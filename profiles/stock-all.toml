@@ -1,0 +1,257 @@
+# profiles/stock-all.toml -- every point arltuner touches set back to offset 0 (P points 4-8 on the cores that have them, E points 5-6).
+# Isolation 2026-10-02: core 0 kept failing OCCT SSE steady even with its own curve and the ring stock.
+[meta]
+name = "stock-all"
+platform = "arl-s-285k"
+
+[[point]]
+kind = "P"
+index = 0
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 0
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 0
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 0
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 0
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 3
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 3
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 3
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 3
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 3
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 2
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 2
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 2
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 5
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 5
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 5
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 6
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 6
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 6
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 7
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 7
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 7
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 1
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 1
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 1
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 4
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 4
+point = 5
+offset_mv = 0
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 4
+point = 6
+offset_mv = 0
+expect_ratio = 55
+
+[[point]]
+kind = "E"
+index = 0
+point = 5
+offset_mv = 0
+expect_ratio = 40
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 5
+offset_mv = 0
+expect_ratio = 40
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 5
+offset_mv = 0
+expect_ratio = 40
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 5
+offset_mv = 0
+expect_ratio = 40
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = 0
+expect_ratio = 46

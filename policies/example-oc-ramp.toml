@@ -1,0 +1,198 @@
+# policies/example-oc-ramp.toml -- AN EXAMPLE, NOT LOADED BY DEFAULT.
+#
+# arltuner only reads a policy file when the operator names it: `python -m arltuner plan|apply --policy <file>`.
+# Without --policy the built-in conservative policy (guard.default_m1_policy) applies, which REFUSES EVERY RAISE.
+# Nothing in this repository loads this file: it is a template to copy, review and edit.
+#
+# THE OPERATOR OWNS THE NUMBERS BELOW. They are illustrative, not recommendations and not hardware facts
+# ([UNVERIFIED]: whether this CPU accepts a ratio / voltage raise through the OC mailbox has never been observed;
+# XTU has only written stock-equivalent values). An overclock is only ever the result of numbers written in a
+# reviewed policy like this one -- the code has no default that raises anything (D-016).
+#
+# What the numbers do (docs/DECISIONS.md D-016, docs/tasks/T-022-bounded-policy-raise.md):
+#   * ratio_max / v_target_max_mv : per core kind (P / E) ceilings of the ratio and of the adaptive OC-point voltage (mV).
+#     A kind left out keeps the no-raise value (its current ratio / its current or fused V target).
+#     Absolute sanity bounds the loader enforces: ratio P <= 62, E <= 60; V target P <= 1625 mV, E <= 1355 mV (0x28 minus one).
+#     The hardware maximum of cmd 0x28 is checked on top whenever a V target is raised.
+#   * offset window = [effective_offset_floor_mv - assumed BIOS offset, offset_ceiling_mv] (D-015): positive runtime offsets are
+#     refused until offset_ceiling_mv is raised (sanity bound +100 mV).
+#   * max_ratio_step / max_v_step_mv / max_offset_step_mv : the most one 0x11 word may change from the current state.
+#     A bigger request is refused with the next allowed step (a ready-to-run profile): an overclock is reached in small steps,
+#     each its own human-attended session with a stability check in between. A rising ratio AND voltage take two words,
+#     voltage first; a falling pair, frequency first.
+#   * every request still needs ARLTUNER_ALLOW_MAILBOX=1, the typed confirmation, the health bracket, the dwell, and the
+#     session / per-boot caps below. Every write is read back; a mismatch trips the guard. A reboot restores the BIOS state.
+#
+# The session / per-boot caps count mailbox WRMSRs including the guard's read-back of each write (one E cluster raising ratio
+# and voltage is 53 WRMSRs: 37 operations + 16 read-backs; one P core offset-only is 13).
+
+cpus = ["0-23"]
+max_operations_per_session = 60
+max_operations_per_boot = 120
+min_dwell_s = 60.0
+
+# Steps and offset bounds at their defaults (shown for completeness; uncomment to change). Keep these plain keys ABOVE the
+# [ratio_max] / [v_target_max_mv] tables below: after a [table] header TOML reads every key as belonging to that table.
+# max_ratio_step = 1
+# max_v_step_mv = 20
+# max_offset_step_mv = 25
+# offset_ceiling_mv = 0
+# effective_offset_floor_mv = -100
+# assumed_bios_offset_mv = { P = -50, E = 0 }
+
+# --- D-016 bounds (example) -----------------------------------------------------------------------------------------------
+# P: ratio ceiling 58; the V target ceiling is left blank on purpose (= "fused": the current V target is the ceiling, so P can
+# only change its ratio and offset, not its OC-point voltage). To allow P voltage too, add:  P = 1500   (mV, example)
+[ratio_max]
+P = 58
+E = 49  # D-017: the XTU-measured E ceiling; the E turbo table (MSR 0x650, see msr_allow below) must be raised to 49 as well
+
+[v_target_max_mv]
+E = 1250
+
+# --- allowlist (identical to guard.default_m1_policy; a policy file replaces the whole policy, so it lists every request) ---
+[[allow]]
+name = "oc_capability_read"
+cmd = 0x01
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "per_core_capability_read"
+cmd = 0x02
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_floor_read"
+cmd = 0x09
+p1 = [0x11]
+p2 = [0, 2, 7]
+kind = "read"
+
+[[allow]]
+name = "favored_core_read"
+cmd = 0x1C
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "granular_ratio_read"
+cmd = 0x26
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "max_voltage_limit_read"
+cmd = 0x28
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_read"
+cmd = 0x14
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_freq_read"
+cmd = 0x10
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_write"
+cmd = 0x15
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "percore_enable_only"
+
+[[allow]]
+name = "voltage_freq_write"
+cmd = 0x11
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "vf_bounded"
+
+[[allow]]
+name = "favored_core_write"
+cmd = 0x1D
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "favored_ratio_follows_vf"
+
+[[allow]]
+name = "granular_ratio_write"
+cmd = 0x27
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "granular_equals_read"
+
+# --- T-023 / D-017: plain-MSR access to the turbo ratio tables (ALL COMMENTED OUT: this file stays inert for plain writes) ----------
+# The E turbo table (MSR 0x650, 8 buckets, bucket 0 = one active core) caps the E-core ratio: after a warm reboot XTU's ratio-49 word
+# persisted but 0x650 = 48 x8 BIOS-restored, so the cores ran 48x [MEASURED lnx 2026-10-01]. A profile with a [turbo] table writes it, in
+# the same plan as the per-core words: a table that raises a bucket is written LAST (after the voltage), one that only lowers goes FIRST.
+# Without any [[msr_allow]] entry every plain MSR read and write is denied (the shipped default policy allows only the plain READS below).
+# turbo_ratio_bounded (writes of 0x650 E / 0x1AD P only): every bucket non-zero, non-increasing from bucket 0 to 7, at most ratio_max of
+# its kind (no ceiling = no raise), within max_ratio_step of the table read this session, at least 0xCE[15:8] (the base ratio).
+# The guard reads every plain write back on the written CPU and on a CPU of the other core kind and trips on a mismatch (the write scope
+# is [UNVERIFIED]). 0x651 / 0x1AE (bucket core counts) can never have a write entry. Uncomment to allow an E-table raise (ceiling above):
+#
+# [[msr_allow]]
+# name = "msr_0xce_read"
+# msr = 0xCE
+# kind = "read"
+#
+# [[msr_allow]]
+# name = "msr_0x650_read"
+# msr = 0x650
+# kind = "read"
+#
+# [[msr_allow]]
+# name = "msr_0x650_write"
+# msr = 0x650
+# kind = "write"
+# cpus = [0]                       # the CPU XTU writes it on
+# check = "turbo_ratio_bounded"
+#
+# (for the P table add the same read + write entries for 0x1AD)
+
+# --- T-025: per-V/F-point offsets (ALL COMMENTED OUT: this file stays inert for point reads and writes) ---------------------------
+# A per-point offset changes ONE V/F point of one core (mailbox P2 = point index) and is distinct from the whole-curve offset above (P2 = 0, the
+# OC point, check vf_bounded). [MEASURED lnx 2026-10-02] E CPU 8: `0x10 P2=6` = 0x0000002E (point 6 = 46x, V target 0, offset 0); `0x10 P2=7` ->
+# rc 0x11 (P2 = 7 is not a point of an E core; the OC point is the P2 = 0 word). SkatterBencher [COMMUNITY]: E has 6 fused points per cluster, P has 8.
+# Profiles name them with [[point]] (kind, index, point, offset_mv, optional expect_ratio); the plan reads `0x10 P2=point`, then writes `0x11 P2=point`
+# = that word with ONLY the offset field [31:21] replaced (ratio and V target of the point are kept exactly); no 0x1D / 0x27 follows.
+# vf_point_offset_bounded: the baseline is the `0x10` read of the SAME CPU and SAME P2 this session; offset inside the same window as the whole-curve
+# offset (effective_offset_floor_mv / assumed_bios_offset_mv / offset_ceiling_mv above) and within max_offset_step_mv of the baseline offset; the
+# read-back must equal the word written (a mismatch trips the guard); the revert is the baseline point word. The hardware's V(n) >= V(n-1) rule
+# across points is NOT checked by arltuner (the voltages of fused points are not readable). Whether the hardware accepts a point write on Linux
+# is [UNVERIFIED]. The two checks cannot be mixed up: a vf_point_offset_bounded entry may not include P2 0, a vf_bounded entry may only have P2 = [0].
+# Uncomment both entries to allow reads of points 1..9 (the register map has P2 1..15; E has 6 points, P has 8) and writes of points 1..8:
+#
+# [[allow]]
+# name = "vf_point_read"
+# cmd = 0x10
+# p1 = [0]
+# p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]   # 7..9 are only useful to see which points exist (rc 0x11 past the last one)
+# kind = "read"
+#
+# [[allow]]
+# name = "vf_point_write"
+# cmd = 0x11
+# p1 = [0]
+# p2 = [1, 2, 3, 4, 5, 6, 7, 8]
+# kind = "write"
+# check = "vf_point_offset_bounded"
+# # params = { offset_raw_min = -102 }   # optional extra tightener of the offset window (raw, -1024..1023)

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linuxmon"
+version = "0.0.1"
+description = "Per-core tuning for Intel Arrow Lake-S on Linux (stdlib only)"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,122 @@
+# profiles/e49-xtu-restore.toml -- put the E-cores back to the operator's XTU state (Windows, 2026-10-01):
+# all 16 E-cores ratio 49, adaptive OC-point voltage cluster 1 = 1.165 V, clusters 2-4 = 1.145 V (XTU had 1.150 V = 0x49A; the operator kept 1.145 after the first apply, 2026-10-01), no offset,
+# E turbo table 49 x8. The 0x11 words already hold this after the warm reboot (CPU 8 read 0x0004A931, lnx-first-read.md);
+# the real change is 0x1D 48 -> 49 per core and MSR 0x650 48 -> 49.
+[meta]
+name = "e49-xtu-restore"
+platform = "arl-s-285k"
+
+[turbo]
+e = [49, 49, 49, 49, 49, 49, 49, 49]
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 49
+oc_voltage_mv = 1165
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 1
+ratio = 49
+oc_voltage_mv = 1165
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 2
+ratio = 49
+oc_voltage_mv = 1165
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 3
+ratio = 49
+oc_voltage_mv = 1165
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 5
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 6
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 7
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 9
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 10
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 11
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 13
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 14
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0
+
+[[core]]
+kind = "E"
+index = 15
+ratio = 49
+oc_voltage_mv = 1145
+offset_mv = 0

@@ -1,0 +1,11 @@
+# profiles/CURRENT - the tuning state to restore after a boot (read by tools/lnx/reapply_current.sh). Update it whenever a round is accepted.
+# 2026-10-04 (win): ACCEPTED p-step7 (operator) = 48x stock on all P; 53x -50 on all P; 55x to target V 1.270 (P0/P3/P1) / 1.285 V (P4/P5/P6/P2/P7);
+#   P0 56/57x 1.360/1.385 V, P3 56/57x 1.330/1.365 V. BIOS LLC 6 (back from 7), VccIA -100. Passed OCCT Linpack 2021 60 min + OCCT SSE variable 60 min.
+#   Why: p-step4 (and p-fav57, step A, step B) failed OCCT Linpack 2021 (CPU error, no WHEA) - p-step7 gives margin back where all-core heavy AVX
+#   runs (48-53x blend) and on the favored cores' boost points, and sets 55x by voltage instead of the deepest offsets. Details: docs/research/win-first-apply.md.
+# earlier: 2026-10-02 22:10 (win): ACCEPTED p-step4 = step 3 + 53x CPU 4 -55 / CPU 5 -65; OCCT clock cycler + 10-min stability clean on Windows at BIOS VccIA -100 mV (Linux gate passed 23:30: percore_stress CPUs 4,5 + 10-min OCCT SSE clean).
+# earlier: 2026-10-02 18:45: ACCEPTED run 18 (15-min OCCT clean): E split3 + P step 3 (= profiles/tune-2026-10-02.toml in one file; p-boot-ramp first so each write stays within the 55 mV step from a fresh boot), PL 295, VccIA -75, ring 40x -16.
+policy = policies/session-2026-10-02-points.toml
+profile = profiles/e-p6-split3.toml
+profile = profiles/p-boot-ramp.toml
+profile = profiles/p-step7.toml

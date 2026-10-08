@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(wrmsr *)",
+      "Bash(setpci *)",
+      "Bash(dd *of=/dev/*)",
+      "Bash(modprobe *)",
+      "Bash(insmod *)",
+      "Bash(rmmod *)",
+      "Bash(sc.exe create *)",
+      "Bash(sc.exe start *)",
+      "Bash(sc.exe config *)",
+      "Bash(winget install *)",
+      "PowerShell(sc.exe create *)",
+      "PowerShell(sc.exe start *)",
+      "PowerShell(sc.exe config *)",
+      "PowerShell(New-Service *)",
+      "PowerShell(Start-Service *)",
+      "PowerShell(winget install *)"
+    ]
+  }
+}

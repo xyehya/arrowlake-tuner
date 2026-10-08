@@ -1,0 +1,12 @@
+# Task index (G1 written just-in-time; later phases get tasks when G1 is done)
+
+| ID | Title | Host | Tier | Status | Depends on |
+|---|---|---|---|---|---|
+| G-101 | platform file `platforms/arl-s-285k.toml` + loader; preflight checks (SPEC §3) | lnx | T0 | ready (after OD-2) | — |
+| G-102 | root helper: JSON-lines protocol, state machine, lock, read-only ops (`preflight`, `vf.dump` via guard, `audit.tail`) | lnx | T0 build | ready (after OD-1) | G-101 |
+| G-103 | web server: bootstrap token → cookie, Host/Origin/CSP, static manifest, SSE; security test suite (SPEC §4.2, §12) | lnx | T0 | ready (after OD-1) | — |
+| G-104 | telemetry readers (APERF/MPERF, VID, temps, RAPL, hwmon Vcore, perf IMC) + `docs/knowledge/telemetry-sources.md` + allowlist rows | lnx | T0 build (fake sysfs/MSR) | ready | G-101 |
+| G-105 | dashboard page (plain JS): live table, preflight, applied-vs-accepted, ops budget | lnx | T0 | ready | G-102, G-103, G-104 |
+| G-106 | install layout: `install.sh`/`uninstall.sh`, polkit action, root-owned paths; CLI audit/lock path move | lnx | T0 build / T1 install | blocked: OD-1 | G-102 |
+
+Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

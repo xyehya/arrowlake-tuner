@@ -1,0 +1,145 @@
+# policies/session-2026-10-01-e49.toml -- SESSION POLICY for one attended sitting (operator yk + orchestrator, 2026-10-01).
+# Derived from example-oc-ramp.toml. Purpose: profiles/e49-xtu-restore.toml (E ratio 49 + E turbo table 49, D-017).
+# Differences from the example: E ratio ceiling 49, E V-target ceiling 1165 mV (= the operator's XTU value, no higher),
+# P untouched (no P ceilings => no P raise), plain-MSR entries for 0xCE / 0x650 enabled (0x650 write on CPU 0 only).
+
+cpus = ["0-23"]
+max_operations_per_session = 220
+max_operations_per_boot = 240
+min_dwell_s = 5.0  # operator 2026-10-01: 5 s between operations inside a bundled apply
+
+# Steps and offset bounds at their defaults (shown for completeness; uncomment to change). Keep these plain keys ABOVE the
+# [ratio_max] / [v_target_max_mv] tables below: after a [table] header TOML reads every key as belonging to that table.
+# max_ratio_step = 1
+# max_v_step_mv = 20
+# max_offset_step_mv = 25
+# offset_ceiling_mv = 0
+# effective_offset_floor_mv = -100
+# assumed_bios_offset_mv = { P = -50, E = 0 }
+
+# --- D-016 bounds (example) -----------------------------------------------------------------------------------------------
+# P: ratio ceiling 58; the V target ceiling is left blank on purpose (= "fused": the current V target is the ceiling, so P can
+# only change its ratio and offset, not its OC-point voltage). To allow P voltage too, add:  P = 1500   (mV, example)
+[ratio_max]
+E = 49  # D-017: the XTU-measured E ceiling; the E turbo table (MSR 0x650, see msr_allow below) must be raised to 49 as well
+
+[v_target_max_mv]
+E = 1165
+
+# --- allowlist (identical to guard.default_m1_policy; a policy file replaces the whole policy, so it lists every request) ---
+[[allow]]
+name = "oc_capability_read"
+cmd = 0x01
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "per_core_capability_read"
+cmd = 0x02
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_floor_read"
+cmd = 0x09
+p1 = [0x11]
+p2 = [0, 2, 7]
+kind = "read"
+
+[[allow]]
+name = "favored_core_read"
+cmd = 0x1C
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "granular_ratio_read"
+cmd = 0x26
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "max_voltage_limit_read"
+cmd = 0x28
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_read"
+cmd = 0x14
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_freq_read"
+cmd = 0x10
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_write"
+cmd = 0x15
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "percore_enable_only"
+
+[[allow]]
+name = "voltage_freq_write"
+cmd = 0x11
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "vf_bounded"
+
+[[allow]]
+name = "favored_core_write"
+cmd = 0x1D
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "favored_ratio_follows_vf"
+
+[[allow]]
+name = "granular_ratio_write"
+cmd = 0x27
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "granular_equals_read"
+
+# --- T-023 / D-017: plain-MSR access to the turbo ratio tables (ALL COMMENTED OUT: this file stays inert for plain writes) ----------
+# The E turbo table (MSR 0x650, 8 buckets, bucket 0 = one active core) caps the E-core ratio: after a warm reboot XTU's ratio-49 word
+# persisted but 0x650 = 48 x8 BIOS-restored, so the cores ran 48x [MEASURED lnx 2026-10-01]. A profile with a [turbo] table writes it, in
+# the same plan as the per-core words: a table that raises a bucket is written LAST (after the voltage), one that only lowers goes FIRST.
+# Without any [[msr_allow]] entry every plain MSR read and write is denied (the shipped default policy allows only the plain READS below).
+# turbo_ratio_bounded (writes of 0x650 E / 0x1AD P only): every bucket non-zero, non-increasing from bucket 0 to 7, at most ratio_max of
+# its kind (no ceiling = no raise), within max_ratio_step of the table read this session, at least 0xCE[15:8] (the base ratio).
+# The guard reads every plain write back on the written CPU and on a CPU of the other core kind and trips on a mismatch (the write scope
+# is [UNVERIFIED]). 0x651 / 0x1AE (bucket core counts) can never have a write entry. Uncomment to allow an E-table raise (ceiling above):
+#
+[[msr_allow]]
+name = "msr_0xce_read"
+msr = 0xCE
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x650_read"
+msr = 0x650
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x650_write"
+msr = 0x650
+kind = "write"
+cpus = [0]                       # the CPU XTU writes it on
+check = "turbo_ratio_bounded"
+
+# (for the P table add the same read + write entries for 0x1AD)

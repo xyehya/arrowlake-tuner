@@ -1,0 +1,6 @@
+"""arltuner — per-core tuning for Intel Arrow Lake-S (Core Ultra 9 285K) on Linux.
+
+Standard library only. Architecture and contracts: docs/ARCHITECTURE.md. Facts: docs/research/registers.md.
+"""
+
+__version__ = "0.0.1"

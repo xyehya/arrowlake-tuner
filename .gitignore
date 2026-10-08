@@ -1,0 +1,25 @@
+# raw captures / dumps (commit a summary + sha256 instead); our own measurement logs (lnx/win, small text) are synced via the private repo
+captures/*
+!captures/lnx/
+!captures/win/
+
+# third-party tools and installers downloaded into the project folder (never commit)
+/tools/ghidra_*/
+/tools/windbg-amd64/
+/*.zip
+
+# agent worktrees and local overrides
+.claude/worktrees/
+.claude/settings.local.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
