@@ -3,13 +3,43 @@ from __future__ import annotations
 
 import html
 import os
+import stat
 from pathlib import Path
 
 
+class LauncherDirError(Exception):
+    """The directory meant to hold the launcher is not a private directory we own."""
+
+
+def check_private_dir(path: Path) -> None:
+    """``path`` must be a real directory (not a symlink), owned by the effective user, with no group/other permission bits."""
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        raise LauncherDirError(f"{path}: {e.strerror}") from None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise LauncherDirError(f"{path}: not a real directory (symlink or file); refusing to put the bootstrap token there")
+    if st.st_uid != os.geteuid():
+        raise LauncherDirError(f"{path}: owned by uid {st.st_uid}, not by you; refusing")
+    if st.st_mode & 0o077:
+        raise LauncherDirError(f"{path}: mode {stat.S_IMODE(st.st_mode):04o} lets others in (need 0700); refusing")
+
+
+def make_private_dir(path: Path) -> None:
+    """Create ``path`` (0700, no parents) if missing, then verify it with ``check_private_dir`` (also when it already existed)."""
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except FileNotFoundError:
+        raise LauncherDirError(f"{path}: parent directory does not exist") from None
+    check_private_dir(path)
+
+
 def write_launcher(path: Path, origin: str, token: str) -> Path:
-    """Create ``path`` (parent dir 0700 if we create it) with mode 0600, replacing any older file. The page has a single POST form."""
+    """Create ``path`` with mode 0600 inside a verified private directory, replacing any older file. The page has a single POST form."""
     path = Path(path)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    make_private_dir(path.parent)
     try:
         path.unlink()
     except FileNotFoundError:

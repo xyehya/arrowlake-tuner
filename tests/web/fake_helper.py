@@ -22,12 +22,17 @@ class FakeHelper:
         self.requests: list[dict] = []
         self.plans: dict[str, dict] = {}
         self._wlock = threading.Lock()
+        self.hold = threading.Event()  # clear it to make vf.dump hang until set again
+        self.hold.set()
         self._t = threading.Thread(target=self._serve, daemon=True)
         self._t.start()
 
     def emit(self, obj: dict) -> None:
         with self._wlock:
-            self._out.write(json.dumps(obj).encode() + b"\n")
+            try:
+                self._out.write(json.dumps(obj).encode() + b"\n")
+            except (ValueError, OSError):
+                pass  # the test already closed the pipe
 
     def raw(self, data: bytes) -> None:
         with self._wlock:
@@ -84,7 +89,9 @@ class FakeHelper:
                 else:
                     p["used"] = True
                     self._reply(rid, True, result={"applied": True})
-            elif op == "busy":
-                self._err(rid, "BUSY", "busy", state="applying")
+            elif op == "vf.dump":
+                threading.Thread(target=lambda r=rid: (self.hold.wait(10), self._reply(r, True, result={"cpus": []})), daemon=True).start()
+            elif op == "cancel":
+                self._err(rid, "BUSY", "busy", state="applying", internal_path="/root/secret")
             else:
                 self._err(rid, "UNKNOWN_OP", op)

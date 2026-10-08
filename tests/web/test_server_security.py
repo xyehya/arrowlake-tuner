@@ -17,6 +17,7 @@ from tests.web.fake_helper import FakeHelper
 
 WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 JSON_CT = "application/json"
+SF = {"Sec-Fetch-Site": "same-origin"}
 
 
 class Base(unittest.TestCase):
@@ -152,8 +153,9 @@ class TestHostOrigin(Base):
                        self.srv.origin + "/", self.srv.origin.upper()):
             st, _, _ = self.call("preflight", cookie=ck, origin=origin)
             self.assertEqual(st, 403, origin)
-            st, _, _ = self.req("GET", "/api/events", cookie=ck, origin=origin)
-            self.assertEqual(st, 403, origin)
+            if origin is not None:  # SSE: Origin is optional (browsers omit it), but when sent it must be exact
+                st, _, _ = self.req("GET", "/api/events", cookie=ck, origin=origin, headers=SF)
+                self.assertEqual(st, 403, origin)
         self.assertEqual(self.call("preflight", cookie=ck)[0], 200)
 
     def test_cross_site_simple_post(self):
@@ -185,7 +187,7 @@ class TestAuth(Base):
         for path in ("/", "/app.js", "/api/status"):
             self.assertEqual(self.req("GET", path)[0], 401, path)
         self.assertEqual(self.call("preflight", cookie=None)[0], 401)
-        self.assertEqual(self.req("GET", "/api/events", origin=self.srv.origin)[0], 401)
+        self.assertEqual(self.req("GET", "/api/events", headers=SF)[0], 401)
         self.assertEqual(self.fake.requests, [])
 
     def test_wrong_cookie_and_malformed_cookie_header(self):
@@ -200,7 +202,7 @@ class TestAuth(Base):
         self.assertEqual(st, 429)
         # while blocked even the right token is refused, and so are cookie-less requests
         self.assertEqual(self.bootstrap()[0], 429)
-        self.assertEqual(self.req("GET", "/")[0], 429)
+        self.assertEqual(self.req("GET", "/", cookie="A" * 43)[0], 429)  # a wrong cookie while blocked
 
     def test_rate_limit_window_expires(self):
         now = [0.0]
@@ -226,7 +228,7 @@ class TestSizeAndPaths(Base):
         c.endheaders()  # the body is never sent
         self.assertEqual(c.getresponse().status, 413)
         c.close()
-        body = json.dumps({"op": "plan", "args": {"x": "a" * 40000}}).encode()
+        body = json.dumps({"op": "plan", "args": {"profile": {"x": "a" * 40000}}}).encode()
         self.assertEqual(self.req("POST", "/api/call", {"Content-Type": JSON_CT}, body, cookie=ck, origin=self.srv.origin)[0], 413)
         self.assertEqual(self.fake.requests, [])
 
@@ -268,7 +270,7 @@ class TestJsonApi(Base):
     def test_validation(self):
         ck = self.login()
         h = {"Content-Type": JSON_CT}
-        for body in (b"not json", b"[]", b"{}", b'{"op": 1}', b'{"op":"x","args":[]}', b'{"op":"x","extra":1}', b'{"op":"Bad Op"}',
+        for body in (b"not json", b"[]", b"{}", b'{"op": 1}', b'{"op":"preflight","args":[]}', b'{"op":"preflight","extra":1}', b'{"op":"Bad Op"}',
                      b'{"op":"' + b"a" * 65 + b'"}'):
             st, _, _ = self.req("POST", "/api/call", h, body, cookie=ck, origin=self.srv.origin)
             self.assertEqual(st, 400, body)
@@ -282,12 +284,9 @@ class TestJsonApi(Base):
         ck = self.login()
         st, _, body = self.call("preflight", cookie=ck)
         self.assertEqual((st, json.loads(body)["ok"]), (200, True))
-        st, _, body = self.call("nope", cookie=ck)
-        self.assertEqual(st, 400)
-        self.assertEqual(json.loads(body)["error"]["code"], "UNKNOWN_OP")
-        st, _, body = self.call("busy", cookie=ck)
+        st, _, body = self.call("cancel", cookie=ck)
         self.assertEqual(st, 409)
-        self.assertEqual(json.loads(body)["error"]["detail"], {"state": "applying"})
+        self.assertEqual(json.loads(body)["error"]["detail"], {"state": "applying"})  # item 12: "internal_path" was dropped
         # the server sent exactly Contract 8 requests: id/op/args only
         for r in self.fake.requests:
             self.assertEqual(set(r), {"id", "op", "args"})
@@ -295,20 +294,36 @@ class TestJsonApi(Base):
 
     def test_plan_bound_nonce_replay(self):
         ck = self.login()
-        plan = json.loads(self.call("plan", cookie=ck)[2])["result"]
+        sse = open_sse(self, ck)
+        plan = json.loads(self.call("plan", {"profile": {}}, cookie=ck)[2])["result"]
         pid, nonce = plan["plan_id"], plan["nonce"]
-        # wrong typed text, then right, then replay
-        st, _, body = self.call("apply", {"plan_id": pid, "typed": "CONFIRM WRONG1"}, cookie=ck)
-        self.assertEqual((st, json.loads(body)["error"]["code"]), (409, "CONFIRM_MISMATCH"))
-        st, _, body = self.call("apply", {"plan_id": pid, "typed": "CONFIRM " + nonce}, cookie=ck)
-        self.assertEqual((st, json.loads(body)["ok"]), (200, True))
-        st, _, body = self.call("apply", {"plan_id": pid, "typed": "CONFIRM " + nonce}, cookie=ck)
-        self.assertEqual((st, json.loads(body)["error"]["code"]), (409, "CONFIRM_MISMATCH"))
-        st, _, body = self.call("apply", {"plan_id": "0" * 64, "typed": "CONFIRM " + nonce}, cookie=ck)
-        self.assertEqual(json.loads(body)["error"]["code"], "PLAN_STALE")
+        results = {}
+
+        def apply(typed, plan_id=pid, origin="default"):
+            st, _, body = self.call("apply", {"plan_id": plan_id, "typed": typed}, cookie=ck, origin=origin)
+            return st, json.loads(body)
+
+        def result_of(rid):
+            if rid not in results:
+                buf = read_until(sse, b'"id":"%s"' % rid.encode())
+                for blk in buf.split(b"\n\n"):
+                    if blk.startswith(b"event: result"):
+                        d = json.loads(blk.split(b"data: ", 1)[1])
+                        results[d["id"]] = d
+            return results[rid]
+
+        st, b = apply("CONFIRM WRONGZ")
+        self.assertEqual(st, 202)  # long op: accepted at once, outcome arrives as an SSE result
+        self.assertEqual(result_of(b["id"])["error"]["code"], "CONFIRM_MISMATCH")
+        st, b = apply("CONFIRM " + nonce)
+        self.assertEqual((st, result_of(b["id"])["ok"]), (202, True))
+        st, b = apply("CONFIRM " + nonce)
+        self.assertEqual(result_of(b["id"])["error"]["code"], "CONFIRM_MISMATCH")  # single-use nonce: replay refused
+        st, b = apply("CONFIRM " + nonce, plan_id="0" * 64)
+        self.assertEqual(result_of(b["id"])["error"]["code"], "PLAN_STALE")
         # a replay from another origin never reaches the helper
         n = len(self.fake.requests)
-        self.assertEqual(self.call("apply", {"plan_id": pid, "typed": "CONFIRM " + nonce}, cookie=ck, origin="http://evil.example")[0], 403)
+        self.assertEqual(apply("CONFIRM " + nonce, origin="http://evil.example")[0], 403)
         self.assertEqual(len(self.fake.requests), n)
 
     def test_helper_down(self):
@@ -324,30 +339,41 @@ class TestJsonApi(Base):
         self.assertFalse(json.loads(body)["helper_alive"])
 
 
+def open_sse(tc, cookie, origin="", fetch_site="same-origin"):
+    s = socket.create_connection(("127.0.0.1", tc.srv.port), timeout=5)
+    h = f"GET /api/events HTTP/1.1\r\nHost: {tc.srv.host_header}\r\nCookie: arltuner_session={cookie}\r\n"
+    if origin:
+        h += f"Origin: {origin}\r\n"
+    if fetch_site:
+        h += f"Sec-Fetch-Site: {fetch_site}\r\n"
+    s.sendall((h + "\r\n").encode())
+    tc.addCleanup(s.close)
+    return s
+
+
+def read_until(s, needle: bytes, limit=5.0) -> bytes:
+    buf = b""
+    end = time.monotonic() + limit
+    while needle not in buf and time.monotonic() < end:
+        try:
+            d = s.recv(4096)
+        except socket.timeout:
+            continue
+        if not d:
+            break
+        buf += d
+    return buf
+
+
 class TestSse(Base):
     cfg_kw = {"sse_keepalive_s": 0.3, "max_sse_clients": 2}
 
-    def open_sse(self, cookie, origin="default"):
-        origin = self.srv.origin if origin == "default" else origin
-        s = socket.create_connection(("127.0.0.1", self.srv.port), timeout=5)
-        s.sendall(f"GET /api/events HTTP/1.1\r\nHost: {self.srv.host_header}\r\nOrigin: {origin}\r\n"
-                  f"Cookie: arltuner_session={cookie}\r\n\r\n".encode())
-        self.addCleanup(s.close)
-        return s
+    def open_sse(self, cookie, **kw):
+        return open_sse(self, cookie, **kw)
 
     @staticmethod
-    def read_until(s, needle: bytes, limit=5.0) -> bytes:
-        buf = b""
-        end = time.monotonic() + limit
-        while needle not in buf and time.monotonic() < end:
-            try:
-                d = s.recv(4096)
-            except socket.timeout:
-                continue
-            if not d:
-                break
-            buf += d
-        return buf
+    def read_until(s, needle, limit=5.0):
+        return read_until(s, needle, limit)
 
     def test_stream_events_and_headers(self):
         ck = self.login()

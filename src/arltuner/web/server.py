@@ -1,8 +1,18 @@
-"""Hardened local HTTP server (SPEC §4.2). Standard library only; no request-derived file paths; no state-changing GET.
+"""Hardened local HTTP server (SPEC §4.2, Contract 8 addendum D-027). Standard library only; no request-derived file paths; no state-changing GET.
 
-Request pipeline (every request): Host exact -> route -> Origin (POST, SSE) -> auth (session cookie) -> Content-Type -> size -> body.
+Request pipeline: Host exact -> route -> Origin (exact; required on POST, optional-but-exact on SSE) -> Sec-Fetch-Site (SSE) -> session cookie ->
+Content-Type -> size -> body -> op allowlist + args schema -> helper.
 Routes (fixed): ``POST /bootstrap`` (launcher form, token swap), ``GET`` manifest pages, ``GET /api/status``, ``GET /api/events`` (SSE),
-``POST /api/call`` (JSON ``{"op", "args"}`` forwarded to the helper, response passed through).
+``POST /api/call`` (allowlisted ``op`` + schema-checked ``args``), ``POST /api/logout``.
+
+Long ops (apply, restore, vf.dump) answer ``202 {"id"}`` at once; the helper's final response arrives as SSE event ``result``.
+
+Auth: a valid session cookie is never rate-limited. Only a *wrong credential* (bad bootstrap token, unknown cookie value) counts as a failure;
+anonymous requests (no cookie) are refused with 401 and not counted. Sessions expire (idle 30 min, absolute 12 h) and can be logged out.
+
+Residual risk (documented, accepted): cookies are not port-isolated on 127.0.0.1 - another local service on the same host name receives the
+cookie. Mitigations: session expiry, exact Host / Origin / Sec-Fetch-Site checks, the plan-bound CONFIRM nonce (SPEC §4.3), and polkit
+authentication at helper start (SPEC §4.1).
 """
 from __future__ import annotations
 
@@ -32,11 +42,65 @@ MANIFEST: dict[str, tuple[str, str]] = {  # URL path -> (file name inside web_ro
 }
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-_OP_RE = re.compile(r"[a-z0-9_.]{1,64}\Z")
 _EVENT_RE = re.compile(r"[a-z0-9_.]{1,32}\Z")
-# HTTP status for a helper error code (Contract 8 codes, passed through untouched; unknown codes -> 422)
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_TYPED = re.compile(r"CONFIRM [A-Z2-9]{6}\Z")
+_REQ_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+
+
+# ---- /api/call allowlist (Contract 8 addendum D-027 d): op -> (args validator, long-running). Args schemas are provisional until the ops land.
+def _empty(a: dict) -> bool:
+    return a == {}
+
+
+def _audit_tail(a: dict) -> bool:
+    return set(a) <= {"n"} and (("n" not in a) or (type(a["n"]) is int and 1 <= a["n"] <= 1000))
+
+
+def _cancel(a: dict) -> bool:
+    return set(a) <= {"op_id"} and (("op_id" not in a) or (isinstance(a["op_id"], str) and bool(_REQ_ID.match(a["op_id"]))))
+
+
+def _plan(a: dict) -> bool:
+    return set(a) == {"profile"} and isinstance(a["profile"], dict)
+
+
+def _apply(a: dict) -> bool:
+    return (set(a) == {"plan_id", "typed"} and isinstance(a["plan_id"], str) and bool(_HEX64.match(a["plan_id"]))
+            and isinstance(a["typed"], str) and bool(_TYPED.match(a["typed"])))
+
+
+OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
+    "preflight": (_empty, False),
+    "audit.tail": (_audit_tail, False),
+    "telemetry.start": (_empty, False),
+    "telemetry.stop": (_empty, False),
+    "cancel": (_cancel, False),
+    "plan": (_plan, False),
+    "vf.dump": (_empty, True),
+    "apply": (_apply, True),
+    "restore": (_empty, True),
+}
+
+# HTTP status for a helper error code (Contract 8 codes; unknown codes -> 422)
 _STATUS_FOR_CODE = {"BAD_REQUEST": 400, "UNKNOWN_OP": 400, "BUSY": 409, "PLAN_STALE": 409, "CONFIRM_MISMATCH": 409, "CANCELLED": 409,
                     "REFUSED": 403, "PREFLIGHT_FAILED": 412, "INTERNAL": 500}
+_DETAIL_ALLOW = ("state", "check")  # the only error.detail keys that reach the browser
+
+
+def public_response(resp: dict[str, Any]) -> dict[str, Any]:
+    """What the browser may see of a helper response: id, ok, result, or error {code, message, detail restricted to an allowlist}."""
+    if resp.get("ok") is True:
+        return {"id": resp.get("id"), "ok": True, "result": resp.get("result")}
+    err = resp.get("error") if isinstance(resp.get("error"), dict) else {}
+    out: dict[str, Any] = {"code": err.get("code") if isinstance(err.get("code"), str) else "INTERNAL",
+                           "message": str(err.get("message", ""))[:500]}
+    det = err.get("detail")
+    if isinstance(det, dict):
+        keep = {k: det[k] for k in _DETAIL_ALLOW if k in det and isinstance(det[k], (str, int, float, bool, type(None)))}
+        if keep:
+            out["detail"] = keep
+    return {"id": resp.get("id"), "ok": False, "error": out}
 
 
 @dataclass
@@ -47,12 +111,17 @@ class Config:
     max_json_body: int = 32 * 1024            # must stay well under the helper's 64 KiB line
     max_form_body: int = 1024
     request_timeout_s: float = 10.0           # per-recv socket timeout AND total deadline for reading a body
+    header_deadline_s: float = 10.0           # total time to receive the request line + headers (slowloris)
+    max_connections: int = 16                 # concurrent connections; excess are closed immediately
     sse_write_timeout_s: float = 5.0
     sse_keepalive_s: float = 15.0
     max_sse_clients: int = 8
-    call_timeout_s: float = 120.0
-    fail_limit: int = 10                      # failed auth attempts ...
-    fail_window_s: float = 60.0               # ... within this window block further unauthenticated requests
+    call_timeout_s: float = 30.0              # short ops only; long ops are 202 + SSE result
+    max_pending_long: int = 4
+    session_idle_s: float = 1800.0
+    session_max_s: float = 12 * 3600.0
+    fail_limit: int = 10                      # wrong-credential attempts ...
+    fail_window_s: float = 60.0               # ... within this window block further wrong-credential attempts
     clock: Callable[[], float] = field(default=time.monotonic)
 
 
@@ -78,6 +147,30 @@ class RateLimiter:
             self._fails.append(now)
 
 
+class _HTTPD(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr: tuple[str, int], handler: type, max_connections: int) -> None:
+        self._slots = threading.BoundedSemaphore(max_connections)
+        super().__init__(addr, handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)  # over the connection cap: closed immediately
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 class WebServer:
     """Owns the listening socket, the bootstrap token, the sessions and the manifest contents."""
 
@@ -87,11 +180,12 @@ class WebServer:
         self._token = config.token or secrets.token_urlsafe(32)
         self._token_born = config.clock()
         self._token_used = False
-        self._sessions: set[str] = set()
+        self._sessions: dict[str, list[float]] = {}  # id -> [created, last_seen]
         self._lock = threading.Lock()
         self.limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)
         self.stop = threading.Event()
         self.sse_clients = 0
+        self.pending_long = 0
         self.on_bootstrap: Callable[[], None] | None = None
         # manifest contents are read once, here; a request never reaches the filesystem
         self.assets: dict[str, tuple[bytes, str]] = {}
@@ -105,8 +199,7 @@ class WebServer:
             srv = outer
             timeout = config.request_timeout_s
 
-        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.httpd.daemon_threads = True
+        self.httpd = _HTTPD(("127.0.0.1", 0), Handler, config.max_connections)
         self.port: int = self.httpd.server_address[1]
         self.host_header = f"127.0.0.1:{self.port}"
         self.origin = f"http://{self.host_header}"
@@ -130,27 +223,52 @@ class WebServer:
     def swap_token(self, presented: str) -> str | None:
         """Single-use, constant-time. Returns a new session id, or None. The token is burned on the first correct presentation."""
         with self._lock:
+            now = self.cfg.clock()
             ok = hmac.compare_digest(presented.encode("utf-8", "replace"), self._token.encode("utf-8"))
-            expired = self.cfg.clock() - self._token_born > self.cfg.token_ttl_s
+            expired = now - self._token_born > self.cfg.token_ttl_s
             if not ok or self._token_used or expired:
                 return None
             self._token_used = True
             sid = secrets.token_urlsafe(32)
-            self._sessions.add(sid)
+            self._sessions[sid] = [now, now]
         if self.on_bootstrap:
             self.on_bootstrap()
         return sid
 
-    def valid_session(self, presented: str | None) -> bool:
+    def valid_session(self, presented: str | None, touch: bool = True) -> str | None:
+        """Return the matching session id (expired ones are dropped; ``touch`` refreshes the idle timer) or None."""
         if not presented:
-            return False
+            return None
         p = presented.encode("utf-8", "replace")
+        now = self.cfg.clock()
+        found: str | None = None
         with self._lock:
-            sessions = list(self._sessions)
-        found = False
-        for s in sessions:  # no early exit: constant-time per candidate
-            found |= hmac.compare_digest(p, s.encode("utf-8"))
+            for sid in list(self._sessions):
+                created, last = self._sessions[sid]
+                if now - created > self.cfg.session_max_s or now - last > self.cfg.session_idle_s:
+                    del self._sessions[sid]
+                    continue
+                if hmac.compare_digest(p, sid.encode("utf-8")):  # no early exit: constant-time per candidate
+                    found = sid
+            if found and touch:
+                self._sessions[found][1] = now
         return found
+
+    def logout(self, sid: str) -> None:
+        with self._lock:
+            self._sessions.pop(sid, None)
+
+    # ---- long-op bookkeeping --------------------------------------------------------------------------------------------------
+    def reserve_long(self) -> bool:
+        with self._lock:
+            if self.pending_long >= self.cfg.max_pending_long:
+                return False
+            self.pending_long += 1
+            return True
+
+    def release_long(self) -> None:
+        with self._lock:
+            self.pending_long = max(0, self.pending_long - 1)
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -161,6 +279,37 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:  # silent; never log request contents (cookies, tokens)
         pass
+
+    # ---- slowloris: total deadline for the request line + headers ------------------------------------------------------------
+    def setup(self) -> None:
+        super().setup()
+        self._hdr_timer: threading.Timer | None = threading.Timer(self.srv.cfg.header_deadline_s, self._kill_socket)
+        self._hdr_timer.daemon = True
+        self._hdr_timer.start()
+
+    def _kill_socket(self) -> None:
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _headers_done(self) -> None:
+        t, self._hdr_timer = self._hdr_timer, None
+        if t is not None:
+            t.cancel()
+
+    def parse_request(self) -> bool:
+        try:
+            return super().parse_request()
+        finally:
+            self._headers_done()
+
+    def finish(self) -> None:
+        self._headers_done()
+        try:
+            super().finish()
+        except OSError:
+            pass
 
     # ---- output ---------------------------------------------------------------------------------------------------------------
     def _headers(self, status: int, ctype: str, length: int | None, extra: dict[str, str] | None = None) -> None:
@@ -188,13 +337,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _err(self, status: int, what: str) -> None:
         self._json(status, {"ok": False, "server_error": what})
 
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        """Errors raised inside http.server itself (malformed request line, 414, 431, ...) get the same headers and a JSON body."""
+        self.close_connection = True
+        try:
+            self._err(code, "bad_request" if code < 500 else "server_error")
+        except OSError:
+            pass
+
     # ---- checks ---------------------------------------------------------------------------------------------------------------
     def _host_ok(self) -> bool:
         hosts = self.headers.get_all("Host") or []
         return len(hosts) == 1 and hosts[0] == self.srv.host_header
 
-    def _origin_ok(self, allow_null: bool = False) -> bool:
+    def _origin_ok(self, allow_null: bool = False, required: bool = True) -> bool:
         origins = self.headers.get_all("Origin") or []
+        if not origins:
+            return not required
         if len(origins) != 1:
             return False
         return origins[0] == self.srv.origin or (allow_null and origins[0] == "null")
@@ -211,16 +370,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         m = jar.get(COOKIE_NAME)
         return m.value if m else None
 
-    def _auth(self) -> bool:
-        """Session cookie check with failure accounting. While rate-limited, unauthenticated requests get 429 without being evaluated."""
+    def _auth(self) -> str | None:
+        """Session id of a valid cookie, else None after sending the error. A valid session is never rate-limited; no cookie at all is a plain
+        401 and is not counted; a *wrong* cookie value counts as a failed attempt (429 once the limit is reached)."""
+        presented = self._cookie()
+        sid = self.srv.valid_session(presented)
+        if sid is not None:
+            return sid
+        if presented is None:
+            self._err(401, "unauthorized")
+            return None
         if self.srv.limiter.blocked():
             self._err(429, "rate_limited")
-            return False
-        if self.srv.valid_session(self._cookie()):
-            return True
+            return None
         self.srv.limiter.fail()
         self._err(401, "unauthorized")
-        return False
+        return None
 
     def _read_body(self, cap: int) -> bytes | None:
         """Content-Length required (no chunked), capped, with a total deadline. Sends the error itself and returns None on failure."""
@@ -285,14 +450,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             path = self._path(self.path)
             if path is None:
                 return self._err(404, "not_found")
-            if path == "/bootstrap":
-                return self._bootstrap() if method == "POST" else self._err(405, "method_not_allowed")
-            if path == "/api/call":
-                return self._call() if method == "POST" else self._err(405, "method_not_allowed")
-            if path == "/api/events":
-                return self._events() if method == "GET" else self._err(405, "method_not_allowed")
-            if path == "/api/status":
-                return self._status() if method == "GET" else self._err(405, "method_not_allowed")
+            routes: dict[str, tuple[str, Callable[[], None]]] = {
+                "/bootstrap": ("POST", self._bootstrap), "/api/call": ("POST", self._call), "/api/logout": ("POST", self._logout),
+                "/api/events": ("GET", self._events), "/api/status": ("GET", self._status),
+            }
+            if path in routes:
+                want, fn = routes[path]
+                return fn() if method == want else self._err(405, "method_not_allowed")
             if path in MANIFEST:
                 return self._static(path) if method == "GET" else self._err(405, "method_not_allowed")
             self._err(404, "not_found")
@@ -301,7 +465,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- handlers -------------------------------------------------------------------------------------------------------------
     def _static(self, path: str) -> None:
-        if not self._auth():
+        if self._auth() is None:
             return
         asset = self.srv.assets.get(path)
         if asset is None:
@@ -309,10 +473,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self._send(200, asset[0], asset[1])
 
     def _status(self) -> None:
-        if not self._auth():
+        if self._auth() is None:
             return
         h = self.srv.helper
         self._json(200, {"ok": True, "helper_alive": bool(h and h.alive), "sse_clients": self.srv.sse_clients})
+
+    def _logout(self) -> None:
+        if not self._origin_ok():
+            return self._err(403, "bad_origin")
+        sid = self._auth()
+        if sid is None:
+            return
+        self.srv.logout(sid)
+        self._json(200, {"ok": True}, {"Set-Cookie": f"{COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
 
     def _bootstrap(self) -> None:
         # The launcher is a file:// page, so its form POST carries ``Origin: null``; that (or our own origin) is the only exception.
@@ -345,7 +518,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _call(self) -> None:
         if not self._origin_ok():
             return self._err(403, "bad_origin")
-        if not self._auth():
+        if self._auth() is None:
             return
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/json":
@@ -357,59 +530,94 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             req = json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             return self._err(400, "bad_json")
-        if (not isinstance(req, dict) or not set(req) <= {"op", "args"} or not isinstance(req.get("op"), str)
-                or not _OP_RE.match(req["op"]) or not isinstance(req.get("args", {}), dict)):
+        if not isinstance(req, dict) or not set(req) <= {"op", "args"} or not isinstance(req.get("op"), str):
             return self._err(400, "bad_request")
+        args = req.get("args", {})
+        spec = OPS.get(req["op"])
+        if spec is None:
+            return self._err(400, "unknown_op")
+        validate, is_long = spec
+        if not isinstance(args, dict) or not validate(args):
+            return self._err(400, "bad_args")
         helper = self.srv.helper
         if helper is None:
             return self._err(503, "helper_unavailable")
+        if is_long:
+            return self._call_long(helper, req["op"], args)
         try:
-            resp = helper.call(req["op"], req.get("args", {}), timeout=self.srv.cfg.call_timeout_s)
+            resp = helper.call(req["op"], args, timeout=self.srv.cfg.call_timeout_s)
         except HelperUnavailable:
             return self._err(503, "helper_unavailable")
         except HelperTimeout:
             return self._err(504, "helper_timeout")
         except RequestTooLarge:
             return self._err(413, "body_too_large")
-        if resp.get("ok") is True:
-            return self._json(200, resp)
-        code = (resp.get("error") or {}).get("code") if isinstance(resp.get("error"), dict) else None
-        self._json(_STATUS_FOR_CODE.get(code, 422), resp)
+        out = public_response(resp)
+        if out["ok"]:
+            return self._json(200, out)
+        self._json(_STATUS_FOR_CODE.get(out["error"]["code"], 422), out)
+
+    def _call_long(self, helper: HelperLink, op: str, args: dict[str, Any]) -> None:
+        srv = self.srv
+        if not srv.reserve_long():
+            return self._err(429, "too_many_pending")
+
+        def done(rid: str, resp: dict[str, Any] | None) -> None:
+            srv.release_long()
+            if resp is None:
+                ev: dict[str, Any] = {"event": "result", "id": rid, "ok": False, "server_error": "helper_unavailable"}
+            else:
+                ev = {"event": "result", **public_response(resp)}
+            helper.publish(ev)
+
+        try:
+            rid = helper.submit(op, args, done)
+        except HelperUnavailable:
+            srv.release_long()
+            return self._err(503, "helper_unavailable")
+        except RequestTooLarge:
+            srv.release_long()
+            return self._err(413, "body_too_large")
+        self._json(202, {"id": rid})
 
     def _events(self) -> None:
-        if not self._origin_ok():
+        # Browsers omit Origin on same-origin GET, so it cannot be required (D-027 b): cookie + exact Host + Sec-Fetch-Site: same-origin;
+        # an Origin that is sent must be exact.
+        if not self._origin_ok(required=False):
             return self._err(403, "bad_origin")
-        if not self._auth():
+        if (self.headers.get("Sec-Fetch-Site") or "") != "same-origin":
+            return self._err(403, "bad_fetch_site")
+        sid = self._auth()
+        if sid is None:
             return
         srv = self.srv
         helper = srv.helper
         if helper is None:
             return self._err(503, "helper_unavailable")
         with srv._lock:
-            if srv.sse_clients >= srv.cfg.max_sse_clients:
-                full = True
-            else:
-                full = False
+            full = srv.sse_clients >= srv.cfg.max_sse_clients
+            if not full:
                 srv.sse_clients += 1
         if full:
             return self._err(503, "too_many_streams")
         sub = helper.subscribe()
+        last_write = time.monotonic()
         try:
             self.connection.settimeout(srv.cfg.sse_write_timeout_s)  # a client that stops reading is dropped
             self._headers(200, "text/event-stream", None)
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
             while not srv.stop.is_set():
+                if srv.valid_session(sid, touch=False) is None:  # logged out or expired: end the stream
+                    break
                 try:
                     ev = sub.queue.get(timeout=min(0.5, srv.cfg.sse_keepalive_s))
                 except queue.Empty:
                     ev = None
-                if ev is CLOSED:
-                    break
-                if sub.overflowed:
+                if ev is CLOSED or sub.overflowed:
                     break
                 if ev is None:
-                    if time.monotonic() - getattr(self, "_last_write", 0.0) < srv.cfg.sse_keepalive_s:
+                    if time.monotonic() - last_write < srv.cfg.sse_keepalive_s:
                         continue
                     self.wfile.write(b": keepalive\n\n")
                 else:
@@ -419,7 +627,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     data = json.dumps(ev, separators=(",", ":"))
                     self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))
                 self.wfile.flush()
-                self._last_write = time.monotonic()
+                last_write = time.monotonic()
         finally:
             sub.close()
             with srv._lock:
