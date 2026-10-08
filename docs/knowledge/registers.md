@@ -111,6 +111,12 @@ Baseline (BIOS 3.40, OC lock off, UVP off, no XTU tuning applied): `0x14` = `0x8
 
 **First real per-core write sequence (XTU, S-04/S-05, Windows, `measured win`, LP 0, −5 mV then back):** `GET 0x14`→`GET 0x10`→`SET 0x11` (full word incl. V target = fused voltage, e.g. `0xFF65B439`)→`SET 0x1D` (= ratio)→`GET 0x26`→`SET 0x27` (= value read), all RC 0; read-back identical to the written word; revert word `0x0005B439` ≠ original `0x00000039` (V target stays set). Details and caveats: `win-xtu-live-trace.md` S-04/S-05. Not yet on any allowlist.
 
+### Telemetry read allowlist (G-104, D-026) — `rdmsr` only, code `telemetry/msrio.py` `TELEMETRY_MSRS`; bits/decoding in `telemetry-sources.md`
+0xE7 MPERF, 0xE8 APERF `[DOC SDM]` · 0xCE PLATFORM_INFO [15:8] `measured` · 0x198 PERF_STATUS [47:32] V, [15:8] ratio `measured` ·
+0x19C / 0x1B1 THERM_STATUS [31] valid, [22:16] readout `[DOC SDM]`, ARL `[UNVERIFIED]` · 0x1A2 [23:16] Tjmax `measured` · 0x606 [12:8] energy unit
+`measured` · 0x611 PKG_ENERGY [31:0] `[DOC SDM]` · 0x64F, 0x6B0 limit reasons: raw only, decode open. Separate from the guard's `PLAIN_MSR_READABLE`
+(unchanged). 0x150 (mailbox) refused by `TelemetryMsr`.
+
 ## MMIO
 MCHBAR 0x59A0 / 0x59A4 / 0x59B0 = PL1 / PL2 / PL4 (INT340X RAPL `ARL_S_THERMAL`, `processor_thermal_rapl.c`) `doc`, PL4 on ARL-S untested. IPF DSP `decomp`: also 0x59A8/0x59AC (PP0/PP1), 0x5938/0x5930/0x593C; **base = mapped BAR of the processor-thermal PCI device**; PCU mailbox 0x5810/0x5814/0x5818 (not the OC mailbox); ref-clock 0x5F60/0x5F64. Per-core HWP request `0x774` `[15:8]`/`[23:16]` fields are used per CPU ·
 MCHBAR 0x5DA0 / 0x5DA4 = BIOS mailbox (0x37 core-ratio ext; SAGV B2P 0x22), *not* MSR 0x150 `doc` (FSP; Intel EDC 13th-gen datasheet).

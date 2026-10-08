@@ -85,3 +85,6 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   (worktrees) do all coding and test runs, read-only Sonnet reviewers check security-relevant work, the orchestrator reviews/merges/decides and
   keeps its context clean, consults the `advisor` tool at defined points, and asks the operator only for hardware access, limits, downloads,
   scope and operator decisions. Detail: `docs/ORCHESTRATION.md`.
+- **D-026 · 2026-10-08 · Telemetry reads use their own read-only allowlist, not the guard.** The sampler reads plain MSRs through
+  `telemetry.msrio.TelemetryMsr` (rdmsr only, fixed `TELEMETRY_MSRS`, refuses 0x150; AST test bars imports of mailbox/guard/controls). The guard's
+  `PLAIN_MSR_READABLE` is not widened (that is an operator item, ORCHESTRATION §4). The first real telemetry read is T1, orchestrator, with a go-ahead.
