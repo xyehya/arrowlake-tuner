@@ -110,3 +110,9 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   audit log from the legacy one (root 0600) so the per-boot count survives a mid-boot install; tmpfiles.d creates `/run/arltuner` (0755 root).
   Consequence: the first restore after the install go-ahead is the first run on the new paths. Dashboard budget/accepted data come from the helper
   (contract 8 addendum G-107).
+- **D-031 · 2026-10-08 · G-106 install merged (2 review rounds); operator CLI path stays as is.** `install.sh` copies only, runs only the installed
+  tree as root (`-I`, cwd /), refuses symlinked source dirs, seeds the audit log as the invoking user (64 MiB cap), atomic code swap, self-check
+  (code tree, launcher hash, polkit rules.d overrides). `uninstall.sh --purge` needs `--yes-reset-budget`. Restore scripts no longer pass `--audit`
+  and pass `HOME` through sudo (pre-install path unchanged). Known and accepted: the operator restore scripts (`tools/lnx/*.sh`) still run the
+  checkout's Python and the checkout `--policy` as root via sudo — that is the human/orchestrator CLI path (D-022), outside the helper trust rule
+  (SPEC §4.4 applies to the pkexec helper). A later phase may move restore onto the installed helper.

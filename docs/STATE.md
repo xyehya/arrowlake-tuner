@@ -1,15 +1,14 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-08 · lnx · G1 in progress (5 of 7 merged). Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-08 · lnx · G1 code complete (7 of 7 merged); G1 exit needs the T1 install. Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
-  (2 review rounds), G-104 telemetry readers. Suite **1646 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
-- **G-105 dashboard merged** (layout unverified in a real browser; it calls `telemetry.start` on every SSE open — check on first real run).
-- **In flight (Sonnet high, worktrees):** G-106 install + polkit + path migration, G-107 helper budget/accepted compare.
-  G-106 and G-107 get a read-only Sonnet security review before merge.
+  (2 review rounds), G-104 telemetry readers. Suite **1803 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
+- **All G1 tasks merged:** G-105 dashboard (layout unverified in a real browser; calls `telemetry.start` on every SSE open), G-106 install +
+  polkit + D-030 paths (2 review rounds), G-107 helper budget heartbeat + accepted compare (1 review round).
 - **Decisions this session:** D-026 telemetry own read allowlist · D-027 web↔helper (202 + SSE result, Sec-Fetch-Site) · D-028 web residual risks
-  · D-029 root helper hardening (no argv as root) · D-030 path migration only when installed.
+  · D-029 root helper hardening (no argv as root) · D-030 path migration only when installed · D-031 install + operator CLI path.
 - **Hardware not touched this session.** Restore scripts not yet run from this repo. Since G-101, `topology`/`msr` read
   `platforms/arl-s-285k.toml` at import ⇒ the next boot's restore also exercises the platform loader (check it first).
 - **Sequencing (D-030):** before install, CLI keeps legacy lock/audit paths; after the install go-ahead (T1), the *following* restore is the first
@@ -44,8 +43,8 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. Merge G-105/G-106/G-107 (reviews for 106/107). G1 exit (ROADMAP): T1 install + first helper `preflight` / telemetry read on hardware — ask the
-   operator for the go-ahead with exact commands.
+1. G1 exit (ROADMAP: read-only app on the reference machine): T1 `sudo bash install.sh` + selfcheck, then GUI with the helper: `preflight` +
+   telemetry (plain reads, no mailbox). `vf.dump` (mailbox, ~124 ops) is a separate go-ahead. Restore after the install uses the new paths.
 2. Orchestrator rule: workers and reviewers run `model: sonnet`, `effort: high` (operator 2026-10-08).
 3. W: first Windows restore from this repo (check the rename end to end).
 
