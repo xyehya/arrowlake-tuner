@@ -91,3 +91,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
 - **D-027 · 2026-10-08 · Web↔helper clarifications (G-103 findings).** Long ops = 202 + SSE `result`; SSE authenticated by cookie + Host +
   `Sec-Fetch-Site: same-origin` (SPEC §4.2 "Origin on SSE" unimplementable in browsers for same-origin GET); helper's root preflight is the authority
   (refuse writes on `UNKNOWN`); `/api/call` op allowlist. Detail: ARCHITECTURE contract 8 addendum.
+- **D-028 · 2026-10-08 · G-103 accepted residual risks (after 2 Sonnet review rounds).** (1) Cookies are not port-isolated on 127.0.0.1: another
+  local service receives the session cookie; mitigated by idle 30 min / absolute 12 h expiry, logout, exact Host/Origin, `Sec-Fetch-Site`, op
+  allowlist, polkit at helper start — not eliminated (a cookie holder can fetch a plan nonce). (2) A local process can hold all 16 connection slots by
+  reconnecting (local DoS only). (3) The server's `plan` args check is shallow; the helper is the authority and must schema-validate profiles.
+  Re-login without restart: second `arltuner-gui.py` run → SIGUSR1 → fresh single-use token.
