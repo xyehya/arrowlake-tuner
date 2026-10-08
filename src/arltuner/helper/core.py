@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 from .config import HelperConfig
-from .ops import OpContext, OpSpec, builtin_ops, write_gate
+from .ops import BudgetMeter, OpContext, OpSpec, builtin_ops, write_gate
 from .protocol import (
     BAD_REQUEST,
     BUSY,
@@ -115,6 +115,7 @@ class Helper:
         self._worker: threading.Thread | None = None
         self._tele: _Telemetry | None = None
         self._tele_lock = threading.Lock()
+        self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
 
     # ---------------------------------------------------------------- output
@@ -250,7 +251,8 @@ class Helper:
     def _heartbeat(self) -> None:
         while not self._shutdown.wait(self.cfg.heartbeat_s):
             running = self.machine.running
-            self.emit({"event": "heartbeat", "op_id": running.op_id if running else None, "state": self.machine.state.value})
+            used, budget = self.budget.snapshot()  # incremental / cached: an fstat per beat, a read only for newly appended audit bytes
+            self.emit({"event": "heartbeat", "op_id": running.op_id if running else None, "state": self.machine.state.value, "ops_used": used, "ops_budget": budget})
 
     # ---------------------------------------------------------------- dispatch
     def _handle(self, frame: Frame) -> None:

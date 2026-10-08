@@ -40,7 +40,7 @@ from arltuner.mailbox import rc_name
 
 from .policy import MsrRequestLike, RequestLike
 
-__all__ = ["EVENTS", "AuditLog", "AuditState", "AuditUnreadable", "read_all", "read_state"]
+__all__ = ["EVENTS", "AuditLog", "AuditState", "AuditUnreadable", "parse_audit_ts", "read_all", "read_state"]
 
 EVENTS = frozenset({"refused", "attempt", "msr_read", "result", "readback", "error", "trip"})
 
@@ -255,6 +255,9 @@ def _parse_ts(value: object, where: str) -> float:
         return stamp.timestamp()
     except (ValueError, OverflowError, OSError) as exc:
         raise AuditUnreadable(f"{where}: bad attempt timestamp {value[:40]!r}: {exc}") from exc
+
+
+parse_audit_ts = _parse_ts  # public name for other readers of the audit log, so they apply the guard's exact timestamp rule
 
 
 def read_state(path: Path | str) -> AuditState:

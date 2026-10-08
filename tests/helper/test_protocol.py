@@ -156,7 +156,7 @@ class WireTests(HelperCase):
         h = self.start()
         h.wait_for(lambda m: m.get("event") == "heartbeat")
         beats = h.events("heartbeat")
-        self.assertEqual({k for k in beats[0]}, {"event", "op_id", "state"})
+        self.assertEqual({k for k in beats[0]}, {"event", "op_id", "state", "ops_used", "ops_budget"})
         self.assertEqual((beats[0]["op_id"], beats[0]["state"]), (None, "idle"))
         h.wait_for(lambda m: m.get("event") == "heartbeat", start=len(h.messages))  # and they keep coming
 
