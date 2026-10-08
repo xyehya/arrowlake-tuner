@@ -1,6 +1,6 @@
 # SPEC — arrowlake-tuner v1 (Linux local web GUI + Windows PowerShell restore) · v2 DRAFT 2026-10-08
 
-_v1 draft: `linuxmon@b01f78a:docs/SPEC-gui.md`. v2 folds in the review `docs/review/2026-10-08-spec-v1-review.md` (37 findings; numbers cited as R#).
+_v1 draft: `linuxmon@b01f78a:docs/SPEC-gui.md`. v2.1 (2026-10-08, D-027): §4.2 SSE uses `Sec-Fetch-Site` instead of a required Origin; long ops 202 + SSE. v2 folds in the review `docs/review/2026-10-08-spec-v1-review.md` (37 findings; numbers cited as R#).
 Open operator decisions are marked **OD-n** (§14) and block the phase named there. Phases: §12 / `docs/ROADMAP.md`. Tasks: just-in-time._
 
 ## 1. Operator decisions (2026-10-08)

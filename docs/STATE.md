@@ -7,7 +7,8 @@ _Updated: 2026-10-08 · lnx · G0 bootstrap done (repo created from linuxmon@b01
   Windows `$Expected` == `profiles/EXPECTED-words.txt` (12/12). Knowledge distilled into `docs/knowledge/`. Spec v2 `docs/SPEC.md` with the
   37-finding review folded in (`docs/review/2026-10-08-spec-v1-review.md`). G1 tasks written (`docs/tasks/INDEX.md`).
 - **Not yet run from this repo:** the restore scripts on hardware (Linux `tools/lnx/restore_tuning.sh`, Windows `tools\win\restore_tuning.ps1`).
-  They are unchanged except the rename; first real run = the next boot's restore.
+  Since G-101 `topology`/`msr` read `platforms/arl-s-285k.toml` at import (raise if missing/corrupt), so the next boot's restore is also
+  the first real run of the platform loader — check it first.
 - **Remote:** private GitHub `xyehya/arrowlake-tuner` (remote `origin`). linuxmon is the read-only archive (`docs/PROVENANCE.md`).
 
 ## Accepted tuning (reference machine) — p-step7 + E split3, BIOS LLC 6 (D-019)

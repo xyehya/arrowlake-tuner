@@ -56,7 +56,7 @@ class Topology:
     cores: tuple[Core, ...]
     def by_cpu(self, cpu: int) -> Core ; def resolve(self, kind: str, index: int) -> Core
     def cluster_cpus(self, cluster: int) -> tuple[int, ...] ; def xtu_name(self, core: Core) -> str   # "P-Core 4" / "E-Core 12"
-def arl_s_285k() -> Topology                          # static, from docs/research/lnx-turbostat-plus-facts.md
+def arl_s_285k() -> Topology                          # from platforms/arl-s-285k.toml (G-101, arltuner.platform)
 def detect(sysfs_root: Path = Path("/sys")) -> Topology  # /sys/devices/cpu_core/cpus + /sys/devices/cpu_atom/cpus ; falls back/validates against arl_s_285k(); raises TopologyMismatch
 ```
 ## Contract 4 — `arltuner.msr` (T-011)
@@ -144,3 +144,9 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
   "expires_s"}`; `apply` args `{"plan_id", "typed"}` — accepted only when `typed == "CONFIRM " + nonce`, plan unchanged, < 600 s old, preflight passes;
   a nonce is single-use (replay ⇒ `CONFIRM_MISMATCH`).
 - Ops: SPEC §4.5 list; an op not yet implemented ⇒ `UNKNOWN_OP`. Tests use a fake helper that speaks this contract exactly; changes need an update here.
+- **Addendum (D-027, G1):** (a) **Long ops** (`apply`, `restore`, `vf.dump`, `stress.*`): the helper still sends exactly one response, at the end;
+  the server answers the POST at once with `202 {"id"}` and forwards the helper's final response as an SSE event `result` (`{"id", "ok", ...}`).
+  No HTTP timeout ever reports a still-running op as failed. (b) **SSE auth:** cookie + exact Host + `Sec-Fetch-Site: same-origin` (absent ⇒ refuse);
+  `Origin`, when sent, must be exact — browsers omit it on same-origin GET, so it cannot be required there. (c) **Preflight `UNKNOWN`/unprivileged:**
+  the server's preflight is display-only; the root helper re-runs preflight and refuses any write op unless the mode is `write` with no check
+  `UNKNOWN`. (d) **`/api/call`** forwards only an allowlisted `op` set with schema-checked `args`; never a raw passthrough.

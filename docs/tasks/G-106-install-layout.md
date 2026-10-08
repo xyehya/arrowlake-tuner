@@ -3,7 +3,8 @@
 
 ## Goal
 `install.sh` / `uninstall.sh` (root, idempotent) per SPEC §4.4 / §11: `/usr/lib/arltuner`, `/usr/share/arltuner/web`, polkit action with
-`exec.path`, `/etc/arltuner/{policy.toml,accepted/}`, `/var/lib/arltuner/`; migrate the audit log and lock (CLI follows); trust-path self-check.
+`exec.path`, `/etc/arltuner/{policy.toml,accepted/}`, `/var/lib/arltuner/`; migrate the audit log and lock (CLI follows); trust-path self-check. Install `platforms/*.toml` to `/usr/lib/arltuner/platforms/`; the installed
+helper must load the platform file only from there (today `platform/schema.py` tries the source tree first — G-106 fixes that for the installed tree).
 
 ## Acceptance
 Install into a fake root in tests (DESTDIR); ownership/mode checks; uninstall leaves `/var/lib/arltuner` unless `--purge`.
