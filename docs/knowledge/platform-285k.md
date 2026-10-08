@@ -107,3 +107,10 @@ Pre-checks: 0xCE[28]=1, 0xCE[24]=1, 0x194[20]=0 (OC unlocked) [MEASURED lnx 2026
 ## 13. llama.cpp findings (RTX 5080 16 GB, P-cores 0-7 pinned) [MEASURED lnx 2026-10-03]
 - Dense Qwen3.8-27B Q3: unified memory ON 85.6 t/s TG vs OFF 11.8 (7x; UM lets --fit put all layers on GPU). MoE Qwen3.6-35B-A3B Q8: UM OFF 42 t/s TG vs ON 13 (3.2x; UM ON pages experts over PCIe).
 - Rule: UM ON for dense, OFF for MoE. MoE-noUM sits at ~33 GB/s (not bandwidth-bound; CPU<->GPU hand-off latency) -> where NGU latency could show. 8 P-cores reach ~95 % of package bandwidth.
+
+## Runtime PL2 via powercap [MEASURED lnx 2026-10-08]
+- Baseline `0x610` = `0x004287d000df87d0`: PL1 250 W en, clamp, tau 56.0 s · PL2 250 W en · **lock 0**. `intel-rapl-mmio:0` present but disabled
+  (limits 0; peak_power 425 W) ⇒ the MSR path is the one in effect.
+- `echo 295000000 > /sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw` ⇒ `0x610` = `0x0042893800df87d0`: **PL2 295 W**, only bits
+  [46:32] changed; PL1/tau/enables untouched; no kernel log lines. Revert: write `250000000`; a reboot restores the BIOS value `[UNVERIFIED]`.
+- ⇒ PL1/PL2/tau need no mailbox on Linux while the lock bit is 0; the GUI can use powercap (root) and verify by reading `0x610`.
