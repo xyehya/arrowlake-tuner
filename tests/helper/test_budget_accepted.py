@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from arltuner.guard import read_state
+from arltuner.guard import AuditUnreadable, read_state
 from arltuner.helper import Helper
 from arltuner.helper.ops import ACCEPTED_FILE, BudgetMeter, accepted_match
 
@@ -134,6 +134,59 @@ class BudgetMeterTests(HelperCase):
         self.assertIsNone(self.helper(euid_fn=lambda: os.geteuid() + 1).budget.snapshot()[0])  # foreign owner
         os.chmod(self.audit, 0o666)
         self.assertIsNone(self.helper().budget.snapshot()[0])  # world-writable
+
+    def test_parity_with_read_state_on_crafted_logs(self) -> None:
+        """The evidence for 'counted the same way the guard counts': the same bytes go to read_state and to the meter; the meter must give the
+        guard's number, or None exactly when the guard raises AuditUnreadable."""
+        good = attempt(BOOT)
+        no_ts = json.dumps({"event": "attempt", "boot_id": BOOT})
+        naive_ts = json.dumps({"ts": "2026-10-08T00:00:00", "event": "attempt", "boot_id": BOOT})
+        junk_ts = json.dumps({"ts": "yesterday", "event": "attempt", "boot_id": BOOT})
+        int_boot = json.dumps({"ts": TS, "event": "attempt", "boot_id": 7})
+        no_boot = json.dumps({"ts": TS, "event": "attempt"})
+        not_attempt_bad_ts = json.dumps({"event": "result", "ts": "garbage", "boot_id": BOOT})
+
+        def lines(*items: str) -> bytes:
+            return ("\n".join(items) + "\n").encode()
+
+        cases: dict[str, bytes] = {
+            "valid": lines(good, attempt(OTHER_BOOT), good, attempt(BOOT, "result")),
+            "empty file": b"",
+            "only blank lines": b"\n\n  \n",
+            "only non-attempt events": lines(attempt(BOOT, "result"), attempt(BOOT, "refused"), not_attempt_bad_ts),
+            "bad json mid-file": lines(good, "{not json", good),
+            "attempt missing ts": lines(good, no_ts),
+            "ts without tz": lines(good, naive_ts),
+            "unparsable ts": lines(good, junk_ts),
+            "boot_id as int": lines(good, int_boot),
+            "boot_id absent counts as null": lines(good, no_boot),
+            "non-object line": lines(good, "[1, 2]"),
+            "record without event": lines(good, '{"ts": "%s"}' % TS),
+            "trailing partial line (cut short)": lines(good, good) + good[:25].encode(),
+            "trailing complete record without newline": lines(good, good) + good.encode(),
+            "trailing record without newline, bad ts": lines(good) + junk_ts.encode(),
+            "carriage return inside a line": (good + "\r\n" + good + "\n").encode(),
+            "invalid utf-8 mid-file": good.encode() + b"\n\xff\xfe\n" + good.encode() + b"\n",
+        }
+        for name, data in cases.items():
+            with self.subTest(name):
+                self.audit.write_bytes(data)
+                try:
+                    want: int | None = read_state(self.audit).attempts_by_boot.get(BOOT, 0)
+                except AuditUnreadable:
+                    want = None
+                self.assertEqual(self.helper().budget.snapshot()[0], want)
+        # and the same when the log arrives in pieces, the way the heartbeat sees it while a dump appends
+        h = self.helper()
+        data = cases["valid"] + cases["trailing complete record without newline"]
+        self.audit.write_bytes(b"")
+        for end in range(0, len(data) + 1, 37):
+            self.audit.write_bytes(data[:end])
+            try:
+                want = read_state(self.audit).attempts_by_boot.get(BOOT, 0)
+            except AuditUnreadable:
+                want = None
+            self.assertEqual(h.budget.snapshot()[0], want, end)
 
     def test_heartbeats_carry_the_counts_and_follow_a_dump(self) -> None:
         h = self.start()

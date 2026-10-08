@@ -31,6 +31,7 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
+from arltuner.guard.audit import _parse_ts
 from arltuner.msr import MailboxTransport
 from arltuner.platform.preflight import PreflightReport, Status
 from arltuner.topology import TopologyError, UnknownCore
@@ -253,6 +254,7 @@ class BudgetMeter:
         self._offset = 0
         self._by_boot: dict[str | None, int] = {}
         self._audit_error: str | None = None
+        self._tail: tuple[str, Any] = ("skip", None)  # the unterminated last line, judged at the last scan
         # policy cache
         self._policy_key: tuple[int, int, int, int] | None = None
         self._budget: int | None = None
@@ -316,10 +318,12 @@ class BudgetMeter:
         except OSError:
             self._reset()
             return None
-        return None if self._audit_error is not None else self._count()
+        if self._audit_error is not None or self._tail[0] == "error":
+            return None
+        return self._count()
 
     def _reset(self) -> None:
-        self._audit_key, self._offset, self._by_boot, self._audit_error = None, 0, {}, None
+        self._audit_key, self._offset, self._by_boot, self._audit_error, self._tail = None, 0, {}, None, ("skip", None)
 
     def _count(self) -> int:
         try:
@@ -327,10 +331,11 @@ class BudgetMeter:
         except Exception:
             boot = None
         boot_id = boot.strip() or None if isinstance(boot, str) else None
-        return self._by_boot.get(boot_id, 0)
+        return self._by_boot.get(boot_id, 0) + (1 if self._tail == ("count", boot_id) else 0)
 
     def _scan(self, handle: Any) -> None:
-        """Read what was appended since ``self._offset``: complete lines only (a trailing partial line waits for its newline)."""
+        """Read what was appended since ``self._offset``: complete lines are folded into the counts; a trailing line with no newline is judged
+        afresh each time (``self._tail``) and never consumed, exactly as ``read_state`` treats it (ignored if it does not parse, counted if it does)."""
         if self._audit_error is not None:
             return  # an unreadable record stays unreadable (the log is append-only); only a replaced or truncated file resets it
         handle.seek(self._offset)
@@ -344,31 +349,41 @@ class BudgetMeter:
             if cut < 0:
                 continue
             complete, pending = pending[: cut + 1], pending[cut + 1 :]
-            for raw in complete.splitlines():
-                self._line(raw)
+            for raw in complete.split(b"\n"):  # '\n' only, like read_state's line iteration (bytes.splitlines would also split on '\r')
+                kind, value = self._classify(raw, partial=False)
+                if kind == "error":
+                    self._audit_error = value
+                    break
+                if kind == "count":
+                    self._by_boot[value] = self._by_boot.get(value, 0) + 1
             self._offset += len(complete)
             if self._audit_error is not None:
-                break
+                return
+        self._tail = self._classify(pending, partial=True)
 
-    def _line(self, raw: bytes) -> None:
+    @staticmethod
+    def _classify(raw: bytes, *, partial: bool) -> tuple[str, Any]:
+        """One audit line as ``read_state`` sees it: ``("skip", None)``, ``("count", boot_id)`` or ``("error", why)`` (``AuditUnreadable``).
+        The timestamp rule is ``arltuner.guard.audit._parse_ts`` itself (private, reused on purpose so the two can never drift apart)."""
         text = raw.strip()
-        if not text or self._audit_error is not None:
-            return
+        if not text:
+            return "skip", None
         try:
             record = json.loads(text.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
-            self._audit_error = "an audit record is not valid JSON"  # the guard refuses such a log: no count is claimed
-            return
+            return ("skip", None) if partial else ("error", "an audit record is not valid JSON")
         if not isinstance(record, dict) or not isinstance(record.get("event"), str):
-            self._audit_error = "an audit record is not an object with an 'event'"
-            return
+            return "error", "an audit record is not an object with an 'event'"
         if record["event"] != "attempt":
-            return
+            return "skip", None
+        try:
+            _parse_ts(record.get("ts"), "audit")
+        except AuditUnreadable as exc:
+            return "error", str(exc)
         boot = record.get("boot_id")
         if boot is not None and not isinstance(boot, str):
-            self._audit_error = "an attempt record's boot_id is neither a string nor null"
-            return
-        self._by_boot[boot] = self._by_boot.get(boot, 0) + 1
+            return "error", "an attempt record's boot_id is neither a string nor null"
+        return "count", boot
 
 
 # --------------------------------------------------------------------------------------------------------------
