@@ -3,7 +3,8 @@
 
 ## Goal
 `install.sh` / `uninstall.sh` (root, idempotent) per SPEC §4.4 / §11: `/usr/lib/arltuner`, `/usr/share/arltuner/web`, polkit action with
-`exec.path`, `/etc/arltuner/{policy.toml,accepted/}`, `/var/lib/arltuner/`; migrate the audit log and lock (CLI follows); trust-path self-check. Install `platforms/*.toml` to `/usr/lib/arltuner/platforms/`; the installed
+`exec.path`, `/etc/arltuner/{policy.toml,accepted/}`, `/var/lib/arltuner/`; migrate the audit log and lock (CLI follows) — the lock moves out of world-writable `/run/lock` into a root-owned dir
+(e.g. `/run/arltuner/`, tmpfiles.d) because a 1777 dir lets any user pre-create/hold it (G-102 scan finding); trust-path self-check. Install `platforms/*.toml` to `/usr/lib/arltuner/platforms/`; the installed
 helper must load the platform file only from there (today `platform/schema.py` tries the source tree first — G-106 fixes that for the installed tree).
 
 ## Acceptance
