@@ -42,13 +42,16 @@ from .trust import TrustError, check_lock_file, check_trusted_path, open_checked
 if TYPE_CHECKING:
     from .core import Helper
 
-__all__ = ["OpContext", "OpSpec", "builtin_ops", "write_gate"]
+__all__ = ["BudgetMeter", "OpContext", "OpSpec", "accepted_match", "builtin_ops", "write_gate"]
 
 AUDIT_TAIL_DEFAULT = 20
 AUDIT_TAIL_MAX = 200
 _TAIL_READ_BYTES = 256 * 1024  # audit.tail never reads more than the last 256 KiB
 _RESULT_SLACK = 2048  # envelope of the response line around the result
 TELEMETRY_INTERVAL_RANGE = (0.2, 60.0)
+ACCEPTED_FILE = "EXPECTED-words.txt"  # inside the helper's accepted dir (G-107): the format of profiles/EXPECTED-words.txt
+_ACCEPTED_MAX_BYTES = 64 * 1024
+_AUDIT_CHUNK = 256 * 1024
 
 
 @dataclass
@@ -229,6 +232,239 @@ def op_audit_tail(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
 
 
 # --------------------------------------------------------------------------------------------------------------
+# Heartbeat budget (G-107, contract 8 addendum): ops_used / ops_budget
+# --------------------------------------------------------------------------------------------------------------
+class BudgetMeter:
+    """``(ops_used, ops_budget)`` for the heartbeat, cheap enough to call every beat.
+
+    ``ops_used`` is what the guard counts for the per-boot cap (``arltuner.guard.read_state``): the ``attempt`` records of the audit log whose
+    ``boot_id`` is the current one (``None`` is its own bucket). It is counted *incrementally*: the audit file is opened and ``fstat``-ed every
+    call and only the bytes appended since the last call are read (complete lines only), so a long log is read once, never per beat. A replaced or
+    truncated file is rescanned from the start. ``ops_budget`` is ``max_operations_per_boot`` of the loaded root policy, cached on the policy
+    file's stat. Either is ``None`` (never a guess) when its source is untrusted, unreadable or invalid, which includes an audit log the guard
+    itself would refuse (``AuditUnreadable``). Runs on the heartbeat thread, never on the dispatch thread.
+    """
+
+    def __init__(self, helper: Helper) -> None:
+        self._helper = helper
+        self._lock = threading.Lock()
+        # audit scan state
+        self._audit_key: tuple[int, int, int, int] | None = None  # (dev, ino, size, mtime_ns) at the last scan
+        self._offset = 0
+        self._by_boot: dict[str | None, int] = {}
+        self._audit_error: str | None = None
+        # policy cache
+        self._policy_key: tuple[int, int, int, int] | None = None
+        self._budget: int | None = None
+
+    def snapshot(self) -> tuple[int | None, int | None]:
+        with self._lock:
+            try:
+                budget = self._budget_locked()
+            except Exception:  # a heartbeat must never die of its own telemetry
+                budget = None
+            try:
+                used = self._used_locked()
+            except Exception:
+                used = None
+            return used, budget
+
+    # ---- budget
+    def _budget_locked(self) -> int | None:
+        cfg = self._helper.cfg
+        if cfg.policy_path is None:
+            return default_m1_policy().max_operations_per_boot
+        try:
+            _trust(self._helper, cfg.policy_path, want="file", must_exist=True)
+            st = os.stat(cfg.policy_path)
+        except (OpError, OSError):
+            self._policy_key, self._budget = None, None
+            return None
+        key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+        if key != self._policy_key:
+            try:
+                self._budget = load_policy(cfg.policy_path).max_operations_per_boot
+            except (PolicyError, OSError):
+                self._budget = None
+            self._policy_key = key
+        return self._budget
+
+    # ---- used
+    def _used_locked(self) -> int | None:
+        helper = self._helper
+        cfg = helper.cfg
+        path = cfg.audit_path
+        try:
+            _trust(helper, path, want="file", must_exist=False)
+            fd = open_checked(path, write=False, create=False, euid=cfg.euid_fn(), what="audit log")
+        except FileNotFoundError:
+            self._reset()
+            return self._count()  # no log yet: no history, as read_state says
+        except (OpError, TrustError, OSError):
+            self._reset()
+            return None
+        try:
+            with os.fdopen(fd, "rb") as handle:
+                st = os.fstat(handle.fileno())
+                key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                replaced = self._audit_key is not None and (st.st_dev, st.st_ino) != self._audit_key[:2]
+                if replaced or st.st_size < self._offset:
+                    self._reset()  # a different or shorter file is not an append to what was counted
+                if key != self._audit_key:
+                    self._scan(handle)
+                    self._audit_key = key
+        except OSError:
+            self._reset()
+            return None
+        return None if self._audit_error is not None else self._count()
+
+    def _reset(self) -> None:
+        self._audit_key, self._offset, self._by_boot, self._audit_error = None, 0, {}, None
+
+    def _count(self) -> int:
+        try:
+            boot = self._helper.cfg.boot_id_fn()
+        except Exception:
+            boot = None
+        boot_id = boot.strip() or None if isinstance(boot, str) else None
+        return self._by_boot.get(boot_id, 0)
+
+    def _scan(self, handle: Any) -> None:
+        """Read what was appended since ``self._offset``: complete lines only (a trailing partial line waits for its newline)."""
+        if self._audit_error is not None:
+            return  # an unreadable record stays unreadable (the log is append-only); only a replaced or truncated file resets it
+        handle.seek(self._offset)
+        pending = b""
+        while True:
+            chunk = handle.read(_AUDIT_CHUNK)
+            if not chunk:
+                break
+            pending += chunk
+            cut = pending.rfind(b"\n")
+            if cut < 0:
+                continue
+            complete, pending = pending[: cut + 1], pending[cut + 1 :]
+            for raw in complete.splitlines():
+                self._line(raw)
+            self._offset += len(complete)
+            if self._audit_error is not None:
+                break
+
+    def _line(self, raw: bytes) -> None:
+        text = raw.strip()
+        if not text or self._audit_error is not None:
+            return
+        try:
+            record = json.loads(text.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            self._audit_error = "an audit record is not valid JSON"  # the guard refuses such a log: no count is claimed
+            return
+        if not isinstance(record, dict) or not isinstance(record.get("event"), str):
+            self._audit_error = "an audit record is not an object with an 'event'"
+            return
+        if record["event"] != "attempt":
+            return
+        boot = record.get("boot_id")
+        if boot is not None and not isinstance(boot, str):
+            self._audit_error = "an attempt record's boot_id is neither a string nor null"
+            return
+        self._by_boot[boot] = self._by_boot.get(boot, 0) + 1
+
+
+# --------------------------------------------------------------------------------------------------------------
+# accepted-state compare (G-107): vf.dump result vs the trusted EXPECTED words
+# --------------------------------------------------------------------------------------------------------------
+def _parse_expected(text: str) -> dict[int, list[int]]:
+    """``<cpu> <OC word (P2=0)> <point 1> ... <point n>`` per line (hex, no 0x; cpu decimal); ``#`` lines and blanks ignored. ValueError if malformed."""
+    table: dict[int, list[int]] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        try:
+            cpu = int(parts[0])
+            words = [int(w, 16) for w in parts[1:]]
+        except ValueError:
+            raise ValueError(f"line {number}: not '<cpu> <hex words>'") from None
+        if cpu < 0 or len(words) < 2 or any(not 0 <= w <= 0xFFFFFFFF for w in words):
+            raise ValueError(f"line {number}: needs a cpu, the OC word and at least one point, each a 32-bit hex word")
+        if cpu in table:
+            raise ValueError(f"line {number}: cpu {cpu} appears twice")
+        table[cpu] = words
+    if not table:
+        raise ValueError("no expected words")
+    return table
+
+
+def _load_accepted(helper: Helper) -> tuple[dict[int, list[int]] | None, str | None]:
+    """The trusted EXPECTED table, or ``(None, why)``. Opened only through :func:`open_checked` (no symlink, one link, owned by the helper's euid,
+    not group/world-writable); with ``enforce_trust`` also the SPEC 4.4 parent-chain check. Any doubt is *untrusted*, never a guess."""
+    cfg = helper.cfg
+    directory = getattr(cfg, "accepted_dir", None)  # HelperConfig field owned by G-106; absent or None: nothing is read
+    if directory is None:
+        return None, "no accepted state directory is configured"
+    path = Path(directory) / ACCEPTED_FILE
+    if cfg.enforce_trust:
+        try:
+            check_trusted_path(path, want="file", must_exist=True, lstat_fn=cfg.lstat_fn)
+        except TrustError as exc:
+            if exc.reason == "does not exist" and exc.path == str(path):
+                return None, f"no accepted state ({path} is absent)"
+            return None, f"accepted state untrusted: {exc}"
+    try:
+        fd = open_checked(path, write=False, create=False, euid=cfg.euid_fn(), what="accepted state")
+    except FileNotFoundError:
+        return None, f"no accepted state ({path} is absent)"
+    except TrustError as exc:
+        return None, f"accepted state untrusted: {exc}"
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            data = handle.read(_ACCEPTED_MAX_BYTES + 1)
+    except OSError as exc:
+        return None, f"accepted state unreadable: {exc.strerror or exc}"
+    if len(data) > _ACCEPTED_MAX_BYTES:
+        return None, f"accepted state untrusted: {path} is larger than {_ACCEPTED_MAX_BYTES} bytes"
+    try:
+        return _parse_expected(data.decode("utf-8")), None
+    except (UnicodeDecodeError, ValueError) as exc:
+        return None, f"accepted state invalid: {exc}"
+
+
+def _hex(word: int | None) -> str | None:
+    return None if word is None else f"{word:#010x}"
+
+
+def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Compare the dump ``document`` (``vfdump.to_json``) with the accepted EXPECTED words: ``(per_core, None)`` or ``(None, note)``.
+    ``per_core`` has one ``{cpu, match, diffs: [{point, expected, actual}]}`` for each dumped CPU that has an expected line (``point`` 0 is the OC
+    word, P2 = 0; 1..n the points; words as ``0x%08x``, ``null`` when one side has no such point). CPUs without an expected line are not listed."""
+    try:
+        table, note = _load_accepted(helper)
+        if table is None:
+            return None, note
+        out: list[dict[str, Any]] = []
+        for unit in document.get("units", []):
+            for cpu in unit.get("cpus", []):
+                want = table.get(cpu["cpu"])
+                if want is None:
+                    continue
+                oc = cpu.get("oc")
+                got: list[int | None] = [None if oc is None else int(oc["word"], 16)]
+                got += [int(p["word"], 16) for p in cpu.get("points", [])]
+                diffs = []
+                for point in range(max(len(want), len(got))):
+                    expected = want[point] if point < len(want) else None
+                    actual = got[point] if point < len(got) else None
+                    if expected != actual:
+                        diffs.append({"point": point, "expected": _hex(expected), "actual": _hex(actual)})
+                out.append({"cpu": cpu["cpu"], "match": not diffs, "diffs": diffs})
+        return out, None
+    except Exception as exc:  # the compare is informational: it must never fail a dump that read the chip
+        return None, f"accepted compare failed: {type(exc).__name__}: {exc}"
+
+
+# --------------------------------------------------------------------------------------------------------------
 # vf.dump
 # --------------------------------------------------------------------------------------------------------------
 class _Cancel(KeyboardInterrupt):
@@ -402,7 +638,8 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
         raise OpError(INTERNAL, stop.text, {"partial": document, "ops_done": sent})
     if tripped:
         raise OpError(INTERNAL, f"the guard tripped after the dump: {trip_reason}", {"partial": document, "ops_done": sent})
-    return {**document, "ops_done": sent}
+    matched, note = accepted_match(helper, document)
+    return {**document, "accepted_match": matched, "accepted_note": note, "ops_done": sent}
 
 
 # --------------------------------------------------------------------------------------------------------------
