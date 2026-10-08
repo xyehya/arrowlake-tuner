@@ -78,3 +78,6 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   behind hardware gates; autostart option (off / with CONFIRM / unattended) subject to D-021.
 - **D-021 · DRAFT, NOT SIGNED · Unattended autostart apply.** Text: `docs/SPEC.md` §10. Signing it supersedes, for that mode only: SAFETY.md step 5,
   AGENTS.md per-sitting go-ahead, D-020/D-020a "never unattended", `tools/lnx/orchestrator_confirm.py` "never scheduled", the env-flag rule.
+- **D-024 · 2026-10-08 · OD-1, OD-2, OD-5 resolved (from the operator).** Root-owned install for the helper, policy, audit log and accepted state,
+  also during development (SPEC §4.4/§11); Python ≥ 3.12; private GitHub `xyehya/arrowlake-tuner`. OD-3/OD-4 (autostart scope, D-021) deferred to
+  G6. BIOS PL1 = 250 W (operator; resolves the 295/250 conflict in the records).

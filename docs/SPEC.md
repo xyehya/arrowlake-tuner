@@ -33,7 +33,7 @@ CPUID alone. Each failure is a named refusal, never a workaround; preflight re-r
 | lockdown: bracketed word in `/sys/kernel/security/lockdown` is `none` (Secure Boot lockdown blocks MSR writes) | read-only + explanation |
 | `/dev/cpu/*/msr` present (module loaded, built in, or loadable); `/sys/module/msr/parameters/allow_writes` ≠ `off` | explanation |
 | polkit + `pkexec` + a polkit agent in the session | helper cannot start; explanation |
-| Python ≥ 3.12 (**OD-2**) | refuse |
+| Python ≥ 3.12 (D-024) | refuse |
 | optional tools: stress-ng, stressapptest, perf, turbostat, lm-sensors, nvidia-smi | feature shows "missing: install <pkg>" |
 Measured here `[MEASURED lnx 2026-10-08]`: lockdown `[none]`, Secure Boot disabled, `allow_writes` default, `intel_pstate` active (HWP).
 
@@ -176,8 +176,8 @@ budget shared with the CLI via the audit log (OD-1 moves it to `/var/lib`: the C
 ## 14. Open decisions (operator)
 | # | Question | Proposed | Blocks |
 |---|---|---|---|
-| OD-1 | Root-owned install for helper, policy, audit, accepted state — also during development (CLI keeps running from the checkout with sudo; it moves its audit log and lock to the same `/var/lib` / `/run/lock` paths) | yes | G1 |
-| OD-2 | Python ≥ 3.12 (excludes Ubuntu 22.04, Debian 12) or ≥ 3.11 | 3.12 | G1 |
-| OD-3 | Autostart applies only a profile with a recorded gate (today p-step7) | yes | G6 |
-| OD-4 | Sign D-021 (unattended autostart, §10) | — | G6 |
-| OD-5 | GitHub remote: private repo `xyehya/arrowlake-tuner`; public later after a privacy scrub? | private now | sync only |
+| OD-1 | Root-owned install for helper, policy, audit, accepted state — also during development (CLI keeps running from the checkout with sudo; it moves its audit log and lock to the same `/var/lib` / `/run/lock` paths) | **yes (D-024)** | — |
+| OD-2 | Python ≥ 3.12 (excludes Ubuntu 22.04, Debian 12) or ≥ 3.11 | **yes (D-024)** | — |
+| OD-3 | Autostart applies only a profile with a recorded gate (today p-step7) | deferred to G6 | G6 |
+| OD-4 | Sign D-021 (unattended autostart, §10) | deferred to G6 | G6 |
+| OD-5 | GitHub remote: private repo `xyehya/arrowlake-tuner`; public later after a privacy scrub? | **yes (D-024)** | — |

@@ -1,5 +1,5 @@
 # G-102 — root helper (protocol, state machine, read-only ops)
-- **Status:** ready (after OD-1) · **Host:** lnx · **Tier:** T0 build (simulator); first real run T1 by the orchestrator · **Depends on:** G-101
+- **Status:** ready · **Host:** lnx · **Tier:** T0 build (simulator); first real run T1 by the orchestrator · **Depends on:** G-101
 
 ## Goal
 `arltuner-helper`: a process speaking JSON lines on stdin/stdout (SPEC §4.5) with the state machine and lock of §4.6; G1 implements only read-only

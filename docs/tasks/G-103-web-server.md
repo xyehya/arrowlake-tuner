@@ -1,5 +1,5 @@
 # G-103 — web server + security suite
-- **Status:** ready (after OD-1) · **Host:** lnx · **Tier:** T0 · **Depends on:** none
+- **Status:** ready · **Host:** lnx · **Tier:** T0 · **Depends on:** none
 
 ## Goal
 Unprivileged `ThreadingHTTPServer` per SPEC §4.2: bootstrap token file (0600) → `HttpOnly; SameSite=Strict` cookie, exact Host/Origin checks, JSON-only

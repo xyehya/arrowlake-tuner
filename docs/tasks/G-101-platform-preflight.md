@@ -1,5 +1,5 @@
 # G-101 — platform file + preflight
-- **Status:** ready (after OD-2) · **Host:** lnx · **Tier:** T0 · **Branch:** `task/G-101-platform-preflight` · **Depends on:** none
+- **Status:** ready · **Host:** lnx · **Tier:** T0 · **Branch:** `task/G-101-platform-preflight` · **Depends on:** none
 
 ## Goal
 Move the platform facts (CPUID, topology, V/F point ratios, fused words `FUSED_POINT`, turbo-table defaults, sensor chip) out of code constants into

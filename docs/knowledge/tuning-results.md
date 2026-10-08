@@ -31,7 +31,7 @@ cpu8  0 8 F 17 1E 28 FB80002E     cpu12/16/20  0 8 F 17 1E 28 FCC0002E
 ```
 (P0 OC word 0x39 is written by the BIOS at every boot; the E rows are one CPU per cluster.)
 Apply order after boot: E split3 (65 ops) -> p-boot-ramp (51) -> p-step7 (51) = 167 apply ops (the post-apply vf-dump adds ~110-130 reads), from stock or from a warm reboot.
-BIOS assumed: LLC 6, VccIA -100 mV, ring 40x -16 mV, DDR5-7200, NGU/D2D 32x, VccSA 1.185 V, TVB voltage optimizations off. PL1/PL2: 295/295 W per STATE.md vs 250/250 W per later notes (see platform-285k.md).
+BIOS assumed: LLC 6, VccIA -100 mV, ring 40x -16 mV, DDR5-7200, NGU/D2D 32x, VccSA 1.185 V, TVB voltage optimizations off. PL1 250 W (operator 2026-10-08, D-024; PL2 250 per the 10-05 notes); earlier records 295/295 W.
 
 ## 2. Acceptance gate (D-019)
 OCCT Linpack 2021 (24 threads, 2048 MB) 60 min + OCCT CPU SSE variable 60 min, OCCT unprivileged, OCCT/XTU closed during apply, WHEA/MCE watched.

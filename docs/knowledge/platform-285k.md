@@ -15,7 +15,7 @@ Register/command layouts are NOT here (see registers.md, copied separately).
 | E-cores in BIOS | no voltage / V/F options | [USER] |
 | Registers present | MSR 0x150 mailbox, 0x1AD/0x1AE/0x650/0x651 turbo tables, 0x198 VID, 0x620 ring ratio | [MEASURED lnx 2026-09-29] `linuxmon@b01f78a:docs/research/lnx-turbostat-plus-facts.md` |
 
-Power limits CONFLICT in sources: `linuxmon@b01f78a:docs/STATE.md` (2026-10-08) says PL1/PL2 295/295 W; `linuxmon@b01f78a:docs/research/win-first-apply.md` (2026-10-05) and `linuxmon@b01f78a:docs/research/lnx-first-read.md` (2026-10-07) say 250/250 W with P turbo 55x for 3-8 active. Treat PL as an operator BIOS setting; read it (powercap), don't assume.
+Power limits: **PL1 250 W** (operator, 2026-10-08, D-024; PL2 250 W per `linuxmon@b01f78a:docs/research/win-first-apply.md` 2026-10-05). Older records said 295/295 W. Read PL at runtime (powercap), don't assume.
 
 ## 2. Topology
 | Item | Value |
