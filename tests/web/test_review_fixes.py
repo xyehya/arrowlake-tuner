@@ -43,7 +43,7 @@ class TestAuthLockout(Base):  # item 1
         for _ in range(5):
             self.assertEqual(self.req("GET", "/", cookie="B" * 43)[0], 401)
         self.assertEqual(self.req("GET", "/", cookie="B" * 43)[0], 429)
-        self.assertEqual(self.bootstrap("nope")[0], 429)
+        self.assertEqual(self.bootstrap("nope")[0], 403)  # bootstrap has its own budget
         self.assertEqual(self.req("GET", "/", cookie=ck)[0], 200)  # the valid session is never rate-limited
         self.assertEqual(self.call("preflight", cookie=ck)[0], 200)
 
@@ -146,8 +146,8 @@ class TestLongOps(Base):  # item 4
         self.fake.hold.clear()
         rid = json.loads(self.call("vf.dump", {}, cookie=ck)[2])["id"]
         self.fake.link.close()
-        got = results_from(read_until(sse, b"helper_unavailable"))
-        self.assertEqual(got[rid]["server_error"], "helper_unavailable")
+        got = results_from(read_until(sse, b"helper_lost"))
+        self.assertEqual(got[rid]["server_error"], "helper_lost")
         self.fake.hold.set()
 
 
@@ -435,6 +435,146 @@ class TestPublicResponse(unittest.TestCase):  # item 12
         long = public_response({"id": "w", "ok": False, "error": {"code": "INTERNAL", "message": "m" * 5000}})
         self.assertEqual(len(long["error"]["message"]), 500)
         self.assertEqual(public_response({"id": "w", "ok": False, "error": "weird"})["error"]["code"], "INTERNAL")
+
+
+class TestBootstrapNotLockedOut(Base):  # round 2, item 1
+    cfg_kw = {"fail_limit": 5}
+
+    def test_bad_tokens_never_block_the_correct_one(self):
+        for _ in range(10):
+            self.assertIn(self.bootstrap("wrong")[0], (403, 429))
+        self.assertEqual(self.bootstrap("wrong")[0], 429)  # noise is throttled ...
+        self.assertEqual(self.bootstrap()[0], 200)         # ... the real token is not
+
+
+class TestPendingSlotRelease(Base):  # round 2, item 2
+    cfg_kw = {"max_pending_long": 1}
+
+    def hb(self, state, n=1):
+        for _ in range(n):
+            self.fake.emit({"event": "heartbeat", "op_id": None, "state": state})
+
+    def wait_free(self):
+        end = time.monotonic() + 3
+        while self.srv.pending_long and time.monotonic() < end:
+            time.sleep(0.02)
+        self.assertEqual(self.srv.pending_long, 0)
+
+    def test_three_idle_heartbeats_release_slot_and_report(self):
+        ck = self.login()
+        sse = open_sse(self, ck)
+        read_until(sse, b"retry: 3000")
+        self.fake.hold.clear()
+        rid = json.loads(self.call("vf.dump", {}, cookie=ck)[2])["id"]
+        self.assertEqual(self.call("restore", {}, cookie=ck)[0], 429)  # slot is held
+        self.hb("idle", 2)
+        self.hb("applying")  # a non-idle heartbeat resets the count: the helper may still be working
+        self.hb("idle", 2)
+        time.sleep(0.4)
+        self.assertEqual(self.srv.pending_long, 1)
+        self.hb("idle")
+        got = results_from(read_until(sse, b"helper_lost"))
+        self.assertEqual(got[rid], {"event": "result", "id": rid, "ok": False, "server_error": "helper_lost"})
+        self.wait_free()
+        self.fake.hold.set()  # a late real answer for the same id is ignored
+        time.sleep(0.3)
+        self.assertEqual(self.call("restore", {}, cookie=ck)[0], 202)
+
+    def test_no_failure_without_idle_heartbeats(self):
+        ck = self.login()
+        self.fake.hold.clear()
+        self.call("vf.dump", {}, cookie=ck)
+        self.hb("applying", 6)
+        time.sleep(0.5)
+        self.assertEqual(self.srv.pending_long, 1)  # no wall-clock timeout either
+        self.fake.hold.set()
+
+    def test_link_death_releases_slot(self):
+        ck = self.login()
+        sse = open_sse(self, ck)
+        self.fake.hold.clear()
+        rid = json.loads(self.call("vf.dump", {}, cookie=ck)[2])["id"]
+        self.fake.kill()
+        self.assertEqual(results_from(read_until(sse, b"helper_lost"))[rid]["server_error"], "helper_lost")
+        self.wait_free()
+        self.fake.hold.set()
+
+
+class TestSessionContinuity(Base):  # round 2, item 3
+    def setUp(self):
+        self.now = [1000.0]
+        self.cfg_kw = {"clock": lambda: self.now[0], "session_idle_s": 100, "session_max_s": 500}
+        super().setUp()
+
+    def test_open_stream_keeps_session_alive_but_not_past_absolute_cap(self):
+        ck = self.login()
+        sse = open_sse(self, ck)
+        read_until(sse, b"retry: 3000")
+        self.now[0] += 90
+        time.sleep(0.8)  # the stream's loop counts as activity
+        self.now[0] += 90  # 180 s since login, 90 s since the stream's last touch: still valid
+        self.assertEqual(self.req("GET", "/", cookie=ck)[0], 200)
+        self.now[0] += 400  # now beyond the 500 s absolute cap
+        time.sleep(0.8)
+        sse.settimeout(3)
+        self.assertEqual(sse.recv(100), b"")  # stream ended
+        self.assertEqual(self.req("GET", "/", cookie=ck)[0], 401)
+
+    def test_relogin_via_sigusr1_without_restart(self):
+        import signal as _signal
+        from arltuner.web import reissue
+        with tempfile.TemporaryDirectory() as d:
+            lp = launcher.write_launcher(Path(d) / "launcher.html", self.srv.origin, self.srv.token)
+            old = self.srv.token
+            ck = self.login()
+            self.req("POST", "/api/logout", cookie=ck, origin=self.srv.origin, body=b"")
+            self.assertEqual(self.req("GET", "/", cookie=ck)[0], 401)
+            self.assertEqual(self.bootstrap(old)[0], 403)  # the first token is burned
+            pidfile = reissue.write_pidfile(Path(d))
+            self.assertEqual(stat.S_IMODE(pidfile.stat().st_mode), 0o600)
+            uninstall = reissue.install_reissue(self.srv, lp)
+            self.addCleanup(uninstall)
+            self.assertEqual(reissue.signal_running(Path(d), marker=b"python"), os.getpid())  # what a second arltuner-gui run does
+            end = time.monotonic() + 3
+            while time.monotonic() < end and self.srv.token == old:
+                time.sleep(0.02)
+            time.sleep(0.2)
+            self.assertNotEqual(self.srv.token, old)
+            self.assertIn(self.srv.token, lp.read_text())
+            self.assertEqual(stat.S_IMODE(lp.stat().st_mode), 0o600)
+            self.assertEqual(self.bootstrap(old)[0], 403)
+            ck2 = self.login()
+            self.assertEqual(self.req("GET", "/", cookie=ck2)[0], 200)
+            self.assertEqual(self.bootstrap()[0], 403)  # single-use again
+
+    def test_signal_running_ignores_stale_or_foreign_pid(self):
+        from arltuner.web import reissue
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(reissue.signal_running(Path(d)))  # no pid file
+            (Path(d) / reissue.PID_NAME).write_text("999999999\n")
+            self.assertIsNone(reissue.signal_running(Path(d)))  # no such process
+            (Path(d) / reissue.PID_NAME).write_text(f"{os.getpid()}\n")
+            self.assertIsNone(reissue.signal_running(Path(d)))  # a live pid that is not arltuner-gui is never signalled
+            (Path(d) / reissue.PID_NAME).write_text("junk")
+            self.assertIsNone(reissue.signal_running(Path(d)))
+
+
+class TestResultsPerSession(Base):  # round 2, item 4
+    def test_ring_replay_and_live_delivery_only_to_owning_session(self):
+        ck1 = self.login()
+        # a second session: mint a fresh token (what a re-login does) and bootstrap again
+        tok = self.srv.new_bootstrap()
+        st, r, _ = self.bootstrap(tok)
+        ck2 = r.getheader("Set-Cookie").split(";")[0].split("=", 1)[1]
+        self.assertNotEqual(ck1, ck2)
+        live2 = open_sse(self, ck2)
+        read_until(live2, b"retry: 3000")
+        rid = json.loads(self.call("vf.dump", {}, cookie=ck1)[2])["id"]
+        time.sleep(0.4)
+        late1, late2 = open_sse(self, ck1), open_sse(self, ck2)
+        self.assertIn(rid, results_from(read_until(late1, rid.encode() + b'","ok"')))  # owner gets the replay
+        got2 = read_until(late2, rid.encode(), limit=1.0) + read_until(live2, rid.encode(), limit=1.0)
+        self.assertNotIn(rid.encode(), got2)  # other session: neither replay nor live delivery
 
 
 if __name__ == "__main__":

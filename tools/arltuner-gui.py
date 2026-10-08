@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from arltuner.web.helperlink import HelperLink  # noqa: E402
 from arltuner.web.launcher import LauncherDirError, check_private_dir, make_private_dir, write_launcher  # noqa: E402
+from arltuner.web.reissue import install_reissue, signal_running, write_pidfile  # noqa: E402
 from arltuner.web.server import Config, WebServer  # noqa: E402
 
 
@@ -43,6 +44,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"arltuner-gui: {e}", file=sys.stderr)
         return 2
 
+    pid = signal_running(a.launcher.parent)
+    if pid:  # a server is already running: ask it for a fresh single-use launcher instead of starting another
+        print(f"server already running (pid {pid}); wrote a fresh launcher shortly:\nopen once: {a.launcher.resolve().as_uri()}")
+        if a.open:
+            import time
+            time.sleep(0.5)
+            webbrowser.open(a.launcher.resolve().as_uri())
+        return 0
     link = None
     if a.helper:
         proc = subprocess.Popen(a.helper, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
@@ -52,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     path = write_launcher(a.launcher, srv.origin, srv.token)
     srv.on_bootstrap = lambda: path.unlink(missing_ok=True)
     srv.start()
+    pidfile = write_pidfile(a.launcher.parent)
+    install_reissue(srv, path)  # SIGUSR1 from a second run: new token + launcher
     url = path.resolve().as_uri()
     print(f"listening on {srv.origin}\nopen once: {url}", flush=True)
     if a.open:
@@ -63,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         srv.close()
         path.unlink(missing_ok=True)
+        pidfile.unlink(missing_ok=True)
     return 0
 
 

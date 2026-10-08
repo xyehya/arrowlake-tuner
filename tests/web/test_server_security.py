@@ -200,9 +200,9 @@ class TestAuth(Base):
             self.assertEqual(self.bootstrap("wrong-token")[0], 403)
         st, _, _ = self.bootstrap("wrong-token")
         self.assertEqual(st, 429)
-        # while blocked even the right token is refused, and so are cookie-less requests
-        self.assertEqual(self.bootstrap()[0], 429)
-        self.assertEqual(self.req("GET", "/", cookie="A" * 43)[0], 429)  # a wrong cookie while blocked
+        # the throttle only covers wrong tokens: the correct one still works, and the cookie limiter is a separate budget
+        self.assertEqual(self.req("GET", "/", cookie="A" * 43)[0], 401)
+        self.assertEqual(self.bootstrap()[0], 200)
 
     def test_rate_limit_window_expires(self):
         now = [0.0]

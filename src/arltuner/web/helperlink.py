@@ -36,8 +36,9 @@ class RequestTooLarge(Exception):
 class Subscription:
     """A bounded event queue. If the consumer is too slow it is flagged ``overflowed`` and should be dropped (it can reconnect)."""
 
-    def __init__(self, link: "HelperLink", maxsize: int = 256) -> None:
+    def __init__(self, link: "HelperLink", maxsize: int = 256, sid: str | None = None) -> None:
         self._link = link
+        self.sid = sid  # session the subscriber belongs to: it only receives published results tagged with that session
         self.queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=maxsize)
         self.overflowed = False
 
@@ -58,7 +59,7 @@ class HelperLink:
         self._pending: dict[str, Callable[[str, dict[str, Any] | None], None]] = {}  # id -> callback(id, response | None)
         self._subs: list[Subscription] = []
         self._latest: dict[str, dict[str, Any]] = {}  # last "state" / "heartbeat" event, replayed to new subscribers
-        self._recent: collections.deque[dict[str, Any]] = collections.deque(maxlen=RECENT_RESULTS)  # published "result" events
+        self._recent: collections.deque[tuple[str | None, dict[str, Any]]] = collections.deque(maxlen=RECENT_RESULTS)  # (session id, result)
         self._wq: queue.Queue[bytes | None] = queue.Queue(maxsize=WRITE_QUEUE)
         self._seq = 0
         self._alive = True
@@ -131,24 +132,25 @@ class HelperLink:
             self._fail_all()
 
     # ---- events ---------------------------------------------------------------------------------------------------------------
-    def subscribe(self) -> Subscription:
-        sub = Subscription(self)
+    def subscribe(self, sid: str | None = None) -> Subscription:
+        sub = Subscription(self, sid=sid)
         with self._lock:
             for ev in self._latest.values():
                 sub.put(ev)
-            for ev in self._recent:
-                sub.put(ev)
+            for owner, ev in self._recent:
+                if owner == sid:
+                    sub.put(ev)
             if not self._alive:
                 sub.put(CLOSED)
             self._subs.append(sub)
         return sub
 
-    def publish(self, ev: dict[str, Any]) -> None:
-        """Server-originated event (the forwarded final response of a long op, event ``result``) to every subscriber."""
+    def publish(self, ev: dict[str, Any], sid: str | None = None) -> None:
+        """Server-originated event (the final response of a long op, event ``result``), delivered only to subscribers of session ``sid``."""
         with self._lock:
             if ev.get("event") == "result":
-                self._recent.append(ev)
-            subs = list(self._subs)
+                self._recent.append((sid, ev))
+            subs = [s for s in self._subs if s.sid == sid]
         for s in subs:
             s.put(ev)
 

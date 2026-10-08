@@ -182,10 +182,12 @@ class WebServer:
         self._token_used = False
         self._sessions: dict[str, list[float]] = {}  # id -> [created, last_seen]
         self._lock = threading.Lock()
-        self.limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)
+        self.limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)       # wrong session cookies
+        self.boot_limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)  # wrong bootstrap tokens (own budget)
         self.stop = threading.Event()
         self.sse_clients = 0
-        self.pending_long = 0
+        self._long_lock = threading.RLock()
+        self._long: dict[str, list] = {}  # request id -> [session id, consecutive idle heartbeats] of long ops awaiting the helper's answer
         self.on_bootstrap: Callable[[], None] | None = None
         # manifest contents are read once, here; a request never reaches the filesystem
         self.assets: dict[str, tuple[bytes, str]] = {}
@@ -210,6 +212,8 @@ class WebServer:
         return self._token
 
     def start(self) -> "WebServer":
+        if self.helper is not None:
+            threading.Thread(target=self._watch_helper, name="web-helper-watch", daemon=True).start()
         self._thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.1}, name="web", daemon=True)
         self._thread.start()
         return self
@@ -254,21 +258,68 @@ class WebServer:
                 self._sessions[found][1] = now
         return found
 
+    def new_bootstrap(self) -> str:
+        """Mint a fresh single-use bootstrap token (the previous one stops working). Existing sessions are untouched."""
+        with self._lock:
+            self._token = secrets.token_urlsafe(32)
+            self._token_born = self.cfg.clock()
+            self._token_used = False
+            return self._token
+
     def logout(self, sid: str) -> None:
         with self._lock:
             self._sessions.pop(sid, None)
 
     # ---- long-op bookkeeping --------------------------------------------------------------------------------------------------
-    def reserve_long(self) -> bool:
-        with self._lock:
-            if self.pending_long >= self.cfg.max_pending_long:
-                return False
-            self.pending_long += 1
-            return True
+    @property
+    def pending_long(self) -> int:
+        with self._long_lock:
+            return len(self._long)
 
-    def release_long(self) -> None:
-        with self._lock:
-            self.pending_long = max(0, self.pending_long - 1)
+    def submit_long(self, helper: HelperLink, op: str, args: dict[str, Any], sid: str) -> str | None:
+        """Submit a long op if a slot is free (None = no slot). The slot is held until the helper answers, the link dies, or the helper
+        reports ``idle`` for 3 consecutive heartbeats while the op is still pending (``helper_lost``). No wall-clock timeout."""
+        with self._long_lock:
+            if len(self._long) >= self.cfg.max_pending_long:
+                return None
+
+            def done(rid: str, resp: dict[str, Any] | None) -> None:
+                with self._long_lock:
+                    if self._long.pop(rid, None) is None:  # already reported lost
+                        return
+                if resp is None:
+                    ev: dict[str, Any] = {"event": "result", "id": rid, "ok": False, "server_error": "helper_lost"}
+                else:
+                    ev = {"event": "result", **public_response(resp)}
+                helper.publish(ev, sid)
+
+            rid = helper.submit(op, args, done)  # raises HelperUnavailable / RequestTooLarge; nothing is registered then
+            self._long[rid] = [sid, 0]
+            return rid
+
+    def _watch_helper(self) -> None:
+        sub = self.helper.subscribe()  # type: ignore[union-attr]
+        try:
+            while not self.stop.is_set():
+                try:
+                    ev = sub.queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if ev is CLOSED:
+                    return
+                if ev.get("event") != "heartbeat":
+                    continue
+                lost: list[tuple[str, str]] = []
+                with self._long_lock:
+                    for rid, rec in list(self._long.items()):
+                        rec[1] = rec[1] + 1 if ev.get("state") == "idle" else 0
+                        if rec[1] >= 3:
+                            lost.append((rid, rec[0]))
+                            del self._long[rid]
+                for rid, sid in lost:
+                    self.helper.publish({"event": "result", "id": rid, "ok": False, "server_error": "helper_lost"}, sid)  # type: ignore[union-attr]
+        finally:
+            sub.close()
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -491,8 +542,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # The launcher is a file:// page, so its form POST carries ``Origin: null``; that (or our own origin) is the only exception.
         if not self._origin_ok(allow_null=True):
             return self._err(403, "bad_origin")
-        if self.srv.limiter.blocked():
-            return self._err(429, "rate_limited")
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/x-www-form-urlencoded":
             return self._err(415, "unsupported_media_type")
@@ -505,8 +554,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             fields = {}
         tokens = fields.get("token", [])
         sid = self.srv.swap_token(tokens[0]) if len(tokens) == 1 else None
-        if sid is None:
-            self.srv.limiter.fail()
+        if sid is None:  # only a wrong token is throttled (own limiter); a correct one is never refused by a limiter
+            if self.srv.boot_limiter.blocked():
+                return self._err(429, "rate_limited")
+            self.srv.boot_limiter.fail()
             return self._err(403, "bad_token")
         # A 303 here would be followed as a cross-site redirect chain (file:// origin) and SameSite=Strict would drop the cookie, so
         # answer 200 and let the now same-site document navigate itself to the clean URL.
@@ -518,7 +569,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _call(self) -> None:
         if not self._origin_ok():
             return self._err(403, "bad_origin")
-        if self._auth() is None:
+        sid = self._auth()
+        if sid is None:
             return
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/json":
@@ -543,7 +595,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if helper is None:
             return self._err(503, "helper_unavailable")
         if is_long:
-            return self._call_long(helper, req["op"], args)
+            return self._call_long(helper, req["op"], args, sid)
         try:
             resp = helper.call(req["op"], args, timeout=self.srv.cfg.call_timeout_s)
         except HelperUnavailable:
@@ -557,27 +609,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, out)
         self._json(_STATUS_FOR_CODE.get(out["error"]["code"], 422), out)
 
-    def _call_long(self, helper: HelperLink, op: str, args: dict[str, Any]) -> None:
-        srv = self.srv
-        if not srv.reserve_long():
-            return self._err(429, "too_many_pending")
-
-        def done(rid: str, resp: dict[str, Any] | None) -> None:
-            srv.release_long()
-            if resp is None:
-                ev: dict[str, Any] = {"event": "result", "id": rid, "ok": False, "server_error": "helper_unavailable"}
-            else:
-                ev = {"event": "result", **public_response(resp)}
-            helper.publish(ev)
-
+    def _call_long(self, helper: HelperLink, op: str, args: dict[str, Any], sid: str) -> None:
         try:
-            rid = helper.submit(op, args, done)
+            rid = self.srv.submit_long(helper, op, args, sid)
         except HelperUnavailable:
-            srv.release_long()
             return self._err(503, "helper_unavailable")
         except RequestTooLarge:
-            srv.release_long()
             return self._err(413, "body_too_large")
+        if rid is None:
+            return self._err(429, "too_many_pending")
         self._json(202, {"id": rid})
 
     def _events(self) -> None:
@@ -600,7 +640,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 srv.sse_clients += 1
         if full:
             return self._err(503, "too_many_streams")
-        sub = helper.subscribe()
+        sub = helper.subscribe(sid)
         last_write = time.monotonic()
         try:
             self.connection.settimeout(srv.cfg.sse_write_timeout_s)  # a client that stops reading is dropped
@@ -608,7 +648,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
             while not srv.stop.is_set():
-                if srv.valid_session(sid, touch=False) is None:  # logged out or expired: end the stream
+                if srv.valid_session(sid) is None:  # an open stream is activity (idle timer); logged out / expired / 12 h cap ends it
                     break
                 try:
                     ev = sub.queue.get(timeout=min(0.5, srv.cfg.sse_keepalive_s))
