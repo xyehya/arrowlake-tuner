@@ -63,6 +63,7 @@ import hmac
 import math
 import os
 import re
+import stat
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -925,7 +926,11 @@ class WriteGuard:
         """LOCKED: exclusive ``O_CREAT|O_EXCL`` lock file holding our pid (portable, no ``fcntl``). An existing file is
         never removed here -- it may belong to a live process; the human clears a stale one by hand."""
         try:
-            fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = os.open(
+                self._lock_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
         except FileExistsError:
             self._refuse(Refusal.LOCKED, f"lock file {self._lock_path} exists ({self._lock_holder()})", req, confirm)
         except OSError as exc:
@@ -942,11 +947,25 @@ class WriteGuard:
         os.close(fd)
 
     def _lock_holder(self) -> str:
+        """Who holds the lock, for the LOCKED message. The lock directory may be writable by others (``/run/lock``), so what sits at the path is
+        untrusted: opened ``O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`` (a symlink fails, a FIFO does not block), ``fstat``-ed on the descriptor (regular
+        file, one link, else never read) and only 32 printable ASCII bytes of it ever reach a message."""
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
-            with open(self._lock_path, "rb") as handle:
-                return "held by pid " + handle.read(32).decode("ascii", "replace").strip()
+            fd = os.open(self._lock_path, flags)
         except OSError:
             return "holder unknown"
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                return "holder unknown: the lock path is not a plain regular file, so it was not read"
+            raw = os.read(fd, 32)
+        except OSError:
+            return "holder unknown"
+        finally:
+            os.close(fd)
+        text = "".join(c for c in raw.decode("ascii", "replace").strip() if " " <= c <= "~")
+        return "held by pid " + text
 
     def _unlink_lock(self) -> None:
         try:
