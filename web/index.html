@@ -3,12 +3,126 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>arrowlake-tuner</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<h1>arrowlake-tuner</h1>
-<p id="status">connecting...</p>
+<header class="top">
+  <h1>arrowlake-tuner <span class="sub">dashboard (read-only)</span></h1>
+  <div class="conn">
+    <span id="conn-sse" class="pill s-unknown">events: connecting</span>
+    <span id="conn-helper" class="pill s-unknown">helper: n/a</span>
+  </div>
+</header>
+
+<div id="banner" class="banner" role="status" hidden></div>
+
+<main>
+  <section id="preflight" class="card" aria-labelledby="h-preflight">
+    <div class="card-head">
+      <h2 id="h-preflight">Preflight</h2>
+      <button type="button" id="btn-preflight">Re-run preflight</button>
+    </div>
+    <p id="pf-summary" class="muted">Preflight not read yet.</p>
+    <table class="grid" id="pf-table" hidden>
+      <thead><tr><th>Check</th><th>Status</th><th>Reason</th></tr></thead>
+      <tbody id="pf-body"></tbody>
+    </table>
+  </section>
+
+  <section id="helper" class="card" aria-labelledby="h-helper">
+    <div class="card-head"><h2 id="h-helper">Helper and mailbox budget</h2></div>
+    <dl class="kv">
+      <dt>State</dt><dd id="hb-state">n/a</dd>
+      <dt>Ops used (this boot)</dt><dd id="hb-used">n/a</dd>
+      <dt>Per-boot budget</dt><dd id="hb-budget">n/a</dd>
+      <dt>Ops left</dt><dd id="hb-left">n/a</dd>
+      <dt>Last heartbeat</dt><dd id="hb-age">n/a</dd>
+    </dl>
+    <progress id="hb-bar" max="1" value="0" aria-label="Mailbox operations used this boot" hidden></progress>
+  </section>
+
+  <section id="tiles" class="card wide" aria-labelledby="h-tiles">
+    <div class="card-head">
+      <h2 id="h-tiles">Live telemetry</h2>
+      <span id="tele-age" class="muted">no sample yet</span>
+    </div>
+    <div class="tiles" id="tile-box">
+      <div class="tile"><div class="tile-label">Package power</div><div class="tile-value" id="t-pkgw">n/a</div></div>
+      <div class="tile"><div class="tile-label">Core power</div><div class="tile-value" id="t-corew">n/a</div></div>
+      <div class="tile"><div class="tile-label">Vcore (board)</div><div class="tile-value" id="t-vcore">n/a</div></div>
+      <div class="tile"><div class="tile-label">Hottest sensor</div><div class="tile-value" id="t-temp">n/a</div></div>
+      <div class="tile"><div class="tile-label">Highest core clock</div><div class="tile-value" id="t-mhz">n/a</div></div>
+      <div class="tile"><div class="tile-label">DRAM read / write</div><div class="tile-value" id="t-dram">n/a</div></div>
+      <div class="tile"><div class="tile-label">Limit reasons (raw 0x6B0)</div><div class="tile-value" id="t-limit">n/a</div></div>
+    </div>
+    <p id="tele-note" class="muted" hidden></p>
+    <div class="scroll">
+      <table class="grid num" id="core-table">
+        <thead><tr><th>CPU</th><th>Core</th><th>MHz</th><th>Busy %</th><th>Ratio</th><th>VID (V)</th></tr></thead>
+        <tbody id="core-body"><tr><td colspan="6" class="muted">Waiting for telemetry.</td></tr></tbody>
+      </table>
+    </div>
+    <details class="temps">
+      <summary>Temperature sensors</summary>
+      <table class="grid num">
+        <thead><tr><th>Sensor</th><th>Temp (C)</th></tr></thead>
+        <tbody id="temp-body"><tr><td colspan="2" class="muted">n/a</td></tr></tbody>
+      </table>
+    </details>
+  </section>
+
+  <section id="vf" class="card wide" aria-labelledby="h-vf">
+    <div class="card-head"><h2 id="h-vf">V/F curve read</h2></div>
+    <p>
+      Reading the V/F curve is a guarded mailbox read session. <strong>Every mailbox request is a WRMSR</strong> and counts against the per-boot budget.
+      Estimated cost: <strong>112 to 124 operations</strong>. Ops left: <strong id="vf-left">n/a</strong>.
+      It never runs by itself.
+    </p>
+    <div class="row">
+      <button type="button" id="btn-dump" disabled>Read V/F curve</button>
+      <button type="button" id="btn-cancel" disabled>Cancel</button>
+      <span id="vf-reason" class="muted"></span>
+    </div>
+    <div id="vf-run" hidden>
+      <progress id="vf-bar" max="1" value="0" aria-label="V/F read progress"></progress>
+      <span id="vf-progress" class="muted"></span>
+    </div>
+    <p id="vf-status" class="muted" role="status"></p>
+    <div class="scroll">
+      <table class="grid num" id="vf-table" hidden>
+        <thead><tr><th>CPU</th><th>Core</th><th>OC point</th><th>V/F points (ratio, offset mV)</th></tr></thead>
+        <tbody id="vf-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="accepted" class="card wide" aria-labelledby="h-acc">
+    <div class="card-head"><h2 id="h-acc">Applied vs accepted</h2></div>
+    <p id="acc-summary">Not read yet. Use "Read V/F curve" to compare the applied V/F words with the accepted state.</p>
+    <div class="scroll">
+      <table class="grid" id="acc-table" hidden>
+        <thead><tr><th>CPU</th><th>Result</th><th>Differences</th></tr></thead>
+        <tbody id="acc-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="audit" class="card wide" aria-labelledby="h-audit">
+    <div class="card-head">
+      <h2 id="h-audit">Audit log (tail)</h2>
+      <button type="button" id="btn-audit">Refresh</button>
+    </div>
+    <p id="audit-note" class="muted">Not read yet.</p>
+    <div class="scroll">
+      <table class="grid" id="audit-table" hidden>
+        <thead><tr><th>Time</th><th>#</th><th>Event</th><th>CPU</th><th>Cmd</th><th>Result</th><th>Reason</th></tr></thead>
+        <tbody id="audit-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
 <script src="/app.js"></script>
 </body>
 </html>
