@@ -41,10 +41,12 @@ if [ -n "$DESTDIR" ]; then
     case $DESTDIR in /*) ;; *) die "DESTDIR must be an absolute path" ;; esac
     PYTHON=${ARLTUNER_PYTHON:-/usr/bin/python3}  # test hooks are honoured only for a DESTDIR install, never for a real one
     LEGACY_AUDIT_OVERRIDE=${ARLTUNER_LEGACY_AUDIT:-}
+    PROC_ROOT=${ARLTUNER_PROC:-/proc}
 else
     [ "$(id -u)" -eq 0 ] || die "must run as root (sudo bash install.sh)"
     PYTHON=/usr/bin/python3  # the interpreter named in the launcher's shebang
     LEGACY_AUDIT_OVERRIDE=
+    PROC_ROOT=/proc
 fi
 
 LIB=$DESTDIR/usr/lib/arltuner
@@ -57,6 +59,21 @@ AUDIT=$STATE/audit.jsonl
 FINAL_PKG=/usr/lib/arltuner/arltuner  # recorded in the .pyc files (compileall -d): the path the code will run from
 
 if [ "$(id -u)" -eq 0 ]; then OWN=(-o root -g root); else OWN=(); fi
+
+# --- a running helper keeps lazily importing from the tree we are about to replace: refuse until it is stopped ---------------------------
+helper_pids() {  # PIDs whose command line has an argument named arltuner-helper (pkexec <path>, python <path>, the launcher itself)
+    local c arg pid
+    for c in "$PROC_ROOT"/[0-9]*/cmdline; do
+        [ -r "$c" ] || continue
+        pid=${c%/cmdline}; pid=${pid##*/}
+        [ "$pid" != "$$" ] || continue
+        while IFS= read -r -d '' arg || [ -n "$arg" ]; do
+            case ${arg##*/} in arltuner-helper|arltuner-helper.py) echo "$pid"; break ;; esac
+        done < "$c" 2>/dev/null || true
+    done
+}
+RUNNING=$(helper_pids | tr '\n' ' ')
+[ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 
 # --- sanity: sources and interpreter -------------------------------------------------------------------------------------------------
 for f in src/arltuner/__init__.py platforms packaging/arltuner-helper packaging/selfcheck.py packaging/io.github.arrowlake-tuner.helper.policy \

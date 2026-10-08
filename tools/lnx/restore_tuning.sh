@@ -11,7 +11,6 @@
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$repo"
 orch=0; check=0; for a in "$@"; do case "$a" in --orchestrated) orch=1;; --check) check=1;; *) echo "unknown arg $a"; exit 2;; esac; done; ts="$(date +%Y%m%dT%H%M%S)"
-audit="--audit $HOME/.local/state/linuxmon/audit.jsonl"
 policy="$(awk -F= '/^policy *=/{gsub(/[ "]/,"",$2); print $2}' profiles/CURRENT)"
 mapfile -t profiles < <(awk '/^profile *=/{sub(/^profile *= */,""); gsub(/"/,""); print}' profiles/CURRENT)
 [ -n "$policy" ] && [ "${#profiles[@]}" -gt 0 ] || { echo "STOP: profiles/CURRENT has no policy/profile lines"; exit 2; }
@@ -27,7 +26,7 @@ fi
 
 lm() {  # one guarded arltuner command (run confirmed above / in chat); full output in the capture file
   local tag="$1"; shift; local f="captures/lnx/restore-$ts-$tag.txt"
-  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" python3 tools/lnx/orchestrator_confirm.py python3 tools/arltuner.py "$@" --device --policy "$policy" --allow-taint-bit 2 $audit > "$f" 2>&1 \
+  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 tools/lnx/orchestrator_confirm.py python3 tools/arltuner.py "$@" --device --policy "$policy" --allow-taint-bit 2 > "$f" 2>&1 \
     || { echo "STOP: $tag failed (see $f)"; tail -5 "$f"; exit 1; }
   grep -E '^Result|REFUSED|refused' "$f" | sed 's/^/  /' || true
 }

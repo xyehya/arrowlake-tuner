@@ -110,34 +110,44 @@ class CliInstalledRule(unittest.TestCase):
 
 
 class CliEndToEnd(test_cli.CliCase):
-    """The rule through ``cli.main``: untrusted => exit 2 before anything is sent; explicit --audit/--lock bypass the defaults."""
+    """The rule through ``cli.main`` (hardware runs only): untrusted => exit 2 before any port is built; explicit --audit/--lock bypass the
+    defaults; ``--sim`` never applies D-030 (legacy per-user defaults even on an installed machine)."""
 
-    def args(self, *extra: object) -> list[object]:
-        return ["read-vf", "--sim", "--cpu", 4, *extra]
+    def setUp(self) -> None:
+        super().setUp()
+        patcher = mock.patch("arltuner.cli.DevCpuMsrPort")
+        self.dev = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def args(self, *extra: object, device: bool = True) -> list[object]:
+        return ["read-vf", "--device" if device else "--sim", "--cpu", 4, *extra]
+
+    def run_hw(self, *argv: object, **kw):
+        return self.run_cli(*argv, health_gate=lambda token: (True, "ok"), env={**test_cli.ENV_OK, "HOME": "/home/x"}, **kw)
 
     def test_untrusted_install_refuses_before_any_request(self) -> None:
         lstat = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
-        code, out, err = self.run_cli(*self.args(), stdin=self.confirmed(), lstat_fn=lstat)
+        code, out, err = self.run_hw(*self.args(), stdin=self.confirmed(), lstat_fn=lstat)
         self.assertEqual(code, 2, err)
         self.assertIn("refused:", err)
         self.assertIn("/etc/arltuner/policy.toml", err)
         self.assertIn("not trusted", err)
+        self.dev.assert_not_called()
         self.nothing_sent()
 
     def test_untrusted_install_also_refuses_when_only_the_lock_is_defaulted(self) -> None:
         lstat = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (0, stat.S_IFREG | 0o666)})
-        code, _, err = self.run_cli(*self.args("--audit", self.audit), stdin=self.confirmed(), lstat_fn=lstat)
+        code, _, err = self.run_hw(*self.args("--audit", self.audit), stdin=self.confirmed(), lstat_fn=lstat)
         self.assertEqual(code, 2, err)
         self.assertIn("not trusted", err)
         self.nothing_sent()
 
     def test_explicit_audit_and_lock_do_not_consult_the_installed_state(self) -> None:
         lstat = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
-        code, out, err = self.run_cli(*self.args("--audit", self.audit, "--lock", self.lock), stdin=self.confirmed(), lstat_fn=lstat)
+        code, out, err = self.run_hw(*self.args("--audit", self.audit, "--lock", self.lock), stdin=self.confirmed(), lstat_fn=lstat, device_port_factory=lambda: self.sim)
         self.assertEqual((code, err), (0, ""), out)
 
-    def test_a_trusted_install_routes_the_defaults_to_the_installed_paths(self) -> None:
-        lstat = fake_lstat(ROOTED)
+    def capture_audit_path(self, argv, **kw) -> list[Path]:
         opened: list[Path] = []
 
         def fake_audit(path):
@@ -145,29 +155,100 @@ class CliEndToEnd(test_cli.CliCase):
             raise OSError("stop here: this test must not create /var/lib/arltuner")
 
         with mock.patch.object(cli, "AuditLog", side_effect=fake_audit), mock.patch.object(Path, "mkdir"):
-            code, _, err = self.run_cli(*self.args(), stdin=self.confirmed(), lstat_fn=lstat)
-        self.assertEqual(opened, [config.INSTALLED_AUDIT])
-        self.assertEqual(code, 1)
-        self.assertIn("/var/lib/arltuner/audit.jsonl", err)
-        self.nothing_sent()
+            self.run_hw(*argv, stdin=self.confirmed(), **kw)
+        return opened
+
+    def test_a_trusted_install_routes_the_defaults_to_the_installed_paths(self) -> None:
+        self.assertEqual(self.capture_audit_path(self.args(), lstat_fn=fake_lstat(ROOTED)), [config.INSTALLED_AUDIT])
 
     def test_absent_install_uses_the_legacy_default_audit_path(self) -> None:
-        opened: list[Path] = []
+        self.assertEqual(self.capture_audit_path(self.args(), lstat_fn=absent), [LEGACY_AUDIT])
 
-        def fake_audit(path):
-            opened.append(Path(path))
-            raise OSError("stop")
+    def test_sim_never_applies_the_installed_paths_even_when_installed(self) -> None:
+        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=fake_lstat(ROOTED)), [LEGACY_AUDIT])
 
-        with mock.patch.object(cli, "AuditLog", side_effect=fake_audit), mock.patch.object(Path, "mkdir"):
-            self.run_cli(*self.args(), stdin=self.confirmed(), lstat_fn=absent, env={**test_cli.ENV_OK, "HOME": "/home/x"})
-        self.assertEqual(opened, [LEGACY_AUDIT])
+    def test_sim_ignores_even_an_untrusted_install(self) -> None:
+        bad = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
+        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=bad), [LEGACY_AUDIT])
 
-    def test_the_guard_gets_the_installed_lock_when_installed(self) -> None:
-        lstat = fake_lstat(ROOTED)
+    def test_sim_lock_default_is_the_legacy_lock(self) -> None:
         with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
-            code, _, err = self.run_cli(*self.args("--audit", self.audit), stdin=self.confirmed(), lstat_fn=lstat)
+            self.run_hw(*self.args("--audit", self.audit, device=False), stdin=self.confirmed(), lstat_fn=fake_lstat(ROOTED))
+        self.assertNotEqual(guard.call_args.kwargs["lock_path"], config.INSTALLED_LOCK)
+        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "linuxmon-mailbox.lock")
+
+    def test_the_guard_gets_the_installed_lock_when_installed_on_hardware(self) -> None:
+        with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
+            code, _, err = self.run_hw(*self.args("--audit", self.audit), stdin=self.confirmed(), lstat_fn=fake_lstat(ROOTED), device_port_factory=lambda: self.sim)
         self.assertEqual(guard.call_args.kwargs["lock_path"], config.INSTALLED_LOCK)
         self.assertEqual(code, 3)
+
+    def test_default_functions_accept_consider_install_false(self) -> None:
+        lstat = fake_lstat(ROOTED)
+        self.assertEqual(cli.default_audit_path(LEGACY_HOME, lstat_fn=lstat, consider_install=False), LEGACY_AUDIT)
+        self.assertEqual(cli.default_lock_path(isdir=lambda p: True, lstat_fn=lstat, consider_install=False), LEGACY_LOCK)
+
+
+class HelperLauncherPaths(unittest.TestCase):
+    """helper/main.py: root + present-but-untrusted policy.toml => named REFUSED, exit 77, no traceback; --sim keeps the legacy defaults."""
+
+    def run_main(self, argv, *, euid, lstat_fn):
+        import io
+
+        out, err = io.BytesIO(), io.StringIO()
+        with mock.patch.object(helper_main, "_startup_refusal", return_value=None):
+            code = helper_main.main(argv, stdin=io.BytesIO(), stdout=out, stderr=err, euid_fn=lambda: euid, lstat_fn=lstat_fn)
+        return code, out.getvalue().decode(), err.getvalue()
+
+    def test_root_with_an_untrusted_policy_is_refused_77_by_name(self) -> None:
+        import json
+
+        lstat = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
+        code, out, err = self.run_main(["--device"], euid=0, lstat_fn=lstat)
+        self.assertEqual(code, 77)
+        msg = json.loads(out.splitlines()[0])
+        self.assertEqual(msg["error"]["detail"]["check"], "TRUST_PATH")
+        self.assertIn("/etc/arltuner/policy.toml", msg["error"]["message"])
+        self.assertIn("refused to start", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_root_lock_is_the_installed_lock_when_installed(self) -> None:
+        import argparse
+
+        ns = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[])
+        cfg = helper_main.build_config(ns, log=lambda t: None, root=True, lstat_fn=fake_lstat(ROOTED))
+        self.assertEqual(cfg.lock_path, Path("/run/arltuner/mailbox.lock"))
+
+    def test_sim_defaults_stay_legacy_on_an_installed_machine(self) -> None:
+        import argparse
+
+        ns = argparse.Namespace(sim=True, device=False, policy=None, audit=None, lock=None, allow_taint_bit=[])
+        cfg = helper_main.build_config(ns, log=lambda t: None, lstat_fn=fake_lstat(ROOTED))
+        self.assertNotEqual(cfg.lock_path, config.INSTALLED_LOCK)
+        self.assertNotEqual(cfg.audit_path, config.INSTALLED_AUDIT)
+        self.assertEqual(cfg.audit_path.name, "audit.jsonl")
+        self.assertIn("linuxmon", str(cfg.audit_path))
+
+    def test_sim_with_an_untrusted_install_is_not_refused(self) -> None:
+        import argparse
+
+        ns = argparse.Namespace(sim=True, device=False, policy=None, audit=None, lock=None, allow_taint_bit=[])
+        helper_main.build_config(ns, log=lambda t: None, lstat_fn=fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)}))
+
+
+class RestoreScripts(unittest.TestCase):
+    def test_restore_scripts_name_no_audit_or_lock_so_the_cli_rule_decides(self) -> None:
+        for rel in ("tools/lnx/restore_tuning.sh", "tools/lnx/reapply_current.sh"):
+            text = (REPO / rel).read_text()
+            for flag in ("--audit", "--lock"):
+                self.assertNotIn(flag, text, f"{rel} must not pass {flag}: D-030's rule picks the lock/audit paths")
+            self.assertNotIn("linuxmon", text.replace("linuxmon:", ""), rel)
+
+    def test_sudo_keeps_the_operators_home_so_the_legacy_default_is_unchanged_before_install(self) -> None:
+        for rel in ("tools/lnx/restore_tuning.sh", "tools/lnx/reapply_current.sh"):
+            for line in (REPO / rel).read_text().splitlines():
+                if "sudo env" in line and "arltuner.py" in line:
+                    self.assertIn('HOME="$HOME"', line, rel)
 
 
 class PlatformPathOrder(unittest.TestCase):

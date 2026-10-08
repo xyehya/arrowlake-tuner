@@ -273,6 +273,38 @@ class HostileCheckout(InstallCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not a regular file", r.stderr)
 
+    def fake_proc(self, **cmdlines: list[str]) -> Path:
+        proc = self.tmp / "proc"
+        for pid, argv in cmdlines.items():
+            (proc / pid.lstrip("p")).mkdir(parents=True)
+            (proc / pid.lstrip("p") / "cmdline").write_bytes(b"".join(a.encode() + b"\0" for a in argv))
+        (proc / "self").mkdir(parents=True, exist_ok=True)
+        return proc
+
+    def test_a_running_helper_blocks_the_install_and_nothing_is_written(self) -> None:
+        for argv in (
+            ["pkexec", "/usr/lib/arltuner/arltuner-helper", "--device"],
+            ["/usr/bin/python3", "-I", "/usr/lib/arltuner/arltuner-helper", "--device"],
+            ["python3", "/x/arltuner-helper.py"],
+        ):
+            proc = self.fake_proc(p4242=["bash"], p4243=argv)
+            r = self.install(extra_env={"ARLTUNER_PROC": str(proc)})
+            self.assertNotEqual(r.returncode, 0, argv)
+            self.assertIn("arltuner-helper process is running", r.stderr)
+            self.assertIn("4243", r.stderr)
+            self.assertEqual(list(self.dest.iterdir()), [], "refused before writing anything")
+            import shutil
+
+            shutil.rmtree(proc)
+
+    def test_unrelated_processes_do_not_block_the_install(self) -> None:
+        proc = self.fake_proc(p10=["bash", "install.sh"], p11=["vim", "notes-on-arltuner.txt"], p12=["/usr/bin/python3", "-m", "http.server"])
+        self.assertEqual(self.install(extra_env={"ARLTUNER_PROC": str(proc)}).returncode, 0)
+
+    def test_a_missing_proc_directory_is_harmless(self) -> None:
+        r = self.install(extra_env={"ARLTUNER_PROC": str(self.tmp / "does-not-exist")})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_relative_destdir_is_refused(self) -> None:
         env = {"PATH": os.environ["PATH"], "DESTDIR": "relative/dir"}
         r = subprocess.run(["bash", str(REPO / "install.sh")], env=env, capture_output=True, text=True, cwd=self.tmp)

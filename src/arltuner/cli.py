@@ -131,13 +131,16 @@ def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
     return True
 
 
-def default_audit_path(env: Mapping[str, str], windows: bool = os.name == "nt", lstat_fn: Callable[[str], object] = os.lstat) -> Path:
+def default_audit_path(
+    env: Mapping[str, str], windows: bool = os.name == "nt", lstat_fn: Callable[[str], object] = os.lstat, consider_install: bool = True
+) -> Path:
     """Installed machine (D-030, not Windows): ``/var/lib/arltuner/audit.jsonl``. Otherwise ``~/.local/state/linuxmon/audit.jsonl`` (home from
     ``env`` HOME / USERPROFILE, else the OS home); on Windows ``%LOCALAPPDATA%\\linuxmon\\audit.jsonl`` when LOCALAPPDATA is set.
+    ``consider_install=False`` (simulator runs, which never touch hardware) skips the rule: always the legacy per-user path.
     Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
     if windows and env.get("LOCALAPPDATA"):
         return Path(env["LOCALAPPDATA"]) / "linuxmon" / "audit.jsonl"
-    if not windows and installed_state(lstat_fn):
+    if consider_install and not windows and installed_state(lstat_fn):
         from arltuner.helper.config import INSTALLED_AUDIT
 
         return INSTALLED_AUDIT
@@ -147,11 +150,14 @@ def default_audit_path(env: Mapping[str, str], windows: bool = os.name == "nt", 
 
 
 def default_lock_path(
-    isdir: Callable[[str], bool] = os.path.isdir, lstat_fn: Callable[[str], object] = os.lstat, windows: bool = os.name == "nt"
+    isdir: Callable[[str], bool] = os.path.isdir,
+    lstat_fn: Callable[[str], object] = os.lstat,
+    windows: bool = os.name == "nt",
+    consider_install: bool = True,
 ) -> Path:
     """Installed machine (D-030, not Windows): ``/run/arltuner/mailbox.lock``. Otherwise ``/run/lock/linuxmon-mailbox.lock`` when ``/run/lock``
-    exists, else the temp directory. Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
-    if not windows and installed_state(lstat_fn):
+    exists, else the temp directory. ``consider_install=False`` (simulator runs): never the installed path. Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
+    if consider_install and not windows and installed_state(lstat_fn):
         from arltuner.helper.config import INSTALLED_LOCK
 
         return INSTALLED_LOCK
@@ -409,6 +415,7 @@ class _Ctx:
     win_health_gate_factory: Callable[[frozenset[int]], HealthGate | None] = _default_win_health_gate_factory
     win_detect_fn: Callable[[], Topology] = _default_win_detect
     measure_io_factory: Callable[[], vfdump.MeasureIO] | None = None  # T-026: None -> the real cpufreq/stress-ng I/O for --device, a refusal for --sim
+    hardware: bool = False  # --device / --device-win: only hardware runs apply the D-030 installed paths (a simulator keeps the per-user defaults)
     lstat_fn: Callable[[str], Any] = os.lstat  # D-030 installed-detection (tests inject fake stat results)
 
     def say(self, text: str = "") -> None:
@@ -580,14 +587,14 @@ def _build_guard(
 
 def _default_lock(ctx: _Ctx) -> Path:
     try:
-        return default_lock_path(lstat_fn=ctx.lstat_fn)
+        return default_lock_path(lstat_fn=ctx.lstat_fn, consider_install=ctx.hardware)
     except InstalledStateRefused as exc:
         ctx.refuse(f"{exc}Nothing was sent.")
 
 
 def _default_audit(ctx: _Ctx) -> Path:
     try:
-        return default_audit_path(ctx.env, lstat_fn=ctx.lstat_fn)
+        return default_audit_path(ctx.env, lstat_fn=ctx.lstat_fn, consider_install=ctx.hardware)
     except InstalledStateRefused as exc:
         ctx.refuse(f"{exc}Nothing was sent.")
 
@@ -1284,6 +1291,7 @@ def main(
             ctx.boot_id_fn = windows_boot_id
         if args.allow_taint_bit:
             err.write("note: --allow-taint-bit is a Linux kernel-taint notion and is ignored with --device-win.\n")
+    ctx.hardware = bool(getattr(args, "device", False))
     try:
         return _COMMANDS[args.command](ctx, args)
     except _Done as done:
