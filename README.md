@@ -28,7 +28,7 @@ python3 tools/arltuner.py plan profiles/p-step7.toml --sim --policy policies/ses
 ## Layout
 | Path | Purpose |
 |---|---|
-| `AGENTS.md`, `CLAUDE.md` | rules for agent sessions; `docs/START-PROMPT.md` = how to resume |
+| `AGENTS.md`, `CLAUDE.md`, `docs/ORCHESTRATION.md` | rules for agent sessions; how the orchestrator runs the project; `docs/START-PROMPT.md` = how to resume |
 | `docs/STATE.md` · `docs/SPEC.md` · `docs/ROADMAP.md` · `docs/tasks/` | live state · product spec · phases · tasks |
 | `docs/SAFETY.md` · `docs/DECISIONS.md` · `docs/ARCHITECTURE.md` | write protocol · decision log · module contracts |
 | `docs/knowledge/` | distilled facts: registers (single source of truth), platform, tuning results, Linux/Windows paths |

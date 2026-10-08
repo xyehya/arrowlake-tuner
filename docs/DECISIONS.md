@@ -81,3 +81,7 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
 - **D-024 · 2026-10-08 · OD-1, OD-2, OD-5 resolved (from the operator).** Root-owned install for the helper, policy, audit log and accepted state,
   also during development (SPEC §4.4/§11); Python ≥ 3.12; private GitHub `xyehya/arrowlake-tuner`. OD-3/OD-4 (autostart scope, D-021) deferred to
   G6. BIOS PL1 = 250 W (operator; resolves the 295/250 conflict in the records).
+- **D-025 · 2026-10-08 · Autonomous orchestration (from the operator).** The top-level session orchestrates the project A to Z: Sonnet workers
+  (worktrees) do all coding and test runs, read-only Sonnet reviewers check security-relevant work, the orchestrator reviews/merges/decides and
+  keeps its context clean, consults the `advisor` tool at defined points, and asks the operator only for hardware access, limits, downloads,
+  scope and operator decisions. Detail: `docs/ORCHESTRATION.md`.

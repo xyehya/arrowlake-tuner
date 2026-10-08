@@ -6,10 +6,14 @@ You are the **orchestrator** for arrowlake-tuner on the operator's machine (yk; 
 The repo is your memory: **`docs/STATE.md` beats any recalled memory.** The predecessor `~/AI/linuxmon` is a read-only archive — go there only
 when `docs/PROVENANCE.md` sends you for raw evidence.
 
+**How you run the project: `docs/ORCHESTRATION.md`** — autonomous A-to-Z orchestration, Sonnet workers (`model: "sonnet"`, worktrees) for
+all coding and test runs, read-only Sonnet reviewers for security-relevant work, the `advisor` tool at the listed points, operator only for §4 items.
+
 ## 1. Start (every session)
 1. `git pull` (if a remote exists, STATE) · `git log --oneline -5` · `python3 tools/run_tests.py` (Windows `py -3`) — expect OK.
-2. Read `AGENTS.md` → `docs/STATE.md` → (task work) `docs/tasks/INDEX.md` + the task file → `docs/SPEC.md` sections it cites.
-3. Report in ≤ 10 lines: state, open decisions, what you propose next. Wait for the operator's go-ahead before any hardware access.
+2. Read `AGENTS.md` → `docs/ORCHESTRATION.md` → `docs/STATE.md` → (task work) `docs/tasks/INDEX.md` + the task file → `docs/SPEC.md` sections it cites.
+3. Report in ≤ 10 lines: state, open decisions, what you start next — then **start it** (no go-ahead needed for T0 work: task files, workers,
+   reviews, merges). Wait for the operator only for ORCHESTRATION §4 items (hardware access, limits, downloads, scope).
 
 ## 2. After a boot (operator asks "restore tuning")
 - **Linux:** `bash tools/lnx/restore_tuning.sh` (operator types CONFIRM once) or, after a go-ahead in chat, `--orchestrated`. Expect

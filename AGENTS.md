@@ -4,6 +4,8 @@
 an ASRock Z890 Steel Legend WiFi — per-core V/F point offsets and target voltages, OC ratios, turbo ratio tables — replicating Intel XTU at runtime.
 Windows: PowerShell restore of the accepted state only. Spec: `docs/SPEC.md`. Predecessor (research, raw evidence): `~/AI/linuxmon` (`docs/PROVENANCE.md`).
 
+**Roles and autonomy:** `docs/ORCHESTRATION.md` (orchestrator runs the project end to end with Sonnet workers; what it decides alone vs asks).
+
 ## Session start (stop as soon as you have enough)
 1. `docs/STATE.md` — done / in-flight / next / blockers / open decisions. Trust it over memory.
 2. Your task file `docs/tasks/G-NNN-*.md` (if assigned); read only what its **Read first** lists.
