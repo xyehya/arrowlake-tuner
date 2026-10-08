@@ -4,7 +4,7 @@ Pure Python, standard library only, no hardware access. ``detect`` reads two sma
 (``devices/cpu_core/cpus`` and ``devices/cpu_atom/cpus``) under a caller-supplied root and only
 *validates* them against the static map; it never infers a topology (Contract 3, docs/ARCHITECTURE.md).
 
-Source of every hard-coded fact below: docs/research/lnx-turbostat-plus-facts.md, section "CPU map"
+Source of every static fact below (now stored in ``platforms/arl-s-285k.toml``, G-101): docs/research/lnx-turbostat-plus-facts.md, section "CPU map"
 ``[MEASURED lnx 2026-09-29 turbostat+ capture]``:
   * Linux CPUs 0-7 are P-cores, 8-23 are E-cores (no SMT).
   * E-clusters of four: 8-11, 12-15, 16-19, 20-23.

@@ -102,15 +102,9 @@ class CpuidTests(FakeRoot):
         self.write("proc/cpuinfo", cpuinfo(vendor="AuthenticAMD"))
         self.assertEqual(self.status("cpuid"), Status.READ_ONLY)
 
-    def test_wrong_model_name(self):
-        self.write("proc/cpuinfo", cpuinfo(name="Intel(R) Core(TM) Ultra 7 265K"))
-        self.assertEqual(self.status("cpuid"), Status.READ_ONLY)
-
-    def test_wrong_cpu_count(self):
-        self.write("proc/cpuinfo", cpuinfo(n=16))
-        r = self.run_pf().get("cpuid")
-        self.assertEqual(r.status, Status.READ_ONLY)
-        self.assertIn("16 logical CPUs", r.reason)
+    def test_offline_cpus_do_not_fail_cpuid(self):
+        self.write("proc/cpuinfo", cpuinfo(n=16))  # topology.detect owns the CPU count
+        self.assertEqual(self.status("cpuid"), Status.PASS)
 
     def test_one_odd_cpu_is_caught(self):
         self.write("proc/cpuinfo", cpuinfo(23) + "\n" + cpuinfo(1, model=1).replace("processor\t: 0", "processor\t: 23"))
@@ -248,8 +242,9 @@ class MsrTests(FakeRoot):
         p.chmod(0)
         self.addCleanup(p.chmod, 0o644)
         r = self.run_pf().get("msr_allow_writes")
-        self.assertEqual(r.status, Status.READ_ONLY)
+        self.assertEqual(r.status, Status.UNKNOWN)  # 0600 file: an unprivileged run must not call the machine read-only
         self.assertIn("root-only", r.reason)
+        self.assertEqual(self.run_pf().mode, "write")
 
 
 class PolkitTests(FakeRoot):
@@ -293,6 +288,11 @@ class PolkitTests(FakeRoot):
     def test_gnome_shell_counts_as_agent(self):
         shutil.rmtree(self.root / "proc/200")
         self.write("proc/300/comm", "gnome-shell\n")
+        self.assertEqual(self.status("polkit_agent"), Status.PASS)
+
+    def test_pkttyagent(self):
+        shutil.rmtree(self.root / "proc/200")
+        self.write("proc/300/comm", "pkttyagent\n")
         self.assertEqual(self.status("polkit_agent"), Status.PASS)
 
     def test_kde_agent(self):

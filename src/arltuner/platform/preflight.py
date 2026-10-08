@@ -3,7 +3,8 @@
 ``preflight(root)`` reads a handful of small files under ``root`` (``/proc/cpuinfo``, ``/sys/kernel/security/lockdown``, ``/dev/cpu/*/msr``,
 ``/sys/module/msr/parameters/allow_writes``, ``/proc/<pid>/comm``, executables in the usual bin directories) and returns one named ``CheckResult``
 per check. A failed check is a named refusal, never a workaround. The fused-word identity half of "recognised platform" is a mailbox read and
-belongs to ``vf.dump`` (G-102); this module only covers CPUID.
+belongs to ``vf.dump`` (G-102); this module only covers CPUID (vendor, family, model,
+stepping on every online CPU); the CPU count is ``topology.detect``'s job.
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ OPTIONAL_TOOLS: dict[str, str] = {
 }
 
 #: Process names (``/proc/<pid>/comm``, max 15 chars) that host a polkit authentication agent. GNOME's agent lives inside the shell.
-_AGENT_COMMS = frozenset({"gnome-shell", "plasmashell", "cinnamon", "budgie-wm", "pantheon-agent-"})
+_AGENT_COMMS = frozenset({"gnome-shell", "plasmashell", "cinnamon", "budgie-wm", "pantheon-agent-", "pkttyagent"})
 _AGENT_WORDS = ("polkit", "policykit")
 
 
@@ -48,6 +49,7 @@ class Status(Enum):
     PASS = "pass"
     READ_ONLY = "read-only"  # the machine can be read but writes are not possible / not allowed
     REFUSE = "refuse"  # the app cannot run at all
+    UNKNOWN = "unknown"  # not determinable from here (unprivileged); the root helper's re-run is authoritative; never changes the mode
     MISSING = "missing"  # an optional feature's tool is absent (the feature shows "missing: install <pkg>")
 
 
@@ -140,10 +142,6 @@ def check_cpuid(blocks: Sequence[dict[str, str]] | None, plat: Platform) -> Chec
                 f"processor {b.get('processor', '?')}: {got[0]!r} family {got[1]} model {got[2]} stepping {got[3]} does not match platform "
                 f"{plat.id} ({want.vendor!r} family {want.family} model {want.model} stepping {want.stepping}, CPUID {want.signature:#x})",
             )
-        if want.model_name_contains not in b.get("model name", ""):
-            return CheckResult(name, Status.READ_ONLY, f"processor {b.get('processor', '?')}: model name {b.get('model name', '')!r} lacks {want.model_name_contains!r}")
-    if len(blocks) != plat.topology.cpu_count:
-        return CheckResult(name, Status.READ_ONLY, f"{len(blocks)} logical CPUs online in /proc/cpuinfo, platform {plat.id} has {plat.topology.cpu_count}")
     return CheckResult(name, Status.PASS, f"CPUID {want.signature:#x} matches platform {plat.id} on all {len(blocks)} CPUs (fused-word identity: checked at vf.dump)")
 
 
@@ -221,7 +219,9 @@ def check_msr_allow_writes(root: Path) -> CheckResult:
             return CheckResult(name, Status.PASS, "msr has no allow_writes parameter (kernel predating it): writes not gated by it")
         return CheckResult(name, Status.READ_ONLY, "msr module not present (see msr_device): allow_writes cannot be read")
     except OSError as exc:
-        return CheckResult(name, Status.READ_ONLY, f"cannot read msr allow_writes ({exc.strerror or exc}; root-only file): unknown")
+        # /sys/module/msr/parameters/allow_writes is mode 0600 (arch/x86/kernel/msr.c): an unprivileged run cannot read it. That is not evidence
+        # of "off", so it must not downgrade the mode; the helper (root) re-runs preflight before every apply.
+        return CheckResult(name, Status.UNKNOWN, f"cannot read msr allow_writes ({exc.strerror or exc}; root-only file): the root helper's preflight decides")
     if value == "off":
         return CheckResult(name, Status.READ_ONLY, "msr.allow_writes=off: the kernel refuses MSR writes (boot without msr.allow_writes=off, or set it to on/default)")
     if value not in ("on", "default", ""):

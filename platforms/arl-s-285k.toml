@@ -16,7 +16,6 @@ signature = 0xC0662
 family = 6
 model = 198
 stepping = 2
-model_name_contains = "Ultra 9 285K"
 
 # [MEASURED lnx 2026-09-29] (platform-285k.md section 2): no SMT, P = Linux CPU 0-7, E = 8-23 in clusters of four, favored P = CPU 0 and 3.
 [topology]

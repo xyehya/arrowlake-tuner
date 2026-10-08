@@ -43,7 +43,6 @@ class CpuId:
     family: int
     model: int
     stepping: int
-    model_name_contains: str
 
 
 @dataclass(frozen=True)
@@ -169,14 +168,13 @@ def parse_platform(data: Mapping[str, object]) -> Platform:
     pid, name, board = (_str(plat, k, "platform") for k in ("id", "name", "board"))
 
     c = _table(data, "cpuid")
-    _check_known(c, "cpuid", {"vendor", "signature", "family", "model", "stepping", "model_name_contains"})
+    _check_known(c, "cpuid", {"vendor", "signature", "family", "model", "stepping"})
     cpuid = CpuId(
         vendor=_str(c, "vendor", "cpuid"),
         signature=_int(c, "signature", "cpuid", 1, 1 << 32),
         family=_int(c, "family", "cpuid", 0, 256),
         model=_int(c, "model", "cpuid", 0, 256),
         stepping=_int(c, "stepping", "cpuid", 0, 16),
-        model_name_contains=_str(c, "model_name_contains", "cpuid"),
     )
     if _signature(cpuid.family, cpuid.model, cpuid.stepping) != cpuid.signature:
         raise PlatformError(
@@ -197,6 +195,8 @@ def parse_platform(data: Mapping[str, object]) -> Platform:
         lp_p=_ints(t, "lp_p", "topology", hi=1024),
         lp_e=_ints(t, "lp_e", "topology", hi=1024),
     )
+    if topo.cpu_core_cpus != f"0-{topo.p_count - 1}" or topo.cpu_atom_cpus != f"{topo.e_first_cpu}-{topo.e_first_cpu + topo.e_count - 1}":
+        raise PlatformError("platform file: [topology] cpu_core_cpus / cpu_atom_cpus must be '0-<p_count-1>' / '<e_first_cpu>-<last E cpu>'")
     if topo.e_first_cpu != topo.p_count:
         raise PlatformError("platform file: [topology] e_first_cpu must equal p_count (P = CPU 0..p_count-1, E follows)")
     if topo.e_count % topo.e_cluster_size:

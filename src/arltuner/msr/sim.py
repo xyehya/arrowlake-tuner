@@ -46,7 +46,7 @@ _MAX_POINT = 15  # registers.md: P2 1..15 = V/F point (hidden on ARL-S)
 #: ``0x10 P2=7`` -> rc ``0x11`` (the OC point is the ``P2 = 0`` word, not a point index). SkatterBencher ``[COMMUNITY]``: E has 6 fused points, P has 8.
 RC_NO_SUCH_POINT = 0x11  # not in ``Rc`` (``rc_name`` says ``UNKNOWN_0x11``)
 _PLATFORM = default_platform()  # V/F point ratios and turbo defaults: platforms/arl-s-285k.toml (G-101)
-POINT_COUNTS_ARL_S: dict[str, int] = {"E": 6, "P": 8}
+POINT_COUNTS_ARL_S: dict[str, int] = {"E": len(_PLATFORM.e_point_ratios), "P": len(_PLATFORM.p_point_ratios)}
 #: T-026 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md "Full point layout", "E cluster 1 V/F curve"): the ratio field of every V/F point
 #: and the BIOS per-point offset (raw, /1024 V). P (CPU 0, same table assumed on every P-core): 8,20,30,48,53,55,56,57x with -49.8 mV (raw -51) at 53x
 #: and 57x and -14.6 mV (raw -15) at 55x. E: 8,15,23,30,40,46x, offset 0. Used by ``SimConfig.measured()`` only (``SimConfig()`` keeps its old defaults).

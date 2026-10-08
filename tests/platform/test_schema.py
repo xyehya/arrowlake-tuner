@@ -54,6 +54,16 @@ class DefaultPlatformTests(unittest.TestCase):
         self.assertEqual([c.cpu for c in topo.cores if c.favored], [0, 3])
         self.assertEqual(topo.cluster_cpus(3), (20, 21, 22, 23))
 
+    def test_cpulist_must_match_counts(self):
+        d = _doc()
+        d["topology"]["cpu_atom_cpus"] = "8-22"
+        with self.assertRaisesRegex(PlatformError, "cpu_atom_cpus"):
+            parse_platform(d)
+
+    def test_point_counts_from_file(self):
+        from arltuner.msr.sim import POINT_COUNTS_ARL_S
+        self.assertEqual(POINT_COUNTS_ARL_S, {"E": 6, "P": 8})
+
     def test_signature_consistent(self):
         d = _doc()
         d["cpuid"]["signature"] = 0xC0663
