@@ -107,6 +107,9 @@ class InstalledStateRefused(Exception):
     """``/etc/arltuner/policy.toml`` exists but fails the helper's trust check (D-030): refuse, never fall back to the legacy paths."""
 
 
+_TMPFILES_CONF = "/usr/lib/tmpfiles.d/arltuner.conf"
+
+
 def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
     """D-030: the machine is *installed* when ``/etc/arltuner/policy.toml`` exists and passes the helper's own trust check
     (``arltuner.helper.trust``: root-owned, not group/world-writable, no symlink, root-owned parents). Absent => ``False`` (legacy paths
@@ -587,9 +590,22 @@ def _build_guard(
 
 def _default_lock(ctx: _Ctx) -> Path:
     try:
-        return default_lock_path(lstat_fn=ctx.lstat_fn, consider_install=ctx.hardware)
+        lock = default_lock_path(lstat_fn=ctx.lstat_fn, consider_install=ctx.hardware)
     except InstalledStateRefused as exc:
         ctx.refuse(f"{exc}Nothing was sent.")
+    from arltuner.helper.config import INSTALLED_LOCK_DIR  # lazy, as in installed_state
+
+    if ctx.hardware and lock.parent == INSTALLED_LOCK_DIR:  # the installed lock: its directory comes from tmpfiles.d, never created here
+        try:
+            ctx.lstat_fn(os.fspath(INSTALLED_LOCK_DIR))
+        except (FileNotFoundError, NotADirectoryError):
+            ctx.refuse(
+                f"the installed lock directory {INSTALLED_LOCK_DIR} does not exist (/etc/arltuner/policy.toml is present, so the CLI uses it and never falls back to the legacy lock). "
+                f"Create it with: sudo systemd-tmpfiles --create {_TMPFILES_CONF}. Nothing was sent."
+            )
+        except OSError:
+            pass  # exists but cannot be examined: the guard's own open reports it
+    return lock
 
 
 def _default_audit(ctx: _Ctx) -> Path:

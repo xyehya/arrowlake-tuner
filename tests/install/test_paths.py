@@ -20,7 +20,8 @@ from ._support import DIR, FILE, REPO, SYMLINK, fake_lstat
 LEGACY_HOME = {"HOME": "/home/x"}
 LEGACY_AUDIT = Path("/home/x/.local/state/linuxmon/audit.jsonl")
 LEGACY_LOCK = Path("/run/lock/linuxmon-mailbox.lock")
-ROOTED = {"/": (0, DIR), "/etc": (0, DIR), "/etc/arltuner": (0, DIR), "/etc/arltuner/policy.toml": (0, FILE)}
+NO_RUN_DIR = {"/": (0, DIR), "/etc": (0, DIR), "/etc/arltuner": (0, DIR), "/etc/arltuner/policy.toml": (0, FILE)}  # installed, but tmpfiles.d never made /run/arltuner
+ROOTED = NO_RUN_DIR | {"/run": (0, DIR), "/run/arltuner": (0, DIR)}
 
 
 def absent(path: str):
@@ -146,6 +147,33 @@ class CliEndToEnd(test_cli.CliCase):
         lstat = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
         code, out, err = self.run_hw(*self.args("--audit", self.audit, "--lock", self.lock), stdin=self.confirmed(), lstat_fn=lstat, device_port_factory=lambda: self.sim)
         self.assertEqual((code, err), (0, ""), out)
+
+    def test_a_missing_installed_lock_directory_is_a_named_refusal_and_never_the_legacy_lock(self) -> None:
+        for argv in (["read-vf", "--cpu", 4, "--audit", self.audit], ["read", "--cpu", 4, "--cmd", "0x10", "--audit", self.audit]):
+            with self.subTest(argv=argv), mock.patch.object(cli, "WriteGuard") as guard:
+                code, out, err = self.run_hw(*argv, "--device", stdin=self.confirmed(), lstat_fn=fake_lstat(NO_RUN_DIR), device_port_factory=lambda: self.sim)
+                self.assertEqual(code, 2, err)
+                self.assertIn("refused:", err)
+                self.assertIn("/run/arltuner", err)
+                self.assertIn("sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/arltuner.conf", err)
+                self.assertNotIn("Traceback", err)
+                self.assertNotIn("linuxmon", err)
+                guard.assert_not_called()
+                self.nothing_sent()
+
+    def test_with_the_lock_directory_present_the_guard_gets_the_installed_lock(self) -> None:
+        with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
+            self.run_hw(*self.args("--audit", self.audit), stdin=self.confirmed(), lstat_fn=fake_lstat(ROOTED), device_port_factory=lambda: self.sim)
+        self.assertEqual(guard.call_args.kwargs["lock_path"], config.INSTALLED_LOCK)
+
+    def test_an_explicit_lock_does_not_need_the_installed_lock_directory(self) -> None:
+        code, out, err = self.run_hw(*self.args("--audit", self.audit, "--lock", self.lock), stdin=self.confirmed(), lstat_fn=fake_lstat(NO_RUN_DIR), device_port_factory=lambda: self.sim)
+        self.assertEqual((code, err), (0, ""), out)
+
+    def test_sim_never_needs_the_installed_lock_directory(self) -> None:
+        with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
+            self.run_hw(*self.args("--audit", self.audit, device=False), stdin=self.confirmed(), lstat_fn=fake_lstat(NO_RUN_DIR))
+        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "linuxmon-mailbox.lock")
 
     def capture_audit_path(self, argv, **kw) -> list[Path]:
         opened: list[Path] = []

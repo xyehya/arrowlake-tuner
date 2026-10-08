@@ -497,16 +497,23 @@ class Uninstall(InstallCase):
         super().setUp()
         self.legacy.write_text("legacy\n")
         self.ok_install()
+        self.path("/run/arltuner").mkdir(parents=True)  # tmpfiles.d's job on a real system (a DESTDIR install never runs it)
+        (self.path("/run/arltuner") / "mailbox.lock").write_text("")
 
     def uninstall(self, *args: str) -> subprocess.CompletedProcess[str]:
         r = run_script(REPO / "uninstall.sh", *args, destdir=self.dest)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r
 
-    def test_uninstall_removes_code_polkit_tmpfiles_and_web_but_keeps_config_and_the_audit_log(self) -> None:
+    def test_uninstall_removes_code_polkit_and_web_but_keeps_config_the_audit_log_and_the_lock_directory_setup(self) -> None:
         r = self.uninstall()
-        for gone in ("/usr/lib/arltuner", "/usr/share/arltuner", "/usr/lib/tmpfiles.d/arltuner.conf", "/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy"):
+        for gone in ("/usr/lib/arltuner", "/usr/share/arltuner", "/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy"):
             self.assertFalse(self.path(gone).exists(), gone)
+        # G-108: the CLI still counts as installed (policy.toml stays), so it still needs its lock directory and the tmpfiles.d file that recreates it at boot
+        self.assertTrue(self.path("/usr/lib/tmpfiles.d/arltuner.conf").is_file())
+        self.assertTrue(self.path("/run/arltuner").is_dir())
+        self.assertIn("kept " + str(self.path("/usr/lib/tmpfiles.d/arltuner.conf")), r.stdout)
+        self.assertIn("kept " + str(self.path("/run/arltuner")), r.stdout)
         self.assertTrue(self.path("/var/lib/arltuner/audit.jsonl").is_file())
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\n")
         self.assertTrue(self.path("/etc/arltuner/policy.toml").is_file())
@@ -521,7 +528,23 @@ class Uninstall(InstallCase):
         self.uninstall("--purge", "--yes-reset-budget")
         self.assertFalse(self.path("/var/lib/arltuner").exists())
         self.assertFalse(self.path("/etc/arltuner").exists())
+        self.assertFalse(self.path("/usr/lib/tmpfiles.d/arltuner.conf").exists())
+        self.assertFalse(self.path("/run/arltuner").exists())
         self.uninstall("--purge", "--yes-reset-budget")
+
+    def test_a_plain_uninstall_twice_still_keeps_the_tmpfiles_file_and_the_lock_directory(self) -> None:
+        self.uninstall()
+        self.uninstall()
+        self.assertTrue(self.path("/usr/lib/tmpfiles.d/arltuner.conf").is_file())
+        self.assertTrue(self.path("/run/arltuner").is_dir())
+
+    def test_the_header_says_what_is_kept(self) -> None:
+        head = (REPO / "uninstall.sh").read_text().split("set -euo", 1)[0]
+        self.assertIn("tmpfiles.d file", head)
+        self.assertIn("/run/arltuner", head)
+        r = run_script(REPO / "uninstall.sh", "--help", destdir=self.dest)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("DESTDIR", r.stdout)
 
     def test_purge_alone_is_refused_and_removes_nothing(self) -> None:
         r = run_script(REPO / "uninstall.sh", "--purge", destdir=self.dest)

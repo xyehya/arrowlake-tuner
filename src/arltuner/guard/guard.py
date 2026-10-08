@@ -933,6 +933,8 @@ class WriteGuard:
             )
         except FileExistsError:
             self._refuse(Refusal.LOCKED, f"lock file {self._lock_path} exists ({self._lock_holder()})", req, confirm)
+        except FileNotFoundError:
+            self._refuse(Refusal.LOCKED, f"cannot create lock file {self._lock_path}: its directory {self._lock_path.parent} does not exist", req, confirm)
         except OSError as exc:
             self._refuse(Refusal.LOCKED, f"cannot create lock file {self._lock_path}: {exc!r}", req, confirm)
         try:
