@@ -92,13 +92,25 @@ class Platform:
     sensors: Sensors
 
 
-def default_platform_path() -> Path:
-    """``platforms/arl-s-285k.toml`` of the source tree, else of the installed tree (``/usr/lib/arltuner/platforms``, SPEC 4.4)."""
-    here = Path(__file__).resolve()
-    for candidate in (here.parents[3] / "platforms" / PLATFORM_FILE, Path("/usr/lib/arltuner/platforms") / PLATFORM_FILE):
+def default_platform_path(here: Path | None = None) -> Path:
+    """The 285K platform file. ``here`` is this module's path (tests inject another).
+
+    * Running from the **installed tree** (``<root>/arltuner/platform/schema.py``, ``<root>`` = ``/usr/lib/arltuner``, SPEC 4.4): only
+      ``<root>/platforms/`` - the root-owned copy next to the code, never a checkout.
+    * Running from a **source checkout** (``<repo>/src/arltuner/platform/schema.py``): ``<repo>/platforms/``, else the installed
+      ``/usr/lib/arltuner/platforms/``.
+
+    Returns the first existing candidate, else the first one (the missing path, for the error message)."""
+    here = Path(__file__).resolve() if here is None else here
+    above_package = here.parents[2]
+    if above_package.name == "src":
+        candidates = [above_package.parent / "platforms" / PLATFORM_FILE, Path("/usr/lib/arltuner/platforms") / PLATFORM_FILE]
+    else:
+        candidates = [above_package / "platforms" / PLATFORM_FILE]
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
-    return here.parents[3] / "platforms" / PLATFORM_FILE  # the missing path, for the error message
+    return candidates[0]
 
 
 # --- validation helpers ------------------------------------------------------------------------------------------------------------------

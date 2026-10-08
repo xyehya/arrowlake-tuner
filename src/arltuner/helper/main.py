@@ -6,12 +6,14 @@ the unprivileged caller. So when the effective uid is 0 the helper accepts *no* 
 safety setting comes from installed constants (below) or from a root-owned, trust-checked file:
 
 * policy ``/etc/arltuner/policy.toml``, audit log ``/var/lib/arltuner/audit.jsonl``, accepted state ``/etc/arltuner/accepted/``;
-* lock: the CLI's ``default_lock_path()`` (see the G-106 TODO there);
+* lock: ``/run/arltuner/mailbox.lock`` (root-owned 0755 directory made by tmpfiles.d) via the CLI's ``default_lock_path()`` and its D-030 rule: the
+  rule sees the installed, trusted ``/etc/arltuner/policy.toml``; a present-but-untrusted one is a named REFUSED (check ``TRUST_PATH``, exit 77);
 * the expected first-write kernel-taint bits: ``/etc/arltuner/helper.toml``, key ``allow_taint_bits = [34]`` (a list of ints 0..63; the file may be
   absent = none; any other key is refused). Root-owned, not group/world-writable, parents root-owned (SPEC 4.4), checked on every ``vf.dump``.
 
-NOTE for G-106 (packaging): the polkit action must pin ``org.freedesktop.policykit.exec.path`` to the installed helper and the launcher is run with
-**no arguments**. A non-root run (tests, ``--sim``) keeps the argv options. Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
+Packaging (G-106): the polkit action pins ``org.freedesktop.policykit.exec.path`` to ``/usr/lib/arltuner/arltuner-helper``, started as
+``pkexec /usr/lib/arltuner/arltuner-helper --device``. A non-root run (tests, ``--sim``) keeps the argv options; ``--sim`` never applies the D-030 rule
+(simulator runs keep the per-user legacy lock / audit defaults). Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
 77 refused to start.
 """
 from __future__ import annotations
@@ -24,7 +26,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
 
-from arltuner.cli import default_audit_path, default_lock_path
+from arltuner.cli import InstalledStateRefused, default_audit_path, default_lock_path
 from arltuner.platform.preflight import preflight
 from arltuner.topology import arl_s_285k
 
@@ -67,8 +69,8 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--sim", action="store_true", help="simulator: no hardware")
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; needs root, a trusted code tree, --policy and --audit)")
     p.add_argument("--policy", metavar="FILE", help="reviewed policy (--sim defaults to the built-in conservative one)")
-    p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to the CLI's ~/.local/state/linuxmon/audit.jsonl)")
-    p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (default: the CLI's /run/lock/linuxmon-mailbox.lock)")
+    p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to ~/.local/state/linuxmon/audit.jsonl)")
+    p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/linuxmon-mailbox.lock; --sim: always the latter)")
     p.add_argument("--allow-taint-bit", metavar="N", type=int, action="append", default=[], help="kernel taint bit the first write is expected to set (health gate)")
     return p
 
@@ -139,14 +141,14 @@ class PortOwningSampler:
         return self._sampler.snapshot()
 
 
-def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: bool = False) -> HelperConfig:
+def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: bool = False, lstat_fn: Callable[[str], Any] = os.lstat) -> HelperConfig:
     """``root=True``: every path and safety setting is an installed constant, nothing is read from ``args``."""
     from arltuner.telemetry import Sampler
 
     if root and args.sim:
         raise _Usage("--sim is refused when running as root")
-    # TODO(G-106, OD-1): /run/lock is 1777 (anyone can pre-create the lock file). Move the default to a root-owned dir such as /run/arltuner/.
-    lock = Path(args.lock) if (args.lock and not root) else default_lock_path()
+    # D-030: installed (trusted /etc/arltuner/policy.toml) => /run/arltuner/mailbox.lock (root-owned dir; /run/lock is 1777). A simulator never applies it.
+    lock = Path(args.lock) if (args.lock and not root) else default_lock_path(lstat_fn=lstat_fn, consider_install=not args.sim)
     if args.sim:
         nowhere = Path("/nonexistent-arltuner-sim")
 
@@ -157,7 +159,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
 
         return HelperConfig(
             lock_path=lock,
-            audit_path=Path(args.audit) if args.audit else default_audit_path(os.environ),
+            audit_path=Path(args.audit) if args.audit else default_audit_path(os.environ, consider_install=False),
             policy_path=Path(args.policy) if args.policy else None,
             port_factory=sim_port,
             topology_fn=arl_s_285k,
@@ -193,6 +195,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
         lock_path=lock,
         audit_path=audit,
         policy_path=policy,
+        accepted_dir=INSTALLED_ACCEPTED_DIR if root else None,  # G-106/G-107: EXPECTED-words.txt, trust-checked by the op that reads it
         port_factory=lambda: DevCpuMsrPort(writable=True),
         topology_fn=detect,
         preflight_fn=lambda: preflight(Path("/")),
@@ -225,6 +228,7 @@ def main(
     stdout: BinaryIO | None = None,
     stderr: TextIO | None = None,
     euid_fn: Callable[[], int] = getattr(os, "geteuid", lambda: 0),
+    lstat_fn: Callable[[str], Any] = os.lstat,
 ) -> int:
     err = sys.stderr if stderr is None else stderr
     out = sys.stdout.buffer if stdout is None else stdout
@@ -254,7 +258,9 @@ def main(
         problem = _startup_refusal(args, euid)
         if problem is not None:
             return refuse("STARTUP", problem)
-        cfg = build_config(args, log=log, root=euid == 0)
+        cfg = build_config(args, log=log, root=euid == 0, lstat_fn=lstat_fn)
+    except InstalledStateRefused as exc:
+        return refuse("TRUST_PATH", str(exc).strip())
     except _Usage as exc:
         if str(exc):
             err.write(f"arltuner-helper: {exc}\n")

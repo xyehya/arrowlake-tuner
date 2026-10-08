@@ -96,11 +96,15 @@ class WinCli(CliCase):
         self.assertEqual(code, 2, err)
 
 
+def _not_installed(path: str):
+    raise FileNotFoundError(path)  # G-106: a machine without /etc/arltuner/policy.toml (D-030: legacy paths)
+
+
 class Defaults(unittest.TestCase):
     def test_default_audit_path_on_windows(self) -> None:
         env = {"LOCALAPPDATA": r"C:\Users\x\AppData\Local", "USERPROFILE": r"C:\Users\x"}
         self.assertEqual(cli.default_audit_path(env, windows=True), Path(env["LOCALAPPDATA"]) / "linuxmon" / "audit.jsonl")
-        self.assertEqual(cli.default_audit_path(env, windows=False), Path(env["USERPROFILE"]) / ".local" / "state" / "linuxmon" / "audit.jsonl")
+        self.assertEqual(cli.default_audit_path(env, windows=False, lstat_fn=_not_installed), Path(env["USERPROFILE"]) / ".local" / "state" / "linuxmon" / "audit.jsonl")
         self.assertEqual(cli.default_audit_path({"HOME": "/h"}, windows=True), Path("/h/.local/state/linuxmon/audit.jsonl"))
 
     def test_default_win_factories_build_the_real_things_lazily(self) -> None:
