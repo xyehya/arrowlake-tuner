@@ -37,6 +37,12 @@ class LockOpenTests(tg.GuardCase):
         exc = self.assert_refused(self.make_guard(), self.read_req(), Refusal.LOCKED)
         return str(exc)
 
+    def test_a_missing_lock_directory_is_a_named_refusal_not_a_traceback(self) -> None:
+        self.lock_path = self.dir / "no-such-dir" / "mailbox.lock"
+        message = self.locked()
+        self.assertIn("does not exist", message)
+        self.assertIn(str(self.dir / "no-such-dir"), message)
+
     def test_fifo_at_the_lock_path_is_a_refusal_not_a_hang(self) -> None:
         os.mkfifo(self.lock_path)
         message = self.locked()
