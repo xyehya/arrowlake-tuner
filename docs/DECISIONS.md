@@ -96,3 +96,6 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   allowlist, polkit at helper start — not eliminated (a cookie holder can fetch a plan nonce). (2) A local process can hold all 16 connection slots by
   reconnecting (local DoS only). (3) The server's `plan` args check is shallow; the helper is the authority and must schema-validate profiles.
   Re-login without restart: second `arltuner-gui.py` run → SIGUSR1 → fresh single-use token.
+  (4) The rate limiters do not slow guessing (a correct token/cookie is checked before the limiter and always accepted, by design, so an
+  attacker cannot lock the operator out); brute-force resistance rests on 256-bit token / session-id entropy. Flagged by the automated commit scan
+  as "rate-limit bypass" — accepted.
