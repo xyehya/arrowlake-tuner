@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from arltuner.platform import default_platform
+
 __all__ = [
     "KIND_E",
     "KIND_P",
@@ -37,11 +39,13 @@ KIND_E = "E"
 KINDS: tuple[str, str] = (KIND_P, KIND_E)
 
 # [MEASURED lnx 2026-09-29] docs/research/lnx-turbostat-plus-facts.md "CPU map"
-_P_COUNT = 8
-_E_COUNT = 16
-_E_CPU_BASE = 8  # E index k <-> Linux CPU 8 + k
-_E_CLUSTER_SIZE = 4
-_FAVORED_P_INDEXES = frozenset({0, 3})
+# (values live in platforms/arl-s-285k.toml, G-101)
+_TOPO = default_platform().topology
+_P_COUNT = _TOPO.p_count
+_E_COUNT = _TOPO.e_count
+_E_CPU_BASE = _TOPO.e_first_cpu  # E index k <-> Linux CPU 8 + k
+_E_CLUSTER_SIZE = _TOPO.e_cluster_size
+_FAVORED_P_INDEXES = frozenset(_TOPO.favored_p)
 
 # Kernel cpulist syntax ("0-7", "8-11,12-23"); an upper sanity bound keeps a corrupt file from
 # expanding into a huge set (kernel NR_CPUS never exceeds 8192).

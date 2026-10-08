@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from arltuner.mailbox import MSR_OC_MAILBOX, Cmd, Domain, Rc, VfWord, is_busy, is_write
+from arltuner.platform import default_platform
 from arltuner.topology import Topology, arl_s_285k
 
 from . import measured_baseline
@@ -44,13 +45,14 @@ _MAX_POINT = 15  # registers.md: P2 1..15 = V/F point (hidden on ARL-S)
 #: T-025 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset 0),
 #: ``0x10 P2=7`` -> rc ``0x11`` (the OC point is the ``P2 = 0`` word, not a point index). SkatterBencher ``[COMMUNITY]``: E has 6 fused points, P has 8.
 RC_NO_SUCH_POINT = 0x11  # not in ``Rc`` (``rc_name`` says ``UNKNOWN_0x11``)
+_PLATFORM = default_platform()  # V/F point ratios and turbo defaults: platforms/arl-s-285k.toml (G-101)
 POINT_COUNTS_ARL_S: dict[str, int] = {"E": 6, "P": 8}
 #: T-026 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md "Full point layout", "E cluster 1 V/F curve"): the ratio field of every V/F point
 #: and the BIOS per-point offset (raw, /1024 V). P (CPU 0, same table assumed on every P-core): 8,20,30,48,53,55,56,57x with -49.8 mV (raw -51) at 53x
 #: and 57x and -14.6 mV (raw -15) at 55x. E: 8,15,23,30,40,46x, offset 0. Used by ``SimConfig.measured()`` only (``SimConfig()`` keeps its old defaults).
 POINT_RATIOS_ARL_S: dict[tuple[str, int], int] = {
-    **{("P", n): r for n, r in enumerate((8, 20, 30, 48, 53, 55, 56, 57), start=1)},
-    **{("E", n): r for n, r in enumerate((8, 15, 23, 30, 40, 46), start=1)},
+    **{("P", n): r for n, r in enumerate(_PLATFORM.p_point_ratios, start=1)},  # platforms/arl-s-285k.toml (G-101)
+    **{("E", n): r for n, r in enumerate(_PLATFORM.e_point_ratios, start=1)},
 }
 POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15, ("P", 8): -51}
 #: T-026 SIM-ONLY: the point ratios of a NON-favored P-core. Only CPU 0 (favored) was measured; SkatterBencher ``[COMMUNITY]``: 57x is the boost ratio of the
@@ -59,7 +61,7 @@ POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15,
 POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
 #: T-028 ``[MEASURED lnx 2026-10-02]`` (docs/research/skatterbencher-285k.md ring section, ring-community.md): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
 #: points 8,14,20,28,34,37,38,39x (V target 0), ``P2 = 9`` -> rc ``0x11``; point 8 = ``0xF6600027`` = 39x with the BIOS offset -75.2 mV (raw -77).
-RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate((8, 14, 20, 28, 34, 37, 38, 39), start=1))
+RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_PLATFORM.ring_point_ratios, start=1))
 RING_POINT_OFFSETS_ARL_S: dict[int, int] = {8: -77}
 _ZERO_VF = VfWord(ratio=0, v_target_raw=0, static=False, offset_raw=0)
 _SILENT_CMDS = (
@@ -85,10 +87,7 @@ _MODELLED_READS = frozenset(
 #: "Facts"): ``0x1AD`` P buckets 57,57,55 x6 (LSB = 1 active core), ``0x1AE`` its core counts 1..8, ``0x650`` E buckets 48 x8, ``0x651`` its core
 #: counts, ``0xCE`` PLATFORM_INFO (``[15:8]`` = 37 base ratio), ``0x194`` FLEX_RATIO. The same value was read on CPU 0 and CPU 20.
 PLAIN_MSR_DEFAULTS: dict[int, int] = {
-    0x1AD: 0x3737373737373939,
-    0x1AE: 0x0807060504030201,
-    0x650: 0x3030303030303030,
-    0x651: 0x100C080604030201,
+    **_PLATFORM.turbo_defaults,  # 0x1AD / 0x1AE / 0x650 / 0x651 from platforms/arl-s-285k.toml (G-101)
     0xCE: 0x08040838F1812500,
     0x194: 0x000E0000,
 }
