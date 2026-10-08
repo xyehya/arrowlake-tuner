@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Start the local web UI:  python3 tools/arltuner-gui.py [--helper CMD ...] [--launcher PATH] [--open]
+"""Start the local web UI:  python3 tools/arltuner-gui.py [--helper CMD ...] [--no-helper] [--launcher PATH] [--open]
 
 Writes a 0600 launcher page (token inside) and prints its file:// URL; open it once and click the button. ``--helper`` is the command that
-speaks the helper protocol (Contract 8) on stdin/stdout; without it the server runs with no helper (API calls answer 503). This script never
-elevates and never starts the root helper by itself.
+speaks the helper protocol (Contract 8) on stdin/stdout. Default (G-106): when ``install.sh`` has put the helper at
+``/usr/lib/arltuner/arltuner-helper``, ``pkexec /usr/lib/arltuner/arltuner-helper --device`` (polkit asks for the admin password: the human act,
+SPEC 4.1); otherwise no helper and API calls answer 503. ``--no-helper`` forces the no-helper mode. This script never elevates by itself: only
+polkit does, and only for exactly that installed path. Web files: the checkout's ``web/`` if present, else ``/usr/share/arltuner/web``.
 """
 from __future__ import annotations
 
@@ -24,11 +26,26 @@ from arltuner.web.reissue import install_reissue, signal_running, write_pidfile 
 from arltuner.web.server import Config, WebServer  # noqa: E402
 
 
+INSTALLED_HELPER = "/usr/lib/arltuner/arltuner-helper"  # = arltuner.helper.config.INSTALLED_HELPER (the polkit action's exec.path)
+INSTALLED_WEB_DIR = Path("/usr/share/arltuner/web")  # = arltuner.helper.config.INSTALLED_WEB_DIR
+
+
+def default_helper_command(isfile=os.path.isfile) -> list[str] | None:
+    """``pkexec <installed helper> --device`` when the installed helper exists, else ``None`` (a checkout run must not pop a polkit prompt)."""
+    return ["pkexec", INSTALLED_HELPER, "--device"] if isfile(INSTALLED_HELPER) else None
+
+
+def default_web_root(checkout_web: Path = ROOT / "web", installed: Path = INSTALLED_WEB_DIR, isdir=os.path.isdir) -> Path:
+    """The checkout's ``web/`` when it exists (development), else the installed, version-matched ``/usr/share/arltuner/web``."""
+    return checkout_web if isdir(checkout_web) else installed
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--helper", nargs=argparse.REMAINDER, help="helper command (rest of the line)")
+    ap.add_argument("--helper", nargs=argparse.REMAINDER, help="helper command (rest of the line); default: pkexec the installed helper, when installed")
+    ap.add_argument("--no-helper", action="store_true", help="do not start any helper (API calls answer 503)")
     ap.add_argument("--launcher", type=Path, default=None, help="default: $XDG_RUNTIME_DIR/arltuner/launcher.html (else /tmp/arltuner-UID/)")
-    ap.add_argument("--web-root", type=Path, default=ROOT / "web")
+    ap.add_argument("--web-root", type=Path, default=default_web_root(), help="default: ./web of the checkout, else /usr/share/arltuner/web")
     ap.add_argument("--open", action="store_true", help="open the launcher in the default browser")
     a = ap.parse_args(argv)
     try:
@@ -53,8 +70,9 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(a.launcher.resolve().as_uri())
         return 0
     link = None
-    if a.helper:
-        proc = subprocess.Popen(a.helper, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+    helper_cmd = None if a.no_helper else (a.helper or default_helper_command())
+    if helper_cmd:
+        proc = subprocess.Popen(helper_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
         assert proc.stdin and proc.stdout
         link = HelperLink(proc.stdout, proc.stdin).start()
     srv = WebServer(Config(web_root=a.web_root), link)

@@ -193,6 +193,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
         lock_path=lock,
         audit_path=audit,
         policy_path=policy,
+        accepted_dir=INSTALLED_ACCEPTED_DIR if root else None,  # G-106/G-107: EXPECTED-words.txt, trust-checked by the op that reads it
         port_factory=lambda: DevCpuMsrPort(writable=True),
         topology_fn=detect,
         preflight_fn=lambda: preflight(Path("/")),

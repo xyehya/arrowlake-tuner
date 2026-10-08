@@ -13,7 +13,23 @@ from arltuner.msr import MsrPort
 from arltuner.platform.preflight import PreflightReport
 from arltuner.topology import Topology
 
-__all__ = ["HEARTBEAT_S", "HelperConfig"]
+__all__ = [
+    "HEARTBEAT_S", "HelperConfig", "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_CODE_DIR", "INSTALLED_HELPER", "INSTALLED_HELPER_TOML",
+    "INSTALLED_LOCK", "INSTALLED_LOCK_DIR", "INSTALLED_PLATFORMS_DIR", "INSTALLED_POLICY", "INSTALLED_STATE_DIR", "INSTALLED_WEB_DIR",
+]
+
+# The installed layout (SPEC 4.4 / 11, D-030; created by ``install.sh``). Everything the root helper trusts lives under these root-owned paths.
+INSTALLED_CODE_DIR = Path("/usr/lib/arltuner")  # the ``arltuner`` package is INSTALLED_CODE_DIR / "arltuner", platform files in ../platforms
+INSTALLED_PLATFORMS_DIR = INSTALLED_CODE_DIR / "platforms"
+INSTALLED_HELPER = INSTALLED_CODE_DIR / "arltuner-helper"  # the polkit action's exec.path; started as ``pkexec <this> --device``
+INSTALLED_WEB_DIR = Path("/usr/share/arltuner/web")
+INSTALLED_POLICY = Path("/etc/arltuner/policy.toml")  # its presence + trust is the CLI's "installed" test (D-030)
+INSTALLED_HELPER_TOML = Path("/etc/arltuner/helper.toml")
+INSTALLED_ACCEPTED_DIR = Path("/etc/arltuner/accepted")
+INSTALLED_STATE_DIR = Path("/var/lib/arltuner")
+INSTALLED_AUDIT = INSTALLED_STATE_DIR / "audit.jsonl"
+INSTALLED_LOCK_DIR = Path("/run/arltuner")  # tmpfiles.d: 0755 root (``/run/lock`` is 1777: anyone could pre-create the lock file there)
+INSTALLED_LOCK = INSTALLED_LOCK_DIR / "mailbox.lock"
 
 HEARTBEAT_S = 2.0  # contract 8
 HealthGate = Callable[[str], tuple[bool, str]]
@@ -21,7 +37,7 @@ HealthGate = Callable[[str], tuple[bool, str]]
 
 @dataclass
 class HelperConfig:
-    """``lock_path`` has no default on purpose: the launcher chooses it (the CLI's ``default_lock_path()``), tests use a temp file.
+    """``lock_path`` has no default on purpose: the launcher chooses it (the CLI's ``default_lock_path()``, which returns ``INSTALLED_LOCK`` on an installed machine), tests use a temp file.
 
     ``simulator``: the port is the simulator (no hardware), so the preflight write gate is not applied and ``vf.dump`` runs on a virtual clock
     (dwell is honoured in virtual time, as the CLI's ``--sim`` does). With ``simulator=False`` every op marked ``write`` first needs a fresh
@@ -36,6 +52,7 @@ class HelperConfig:
     preflight_fn: Callable[[], PreflightReport]
     sampler_factory: Callable[[float], Any]  # interval_s -> object with start() / stop() / snapshot() (arltuner.telemetry.Sampler)
     simulator: bool = True
+    accepted_dir: Path | None = None  # root-owned accepted state (``EXPECTED-words.txt`` inside); None = no accepted-state compare (simulator, tests)
     enforce_trust: bool = False  # SPEC 4.4 path checks on policy and audit paths; the launcher turns it on for hardware
     lstat_fn: Callable[[str], Any] = os.lstat
     euid_fn: Callable[[], int] = getattr(os, "geteuid", lambda: 0)  # who must own every file the helper opens for writing (root on hardware)

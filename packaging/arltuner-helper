@@ -1,0 +1,13 @@
+#!/usr/bin/python3 -I
+# arltuner root helper launcher (G-106). Installed to /usr/lib/arltuner/arltuner-helper, root-owned, mode 0755; the polkit action pins this path.
+# `-I` (isolated: no PYTHONPATH/user site, and no script directory or cwd on sys.path) so the only code that can be imported is the installed,
+# root-owned tree added below. The helper itself refuses to start as root unless that whole tree passes the SPEC 4.4 trust check, and it accepts
+# no argv as root but a bare --device (D-029).
+import sys
+
+sys.dont_write_bytecode = True  # the tree is precompiled at install time; root never writes into it afterwards
+sys.path.insert(0, "/usr/lib/arltuner")
+
+from arltuner.helper.main import process_main  # noqa: E402
+
+process_main()

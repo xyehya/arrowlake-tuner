@@ -117,6 +117,11 @@ def forbidden_port() -> object:
     raise AssertionError("a device port must never be constructed in a test")
 
 
+def not_installed(path: str):
+    """An ``lstat`` for a machine without ``/etc/arltuner`` (D-030: the CLI then keeps the legacy lock / audit paths)."""
+    raise FileNotFoundError(path)
+
+
 class CliCase(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -441,13 +446,13 @@ class Apply(CliCase):
         self.assertIn("policy error", err)
         self.nothing_sent()
 
-    def test_a_default_audit_path_is_a_state_directory_file(self) -> None:
-        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}), Path("/home/x/.local/state/linuxmon/audit.jsonl"))
-        self.assertEqual(cli.default_audit_path({"USERPROFILE": "C:/Users/x"}), Path("C:/Users/x/.local/state/linuxmon/audit.jsonl"))
+    def test_a_default_audit_path_is_a_state_directory_file(self) -> None:  # G-106: not installed (no /etc/arltuner/policy.toml) => legacy
+        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}, lstat_fn=not_installed), Path("/home/x/.local/state/linuxmon/audit.jsonl"))
+        self.assertEqual(cli.default_audit_path({"USERPROFILE": "C:/Users/x"}, lstat_fn=not_installed), Path("C:/Users/x/.local/state/linuxmon/audit.jsonl"))
 
     def test_a_default_lock_path_is_run_lock_when_it_exists(self) -> None:
-        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock"), Path("/run/lock/linuxmon-mailbox.lock"))
-        fallback = cli.default_lock_path(isdir=lambda p: False)
+        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock", lstat_fn=not_installed), Path("/run/lock/linuxmon-mailbox.lock"))
+        fallback = cli.default_lock_path(isdir=lambda p: False, lstat_fn=not_installed)
         self.assertEqual(fallback.name, "linuxmon-mailbox.lock")
         self.assertEqual(fallback.parent, Path(tempfile.gettempdir()))
 

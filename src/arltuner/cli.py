@@ -30,7 +30,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn, TextIO
+from typing import Any, NoReturn, TextIO
 
 from arltuner import vfdump
 from arltuner.controls import (
@@ -84,8 +84,10 @@ __all__ = [
     "EXIT_OK",
     "EXIT_REFUSED",
     "EXIT_USAGE",
+    "InstalledStateRefused",
     "default_audit_path",
     "default_lock_path",
+    "installed_state",
     "main",
 ]
 
@@ -101,18 +103,58 @@ WIN_HELP = "Windows 11 as Administrator via ThrottleStop's kernel driver (hardwa
 # --------------------------------------------------------------------------------------------------------------
 # Defaults
 # --------------------------------------------------------------------------------------------------------------
-def default_audit_path(env: Mapping[str, str], windows: bool = os.name == "nt") -> Path:
-    """``~/.local/state/linuxmon/audit.jsonl`` (home from ``env`` HOME / USERPROFILE, else the OS home); on Windows
-    ``%LOCALAPPDATA%\\linuxmon\\audit.jsonl`` when LOCALAPPDATA is set."""
+class InstalledStateRefused(Exception):
+    """``/etc/arltuner/policy.toml`` exists but fails the helper's trust check (D-030): refuse, never fall back to the legacy paths."""
+
+
+def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
+    """D-030: the machine is *installed* when ``/etc/arltuner/policy.toml`` exists and passes the helper's own trust check
+    (``arltuner.helper.trust``: root-owned, not group/world-writable, no symlink, root-owned parents). Absent => ``False`` (legacy paths
+    unchanged). Present but untrusted => :class:`InstalledStateRefused` (no fallback: a planted file must not silently route the
+    guard's lock and audit log elsewhere)."""
+    from arltuner.helper.config import INSTALLED_POLICY  # lazy: the CLI must not import the helper package at module load
+    from arltuner.helper.trust import TrustError, check_trusted_path
+
+    try:
+        lstat_fn(os.fspath(INSTALLED_POLICY))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        pass  # exists but cannot be examined: the trust check below refuses it by name
+    try:
+        check_trusted_path(INSTALLED_POLICY, want="file", lstat_fn=lstat_fn)
+    except TrustError as exc:
+        raise InstalledStateRefused(
+            f"{INSTALLED_POLICY} is present but not trusted ({exc.path}: {exc.reason}); the CLI will not guess between the installed and the "
+            "legacy lock/audit paths (D-030). Repair the install (re-run install.sh as root) or pass explicit --audit and --lock. "
+        ) from None
+    return True
+
+
+def default_audit_path(env: Mapping[str, str], windows: bool = os.name == "nt", lstat_fn: Callable[[str], object] = os.lstat) -> Path:
+    """Installed machine (D-030, not Windows): ``/var/lib/arltuner/audit.jsonl``. Otherwise ``~/.local/state/linuxmon/audit.jsonl`` (home from
+    ``env`` HOME / USERPROFILE, else the OS home); on Windows ``%LOCALAPPDATA%\\linuxmon\\audit.jsonl`` when LOCALAPPDATA is set.
+    Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
     if windows and env.get("LOCALAPPDATA"):
         return Path(env["LOCALAPPDATA"]) / "linuxmon" / "audit.jsonl"
+    if not windows and installed_state(lstat_fn):
+        from arltuner.helper.config import INSTALLED_AUDIT
+
+        return INSTALLED_AUDIT
     home = env.get("HOME") or env.get("USERPROFILE")
     base = Path(home) if home else Path.home()
     return base / ".local" / "state" / "linuxmon" / "audit.jsonl"
 
 
-def default_lock_path(isdir: Callable[[str], bool] = os.path.isdir) -> Path:
-    """``/run/lock/linuxmon-mailbox.lock`` when ``/run/lock`` exists, else the temp directory."""
+def default_lock_path(
+    isdir: Callable[[str], bool] = os.path.isdir, lstat_fn: Callable[[str], object] = os.lstat, windows: bool = os.name == "nt"
+) -> Path:
+    """Installed machine (D-030, not Windows): ``/run/arltuner/mailbox.lock``. Otherwise ``/run/lock/linuxmon-mailbox.lock`` when ``/run/lock``
+    exists, else the temp directory. Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
+    if not windows and installed_state(lstat_fn):
+        from arltuner.helper.config import INSTALLED_LOCK
+
+        return INSTALLED_LOCK
     if isdir("/run/lock"):
         return Path("/run/lock") / "linuxmon-mailbox.lock"
     return Path(tempfile.gettempdir()) / "linuxmon-mailbox.lock"
@@ -367,6 +409,7 @@ class _Ctx:
     win_health_gate_factory: Callable[[frozenset[int]], HealthGate | None] = _default_win_health_gate_factory
     win_detect_fn: Callable[[], Topology] = _default_win_detect
     measure_io_factory: Callable[[], vfdump.MeasureIO] | None = None  # T-026: None -> the real cpufreq/stress-ng I/O for --device, a refusal for --sim
+    lstat_fn: Callable[[str], Any] = os.lstat  # D-030 installed-detection (tests inject fake stat results)
 
     def say(self, text: str = "") -> None:
         self.out.write(text + "\n")
@@ -515,7 +558,7 @@ def _build_guard(
 ) -> tuple[WriteGuard, Callable[[], float], Callable[[float], object]]:
     clock, sleep = _clock_sleep(ctx, device)
     transport = MailboxTransport(port, sleep=sleep, clock=clock)
-    lock_path = Path(lock) if lock else default_lock_path()
+    lock_path = Path(lock) if lock else _default_lock(ctx)
     # T-016: the guard also enforces dwell across processes from the audit log's wall-clock timestamps. On hardware that is
     # the real wall clock. A simulator run waits on a virtual (or injected) clock, so its wall clock must move with it.
     wall_clock = ctx.wall_clock if device else anchored_wall_clock(clock, ctx.wall_clock)
@@ -535,8 +578,22 @@ def _build_guard(
     return guard, clock, sleep
 
 
+def _default_lock(ctx: _Ctx) -> Path:
+    try:
+        return default_lock_path(lstat_fn=ctx.lstat_fn)
+    except InstalledStateRefused as exc:
+        ctx.refuse(f"{exc}Nothing was sent.")
+
+
+def _default_audit(ctx: _Ctx) -> Path:
+    try:
+        return default_audit_path(ctx.env, lstat_fn=ctx.lstat_fn)
+    except InstalledStateRefused as exc:
+        ctx.refuse(f"{exc}Nothing was sent.")
+
+
 def _open_audit(ctx: _Ctx, path: str | None) -> AuditLog:
-    target = Path(path) if path else default_audit_path(ctx.env)
+    target = Path(path) if path else _default_audit(ctx)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         return AuditLog(target)
@@ -547,7 +604,7 @@ def _open_audit(ctx: _Ctx, path: str | None) -> AuditLog:
 def _boot_ops_used(ctx: _Ctx, path: str | None) -> int:
     """Operations the audit log already records for this boot (every process, reads included). An unreadable log refuses,
     exactly as the guard would (``AUDIT_UNAVAILABLE``): a budget that cannot be evaluated is not waived."""
-    target = Path(path) if path else default_audit_path(ctx.env)
+    target = Path(path) if path else _default_audit(ctx)
     try:
         state = read_state(target)
     except (AuditUnreadable, OSError) as exc:
@@ -1174,6 +1231,7 @@ def main(
     win_port_factory: Callable[[], MsrPort] | None = None,
     win_health_gate_factory: Callable[[frozenset[int]], HealthGate | None] | None = None,
     win_detect_fn: Callable[[], Topology] | None = None,
+    lstat_fn: Callable[[str], Any] | None = None,
 ) -> int:
     """Run the CLI and return the exit code (0 ok, 1 usage, 2 refused, 3 hardware/guard trouble). Nothing is read from
     ``sys``/``os`` when the matching parameter is given.
@@ -1184,6 +1242,7 @@ def main(
     ``--allow-taint-bit`` values (wired after T-015). ``clock`` / ``sleep`` default to real time for ``--device`` and to a
     virtual clock for ``--sim``. ``sim_factory`` / ``device_port_factory`` / ``detect_fn`` build the MSR port(s) and validate the
     machine; for ``--device-win`` the ``win_*`` counterparts (ThrottleStop port, WHEA health gate, LP-map check; ``boot_id_fn`` defaults to the Windows boot id). ``measure_io_factory`` (T-026, ``vf-dump --measure``) builds the cpufreq / load-generator I/O; unset, only ``--device`` gets the real one.
+    ``lstat_fn`` (default ``os.lstat``) feeds the D-030 installed-detection that picks the default lock / audit paths (tests inject fake stat results).
     """
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
@@ -1207,7 +1266,7 @@ def main(
         device_port_factory=device_port_factory if device_port_factory is not None else _default_device_port,
         detect_fn=detect_fn if detect_fn is not None else detect,
         measure_io_factory=measure_io_factory,
-        **{k: v for k, v in (("win_port_factory", win_port_factory), ("win_health_gate_factory", win_health_gate_factory), ("win_detect_fn", win_detect_fn)) if v is not None},
+        **{k: v for k, v in (("win_port_factory", win_port_factory), ("win_health_gate_factory", win_health_gate_factory), ("win_detect_fn", win_detect_fn), ("lstat_fn", lstat_fn)) if v is not None},
     )
     parser = _build_parser(out, err)
     try:
