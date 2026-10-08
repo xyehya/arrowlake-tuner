@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from arltuner.platform import default_platform
+
 __all__ = [
     "CPU_COUNT",
     "DOMAIN_VF",
@@ -37,12 +39,16 @@ __all__ = [
 
 TAG = "[MEASURED win 2026-10-01]"
 
-CPU_COUNT = 24
-P_CPUS = tuple(range(8))  # Linux CPUs 0-7
-E_CPUS = tuple(range(8, 24))  # Linux CPUs 8-23 (clusters 8-11, 12-15, 16-19, 20-23)
+# Topology, LP map and fused words come from ``platforms/arl-s-285k.toml`` (G-101); the values are unchanged.
+_PLATFORM = default_platform()
+_TOPO = _PLATFORM.topology
 
-_P_LP = (0, 1, 10, 11, 12, 13, 22, 23)
-_E_LP = (2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21)
+CPU_COUNT = _TOPO.cpu_count
+P_CPUS = _TOPO.p_cpus  # Linux CPUs 0-7
+E_CPUS = _TOPO.e_cpus  # Linux CPUs 8-23 (clusters 8-11, 12-15, 16-19, 20-23)
+
+_P_LP = _TOPO.lp_p
+_E_LP = _TOPO.lp_e
 
 
 def _freeze(table: Mapping[int, int]) -> Mapping[int, int]:
@@ -67,20 +73,7 @@ MAX_VOLTAGE_RAW: Mapping[int, int] = _freeze({cpu: (0x681 if cpu < 8 else 0x56D)
 
 #: ``0x09 P1=0x11 P2=0`` per core: the fused V/F point (ratio ``[7:0]``, voltage ``[19:8]``, S2.10). These are the XTU UI
 #: "Voltage Override" values (P0 1.426 V, P4 1.316 V, E 1.156 V / 1.137 V).
-FUSED_POINT: Mapping[int, int] = _freeze(
-    {
-        0: 0x5B439,
-        1: 0x53839,
-        2: 0x57439,
-        3: 0x59439,
-        4: 0x54439,
-        5: 0x56C39,
-        6: 0x56039,
-        7: 0x58039,
-        **{cpu: 0x4A02E for cpu in range(8, 12)},
-        **{cpu: 0x48C2E for cpu in range(12, 24)},
-    }
-)
+FUSED_POINT: Mapping[int, int] = _freeze(_PLATFORM.fused_point)
 
 #: ``0x1C P1=0 P2=0`` per core (``[7:0]`` favored/current ratio, ``[15:8]`` fused): favored P = CPU 0 and 3 (57), other P 55,
 #: E ``0x2E30`` (fused 46, favored ratio 48 -- note ``[7:0]`` > ``[15:8]`` on E cores: ``[15:8]`` is not a ceiling for the ratio).
