@@ -37,7 +37,7 @@ from arltuner.topology import TopologyError, UnknownCore
 
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, MAX_LINE, PREFLIGHT_FAILED, REFUSED, OpError
 from .state import State
-from .trust import TrustError, check_trusted_path
+from .trust import TrustError, check_lock_file, check_trusted_path, open_checked
 
 if TYPE_CHECKING:
     from .core import Helper
@@ -187,19 +187,26 @@ def _trust(helper: Helper, path: Path, *, want: str | None, must_exist: bool) ->
         raise OpError(REFUSED, f"untrusted path (SPEC 4.4): {exc}", {"check": "TRUST_PATH", "path": exc.path, "reason": exc.reason}) from None
 
 
+def _trust_refusal(exc: TrustError, check: str) -> OpError:
+    return OpError(REFUSED, f"untrusted file: {exc}. Nothing was sent.", {"check": check, "path": exc.path, "reason": exc.reason})
+
+
 def op_audit_tail(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     path = helper.cfg.audit_path
     _trust(helper, path, want="file", must_exist=False)
     try:
-        if stat.S_ISLNK(os.lstat(path).st_mode):
-            raise OpError(REFUSED, f"audit log {path} is a symlink", {"check": "TRUST_PATH", "path": str(path), "reason": "symlink"})
-        with open(path, "rb") as handle:
+        # O_NOFOLLOW + fstat on the opened descriptor (regular file, ours, not writable by others): never open-then-check by name
+        fd = open_checked(path, write=False, create=False, euid=helper.cfg.euid_fn(), what="audit log")
+    except FileNotFoundError:
+        return {"path": str(path), "records": [], "truncated": False}
+    except TrustError as exc:
+        raise _trust_refusal(exc, "TRUST_PATH") from None
+    try:
+        with os.fdopen(fd, "rb") as handle:
             size = handle.seek(0, os.SEEK_END)
             start = max(0, size - _TAIL_READ_BYTES)
             handle.seek(start)
             data = handle.read()
-    except FileNotFoundError:
-        return {"path": str(path), "records": [], "truncated": False}
     except OSError as exc:
         raise OpError(INTERNAL, f"cannot read the audit log: {exc.strerror or exc}") from None
     lines = data.split(b"\n")
@@ -282,6 +289,18 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
             f"this dump needs up to {needed} mailbox reads (every read is a WRMSR) but the policy allows {policy.max_operations_per_session} per session.",
             "SESSION_LIMIT", needed=needed, allowed=policy.max_operations_per_session,
         )
+    euid = cfg.euid_fn()
+    try:
+        check_lock_file(cfg.lock_path, euid=euid)  # a foreign / symlinked lock file in a world-writable directory is refused, not followed or taken over
+    except TrustError as exc:
+        raise _trust_refusal(exc, "LOCK_UNTRUSTED") from None
+    try:
+        # create-or-validate the audit log with O_NOFOLLOW + fstat before AuditLog (which itself opens O_NOFOLLOW|O_APPEND) ever touches it
+        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o644, euid=euid, what="audit log"))
+    except TrustError as exc:
+        raise _trust_refusal(exc, "TRUST_PATH") from None
+    except OSError as exc:
+        raise _refuse(f"cannot open the audit log {cfg.audit_path}: {exc}.", "AUDIT_UNAVAILABLE") from None
     try:
         state = read_state(cfg.audit_path)
     except (AuditUnreadable, OSError) as exc:

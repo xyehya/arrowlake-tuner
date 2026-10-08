@@ -23,6 +23,7 @@ from .protocol import (
     CANCELLED,
     INTERNAL,
     MAX_LINE,
+    REFUSED,
     UNKNOWN_OP,
     Frame,
     OpError,
@@ -35,9 +36,11 @@ from .protocol import (
     read_frame,
 )
 from .state import Busy, State, StateMachine
+from .trust import TrustError, open_checked
 
 __all__ = ["EXIT_INSTANCE_BUSY", "Helper", "InstanceBusy", "InstanceLock"]
 
+EXIT_REFUSED_TO_START = 77  # the lock file is not trustworthy
 EXIT_INSTANCE_BUSY = 75  # EX_TEMPFAIL: another helper holds the machine-wide instance lock
 _POLL_S = 0.1
 
@@ -51,17 +54,19 @@ class InstanceLock:
     file (the guard creates and removes ``lock_path`` itself around every transaction, so it cannot double as a lifetime lock). Released by the
     kernel when the process dies; the file is never deleted (no unlink race)."""
 
-    def __init__(self, lock_path: os.PathLike[str] | str) -> None:
+    def __init__(self, lock_path: os.PathLike[str] | str, *, euid: int | None = None) -> None:
         path = os.fspath(lock_path)
         self.path = path + ".helper"
+        self._euid = getattr(os, "geteuid", lambda: 0)() if euid is None else euid
         self._fd: int | None = None
 
     def acquire(self) -> None:
+        """``TrustError`` if the file is a symlink, foreign-owned or writable by others (``LOCK_UNTRUSTED``): never followed or taken over."""
         try:
             import fcntl
         except ImportError as exc:  # not POSIX: the helper is Linux-only
             raise InstanceBusy("the instance lock needs fcntl (Linux)") from exc
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = open_checked(self.path, write=True, create=True, euid=self._euid, what="instance lock file")
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -138,11 +143,15 @@ class Helper:
     # ---------------------------------------------------------------- the loop
     def run(self, stdin: BinaryIO, stdout: BinaryIO) -> int:
         self._writer = Writer(stdout, on_broken=lambda: self.request_shutdown("stdout closed"))
-        lock = InstanceLock(self.cfg.lock_path)
+        lock = InstanceLock(self.cfg.lock_path, euid=self.cfg.euid_fn())
         try:
             lock.acquire()
+        except TrustError as exc:  # a symlink, a foreign-owned or a writable-by-others lock file: never followed, never taken over
+            self._send(error_response(None, REFUSED, f"untrusted lock file: {exc}", {"check": "LOCK_UNTRUSTED", "path": exc.path, "reason": exc.reason}))
+            self.cfg.log(f"lock: {exc}")
+            return EXIT_REFUSED_TO_START
         except (InstanceBusy, OSError) as exc:
-            self._send(error_response(None, BUSY, f"the helper is already running on this machine: {exc}", {"state": "locked"}))
+            self._send(error_response(None, REFUSED, f"the helper is already running on this machine: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
         frames: queue.Queue[Frame] = queue.Queue()

@@ -38,6 +38,7 @@ class HelperConfig:
     simulator: bool = True
     enforce_trust: bool = False  # SPEC 4.4 path checks on policy and audit paths; the launcher turns it on for hardware
     lstat_fn: Callable[[str], Any] = os.lstat
+    euid_fn: Callable[[], int] = getattr(os, "geteuid", lambda: 0)  # who must own every file the helper opens for writing (root on hardware)
     health_gate_factory: Callable[[], HealthGate | None] = lambda: None
     boot_id_fn: Callable[[], str | None] = read_boot_id
     wall_clock: Callable[[], float] = time.time

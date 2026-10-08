@@ -255,8 +255,8 @@ class InstanceLockTests(HelperCase):
         self.harnesses.append(second)
         second.start()
         msg = second.response(None)
-        self.assertEqual(error_code(msg), "BUSY")
-        self.assertEqual(msg["error"]["detail"]["state"], "locked")
+        self.assertEqual(error_code(msg), "REFUSED")
+        self.assertEqual(msg["error"]["detail"]["check"], "INSTANCE_LOCK")
         self.assertEqual(second.join(), EXIT_INSTANCE_BUSY)
         self.assertEqual(second.messages, [msg])  # one line, nothing else
         self.assertTrue(first.call("p2", "preflight")["ok"])  # the first one is unaffected

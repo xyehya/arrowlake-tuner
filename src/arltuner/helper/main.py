@@ -57,6 +57,7 @@ def _parser() -> argparse.ArgumentParser:
 def build_config(args: argparse.Namespace, *, log: Callable[[str], None]) -> HelperConfig:
     from arltuner.telemetry import Sampler
 
+    # TODO(G-106, OD-1): /run/lock is 1777 (anyone can pre-create the lock file). Move the default to a root-owned dir such as /run/arltuner/.
     lock = Path(args.lock) if args.lock else default_lock_path()
     if args.sim:
         nowhere = Path("/nonexistent-arltuner-sim")

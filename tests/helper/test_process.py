@@ -98,7 +98,7 @@ class ProcessTests(ProcessCase):
         self.assertTrue(self.roundtrip(first, {"id": "1", "op": "preflight"})["ok"])
         second = self.spawn()
         msg = json.loads(second.stdout.readline())
-        self.assertEqual((msg["ok"], msg["error"]["code"]), (False, "BUSY"))
+        self.assertEqual((msg["ok"], msg["error"]["code"], msg["error"]["detail"]["check"]), (False, "REFUSED", "INSTANCE_LOCK"))
         self.assertEqual(second.wait(10), 75)
         self.assertTrue(self.roundtrip(first, {"id": "2", "op": "preflight"})["ok"])
 
