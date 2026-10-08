@@ -159,3 +159,6 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
   guard trips ⇒ `INTERNAL`. As root the helper takes **no argv but a bare `--device`** (`--sim` ⇒ `ROOT_SIM`, others ⇒ `ROOT_ARGV`, exit 77); paths are
   constants (`/etc/arltuner/policy.toml`, `/etc/arltuner/helper.toml` = `allow_taint_bits`, `/var/lib/arltuner/audit.jsonl`, `/etc/arltuner/accepted`);
   every root-opened file: `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, fstat regular, nlink 1, owner euid, no g/o write, never `O_TRUNC`. Server `OPS` mirrors these.
+- **Addendum (G-107, D-030):** `heartbeat {state, ops_used, ops_budget}` (per-boot count from the helper's audit log; budget from root policy) —
+  the dashboard's budget source. `vf.dump` result gains `accepted_match`: per core `{cpu, match: bool, diffs: [{point, expected, actual}]}` computed by
+  the helper against `/etc/arltuner/accepted` EXPECTED words; `null` when no trusted accepted state exists.

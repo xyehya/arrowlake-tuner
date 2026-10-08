@@ -1,15 +1,20 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-08 · lnx · G0 bootstrap done (repo created from linuxmon@b01f78a). Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-08 · lnx · G1 in progress (4 of 7 merged). Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
-- **G0 done:** code renamed `arltuner`, 1261 offline tests OK, sim plan of p-step7 identical to linuxmon, accepted profiles + policy carried,
-  Windows `$Expected` == `profiles/EXPECTED-words.txt` (12/12). Knowledge distilled into `docs/knowledge/`. Spec v2 `docs/SPEC.md` with the
-  37-finding review folded in (`docs/review/2026-10-08-spec-v1-review.md`). G1 tasks written (`docs/tasks/INDEX.md`).
-- **Not yet run from this repo:** the restore scripts on hardware (Linux `tools/lnx/restore_tuning.sh`, Windows `tools\win\restore_tuning.ps1`).
-  Since G-101 `topology`/`msr` read `platforms/arl-s-285k.toml` at import (raise if missing/corrupt), so the next boot's restore is also
-  the first real run of the platform loader — check it first.
-- **Remote:** private GitHub `xyehya/arrowlake-tuner` (remote `origin`). linuxmon is the read-only archive (`docs/PROVENANCE.md`).
+- **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
+  (2 review rounds), G-104 telemetry readers. Suite **1610 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
+- **In flight (Sonnet high, worktrees):** G-105 dashboard, G-106 install + polkit + path migration, G-107 helper budget/accepted compare.
+  G-106 and G-107 get a read-only Sonnet security review before merge.
+- **Decisions this session:** D-026 telemetry own read allowlist · D-027 web↔helper (202 + SSE result, Sec-Fetch-Site) · D-028 web residual risks
+  · D-029 root helper hardening (no argv as root) · D-030 path migration only when installed.
+- **Hardware not touched this session.** Restore scripts not yet run from this repo. Since G-101, `topology`/`msr` read
+  `platforms/arl-s-285k.toml` at import ⇒ the next boot's restore also exercises the platform loader (check it first).
+- **Sequencing (D-030):** before install, CLI keeps legacy lock/audit paths; after the install go-ahead (T1), the *following* restore is the first
+  run on `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl`. The helper refuses to run from a checkout ⇒ first real helper run needs
+  the install. Each is a separate operator go-ahead.
+- **Remote:** private GitHub `xyehya/arrowlake-tuner` (`origin`). linuxmon = read-only archive (`docs/PROVENANCE.md`).
 
 ## Accepted tuning (reference machine) — p-step7 + E split3, BIOS LLC 6 (D-019)
 `profiles/CURRENT`: `e-p6-split3` → `p-boot-ramp` → `p-step7`; words `profiles/EXPECTED-words.txt`. Gate passed on Windows (2026-10-04) and Linux
@@ -38,9 +43,10 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. G1 (`docs/tasks/INDEX.md`): G-101 and G-103/G-104 can start in parallel (Sonnet workers in worktrees, simulator/fake sysfs only); G-102 after G-101;
-   G-105 last; G-106 (unblocked).
-2. W: first Windows restore from this repo (check the rename end to end).
+1. Merge G-105/G-106/G-107 (reviews for 106/107). G1 exit (ROADMAP): T1 install + first helper `preflight` / telemetry read on hardware — ask the
+   operator for the go-ahead with exact commands.
+2. Orchestrator rule: workers and reviewers run `model: sonnet`, `effort: high` (operator 2026-10-08).
+3. W: first Windows restore from this repo (check the rename end to end).
 
 ## How we work
 Operator at the machine; orchestrator answers guard tokens only after a go-ahead. One variable at a time; acceptance gate = 60-min OCCT Linpack 2021

@@ -103,3 +103,10 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   and the taint-bit allowance are root-owned constants (`/etc/arltuner/helper.toml`); file opens symlink/FIFO/hardlink-safe (guard lock/audit too).
   Carried: `check_code_tree` is a tripwire (runs after import) — the gate is G-106's polkit `exec.path` with no argv; lock stays in `/run/lock` (DoS
   only) until G-106; latent: a future non-long write op would skip `machine.begin` — G2 must mark write ops long or fix the gate.
+- **D-030 · 2026-10-08 · Path migration rule + G1 tail.** CLI and helper switch from the legacy lock/audit (`/run/lock/linuxmon-mailbox.lock`,
+  `~/.local/state/linuxmon/audit.jsonl`) to `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl` **only when installed**: the CLI treats
+  "installed" = `/etc/arltuner/policy.toml` present and passing the helper's trust check; present-but-untrusted ⇒ named refusal, never fallback; absent
+  ⇒ legacy unchanged. No two-lock transition (a user-owned legacy log read for the cap would be truncatable ⇒ cap bypass). `install.sh` seeds the new
+  audit log from the legacy one (root 0600) so the per-boot count survives a mid-boot install; tmpfiles.d creates `/run/arltuner` (0755 root).
+  Consequence: the first restore after the install go-ahead is the first run on the new paths. Dashboard budget/accepted data come from the helper
+  (contract 8 addendum G-107).
