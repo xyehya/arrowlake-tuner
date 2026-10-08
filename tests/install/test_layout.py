@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -319,6 +320,178 @@ class HostileCheckout(InstallCase):
             self.assertIn("must run as root", r.stderr)
 
 
+def bash_function(name: str) -> str:
+    """The text of a shell function of install.sh, so it can be exercised alone (swap_dir, copy_one)."""
+    m = re.search(rf"^{name}\(\) \{{.*?^\}}$", (REPO / "install.sh").read_text(), re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def run_bash(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    prelude = 'set -euo pipefail\ndie() { echo "die: $*" >&2; exit 1; }\nOWN=()\n'
+    return subprocess.run(["bash", "-c", prelude + script], capture_output=True, text=True, cwd=cwd, env={"PATH": os.environ["PATH"]}, timeout=60)
+
+
+class SourceTreeAttacks(InstallCase):
+    def test_a_symlinked_source_directory_is_refused_and_nothing_is_installed(self) -> None:
+        for rel in ("src", "src/arltuner", "platforms", "web", "packaging", "profiles", "policies"):
+            with self.subTest(rel):
+                src = copy_checkout(self.tmp / ("c-" + rel.replace("/", "_")))
+                elsewhere = self.tmp / ("elsewhere-" + rel.replace("/", "_"))
+                (src / rel).rename(elsewhere)
+                (src / rel).symlink_to(elsewhere)
+                dest = self.tmp / ("root-" + rel.replace("/", "_"))
+                dest.mkdir()
+                r = run_script(src / "install.sh", destdir=dest, legacy_audit=self.legacy)
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("symlink", r.stderr)
+                self.assertEqual(list(dest.iterdir()), [], "refused before writing anything")
+
+    def test_a_symlinked_python_file_inside_the_package_is_not_installed(self) -> None:
+        src = copy_checkout(self.tmp / "checkout")
+        secret = self.tmp / "secret.py"
+        secret.write_text("SECRET = 1\n")
+        (src / "src" / "arltuner" / "leak.py").symlink_to(secret)
+        self.ok_install(script=src / "install.sh")
+        self.assertFalse((self.path("/usr/lib/arltuner/arltuner") / "leak.py").exists())
+        self.assertNotIn(b"SECRET", b"".join(p.read_bytes() for p in self.path("/usr/lib/arltuner").rglob("*.py")))
+
+    def test_two_policy_lines_in_current_are_refused(self) -> None:
+        src = copy_checkout(self.tmp / "checkout")
+        cur = src / "profiles" / "CURRENT"
+        cur.write_text("policy = policies/example-oc-ramp.toml\n" + cur.read_text())
+        r = self.install(script=src / "install.sh")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("more than one 'policy =' line", r.stderr)
+        self.assertFalse((self.dest / "etc/arltuner/policy.toml").exists())
+
+    def test_no_bare_empty_array_expansion_under_set_u(self) -> None:
+        self.assertNotIn('"${OWN[@]}"', (REPO / "install.sh").read_text().replace('${OWN[@]+"${OWN[@]}"}', ""))
+
+
+class ShellFunctions(InstallCase):
+    def test_swap_dir_replaces_and_removes_the_old_tree(self) -> None:
+        (self.tmp / "final").mkdir()
+        (self.tmp / "final" / "old.txt").write_text("old")
+        (self.tmp / "new").mkdir()
+        (self.tmp / "new" / "new.txt").write_text("new")
+        r = run_bash(bash_function("swap_dir") + '\nswap_dir "$PWD/new" "$PWD/final"', self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(p.name for p in (self.tmp / "final").iterdir()), ["new.txt"])
+        self.assertEqual([p.name for p in self.tmp.iterdir() if ".old." in p.name], [])
+
+    def test_swap_dir_with_nothing_there_yet(self) -> None:
+        (self.tmp / "new").mkdir()
+        r = run_bash(bash_function("swap_dir") + '\nswap_dir "$PWD/new" "$PWD/final"', self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.tmp / "final").is_dir())
+
+    def test_a_failing_swap_rolls_back_and_the_final_path_is_never_missing(self) -> None:
+        (self.tmp / "final").mkdir()
+        (self.tmp / "final" / "keep.txt").write_text("keep")
+        r = run_bash(bash_function("swap_dir") + '\nswap_dir "$PWD/does-not-exist" "$PWD/final"', self.tmp)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("rolled back", r.stderr)
+        self.assertEqual((self.tmp / "final" / "keep.txt").read_text(), "keep")
+        self.assertEqual([p.name for p in self.tmp.iterdir() if ".old." in p.name], [])
+
+    def test_swap_dir_moves_a_symlink_aside_instead_of_following_it(self) -> None:
+        target = self.tmp / "victim"
+        target.mkdir()
+        (target / "precious").write_text("x")
+        (self.tmp / "final").symlink_to(target)
+        (self.tmp / "new").mkdir()
+        r = run_bash(bash_function("swap_dir") + '\nswap_dir "$PWD/new" "$PWD/final"', self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.tmp / "final").is_dir() and not (self.tmp / "final").is_symlink())
+        self.assertEqual((target / "precious").read_text(), "x", "the link target was not touched")
+
+    def test_copy_one_copies_a_regular_file_with_the_requested_mode(self) -> None:
+        (self.tmp / "a.txt").write_text("data")
+        os.chmod(self.tmp / "a.txt", 0o666)
+        r = run_bash(bash_function("copy_one") + '\ncopy_one "$PWD/a.txt" "$PWD/sub/b.txt" 0640', self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.tmp / "sub" / "b.txt").read_text(), "data")
+        self.assertEqual(stat.S_IMODE((self.tmp / "sub" / "b.txt").stat().st_mode), 0o640)
+
+    def test_copy_one_refuses_a_source_that_is_a_link_and_leaves_no_destination(self) -> None:
+        (self.tmp / "secret").write_text("TOP SECRET")
+        (self.tmp / "a.txt").symlink_to(self.tmp / "secret")
+        r = run_bash(bash_function("copy_one") + '\ncopy_one "$PWD/a.txt" "$PWD/b.txt" 0644', self.tmp)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("changed while it was being copied", r.stderr)
+        self.assertFalse((self.tmp / "b.txt").exists() or (self.tmp / "b.txt").is_symlink())
+
+    def test_copy_one_replaces_a_planted_destination_link_without_following_it(self) -> None:
+        (self.tmp / "a.txt").write_text("data")
+        (self.tmp / "victim").write_text("untouched")
+        (self.tmp / "b.txt").symlink_to(self.tmp / "victim")
+        r = run_bash(bash_function("copy_one") + '\ncopy_one "$PWD/a.txt" "$PWD/b.txt" 0644', self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.tmp / "victim").read_text(), "untouched")
+        self.assertFalse((self.tmp / "b.txt").is_symlink())
+
+
+class LegacySeed(InstallCase):
+    def me(self) -> tuple[str, str]:
+        import pwd
+
+        return str(os.getuid()), pwd.getpwuid(os.getuid()).pw_name
+
+    def test_sudo_user_root_with_a_different_pkexec_uid_is_refused_before_anything_is_written(self) -> None:
+        uid, _ = self.me()
+        self.legacy.write_text("x\n")
+        r = self.install(extra_env={"SUDO_USER": "root", "PKEXEC_UID": uid})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("disagree", r.stderr)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_two_different_users_are_refused(self) -> None:
+        uid, name = self.me()
+        r = self.install(extra_env={"SUDO_USER": name + "x", "PKEXEC_UID": uid})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("disagree", r.stderr)
+
+    def test_matching_users_are_accepted(self) -> None:
+        uid, name = self.me()
+        self.legacy.write_text("legacy\n")
+        self.ok_install(extra_env={"SUDO_USER": name, "PKEXEC_UID": uid})
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\n")
+
+    def test_a_bad_or_unknown_pkexec_uid_is_refused(self) -> None:
+        for bad in ("abc", "4294967290"):
+            r = self.install(extra_env={"PKEXEC_UID": bad})
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertEqual(list(self.dest.iterdir()), [], bad)
+
+    def test_root_is_never_the_user_whose_log_is_seeded(self) -> None:
+        self.legacy.write_text("root's idea of a log\n")
+        r = self.ok_install(extra_env={"SUDO_USER": "root"}, legacy_audit=None)
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), b"")
+        self.assertIn("created empty", r.stdout)
+
+    def test_a_legacy_log_over_64_mib_is_refused_and_leaves_no_audit_log(self) -> None:
+        with open(self.legacy, "wb") as fh:
+            fh.truncate(67108864 + 1)
+        r = self.install()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("larger than 64 MiB", r.stderr)
+        self.assertFalse((self.dest / "var/lib/arltuner/audit.jsonl").exists())
+        self.assertEqual([p.name for p in (self.dest / "var/lib/arltuner").iterdir()], [], "no staging file left behind")
+
+    def test_a_legacy_log_of_exactly_64_mib_is_accepted(self) -> None:
+        with open(self.legacy, "wb") as fh:
+            fh.truncate(67108864)
+        self.ok_install()
+        self.assertEqual((self.dest / "var/lib/arltuner/audit.jsonl").stat().st_size, 67108864)
+
+    def test_the_size_cap_does_not_depend_on_a_stat_of_the_source(self) -> None:
+        text = (REPO / "install.sh").read_text()
+        self.assertIn("head -c 67108865", text)
+        self.assertNotIn("stat -c %s \"$LEGACY\"", text)
+        self.assertIn("runuser -u", text)
+
+
 class Uninstall(InstallCase):
     def setUp(self) -> None:
         super().setUp()
@@ -345,10 +518,24 @@ class Uninstall(InstallCase):
         self.assertTrue(self.path("/var/lib/arltuner/audit.jsonl").is_file())
 
     def test_purge_removes_config_and_state_too(self) -> None:
-        self.uninstall("--purge")
+        self.uninstall("--purge", "--yes-reset-budget")
         self.assertFalse(self.path("/var/lib/arltuner").exists())
         self.assertFalse(self.path("/etc/arltuner").exists())
-        self.uninstall("--purge")
+        self.uninstall("--purge", "--yes-reset-budget")
+
+    def test_purge_alone_is_refused_and_removes_nothing(self) -> None:
+        r = run_script(REPO / "uninstall.sh", "--purge", destdir=self.dest)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--yes-reset-budget", r.stderr)
+        self.assertIn("RESETS the per-boot", r.stderr)
+        self.assertTrue(self.path("/usr/lib/arltuner").is_dir())
+        self.assertTrue(self.path("/var/lib/arltuner/audit.jsonl").is_file())
+        self.assertTrue(self.path("/etc/arltuner/policy.toml").is_file())
+
+    def test_the_budget_flag_alone_is_refused(self) -> None:
+        r = run_script(REPO / "uninstall.sh", "--yes-reset-budget", destdir=self.dest)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertTrue(self.path("/var/lib/arltuner/audit.jsonl").is_file())
 
     def test_reinstall_after_uninstall_keeps_the_old_audit_log(self) -> None:
         self.uninstall()
@@ -371,6 +558,7 @@ class SelfcheckOnTheRealInstallTree(InstallCase):
         lstat = lambda p: os.lstat(self.dest / str(p).lstrip("/"))  # noqa: E731
         listdir = lambda p: os.listdir(self.dest / str(p).lstrip("/"))  # noqa: E731
         read = lambda p: (self.dest / str(p).lstrip("/")).read_bytes()  # noqa: E731
+        self.assertEqual((self.dest / "usr/lib/arltuner/arltuner-helper").read_bytes(), (REPO / "packaging/arltuner-helper").read_bytes())
         results = mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid())
         self.assertEqual([r for r in results if r[1] is not None], [])
         self.assertGreaterEqual(len(results), 12)

@@ -16,6 +16,8 @@ spec.loader.exec_module(selfcheck)
 EXE = stat.S_IFREG | 0o755
 PRIVATE = stat.S_IFREG | 0o600
 POLKIT = (REPO / "packaging" / "io.github.arrowlake-tuner.helper.policy").read_bytes()
+LAUNCHER = (REPO / "packaging" / "arltuner-helper").read_bytes()
+CODE_TREE = "code tree /usr/lib/arltuner (top level, arltuner/, platforms/, every dir and file, __pycache__ included)"
 
 GOOD: dict[str, tuple[int, int]] = {
     "/": (0, DIR), "/usr": (0, DIR), "/usr/lib": (0, DIR), "/usr/share": (0, DIR), "/usr/share/polkit-1": (0, DIR), "/usr/share/polkit-1/actions": (0, DIR),
@@ -32,13 +34,19 @@ GOOD: dict[str, tuple[int, int]] = {
 }
 
 
-def run(tree, polkit: bytes = POLKIT) -> dict[str, str | None]:
-    results = selfcheck.selfcheck(lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), read_fn=lambda p: polkit)
+def run(tree, polkit: bytes = POLKIT, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None) -> dict[str, str | None]:
+    def read(p) -> bytes:
+        p = str(p)
+        if p in (files or {}):
+            return files[p]
+        return launcher if p == str(selfcheck.HELPER) else polkit
+
+    results = selfcheck.selfcheck(lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), read_fn=read)
     return dict(results)
 
 
-def failures(tree, polkit: bytes = POLKIT) -> dict[str, str]:
-    return {k: v for k, v in run(tree, polkit).items() if v is not None}
+def failures(tree, polkit: bytes = POLKIT, **kw) -> dict[str, str]:
+    return {k: v for k, v in run(tree, polkit, **kw).items() if v is not None}
 
 
 class Good(unittest.TestCase):
@@ -69,17 +77,66 @@ class Damage(unittest.TestCase):
         self.assertIn("writable", why)
 
     def test_a_user_owned_platform_file(self) -> None:
-        label, _ = self.only(GOOD | {"/usr/lib/arltuner/platforms/arl-s-285k.toml": (1000, FILE)})
-        self.assertIn("platform", label)
+        label, why = self.only(GOOD | {"/usr/lib/arltuner/platforms/arl-s-285k.toml": (1000, FILE)})
+        self.assertIn("code tree", label)
+        self.assertIn("arl-s-285k.toml", why)
 
     def test_a_symlinked_code_directory(self) -> None:
         label, why = self.only(GOOD | {"/usr/lib/arltuner/arltuner": (0, SYMLINK)})
         self.assertIn("code tree", label)
         self.assertIn("symlink", why)
 
+    def test_a_user_owned_file_at_the_top_level_of_the_code_directory(self) -> None:
+        label, why = self.only(GOOD | {"/usr/lib/arltuner/stray.py": (1000, FILE)})
+        self.assertEqual(label, CODE_TREE)
+        self.assertIn("stray.py", why)
+
+    def test_a_launcher_with_other_content_is_refused(self) -> None:
+        label, why = self.only(GOOD, launcher=LAUNCHER + b"# extra\n")
+        self.assertIn("launcher content", label)
+        self.assertIn("sha256", why)
+
+    def test_a_launcher_with_another_shebang_is_refused(self) -> None:
+        label, why = self.only(GOOD, launcher=b"#!/usr/bin/python3\n" + LAUNCHER.split(b"\n", 1)[1])
+        self.assertIn("shebang", why)
+
+    def test_the_pinned_launcher_hash_matches_the_packaged_launcher(self) -> None:
+        import hashlib
+
+        self.assertEqual(selfcheck.LAUNCHER_SHA256, hashlib.sha256(LAUNCHER).hexdigest())
+        self.assertEqual(selfcheck.LAUNCHER_SHEBANG, LAUNCHER.split(b"\n", 1)[0])
+
+    def test_leftover_staging_paths_are_flagged(self) -> None:
+        for extra in (
+            "/usr/lib/arltuner.old.123", "/usr/lib/.arltuner.new.9", "/usr/share/arltuner/web.old.4",
+            "/etc/arltuner/.accepted.new.7", "/etc/arltuner/accepted.old.2", "/var/lib/arltuner/.audit.new.1",
+        ):
+            tree = GOOD | {extra: (0, DIR), "/usr/share/arltuner": (0, DIR), "/usr/share": (0, DIR)}
+            label, why = self.only(tree)
+            self.assertIn("leftover", label, extra)
+            self.assertIn(extra, why)
+
+    def test_other_packages_in_usr_lib_are_not_leftovers(self) -> None:
+        tree = GOOD | {"/usr/lib/python3.old.1": (0, DIR), "/usr/lib/foo.new.2": (0, DIR)}
+        self.assertEqual(failures(tree), {})
+
+    def test_a_polkit_rule_mentioning_the_action_is_flagged(self) -> None:
+        rule = b'polkit.addRule(function(a, s) { if (a.id == "io.github.arrowlake-tuner.helper") return polkit.Result.YES; });'
+        for d in ("/etc/polkit-1/rules.d", "/usr/share/polkit-1/rules.d"):
+            tree = GOOD | {d: (0, DIR), f"{d}/49-x.rules": (0, FILE), f"{d}/50-other.rules": (0, FILE)}
+            label, why = self.only(tree, files={f"{d}/49-x.rules": rule, f"{d}/50-other.rules": b"// unrelated"})
+            self.assertIn("polkit rules.d", label)
+            self.assertIn("49-x.rules", why)
+            self.assertNotIn("50-other", why)
+
+    def test_unrelated_polkit_rules_are_fine(self) -> None:
+        tree = GOOD | {"/etc/polkit-1/rules.d": (0, DIR), "/etc/polkit-1/rules.d/50-default.rules": (0, FILE)}
+        self.assertEqual(failures(tree, files={"/etc/polkit-1/rules.d/50-default.rules": b"// wheel may do things"}), {})
+
     def test_a_missing_launcher(self) -> None:
         bad = failures({k: v for k, v in GOOD.items() if k != "/usr/lib/arltuner/arltuner-helper"})
         self.assertEqual(set(bad), {"helper launcher", "helper launcher is executable"})
+        self.assertNotIn("helper launcher content = packaged launcher, isolated-python shebang", bad)
 
     def test_a_non_executable_launcher(self) -> None:
         label, why = self.only(GOOD | {"/usr/lib/arltuner/arltuner-helper": (0, FILE)})

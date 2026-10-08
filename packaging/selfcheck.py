@@ -9,7 +9,9 @@ checks passed; 1: at least one failed (each is named); the install is then NOT u
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import stat
 import sys
 import xml.etree.ElementTree as ET
@@ -27,6 +29,11 @@ STATE_DIR = Path("/var/lib/arltuner")
 RUN_DIR = Path("/run/arltuner")
 POLKIT_ACTION = "io.github.arrowlake-tuner.helper"
 EXEC_PATH_KEY = "org.freedesktop.policykit.exec.path"
+LAUNCHER_SHA256 = "7a455955bc8a124694dd3b77761372a2f1a9d47ffa99ea7488f85891e92004c4"  # sha256 of packaging/arltuner-helper (a test keeps the two in step)
+LAUNCHER_SHEBANG = b"#!/usr/bin/python3 -I"
+POLKIT_RULES_DIRS = (Path("/etc/polkit-1/rules.d"), Path("/usr/share/polkit-1/rules.d"))  # a rule here could grant the action without a password
+# Staging leftovers of an interrupted install (swap_dir / seeding): "<name>.old.<pid>", "<name>.new.<pid>", ".accepted.new.<pid>", ".tmp.<pid>", ".audit.new.<pid>"
+LEFTOVER = re.compile(r"(^|.*\.)(old|new)\.\d+$|^\.(tmp|audit\.new|accepted\.new)\.\d+$")
 
 Result = tuple[str, str | None]  # (what was checked, None = ok / the reason it failed)
 
@@ -98,10 +105,19 @@ def selfcheck(
 
         run(label, go)
 
-    tree("code tree /usr/lib/arltuner/arltuner (every dir and file, __pycache__ included)", CODE_DIR / "arltuner")
-    tree("platform files /usr/lib/arltuner/platforms", CODE_DIR / "platforms")
+    tree("code tree /usr/lib/arltuner (top level, arltuner/, platforms/, every dir and file, __pycache__ included)", CODE_DIR)
     path("helper launcher", HELPER)
     mode_check("helper launcher is executable", HELPER, executable=True)
+
+    def launcher_content() -> None:
+        data = read_fn(HELPER)
+        if data.split(b"\n", 1)[0] != LAUNCHER_SHEBANG:
+            raise ValueError(f"shebang must be exactly {LAUNCHER_SHEBANG.decode()!r}")
+        if hashlib.sha256(data).hexdigest() != LAUNCHER_SHA256:
+            raise ValueError("content differs from the packaged launcher (sha256 mismatch)")
+
+    if results[-2][1] is None:  # read only after the launcher passed the trust check
+        run("helper launcher content = packaged launcher, isolated-python shebang", launcher_content)
     path("self-check script", SELFCHECK)
     path("polkit action file", POLKIT_FILE)
     if results[-1][1] is None:  # content is parsed only after the file itself passed the trust check
@@ -123,6 +139,40 @@ def selfcheck(
 
     run("audit log mode 0600", audit_mode)
     path("run dir /run/arltuner (tmpfiles.d)", RUN_DIR, want="dir")
+
+    def leftovers() -> None:
+        found = []
+        for directory, only_prefixed in ((CODE_DIR.parent, True), (CODE_DIR.parent.parent / "share" / "arltuner", False), (ETC_DIR, False), (STATE_DIR, False)):
+            try:
+                names = listdir_fn(str(directory))
+            except OSError:
+                continue
+            for name in names:
+                if LEFTOVER.match(name) and (not only_prefixed or name.lstrip(".").startswith("arltuner")):
+                    found.append(str(directory / name))
+        if found:
+            raise ValueError(f"leftover staging paths of an interrupted install: {sorted(found)}")
+
+    run("no leftover .old.*/.new.* staging paths", leftovers)
+
+    def polkit_rules() -> None:
+        hits = []
+        for directory in POLKIT_RULES_DIRS:
+            try:
+                names = listdir_fn(str(directory))
+            except OSError:
+                continue
+            for name in names:
+                try:
+                    data = read_fn(directory / name)
+                except OSError as exc:
+                    raise ValueError(f"cannot read {directory / name}: {exc.strerror or exc}") from None
+                if POLKIT_ACTION.encode() in data:
+                    hits.append(str(directory / name))
+        if hits:
+            raise ValueError(f"polkit rule file(s) mention {POLKIT_ACTION} (a rule can override the action's auth_admin): {sorted(hits)}")
+
+    run("no polkit rules.d file mentions the helper action", polkit_rules)
     return results
 
 

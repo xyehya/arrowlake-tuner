@@ -1,6 +1,8 @@
 #!/bin/bash
 # arrowlake-tuner uninstall (G-106). Run as root:   sudo bash uninstall.sh [--purge]
 #
+# Usage: uninstall.sh [--purge --yes-reset-budget]   (--purge deletes the audit log, which RESETS the per-boot operation cap: it needs the second flag)
+#
 # Removes the code (/usr/lib/arltuner), the web files, the polkit action, the tmpfiles.d file and /run/arltuner. Idempotent.
 # KEEPS /etc/arltuner (policy, accepted state) and /var/lib/arltuner (audit log) unless --purge: while /etc/arltuner/policy.toml stays, the CLI
 # keeps counting the per-boot budget in /var/lib/arltuner/audit.jsonl (D-030). --purge removes both; the CLI then returns to the legacy per-user
@@ -14,13 +16,18 @@ export PATH
 die() { echo "uninstall.sh: $*" >&2; exit 1; }
 
 PURGE=0
+RESET_OK=0
 for arg in "$@"; do
     case $arg in
         --purge) PURGE=1 ;;
-        -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) die "unknown argument: $arg (usage: uninstall.sh [--purge])" ;;
+        --yes-reset-budget) RESET_OK=1 ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) die "unknown argument: $arg (usage: uninstall.sh [--purge --yes-reset-budget])" ;;
     esac
 done
+
+[ "$PURGE" -eq 0 ] || [ "$RESET_OK" -eq 1 ] || die "--purge deletes /var/lib/arltuner/audit.jsonl, which RESETS the per-boot operation count (cap 600) and the budget safety net; add --yes-reset-budget to confirm (nothing was removed)"
+[ "$PURGE" -eq 1 ] || [ "$RESET_OK" -eq 0 ] || die "--yes-reset-budget only goes with --purge"
 
 DESTDIR=${DESTDIR:-}
 DESTDIR=${DESTDIR%/}

@@ -76,31 +76,66 @@ RUNNING=$(helper_pids | tr '\n' ' ')
 [ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 
 # --- sanity: sources and interpreter -------------------------------------------------------------------------------------------------
-for f in src/arltuner/__init__.py platforms packaging/arltuner-helper packaging/selfcheck.py packaging/io.github.arrowlake-tuner.helper.policy \
-         packaging/arltuner.tmpfiles.conf profiles/CURRENT profiles/EXPECTED-words.txt web; do
+# Every directory we copy from, and every file we need, must be a real entry of THIS checkout: no symlink, and its realpath stays under $SRC.
+for f in src platforms web packaging profiles policies; do
+    [ -d "$SRC/$f" ] || die "incomplete checkout: $SRC/$f is missing"
+done
+for f in src src/arltuner src/arltuner/__init__.py platforms web packaging profiles policies packaging/arltuner-helper packaging/selfcheck.py \
+         packaging/io.github.arrowlake-tuner.helper.policy packaging/arltuner.tmpfiles.conf profiles/CURRENT profiles/EXPECTED-words.txt; do
     [ -e "$SRC/$f" ] || die "incomplete checkout: $SRC/$f is missing"
     [ ! -L "$SRC/$f" ] || die "$SRC/$f is a symlink; refusing"
+    real=$(realpath -e -- "$SRC/$f") || die "cannot resolve $SRC/$f"
+    case $real in "$SRC"/*) ;; *) die "$SRC/$f resolves to $real, outside the checkout; refusing" ;; esac
 done
 (cd / && "$PYTHON" -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)') || die "$PYTHON must be Python >= 3.12 (D-024)"
+
+# --- who is installing: the legacy audit log is read as that user, never as root -------------------------------------------------------
+INVOKER=""
+if [ -n "${PKEXEC_UID:-}" ]; then
+    case $PKEXEC_UID in *[!0-9]*) die "PKEXEC_UID is not a number" ;; esac
+    FROM_PK=$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)
+    [ -n "$FROM_PK" ] || die "PKEXEC_UID=$PKEXEC_UID is not a known user"
+    INVOKER=$FROM_PK
+fi
+if [ -n "${SUDO_USER:-}" ]; then
+    if [ -n "$INVOKER" ] && [ "$INVOKER" != "$SUDO_USER" ]; then
+        die "PKEXEC_UID ($INVOKER) and SUDO_USER ($SUDO_USER) disagree; refusing to guess whose legacy audit log to seed"
+    fi
+    INVOKER=$SUDO_USER
+fi
+[ "$INVOKER" != root ] || INVOKER=""  # never root
+
+copy_one() {  # copy_one SRC DST MODE: copy WITHOUT dereferencing, then insist the result is a regular file (a source swapped for a link is not followed)
+    local from=$1 to=$2 mode=$3
+    mkdir -p -- "$(dirname -- "$to")"
+    rm -f -- "$to"
+    cp --no-dereference --no-preserve=all -- "$from" "$to" || die "cannot copy $from"
+    if [ -L "$to" ] || [ ! -f "$to" ]; then rm -f -- "$to"; die "$from changed while it was being copied (not a regular file); refusing"; fi
+    chmod "$mode" "$to"
+    if [ "$(id -u)" -eq 0 ]; then chown root:root "$to"; fi
+}
 
 copy_files() {  # copy_files SRCDIR DSTDIR [find-args...]: regular files only, never symlinks, no __pycache__, mode 0644
     local from=$1 to=$2 rel
     shift 2
     (cd "$from" && find . -name __pycache__ -prune -o -type f "$@" -print0) | while IFS= read -r -d '' rel; do
         rel=${rel#./}
-        install -D -m 0644 "${OWN[@]}" "$from/$rel" "$to/$rel"
+        copy_one "$from/$rel" "$to/$rel" 0644
     done
 }
 
-swap_dir() {  # swap_dir NEW FINAL: replace FINAL by NEW (old tree removed afterwards)
-    local new=$1 final=$2
+swap_dir() {  # swap_dir NEW FINAL: FINAL is never missing afterwards - the old tree moves aside, the new one moves in, a failure moves the old one back
+    local new=$1 final=$2 old=$2.old.$$
     if [ -e "$final" ] || [ -L "$final" ]; then
-        rm -rf "$final.old.$$"
-        mv "$final" "$final.old.$$"
-        mv "$new" "$final"
-        rm -rf "$final.old.$$"
+        rm -rf -- "$old"
+        mv -T -- "$final" "$old" || die "cannot move $final aside; nothing was changed"
+        if ! mv -T -- "$new" "$final"; then
+            mv -T -- "$old" "$final" || echo "CRITICAL: could not restore $final from $old" >&2
+            die "could not move the new tree to $final; rolled back to the old one"
+        fi
+        rm -rf -- "$old"
     else
-        mv "$new" "$final"
+        mv -T -- "$new" "$final" || die "could not move the new tree to $final"
     fi
 }
 
@@ -115,11 +150,11 @@ mkdir -p "$DESTDIR/usr/lib/tmpfiles.d" "$DESTDIR/usr/share/polkit-1/actions"  # 
 NEW=$DESTDIR/usr/lib/.arltuner.new.$$
 trap 'rm -rf "$NEW" "${WEB}.new.$$" "$ETC/.accepted.new.$$" "$ETC/.tmp.$$" "$STATE/.audit.new.$$"' EXIT
 rm -rf "$NEW"
-install -d -m 0755 "${OWN[@]}" "$NEW" "$NEW/arltuner" "$NEW/platforms"
+install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$NEW" "$NEW/arltuner" "$NEW/platforms"
 copy_files "$SRC/src/arltuner" "$NEW/arltuner" -name '*.py'
 copy_files "$SRC/platforms" "$NEW/platforms" -name '*.toml'
-install -m 0755 "${OWN[@]}" "$SRC/packaging/arltuner-helper" "$NEW/arltuner-helper"
-install -m 0755 "${OWN[@]}" "$SRC/packaging/selfcheck.py" "$NEW/arltuner-selfcheck"
+copy_one "$SRC/packaging/arltuner-helper" "$NEW/arltuner-helper" 0755
+copy_one "$SRC/packaging/selfcheck.py" "$NEW/arltuner-selfcheck" 0755
 # From here on only the installed copy is executed (isolated mode, cwd /): a planted compileall.py / sitecustomize in the checkout cannot run as root.
 (cd / && "$PYTHON" -I -m compileall -q -f -d "$FINAL_PKG" "$NEW/arltuner") || die "compileall failed"
 normalize "$NEW"
@@ -128,16 +163,16 @@ swap_dir "$NEW" "$LIB"
 
 # --- 2. static web files ------------------------------------------------------------------------------------------------------------
 mkdir -p "$DESTDIR/usr/share"
-install -d -m 0755 "${OWN[@]}" "$DESTDIR/usr/share/arltuner"
+install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$DESTDIR/usr/share/arltuner"
 rm -rf "$WEB.new.$$"
-install -d -m 0755 "${OWN[@]}" "$WEB.new.$$"
+install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$WEB.new.$$"
 copy_files "$SRC/web" "$WEB.new.$$" ! -name '.*'
 normalize "$WEB.new.$$"
 swap_dir "$WEB.new.$$" "$WEB"
 
 # --- 3. polkit action + tmpfiles.d --------------------------------------------------------------------------------------------------
-install -m 0644 "${OWN[@]}" "$SRC/packaging/io.github.arrowlake-tuner.helper.policy" "$POLKIT"
-install -m 0644 "${OWN[@]}" "$SRC/packaging/arltuner.tmpfiles.conf" "$TMPF"
+copy_one "$SRC/packaging/io.github.arrowlake-tuner.helper.policy" "$POLKIT" 0644
+copy_one "$SRC/packaging/arltuner.tmpfiles.conf" "$TMPF" 0644
 if [ -z "$DESTDIR" ]; then
     if command -v systemd-tmpfiles >/dev/null 2>&1; then
         systemd-tmpfiles --create "$TMPF" || die "systemd-tmpfiles --create failed"
@@ -147,7 +182,7 @@ if [ -z "$DESTDIR" ]; then
 fi
 
 # --- 4. /etc/arltuner: seeded from the repo only when absent ------------------------------------------------------------------------
-install -d -m 0755 "${OWN[@]}" "$ETC"
+install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$ETC"
 
 current_values() {  # current_values KEY: the values of "KEY = value" lines of profiles/CURRENT, each validated
     local key=$1 v
@@ -159,8 +194,9 @@ current_values() {  # current_values KEY: the values of "KEY = value" lines of p
     done
 }
 
-POLICY_SRC=$(current_values policy | head -n 1)
+POLICY_SRC=$(current_values policy)  # captured whole (no head: no SIGPIPE), and there must be exactly one
 [ -n "$POLICY_SRC" ] || die "profiles/CURRENT has no 'policy =' line"
+case $POLICY_SRC in *$'\n'*) die "profiles/CURRENT has more than one 'policy =' line; refusing to pick one" ;; esac
 
 if [ -e "$ETC/policy.toml" ] && [ "$RESEED" -eq 0 ]; then
     if cmp -s "$SRC/$POLICY_SRC" "$ETC/policy.toml"; then
@@ -169,7 +205,7 @@ if [ -e "$ETC/policy.toml" ] && [ "$RESEED" -eq 0 ]; then
         echo "policy.toml: KEPT (it differs from $POLICY_SRC; operator-owned limits are never overwritten; --reseed-config replaces it)"
     fi
 else
-    install -m 0644 "${OWN[@]}" "$SRC/$POLICY_SRC" "$ETC/policy.toml"
+    copy_one "$SRC/$POLICY_SRC" "$ETC/policy.toml" 0644
     echo "policy.toml: installed from $POLICY_SRC"
 fi
 
@@ -178,7 +214,7 @@ if [ ! -e "$ETC/helper.toml" ] || [ "$RESEED" -eq 1 ]; then
         '# arltuner root helper settings (read as root, trust-checked on every vf.dump). Only this key exists.' \
         '# The first MSR write of a boot sets kernel taint bit 2 (CPU_OUT_OF_SPEC): expected [MEASURED lnx 2026-10-07, docs/knowledge/linux-path.md].' \
         'allow_taint_bits = [2]' > "$ETC/.tmp.$$"
-    install -m 0644 "${OWN[@]}" "$ETC/.tmp.$$" "$ETC/helper.toml"
+    copy_one "$ETC/.tmp.$$" "$ETC/helper.toml" 0644
     rm -f "$ETC/.tmp.$$"
     echo "helper.toml: installed (allow_taint_bits = [2])"
 else
@@ -188,13 +224,13 @@ fi
 if true; then  # accepted state follows the repo on every run (not coupled to --reseed-config)
     ACC=$ETC/.accepted.new.$$
     rm -rf "$ACC"
-    install -d -m 0755 "${OWN[@]}" "$ACC" "$ACC/profiles"
-    install -m 0644 "${OWN[@]}" "$SRC/profiles/CURRENT" "$ACC/CURRENT"
-    install -m 0644 "${OWN[@]}" "$SRC/profiles/EXPECTED-words.txt" "$ACC/EXPECTED-words.txt"
+    install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$ACC" "$ACC/profiles"
+    copy_one "$SRC/profiles/CURRENT" "$ACC/CURRENT" 0644
+    copy_one "$SRC/profiles/EXPECTED-words.txt" "$ACC/EXPECTED-words.txt" 0644
     PROFILES=$(current_values profile)  # a captured value, so a refused path aborts the install (a process substitution would not)
     while IFS= read -r prof; do
         [ -n "$prof" ] || continue
-        install -D -m 0644 "${OWN[@]}" "$SRC/$prof" "$ACC/$prof"
+        copy_one "$SRC/$prof" "$ACC/$prof" 0644
     done <<< "$PROFILES"
     swap_dir "$ACC" "$ETC/accepted"
     echo "accepted/: replaced from profiles/CURRENT"
@@ -202,20 +238,19 @@ fi
 
 # --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"
-install -d -m 0755 "${OWN[@]}" "$STATE"
+install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$STATE"
+
+as_user() {  # run a command as the invoking user (root only reads the legacy log THROUGH that user's permissions)
+    if [ "$(id -u)" -eq 0 ]; then runuser -u "$INVOKER" -- "$@"; else "$@"; fi
+}
 
 legacy_audit_source() {  # prints the legacy log path of the invoking user, or nothing
+    local home=""
     if [ -n "$LEGACY_AUDIT_OVERRIDE" ]; then printf '%s\n' "$LEGACY_AUDIT_OVERRIDE"; return 0; fi
-    local user="" uid="" home=""
-    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
-        user=$SUDO_USER
-    elif [ -n "${PKEXEC_UID:-}" ]; then
-        uid=$PKEXEC_UID
-        user=$(getent passwd "$uid" | cut -d: -f1 || true)
-    fi
-    if [ -z "$user" ] && [ "$(id -u)" -ne 0 ]; then home=$HOME; else
-        [ -n "$user" ] || return 0
-        home=$(getent passwd "$user" | cut -d: -f6 || true)
+    if [ -n "$INVOKER" ]; then
+        home=$(getent passwd "$INVOKER" | cut -d: -f6 || true)
+    elif [ "$(id -u)" -ne 0 ]; then
+        home=$HOME  # a non-root DESTDIR test run
     fi
     [ -n "$home" ] || return 0
     printf '%s/.local/state/linuxmon/audit.jsonl\n' "$home"
@@ -224,34 +259,29 @@ legacy_audit_source() {  # prints the legacy log path of the invoking user, or n
 if [ -e "$AUDIT" ] || [ -L "$AUDIT" ]; then
     echo "audit.jsonl: kept (never overwritten)"
 else
-    LEGACY=$(legacy_audit_source || true)
+    LEGACY=""
+    if [ "$(id -u)" -ne 0 ] || [ -n "$INVOKER" ]; then LEGACY=$(legacy_audit_source || true); fi
     TMPAUDIT=$STATE/.audit.new.$$
     ( umask 077; : > "$TMPAUDIT" )
-    if [ -n "$LEGACY" ] && [ -f "$LEGACY" ] && [ ! -L "$LEGACY" ]; then
-        # Read it AS THE USER (a symlinked parent directory must not let root copy some other file into a log the GUI can tail) and cap its size.
-        size=$(stat -c %s "$LEGACY")
+    if [ "$(id -u)" -eq 0 ] && [ -n "$LEGACY" ]; then
+        command -v runuser >/dev/null 2>&1 || { rm -f "$TMPAUDIT"; die "runuser is needed to read $LEGACY safely; install util-linux"; }
+    fi
+    if [ -n "$LEGACY" ] && as_user test -f "$LEGACY" && as_user test ! -L "$LEGACY"; then
+        # Read AS THE USER (a symlinked parent directory must not let root copy some other file into a log the GUI can tail), at most 64 MiB + 1 byte.
+        as_user head -c 67108865 -- "$LEGACY" > "$TMPAUDIT" || { rm -f "$TMPAUDIT"; die "could not read the legacy audit log $LEGACY${INVOKER:+ as $INVOKER}"; }
+        size=$(stat -c %s "$TMPAUDIT")
         [ "$size" -le 67108864 ] || { rm -f "$TMPAUDIT"; die "legacy audit log $LEGACY is larger than 64 MiB; seed it by hand (the per-boot count must survive)"; }
-        if [ -n "$LEGACY_AUDIT_OVERRIDE" ]; then
-            cat -- "$LEGACY" > "$TMPAUDIT"  # test hook (DESTDIR installs only)
-        elif [ "$(id -u)" -eq 0 ]; then
-            LEGACY_USER=${SUDO_USER:-}
-            [ -n "$LEGACY_USER" ] || LEGACY_USER=$(getent passwd "${PKEXEC_UID:-}" | cut -d: -f1)
-            command -v runuser >/dev/null 2>&1 || { rm -f "$TMPAUDIT"; die "runuser is needed to read $LEGACY safely; install util-linux"; }
-            runuser -u "$LEGACY_USER" -- cat -- "$LEGACY" > "$TMPAUDIT" || { rm -f "$TMPAUDIT"; die "could not read the legacy audit log $LEGACY as $LEGACY_USER"; }
-        else
-            cat -- "$LEGACY" > "$TMPAUDIT"
-        fi
         echo "audit.jsonl: seeded from $LEGACY ($size bytes)"
     else
         echo "audit.jsonl: created empty (no legacy log found${LEGACY:+ at $LEGACY})"
         if [ -z "$LEGACY" ] && [ -z "$DESTDIR" ]; then
-            echo "WARNING: no invoking user (SUDO_USER / PKEXEC_UID) found, so no legacy audit log was seeded. If ~/.local/state/linuxmon/audit.jsonl exists" >&2
+            echo "WARNING: no invoking user (PKEXEC_UID / SUDO_USER, not root) found, so no legacy audit log was seeded. If ~/.local/state/linuxmon/audit.jsonl exists" >&2
             echo "         and this boot already spent mailbox operations, stop here: the per-boot count (cap 600) restarts from zero (D-030)." >&2
         fi
     fi
     chmod 0600 "$TMPAUDIT"
     if [ "$(id -u)" -eq 0 ]; then chown root:root "$TMPAUDIT"; fi
-    mv "$TMPAUDIT" "$AUDIT"
+    mv -T -- "$TMPAUDIT" "$AUDIT"
 fi
 
 # --- 6. self-check: the installed tree, as the helper will see it --------------------------------------------------------------------
