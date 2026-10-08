@@ -283,7 +283,11 @@ class BoundedMemoryTests(HelperCase):
             self.assertTrue(blocker.entered.wait(10))  # the dispatch loop is now stuck inside an inline op
             for i in range(30):
                 h.send({"id": f"q{i}", "op": "telemetry.stop"})
-            busy = h.wait_for(lambda m: m.get("ok") is False and m["error"]["code"] == "BUSY")
+            # Dispatch is parked inside "b", so the outcome is fixed: q0..q3 fill the queue and q4..q29 are refused. The earlier version released
+            # the blocker after the FIRST BUSY, while the reader was still draining the flood; room appeared mid-flood and the count varied.
+            flood, queue_max = 30, 4
+            self.wait_until(h, lambda msgs: sum(1 for m in msgs if self.is_busy(m)) == flood - queue_max)
+            busy = next(m for m in h.messages if self.is_busy(m))
             self.assertEqual(busy["error"]["detail"]["queue"], "full")
             self.assertEqual(busy["error"]["detail"]["state"], "idle")
             h.close_stdin()  # EOF has to wait for room, not be dropped
@@ -291,14 +295,31 @@ class BoundedMemoryTests(HelperCase):
             self.assertEqual(h.join(), 0)
         answers: dict[str, list[dict]] = {}
         for m in h.messages:
-            if "id" in m and m["id"] is not None:
+            if m.get("id") is not None:
                 answers.setdefault(m["id"], []).append(m)
-        ids = {f"q{i}" for i in range(30)} | {"b"}
+        self.assertEqual(set(answers), {"b"} | {f"q{i}" for i in range(flood)})
         self.assertTrue(all(len(v) == 1 for v in answers.values()))  # never two answers
-        dropped = [i for i in ids if i in answers and answers[i][0].get("ok") is False and answers[i][0]["error"]["code"] == "BUSY"]
-        self.assertGreater(len(dropped), 10)  # most of the flood was refused, not queued
-        for i in ids:  # everything that was not refused was either served or told the helper is shutting down
-            self.assertIn(i, answers)
+        self.assertTrue(answers["b"][0]["ok"])
+        for i in range(queue_max):  # the queued ones were served after the release
+            self.assertTrue(answers[f"q{i}"][0]["ok"], answers[f"q{i}"])
+        for i in range(queue_max, flood):  # the rest were refused, each under its own id
+            self.assertTrue(self.is_busy(answers[f"q{i}"][0]), answers[f"q{i}"])
+
+    @staticmethod
+    def is_busy(m: dict) -> bool:
+        return m.get("ok") is False and m["error"]["code"] == "BUSY"
+
+    @staticmethod
+    def wait_until(h, pred, timeout: float = 10.0) -> None:
+        import time
+
+        deadline = time.monotonic() + timeout
+        with h._cond:
+            while not pred(list(h.messages)):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise AssertionError(f"timed out; saw {len(h.messages)} messages")
+                h._cond.wait(left)
 
 
 class StallTests(HelperCase):

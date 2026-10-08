@@ -196,6 +196,11 @@ class Harness:
         self._run.join(timeout)
         if self._run.is_alive():
             raise AssertionError("the helper did not exit")
+        # the helper's stdout is closed on exit; the collector sees EOF only after it has read everything the helper wrote. Without this wait a test
+        # that reads h.messages right after join() could miss the last lines (the flake of the queue-bound test).
+        self._collect.join(timeout)
+        if self._collect.is_alive():
+            raise AssertionError("the output collector did not reach EOF")
         return self.exit_code
 
     def stop(self) -> None:
