@@ -9,11 +9,13 @@
 #   /usr/share/arltuner/web/               static GUI files
 #   /usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy      auth_admin everywhere, no _keep
 #   /usr/lib/tmpfiles.d/arltuner.conf      /run/arltuner 0755 root (mailbox lock directory)
-#   /etc/arltuner/{policy.toml,helper.toml,accepted/}   seeded from the checkout ONLY when absent (operator edits survive a re-run)
+#   /etc/arltuner/{policy.toml,helper.toml}   operator-owned limits: seeded from the checkout ONLY when absent (--reseed-config replaces them)
+#   /etc/arltuner/accepted/                CURRENT + EXPECTED-words.txt + the profiles it lists: replaced from the checkout on EVERY run (the repo is
+#                                          the acceptance record, and the dashboard compares live words against this copy)
 #   /var/lib/arltuner/audit.jsonl          0600; seeded once from the invoking user's legacy ~/.local/state/linuxmon/audit.jsonl
 #
 # The checkout is only ever COPIED. After the copy, the only Python that runs (compileall, the self-check) is the installed, root-owned tree, in
-# isolated mode, with cwd /. Idempotent: a second run replaces code/web/polkit/tmpfiles and leaves config and the audit log alone.
+# isolated mode, with cwd /. Idempotent: a second run replaces code/web/polkit/tmpfiles and leaves policy.toml, helper.toml and the audit log alone.
 # DESTDIR=/some/dir installs into that tree instead (tests, packaging): no chown unless root, no systemd-tmpfiles, no live self-check.
 set -euo pipefail
 umask 022
@@ -27,7 +29,7 @@ RESEED=0
 for arg in "$@"; do
     case $arg in
         --reseed-config) RESEED=1 ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $arg (usage: install.sh [--reseed-config])" ;;
     esac
 done
@@ -166,7 +168,7 @@ else
     echo "helper.toml: kept"
 fi
 
-if [ ! -e "$ETC/accepted/CURRENT" ] || [ "$RESEED" -eq 1 ]; then
+if true; then  # accepted state follows the repo on every run (not coupled to --reseed-config)
     ACC=$ETC/.accepted.new.$$
     rm -rf "$ACC"
     install -d -m 0755 "${OWN[@]}" "$ACC" "$ACC/profiles"
@@ -178,9 +180,7 @@ if [ ! -e "$ETC/accepted/CURRENT" ] || [ "$RESEED" -eq 1 ]; then
         install -D -m 0644 "${OWN[@]}" "$SRC/$prof" "$ACC/$prof"
     done <<< "$PROFILES"
     swap_dir "$ACC" "$ETC/accepted"
-    echo "accepted/: seeded from profiles/CURRENT"
-else
-    echo "accepted/: kept"
+    echo "accepted/: replaced from profiles/CURRENT"
 fi
 
 # --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------

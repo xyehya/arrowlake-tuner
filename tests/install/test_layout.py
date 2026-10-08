@@ -185,15 +185,22 @@ class Idempotence(InstallCase):
         self.ok_install()
         self.path("/etc/arltuner/policy.toml").write_text("# operator edit\n")
         self.path("/etc/arltuner/helper.toml").write_text("allow_taint_bits = [2, 5]\n")
-        (self.path("/etc/arltuner/accepted") / "CURRENT").write_text("# newer acceptance\n")
         self.path("/var/lib/arltuner/audit.jsonl").write_text("legacy\nroot-wrote-this\n")
         self.legacy.write_text("a different legacy log\n")
         r = self.ok_install()
         self.assertEqual(self.path("/etc/arltuner/policy.toml").read_text(), "# operator edit\n")
         self.assertEqual(self.path("/etc/arltuner/helper.toml").read_text(), "allow_taint_bits = [2, 5]\n")
-        self.assertEqual((self.path("/etc/arltuner/accepted") / "CURRENT").read_text(), "# newer acceptance\n")
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\nroot-wrote-this\n")
         self.assertIn("KEPT", r.stdout)
+
+    def test_accepted_state_follows_the_repo_on_every_run(self) -> None:
+        self.ok_install()
+        (self.path("/etc/arltuner/accepted") / "EXPECTED-words.txt").write_text("stale\n")
+        (self.path("/etc/arltuner/accepted") / "junk").write_text("x")
+        self.ok_install()
+        acc = self.path("/etc/arltuner/accepted")
+        self.assertEqual((acc / "EXPECTED-words.txt").read_bytes(), (REPO / "profiles/EXPECTED-words.txt").read_bytes())
+        self.assertFalse((acc / "junk").exists())
 
     def test_reseed_config_restores_the_repo_config_but_never_the_audit_log(self) -> None:
         self.ok_install()

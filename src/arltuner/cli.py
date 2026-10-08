@@ -300,8 +300,8 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             help="reviewed policy TOML (default: the built-in conservative M1 policy: no raise, step limits, D-015 offset floor); "
             "ratio / voltage ceilings, the offset ceiling and step limits can only be raised in this file (D-016)",
         )
-        p.add_argument("--audit", metavar="FILE", help="audit log (default: ~/.local/state/linuxmon/audit.jsonl, on Windows %%LOCALAPPDATA%%\\linuxmon\\audit.jsonl)")
-        p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/lock/linuxmon-mailbox.lock, else the temp dir)")
+        p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else ~/.local/state/linuxmon/audit.jsonl, on Windows %%LOCALAPPDATA%%\\linuxmon\\audit.jsonl)")
+        p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/linuxmon-mailbox.lock, else the temp dir)")
         p.add_argument("--operator", metavar="NAME", help="name recorded in the audit log (default: $USER)")
         p.add_argument(
             "--allow-taint-bit",
