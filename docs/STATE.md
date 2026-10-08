@@ -1,11 +1,12 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-08 · lnx · G1 in progress (4 of 7 merged). Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-08 · lnx · G1 in progress (5 of 7 merged). Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
-  (2 review rounds), G-104 telemetry readers. Suite **1610 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
-- **In flight (Sonnet high, worktrees):** G-105 dashboard, G-106 install + polkit + path migration, G-107 helper budget/accepted compare.
+  (2 review rounds), G-104 telemetry readers. Suite **1646 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
+- **G-105 dashboard merged** (layout unverified in a real browser; it calls `telemetry.start` on every SSE open — check on first real run).
+- **In flight (Sonnet high, worktrees):** G-106 install + polkit + path migration, G-107 helper budget/accepted compare.
   G-106 and G-107 get a read-only Sonnet security review before merge.
 - **Decisions this session:** D-026 telemetry own read allowlist · D-027 web↔helper (202 + SSE result, Sec-Fetch-Site) · D-028 web residual risks
   · D-029 root helper hardening (no argv as root) · D-030 path migration only when installed.
