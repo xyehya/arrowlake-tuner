@@ -46,7 +46,7 @@ __all__ = ["OpContext", "OpSpec", "builtin_ops", "write_gate"]
 
 AUDIT_TAIL_DEFAULT = 20
 AUDIT_TAIL_MAX = 200
-_TAIL_READ_BYTES = 1 << 20
+_TAIL_READ_BYTES = 256 * 1024  # audit.tail never reads more than the last 256 KiB
 _RESULT_SLACK = 2048  # envelope of the response line around the result
 TELEMETRY_INTERVAL_RANGE = (0.2, 60.0)
 
@@ -72,6 +72,7 @@ class OpSpec:
     validate: Callable[[dict[str, Any]], dict[str, Any]]
     long: bool = False
     write: bool = False
+    slow: bool = False  # read-only but touches the filesystem: runs on its own thread (bounded), never on the dispatch thread
     state: State | None = None
 
 
@@ -220,7 +221,7 @@ def op_audit_tail(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
             records.append(json.loads(ln.decode("utf-8")))
         except (UnicodeDecodeError, ValueError):
             records.append({"unparsable": ln[:200].decode("utf-8", "replace")})
-    truncated = len(lines) > len(wanted)
+    truncated = start > 0 or len(lines) > len(wanted)
     while records and len(json.dumps(records, separators=(",", ":"))) > MAX_LINE - _RESULT_SLACK:  # the response line has a 64 KiB cap too
         records.pop(0)
         truncated = True
@@ -327,12 +328,19 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
         virtual, wall = helper.sim_time
         virtual.sleep(policy.min_dwell_s)
         clock, sleep = virtual.clock, virtual.sleep
+        transport_sleep = sleep
     else:
         clock, wall = cfg.monotonic, cfg.wall_clock
+        transport_sleep = cfg.sleep  # a real sleep: a set cancel flag must not turn the mailbox poll loop into a spin (cancel acts between transactions)
 
-        def sleep(seconds: float) -> None:
+        def sleep(seconds: float) -> None:  # the dwell between transactions: the cancel flag wakes it
             ctx.cancel.wait(seconds)
-    gate = cfg.health_gate_factory()
+    try:
+        gate = cfg.health_gate_factory()
+    except TrustError as exc:
+        raise _trust_refusal(exc, "TRUST_PATH") from None
+    except (ValueError, OSError) as exc:
+        raise _refuse(f"the helper's own configuration is invalid: {exc}.", "HELPER_CONFIG_INVALID") from None
     if gate is None and not cfg.simulator:
         raise _refuse("no health gate is available (the health bracket is mandatory on hardware).", "NO_HEALTH_GATE")
     policy = dataclasses.replace(policy, max_operations_per_session=needed)  # exactly the budget; a policy can only lower it
@@ -346,7 +354,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
     try:
         token = secrets.token_hex(16)
         guard = WriteGuard(
-            MailboxTransport(port, sleep=sleep, clock=clock),
+            MailboxTransport(port, sleep=transport_sleep, clock=clock),
             policy,
             audit,
             session_token=token,
@@ -414,8 +422,8 @@ def op_cancel(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str,
 
 def builtin_ops() -> dict[str, OpSpec]:
     specs = [
-        OpSpec("preflight", op_preflight, _no_args),
-        OpSpec("audit.tail", op_audit_tail, _validate_audit_tail),
+        OpSpec("preflight", op_preflight, _no_args, slow=True),
+        OpSpec("audit.tail", op_audit_tail, _validate_audit_tail, slow=True),
         OpSpec("telemetry.start", op_telemetry_start, _validate_telemetry_start),
         OpSpec("telemetry.stop", op_telemetry_stop, _no_args),
         OpSpec("cancel", op_cancel, _validate_cancel),

@@ -67,12 +67,15 @@ class PreflightAuthorityTests(HelperCase):
                 h.stop()  # releases the instance lock for the next sub-case
         self.assertEqual(self.stub.ran, [])
 
-    def test_the_refusal_changes_no_state_and_sends_no_state_event(self) -> None:
+    def test_a_refused_long_write_op_leaves_the_machine_idle(self) -> None:
+        # the gate (a preflight read) runs on the op's own thread, so the dispatch loop never waits for it: the state is entered and left again
         self.current = UNKNOWN_REPORT
         h = self.start(self.hardware_cfg())
         h.call("w", "stub.write")
-        self.assertEqual(h.events("state"), [])
+        h.wait_for(lambda m: m.get("event") == "state" and m["state"] == "idle")
         self.assertEqual(h.call("c", "cancel")["result"]["state"], "idle")
+        self.assertEqual(self.stub.ran, [])
+        self.assertTrue(h.call("again", "preflight")["ok"])
 
     def test_the_gate_is_a_fresh_run_every_time(self) -> None:
         h = self.start(self.hardware_cfg())

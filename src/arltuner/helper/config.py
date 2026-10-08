@@ -43,6 +43,7 @@ class HelperConfig:
     boot_id_fn: Callable[[], str | None] = read_boot_id
     wall_clock: Callable[[], float] = time.time
     monotonic: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], object] = time.sleep  # the mailbox transport's poll sleep on hardware (never the cancel-aware one)
     heartbeat_s: float = HEARTBEAT_S
     operator: str = "helper"  # recorded in the audit log; the polkit password is the human act (SPEC 4.1)
     extra_ops: Mapping[str, Any] = field(default_factory=dict)  # tests: stub ops (OpSpec) registered next to the built-in ones

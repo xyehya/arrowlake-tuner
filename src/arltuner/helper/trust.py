@@ -56,9 +56,40 @@ def check_trusted_path(path: Path | str, *, want: str | None = "file", must_exis
         _check_one(node, st, want=want, is_leaf=is_leaf, root_uid=root_uid)
 
 
-def check_code_tree(package_dir: Path | str, *, lstat_fn: LstatFn = os.lstat, root_uid: int = 0) -> None:
-    """The directory holding the helper's own code must be a trusted directory (never ``~/.local`` or a git checkout)."""
+def check_code_tree(
+    package_dir: Path | str,
+    *,
+    lstat_fn: LstatFn = os.lstat,
+    listdir_fn: Callable[[str], list[str]] = os.listdir,
+    root_uid: int = 0,
+    max_entries: int = 50_000,
+) -> None:
+    """The installed ``arltuner`` package tree must be trusted as a whole: the directory and its parents (see :func:`check_trusted_path`) and every
+    directory and file below it (``__pycache__`` included) owned by root, not group/world-writable, no symlinks, nothing but directories and regular
+    files. Python imports any of them as root, so one writable ``.py`` or ``.pyc`` is a local root escalation. Never a git checkout or ``~/.local``."""
     check_trusted_path(package_dir, want="dir", lstat_fn=lstat_fn, root_uid=root_uid)
+    pending = [str(package_dir)]
+    seen = 0
+    while pending:
+        directory = pending.pop()
+        try:
+            names = listdir_fn(directory)
+        except OSError as exc:
+            raise TrustError(directory, f"cannot list: {exc.strerror or exc}") from None
+        for name in names:
+            node = os.path.join(directory, name)
+            seen += 1
+            if seen > max_entries:
+                raise TrustError(package_dir, f"more than {max_entries} entries: not a plausible package tree")
+            try:
+                st = lstat_fn(node)
+            except OSError as exc:
+                raise TrustError(node, f"cannot stat: {exc.strerror or exc}") from None
+            _check_one(node, st, want=None, is_leaf=True, root_uid=root_uid)
+            if stat.S_ISDIR(st.st_mode):
+                pending.append(node)
+            elif not stat.S_ISREG(st.st_mode):
+                raise TrustError(node, "is neither a directory nor a regular file")
 
 
 def open_checked(
@@ -68,7 +99,8 @@ def open_checked(
     creates), then ``fstat`` the opened descriptor - it must be a regular file owned by ``euid`` with no group/other write bit. Never open-then-check
     by name (TOCTOU). A symlink (dangling or not), a foreign owner or a writable-by-others file is a :class:`TrustError`; nothing is followed,
     created through or taken over. ``FileNotFoundError`` propagates when ``create`` is false."""
-    flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    # never O_TRUNC (a hard-linked alias must not be clobbered by an open), O_NONBLOCK so a planted FIFO cannot hang the open
+    flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         try:
             if not create:
@@ -86,6 +118,8 @@ def open_checked(
         st = fstat_fn(fd)
         if not stat.S_ISREG(st.st_mode):
             raise TrustError(path, f"{what} is not a regular file")
+        if st.st_nlink != 1:
+            raise TrustError(path, f"{what} has {st.st_nlink} hard links (an alias of some other file); refused")
         if st.st_uid != euid:
             raise TrustError(path, f"{what} is owned by uid {st.st_uid}, not by the helper (uid {euid}); not taken over")
         if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -110,3 +144,7 @@ def check_lock_file(path: Path | str, *, euid: int, lstat_fn: Callable[[str], An
         raise TrustError(path, "the lock file is a symlink; not followed")
     if st.st_uid != euid:
         raise TrustError(path, f"the lock file is owned by uid {st.st_uid}, not by the helper (uid {euid}); not taken over")
+    if not stat.S_ISREG(st.st_mode):
+        raise TrustError(path, "the lock path is not a regular file (FIFO, device, directory); not touched")
+    if st.st_nlink != 1:
+        raise TrustError(path, f"the lock file has {st.st_nlink} hard links (an alias of some other file); refused")

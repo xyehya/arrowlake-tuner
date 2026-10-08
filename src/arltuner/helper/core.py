@@ -7,6 +7,7 @@ current mailbox transaction finishes, no new one starts, the op sends its one fi
 """
 from __future__ import annotations
 
+import collections
 import os
 import queue
 import signal
@@ -43,6 +44,10 @@ __all__ = ["EXIT_INSTANCE_BUSY", "Helper", "InstanceBusy", "InstanceLock"]
 EXIT_REFUSED_TO_START = 77  # the lock file is not trustworthy
 EXIT_INSTANCE_BUSY = 75  # EX_TEMPFAIL: another helper holds the machine-wide instance lock
 _POLL_S = 0.1
+SEEN_MAX = 1024  # request ids remembered for the uniqueness rule; the oldest finished one is forgotten beyond this (an id older than 1024 requests may be reused)
+QUEUE_MAX = 64  # requests read from stdin but not yet dispatched; beyond this a request is refused with BUSY (detail.queue = "full"), never buffered
+SLOW_MAX = 4  # read-only ops (preflight, audit.tail) that may run at the same time, each on its own thread; the 5th is refused with BUSY
+_SLOW_JOIN_S = 5.0
 
 
 class InstanceBusy(Exception):
@@ -102,7 +107,9 @@ class Helper:
         self._writer: Writer | None = None
         self._shutdown = threading.Event()
         self._signal: int | None = None  # set by the signal handler (a plain attribute: no lock may be taken in a handler)
-        self._seen: set[str] = set()
+        self._seen: collections.OrderedDict[str, None] = collections.OrderedDict()
+        self._slow: set[threading.Thread] = set()
+        self._slow_lock = threading.Lock()
         self._inflight: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cancel: threading.Event | None = None
         self._worker: threading.Thread | None = None
@@ -154,7 +161,7 @@ class Helper:
             self._send(error_response(None, REFUSED, f"the helper is already running on this machine: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
-        frames: queue.Queue[Frame] = queue.Queue()
+        frames: queue.Queue[Frame] = queue.Queue(maxsize=QUEUE_MAX)
         threading.Thread(target=self._reader, args=(stdin, frames), name="helper-stdin", daemon=True).start()
         beat = threading.Thread(target=self._heartbeat, name="helper-heartbeat", daemon=True)
         beat.start()
@@ -185,6 +192,10 @@ class Helper:
         worker = self._worker
         if worker is not None:
             worker.join()  # the in-flight transaction completes, the op answers once
+        with self._slow_lock:
+            slow = list(self._slow)
+        for thread in slow:
+            thread.join(_SLOW_JOIN_S)  # preflight / audit.tail are bounded reads; do not wait forever for a wedged filesystem
         self.telemetry_stop()
         while True:  # requests read but not started: each still gets its one answer
             try:
@@ -206,12 +217,35 @@ class Helper:
                     cancel = self._cancel  # stop a running op at its next safe point now, not when the dispatch loop gets to the EOF frame
                     if cancel is not None:
                         cancel.set()
-                    frames.put(frame)
+                    while not self._shutdown.is_set():  # the EOF frame must get in: wait for room, never drop it
+                        try:
+                            frames.put(frame, timeout=_POLL_S)
+                            break
+                        except queue.Full:
+                            continue
                     return
-                frames.put(frame)
+                try:
+                    frames.put_nowait(frame)
+                except queue.Full:
+                    self._refuse_queue_full(frame)
         except Exception as exc:
             self.cfg.log(f"stdin reader failed: {type(exc).__name__}: {exc}")
-            frames.put(Frame("eof"))
+            try:
+                frames.put(Frame("eof"), timeout=1)
+            except queue.Full:
+                self.request_shutdown("stdin reader failed with a full queue")
+
+    def _refuse_queue_full(self, frame: Frame) -> None:
+        """The dispatch loop is not keeping up: refuse instead of buffering without bound. The request id is echoed only when it is not one in use."""
+        req_id = None
+        if frame.kind == "line":
+            try:
+                rid = parse_request(frame.data).id
+                req_id = None if rid in self._seen else rid
+            except ProtocolError:
+                pass
+        self.emit(error_response(req_id, BUSY, f"the request queue is full ({QUEUE_MAX}); the request was dropped, nothing was started",
+                                 {"state": self.machine.state.value, "queue": "full"}))
 
     def _heartbeat(self) -> None:
         while not self._shutdown.wait(self.cfg.heartbeat_s):
@@ -231,6 +265,16 @@ class Helper:
             return
         self._dispatch(req)
 
+    def _remember(self, req_id: str) -> None:
+        self._seen[req_id] = None
+        while len(self._seen) > SEEN_MAX:
+            for old in self._seen:
+                if old not in self._inflight:
+                    del self._seen[old]
+                    break
+            else:
+                break
+
     def _dispatch(self, req: Request) -> None:
         if req.id in self._seen:
             if self._inflight.get(req.id) == (req.op, req.args):
@@ -240,11 +284,12 @@ class Helper:
                 return
             self._send(error_response(None, BAD_REQUEST, "request id already used on this connection", {"id": req.id}))
             return
-        self._seen.add(req.id)
+        self._remember(req.id)
         spec = self.ops.get(req.op)
         if spec is None:
             self._send(error_response(req.id, UNKNOWN_OP, f"unknown op {req.op!r}"))
             return
+        threaded = not spec.long and (spec.slow or spec.write)
         try:
             args = spec.validate(req.args)
             if spec.long or spec.write:  # mailbox-class ops run only in 'idle' (SPEC 4.6); the read-only ones are allowed in every state
@@ -252,16 +297,18 @@ class Helper:
                 if running is not None:
                     raise OpError(BUSY, f"the helper is {running.state.value} ({running.op} {running.op_id}); conflicting request refused",
                                   {"state": running.state.value, "op_id": running.op_id, "op": running.op})
-                if spec.write:  # D-027 c: the helper's own fresh preflight, mode 'write' with no UNKNOWN check
-                    write_gate(self)
-            if not spec.long:
-                ctx = OpContext(req.id, threading.Event(), self.emit)
-                self._send(ok_response(req.id, spec.handler(self, ctx, args)))
+            if spec.long:
+                assert spec.state is not None
+                cancel = threading.Event()
+                self._cancel = cancel  # before begin(): a cancel arriving the moment the state flips must find this op's flag
+                self.machine.begin(req.id, spec.name, spec.state)
+            elif threaded:
+                with self._slow_lock:
+                    if len(self._slow) >= SLOW_MAX:
+                        raise OpError(BUSY, f"{SLOW_MAX} read-only operations are already running; try again", {"state": self.machine.state.value, "slow_ops": SLOW_MAX})
+            else:
+                self._send(ok_response(req.id, spec.handler(self, OpContext(req.id, threading.Event(), self.emit), args)))
                 return
-            assert spec.state is not None
-            cancel = threading.Event()
-            self._cancel = cancel  # before begin(): a cancel arriving the moment the state flips must find this op's flag
-            self.machine.begin(req.id, spec.name, spec.state)
         except OpError as exc:
             self._send(error_response(req.id, exc.code, exc.message, exc.detail))
             return
@@ -273,29 +320,63 @@ class Helper:
             self._internal(req.id, exc)
             return
         self._inflight[req.id] = (req.op, req.args)
-        self._state_event(req.id)
-        worker = threading.Thread(target=self._run_long, args=(spec, req, args, cancel), name=f"helper-op-{req.op}", daemon=True)
-        self._worker = worker
-        worker.start()
+        if spec.long:
+            self._state_event(req.id)
+            worker = threading.Thread(target=self._run_long, args=(spec, req, args, cancel), name=f"helper-op-{req.op}", daemon=True)
+            self._worker = worker
+            try:
+                worker.start()
+            except Exception as exc:  # e.g. "can't start new thread": the machine must not stay in 'planning' with nothing running
+                self._worker = None
+                self._inflight.pop(req.id, None)
+                self.machine.end(req.id)
+                self._internal(req.id, exc)
+                self._state_event(req.id)
+        else:
+            thread = threading.Thread(target=self._run_slow, args=(spec, req, args), name=f"helper-op-{req.op}", daemon=True)
+            with self._slow_lock:
+                self._slow.add(thread)
+            try:
+                thread.start()
+            except Exception as exc:
+                with self._slow_lock:
+                    self._slow.discard(thread)
+                self._inflight.pop(req.id, None)
+                self._internal(req.id, exc)
 
     def _internal(self, req_id: str, exc: Exception) -> None:
         self.cfg.log("internal error:\n" + "".join(traceback.format_exception(exc)))
         self._send(error_response(req_id, INTERNAL, f"{type(exc).__name__}: {exc}"))
 
-    def _run_long(self, spec: OpSpec, req: Request, args: dict[str, Any], cancel: threading.Event) -> None:
-        ctx = OpContext(req.id, cancel, self.emit)
+    def _answer(self, spec: OpSpec, req: Request, args: dict[str, Any], cancel: threading.Event) -> dict[str, Any]:
+        """Run one op to its one response. The D-027 c gate (the helper's own fresh preflight) is part of the op, on the op's thread."""
         try:
-            response = ok_response(req.id, spec.handler(self, ctx, args))
+            if spec.write:
+                write_gate(self)
+            return ok_response(req.id, spec.handler(self, OpContext(req.id, cancel, self.emit), args))
         except OpError as exc:
-            response = error_response(req.id, exc.code, exc.message, exc.detail)
+            return error_response(req.id, exc.code, exc.message, exc.detail)
         except Exception as exc:
             self.cfg.log("internal error:\n" + "".join(traceback.format_exception(exc)))
-            response = error_response(req.id, INTERNAL, f"{type(exc).__name__}: {exc}")
+            return error_response(req.id, INTERNAL, f"{type(exc).__name__}: {exc}")
+
+    def _run_long(self, spec: OpSpec, req: Request, args: dict[str, Any], cancel: threading.Event) -> None:
+        response = self._answer(spec, req, args, cancel)
         # idle first, then the answer: a client that sends its next request on receiving this one must not meet BUSY
         self._inflight.pop(req.id, None)
         self.machine.end(req.id)
         self._send(response)
         self._state_event(req.id)
+
+    def _run_slow(self, spec: OpSpec, req: Request, args: dict[str, Any]) -> None:
+        """preflight / audit.tail / a quick write op: off the dispatch thread, so cancel, EOF and signals stay responsive while they read."""
+        try:
+            response = self._answer(spec, req, args, threading.Event())
+        finally:
+            self._inflight.pop(req.id, None)
+            with self._slow_lock:
+                self._slow.discard(threading.current_thread())
+        self._send(response)
 
     # ---------------------------------------------------------------- ops that need the helper's own state
     def cancel_running(self, op_id: str | None) -> dict[str, Any]:
@@ -312,10 +393,16 @@ class Helper:
         with self._tele_lock:
             if self._tele is not None:
                 return {"running": True, "already_running": True, "op_id": self._tele.op_id}
+            sampler = None
             try:
                 sampler = self.cfg.sampler_factory(interval_s)
                 sampler.start()
             except Exception as exc:
+                if sampler is not None:  # release whatever the sampler holds (a port's descriptors) when its start failed
+                    try:
+                        sampler.stop()
+                    except Exception as stop_exc:
+                        self.cfg.log(f"telemetry sampler stop after a failed start: {type(stop_exc).__name__}: {stop_exc}")
                 raise OpError(INTERNAL, f"telemetry could not start: {type(exc).__name__}: {exc}") from None
             stop = threading.Event()
             thread = threading.Thread(target=self._telemetry_loop, args=(op_id, sampler, interval_s, stop), name="helper-telemetry", daemon=True)

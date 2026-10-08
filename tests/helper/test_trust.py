@@ -25,6 +25,14 @@ def fake_lstat(tree: dict[str, tuple[int, int]]):
     return lstat
 
 
+def fake_listdir(tree: dict[str, tuple[int, int]]):
+    def listdir(path: str) -> list[str]:
+        prefix = path.rstrip("/") + "/"
+        return sorted({p[len(prefix):].split("/", 1)[0] for p in tree if p.startswith(prefix) and p != path})
+
+    return listdir
+
+
 def good_tree() -> dict[str, tuple[int, int]]:
     return {
         "/": (0, DIR), "/etc": (0, DIR), "/etc/arltuner": (0, DIR), "/etc/arltuner/policy.toml": (0, FILE),
@@ -46,7 +54,7 @@ class TrustPathTests(unittest.TestCase):
         self.check(good_tree())
         self.check(good_tree(), "/var/lib/arltuner/audit.jsonl")
         self.check(good_tree(), "/etc/arltuner", want="dir")
-        check_code_tree("/usr/lib/arltuner", lstat_fn=fake_lstat(good_tree()))
+        check_code_tree("/usr/lib/arltuner", lstat_fn=fake_lstat(good_tree()), listdir_fn=fake_listdir(good_tree()))
 
     def test_user_owned_file_is_refused(self) -> None:
         tree = good_tree() | {"/etc/arltuner/policy.toml": (1000, FILE)}
@@ -113,7 +121,55 @@ class TrustPathTests(unittest.TestCase):
     def test_a_checkout_or_home_tree_is_not_a_trusted_code_tree(self) -> None:
         tree = good_tree() | {"/home": (0, DIR), "/home/u": (1000, DIR), "/home/u/src": (1000, DIR), "/home/u/src/arltuner": (1000, DIR)}
         with self.assertRaises(TrustError):
-            check_code_tree("/home/u/src/arltuner", lstat_fn=fake_lstat(tree))
+            check_code_tree("/home/u/src/arltuner", lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree))
+
+
+PKG = "/usr/lib/arltuner"
+
+
+def package_tree() -> dict[str, tuple[int, int]]:
+    """An installed package: root-owned dirs and files, including a ``__pycache__``."""
+    tree = good_tree()
+    for rel, kind in (("arltuner", DIR), ("arltuner/__init__.py", FILE), ("arltuner/helper", DIR), ("arltuner/helper/core.py", FILE),
+                      ("arltuner/helper/__pycache__", DIR), ("arltuner/helper/__pycache__/core.cpython-314.pyc", FILE)):
+        tree[f"{PKG}/{rel}"] = (0, kind)
+    return tree
+
+
+class CodeTreeTests(unittest.TestCase):
+    """Item 8: the whole installed package tree (every dir and file, __pycache__ included) is checked, not just its top directory."""
+
+    def check(self, tree) -> None:
+        check_code_tree(f"{PKG}/arltuner", lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree))
+
+    def test_clean_tree_passes(self) -> None:
+        self.check(package_tree())
+
+    def test_every_node_is_examined(self) -> None:
+        bad_nodes = {
+            "writable py": (f"{PKG}/arltuner/helper/core.py", (0, stat.S_IFREG | 0o666)),
+            "group-writable pyc": (f"{PKG}/arltuner/helper/__pycache__/core.cpython-314.pyc", (0, stat.S_IFREG | 0o664)),
+            "user-owned pyc": (f"{PKG}/arltuner/helper/__pycache__/core.cpython-314.pyc", (1000, FILE)),
+            "writable pycache dir": (f"{PKG}/arltuner/helper/__pycache__", (0, stat.S_IFDIR | 0o777)),
+            "user-owned subpackage": (f"{PKG}/arltuner/helper", (1000, DIR)),
+            "symlinked module": (f"{PKG}/arltuner/__init__.py", (0, stat.S_IFLNK | 0o777)),
+            "fifo": (f"{PKG}/arltuner/__init__.py", (0, stat.S_IFIFO | 0o644)),
+        }
+        for name, (path, entry) in bad_nodes.items():
+            with self.subTest(name), self.assertRaises(TrustError) as ctx:
+                self.check(package_tree() | {path: entry})
+            self.assertEqual(ctx.exception.path, path)
+
+    def test_an_unlistable_directory_and_an_implausible_tree_are_refused(self) -> None:
+        tree = package_tree()
+
+        def broken(path: str):
+            raise PermissionError(13, "Permission denied")
+
+        with self.assertRaises(TrustError):
+            check_code_tree(f"{PKG}/arltuner", lstat_fn=fake_lstat(tree), listdir_fn=broken)
+        with self.assertRaises(TrustError):
+            check_code_tree(f"{PKG}/arltuner", lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), max_entries=2)
 
 
 class HelperTrustTests(HelperCase):

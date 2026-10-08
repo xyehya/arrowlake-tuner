@@ -50,6 +50,7 @@ _RESERVED = frozenset(
 _O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no text-mode newline translation
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)  # POSIX: refuse a symlink as the final path component
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)  # opening a FIFO must never block (a planted FIFO is refused by the fstat below, not waited on)
 _MAX_TEXT = 500
 
 
@@ -82,6 +83,26 @@ def _refuse_symlink(path: Path) -> None:
         raise OSError(f"audit log {path} is a symlink; refusing to follow it")
 
 
+def _require_plain_file(fd: int, path: Path, what: str = "audit log") -> None:
+    """``fstat`` the descriptor we actually opened: a regular file with exactly one link, else close it and raise ``OSError`` (never read or
+    write a FIFO, device or hard-linked alias; checking the name first and opening afterwards would be a TOCTOU)."""
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{what} {path} is not a regular file; refusing")
+        if st.st_nlink != 1:
+            raise OSError(f"{what} {path} has {st.st_nlink} hard links; refusing")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _open_read(path: Path) -> int:
+    fd = os.open(path, os.O_RDONLY | _O_BINARY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC)
+    _require_plain_file(fd, path)
+    return fd
+
+
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
@@ -102,7 +123,8 @@ class AuditLog:
         _refuse_symlink(self._path)
         fd = self._open()  # creates the file now so a bad path fails at construction, not at the first write
         os.close(fd)
-        existing = self._path.read_bytes()
+        with os.fdopen(_open_read(self._path), "rb") as handle:
+            existing = handle.read()
         self._seq = existing.count(b"\n")
         # A previous crash may have left a last line without its newline: start on a fresh line so it stays isolated.
         self._pending_newline = bool(existing) and not existing.endswith(b"\n")
@@ -113,8 +135,10 @@ class AuditLog:
 
     def _open(self) -> int:
         _refuse_symlink(self._path)
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | _O_BINARY | _O_NOFOLLOW | _O_CLOEXEC
-        return os.open(self._path, flags, 0o644)
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | _O_BINARY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC
+        fd = os.open(self._path, flags, 0o644)
+        _require_plain_file(fd, self._path)
+        return fd
 
     def append(
         self,
@@ -247,7 +271,7 @@ def read_state(path: Path | str) -> AuditState:
     last: float | None = None
     by_boot: dict[str | None, int] = {}
     try:
-        handle = open(target, "rb")
+        handle = os.fdopen(_open_read(target), "rb")
     except FileNotFoundError:
         return AuditState(None, MappingProxyType({}))
     with handle:

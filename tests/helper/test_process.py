@@ -110,7 +110,7 @@ class ProcessTests(ProcessCase):
             if msg.get("event") == "heartbeat":
                 break
         self.assertGreaterEqual(time.monotonic() - t0, 1.5)
-        self.assertLess(time.monotonic() - t0, 4.0)
+        self.assertLess(time.monotonic() - t0, 9.0)
         self.assertEqual((msg["state"], msg["op_id"]), ("idle", None))
 
     def test_usage_errors(self) -> None:

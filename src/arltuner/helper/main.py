@@ -1,19 +1,28 @@
 """``arltuner-helper``: the launcher around :class:`~arltuner.helper.core.Helper`. Real I/O is built here and only here.
 
-``--sim`` is the simulator (no hardware, no trust checks: temp paths cannot be root-owned). ``--device`` is the hardware: it refuses to start
-unless it runs as root from a trusted code tree (SPEC 4.4), needs an explicit ``--policy`` and ``--audit`` (both trust-checked on use), and gates
-every mailbox op on its own fresh preflight (D-027 c). It is started by pkexec (SPEC 4.1) and never by a developer shell as a casual command;
-the orchestrator runs it on hardware only with the operator's go-ahead (AGENTS.md). Exit codes: 0 stopped cleanly - 64 usage - 75 another
-helper runs - 77 refused to start.
+**argv is the trust boundary.** The helper is started by pkexec (SPEC 4.1), and everything after the program name on that command line is chosen by
+the unprivileged caller. So when the effective uid is 0 the helper accepts *no* argv at all (a lone ``--device`` is tolerated, nothing else):
+``--sim`` is refused outright and ``--audit`` / ``--lock`` / ``--policy`` / ``--allow-taint-bit`` are refused by name. As root every path and every
+safety setting comes from installed constants (below) or from a root-owned, trust-checked file:
+
+* policy ``/etc/arltuner/policy.toml``, audit log ``/var/lib/arltuner/audit.jsonl``, accepted state ``/etc/arltuner/accepted/``;
+* lock: the CLI's ``default_lock_path()`` (see the G-106 TODO there);
+* the expected first-write kernel-taint bits: ``/etc/arltuner/helper.toml``, key ``allow_taint_bits = [34]`` (a list of ints 0..63; the file may be
+  absent = none; any other key is refused). Root-owned, not group/world-writable, parents root-owned (SPEC 4.4), checked on every ``vf.dump``.
+
+NOTE for G-106 (packaging): the polkit action must pin ``org.freedesktop.policykit.exec.path`` to the installed helper and the launcher is run with
+**no arguments**. A non-root run (tests, ``--sim``) keeps the argv options. Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
+77 refused to start.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import BinaryIO, TextIO
+from typing import Any, BinaryIO, TextIO
 
 from arltuner.cli import default_audit_path, default_lock_path
 from arltuner.platform.preflight import preflight
@@ -22,12 +31,22 @@ from arltuner.topology import arl_s_285k
 from .config import HelperConfig
 from .core import Helper
 from .protocol import REFUSED, Writer, error_response
-from .trust import TrustError, check_code_tree
+from .trust import TrustError, check_code_tree, check_trusted_path, open_checked
 
-__all__ = ["build_config", "main", "process_main"]
+__all__ = [
+    "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "load_taint_bits",
+    "main", "process_main", "root_argv_refusal",
+]
 
 EXIT_USAGE = 64
 EXIT_REFUSED_TO_START = 77
+
+INSTALLED_POLICY = Path("/etc/arltuner/policy.toml")
+INSTALLED_AUDIT = Path("/var/lib/arltuner/audit.jsonl")
+INSTALLED_HELPER_TOML = Path("/etc/arltuner/helper.toml")
+INSTALLED_ACCEPTED_DIR = Path("/etc/arltuner/accepted")
+
+_ROOT_FORBIDDEN_NAMED = ("--sim", "--audit", "--lock", "--policy", "--allow-taint-bit")
 
 
 class _Usage(Exception):
@@ -43,22 +62,91 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="arltuner-helper", description=__doc__.split("\n\n")[0], add_help=True)
+    p = _Parser(prog="arltuner-helper", description="arltuner root helper (JSON lines on stdin/stdout). Non-root runs only; as root there is no argv.", add_help=True, allow_abbrev=False)
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--sim", action="store_true", help="simulator: no hardware")
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; needs root, a trusted code tree, --policy and --audit)")
-    p.add_argument("--policy", metavar="FILE", help="reviewed policy (required for --device; --sim defaults to the built-in conservative one)")
-    p.add_argument("--audit", metavar="FILE", help="audit log (required for --device; --sim defaults to the CLI's ~/.local/state/linuxmon/audit.jsonl)")
+    p.add_argument("--policy", metavar="FILE", help="reviewed policy (--sim defaults to the built-in conservative one)")
+    p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to the CLI's ~/.local/state/linuxmon/audit.jsonl)")
     p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (default: the CLI's /run/lock/linuxmon-mailbox.lock)")
     p.add_argument("--allow-taint-bit", metavar="N", type=int, action="append", default=[], help="kernel taint bit the first write is expected to set (health gate)")
     return p
 
 
-def build_config(args: argparse.Namespace, *, log: Callable[[str], None]) -> HelperConfig:
+def root_argv_refusal(argv: Sequence[str]) -> tuple[str, str] | None:
+    """As root, argv must be empty (or exactly ``--device``). Returns ``(check, message)`` for the first thing that is not."""
+    for token in argv:
+        if token == "--device":
+            continue
+        name = token.split("=", 1)[0]
+        if name == "--sim":
+            return "ROOT_SIM", "--sim is refused when running as root: the simulator is not a way to run the helper with privileges"
+        if name in _ROOT_FORBIDDEN_NAMED:
+            return "ROOT_ARGV", f"{name} is refused when running as root: paths and safety settings come from installed, root-owned files only (SPEC 4.4)"
+        return "ROOT_ARGV", f"argument {token!r} is refused when running as root: the helper takes no arguments (polkit exec.path, no argv)"
+    return None
+
+
+def load_taint_bits(path: Path | str = INSTALLED_HELPER_TOML, *, lstat_fn: Callable[[str], Any] = os.lstat, root_uid: int = 0) -> frozenset[int]:
+    """The expected first-write taint bits from the root-owned ``helper.toml`` (documented in the module docstring). Absent file = none.
+    ``TrustError`` if the path is not trusted, ``ValueError`` if the content is not exactly ``allow_taint_bits = [int, ...]`` (0..63)."""
+    check_trusted_path(path, want="file", must_exist=False, lstat_fn=lstat_fn, root_uid=root_uid)
+    try:
+        fd = open_checked(path, write=False, create=False, euid=root_uid, what="helper.toml")
+    except FileNotFoundError:
+        return frozenset()
+    with os.fdopen(fd, "rb") as handle:
+        data = handle.read(65536)
+    try:
+        doc = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"{path}: not valid TOML: {exc}") from None
+    extra = sorted(set(doc) - {"allow_taint_bits"})
+    if extra:
+        raise ValueError(f"{path}: unknown key(s) {extra}")
+    bits = doc.get("allow_taint_bits", [])
+    if not isinstance(bits, list) or not all(isinstance(b, int) and not isinstance(b, bool) and 0 <= b <= 63 for b in bits):
+        raise ValueError(f"{path}: allow_taint_bits must be a list of integers 0..63")
+    return frozenset(bits)
+
+
+class PortOwningSampler:
+    """A telemetry sampler that owns the MSR port it reads through and closes it when it stops *or fails to start* (no descriptor outlives a
+    start/stop cycle)."""
+
+    def __init__(self, port: Any, sampler: Any) -> None:
+        self._port, self._sampler = port, sampler
+
+    def _close(self) -> None:
+        close = getattr(self._port, "close", None)
+        if callable(close):
+            close()
+
+    def start(self) -> None:
+        try:
+            self._sampler.start()
+        except BaseException:
+            self._close()
+            raise
+
+    def stop(self) -> None:
+        try:
+            self._sampler.stop()
+        finally:
+            self._close()
+
+    def snapshot(self) -> Any:
+        return self._sampler.snapshot()
+
+
+def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: bool = False) -> HelperConfig:
+    """``root=True``: every path and safety setting is an installed constant, nothing is read from ``args``."""
     from arltuner.telemetry import Sampler
 
+    if root and args.sim:
+        raise _Usage("--sim is refused when running as root")
     # TODO(G-106, OD-1): /run/lock is 1777 (anyone can pre-create the lock file). Move the default to a root-owned dir such as /run/arltuner/.
-    lock = Path(args.lock) if args.lock else default_lock_path()
+    lock = Path(args.lock) if (args.lock and not root) else default_lock_path()
     if args.sim:
         nowhere = Path("/nonexistent-arltuner-sim")
 
@@ -84,55 +172,89 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None]) -> Hel
     from arltuner.telemetry import TelemetryMsr
     from arltuner.topology import detect
 
-    bits = frozenset(args.allow_taint_bit)
+    def sampler_factory(interval: float) -> PortOwningSampler:
+        port = DevCpuMsrPort(writable=False)
+        try:
+            return PortOwningSampler(port, Sampler(TelemetryMsr(port), interval_s=interval))
+        except BaseException:
+            port.close()
+            raise
+
+    if root:
+        audit, policy = INSTALLED_AUDIT, INSTALLED_POLICY
+        gate_factory = lambda: make_health_gate(Path("/"), allowed_new_taint_bits=load_taint_bits(INSTALLED_HELPER_TOML))  # noqa: E731
+    else:
+        if not args.policy or not args.audit:
+            raise _Usage("--device needs an explicit --policy and --audit (root-owned, not group/world-writable)")
+        audit, policy = Path(args.audit), Path(args.policy)
+        bits = frozenset(args.allow_taint_bit)
+        gate_factory = lambda: make_health_gate(Path("/"), allowed_new_taint_bits=bits)  # noqa: E731
     return HelperConfig(
         lock_path=lock,
-        audit_path=Path(args.audit),
-        policy_path=Path(args.policy),
+        audit_path=audit,
+        policy_path=policy,
         port_factory=lambda: DevCpuMsrPort(writable=True),
         topology_fn=detect,
         preflight_fn=lambda: preflight(Path("/")),
-        sampler_factory=lambda interval: Sampler(TelemetryMsr(DevCpuMsrPort(writable=False)), interval_s=interval),
+        sampler_factory=sampler_factory,
         simulator=False,
         enforce_trust=True,
-        health_gate_factory=lambda: make_health_gate(Path("/"), allowed_new_taint_bits=bits),
+        health_gate_factory=gate_factory,
         operator=f"gui:uid{os.environ.get('PKEXEC_UID', 'unknown')}",
         log=log,
     )
 
 
-def _startup_refusal(args: argparse.Namespace) -> str | None:
-    """Hardware mode only: root, and code from a trusted tree (never a git checkout or ~/.local)."""
+def _startup_refusal(args: argparse.Namespace, euid: int) -> str | None:
+    """Hardware mode only: root, and the whole installed package tree trusted (never a git checkout or ~/.local)."""
     if args.sim:
         return None
-    if os.geteuid() != 0:
+    if euid != 0:
         return "--device needs root (start it through pkexec)"
     try:
-        check_code_tree(Path(__file__).resolve().parent)
+        check_code_tree(Path(os.path.abspath(__file__)).parent.parent)  # the arltuner package: every dir and file below it
     except TrustError as exc:
         return f"the helper's code is not in a root-owned, non-writable tree (SPEC 4.4): {exc}"
     return None
 
 
-def main(argv: Sequence[str] | None = None, *, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None, stderr: TextIO | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    stdin: BinaryIO | None = None,
+    stdout: BinaryIO | None = None,
+    stderr: TextIO | None = None,
+    euid_fn: Callable[[], int] = getattr(os, "geteuid", lambda: 0),
+) -> int:
     err = sys.stderr if stderr is None else stderr
     out = sys.stdout.buffer if stdout is None else stdout
     inp = sys.stdin.buffer if stdin is None else stdin
+    argv = list(sys.argv[1:] if argv is None else argv)
+    euid = euid_fn()
 
     def log(text: str) -> None:
         err.write(f"arltuner-helper: {text}\n")
         err.flush()
 
+    def refuse(check: str, message: str) -> int:
+        Writer(out).send(error_response(None, REFUSED, message, {"check": check}))
+        log(f"refused to start: {message}")
+        return EXIT_REFUSED_TO_START
+
     try:
-        args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
-        if args.device and (not args.policy or not args.audit):
-            raise _Usage("--device needs an explicit --policy and --audit (root-owned, not group/world-writable)")
-        refusal = _startup_refusal(args)
-        if refusal is not None:
-            Writer(out).send(error_response(None, REFUSED, refusal, {"check": "STARTUP"}))
-            log(f"refused to start: {refusal}")
-            return EXIT_REFUSED_TO_START
-        cfg = build_config(args, log=log)
+        if euid == 0:
+            bad = root_argv_refusal(argv)
+            if bad is not None:
+                return refuse(*bad)
+            args = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[])
+        else:
+            args = _parser().parse_args(argv)
+            if args.device and (not args.policy or not args.audit):
+                raise _Usage("--device needs an explicit --policy and --audit (root-owned, not group/world-writable)")
+        problem = _startup_refusal(args, euid)
+        if problem is not None:
+            return refuse("STARTUP", problem)
+        cfg = build_config(args, log=log, root=euid == 0)
     except _Usage as exc:
         if str(exc):
             err.write(f"arltuner-helper: {exc}\n")

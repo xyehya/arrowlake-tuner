@@ -60,7 +60,7 @@ class OpenCheckedTests(unittest.TestCase):
         p = self.tmp / "f"
         p.write_text("x")
         os.chmod(p, 0o600)
-        foreign = lambda fd: types.SimpleNamespace(st_mode=os.fstat(fd).st_mode, st_uid=4242)  # noqa: E731
+        foreign = lambda fd: types.SimpleNamespace(st_mode=os.fstat(fd).st_mode, st_uid=4242, st_nlink=1)  # noqa: E731
         with self.assertRaises(TrustError) as ctx:
             open_checked(p, write=True, create=False, euid=0 if self.euid else 1, fstat_fn=foreign)
         self.assertIn("owned by uid 4242", ctx.exception.reason)
