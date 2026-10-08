@@ -150,3 +150,12 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
   `Origin`, when sent, must be exact — browsers omit it on same-origin GET, so it cannot be required there. (c) **Preflight `UNKNOWN`/unprivileged:**
   the server's preflight is display-only; the root helper re-runs preflight and refuses any write op unless the mode is `write` with no check
   `UNKNOWN`. (d) **`/api/call`** forwards only an allowlisted `op` set with schema-checked `args`; never a raw passthrough.
+- **Addendum (G-102 merged, D-029):** `args` optional (default `{}`). Op args/results: `preflight {}` → report + `writes_allowed`; `vf.dump
+  {cpus?: [int] | "0-7,16", all_e?: bool}` (long; state `planning`; **write-gated**, a mailbox read is a WRMSR) → `vfdump.to_json` + `ops_done`,
+  partial in `detail.partial` on cancel/refusal; `audit.tail {n?: 1..200}` (last 256 KiB only); `telemetry.start {interval_s?: 0.2..60}`;
+  `cancel {op_id?}`. Duplicate in-flight request (same id/op/args) is deduped; other id reuse ⇒ `BAD_REQUEST` (id null); seen-id LRU 1024; input
+  queue 64 ⇒ `BUSY detail.queue="full"`. `detail.check` values: `TRUST_PATH`, `LOCK_UNTRUSTED`, `INSTANCE_LOCK`, `TOPOLOGY`, `UNKNOWN_CORE`,
+  `POLICY_INVALID`, `SESSION_LIMIT`, `BOOT_LIMIT`, `AUDIT_UNAVAILABLE`, `NO_HEALTH_GATE`, `STARTUP`, `HELPER_CONFIG_INVALID`; hardware faults and
+  guard trips ⇒ `INTERNAL`. As root the helper takes **no argv but a bare `--device`** (`--sim` ⇒ `ROOT_SIM`, others ⇒ `ROOT_ARGV`, exit 77); paths are
+  constants (`/etc/arltuner/policy.toml`, `/etc/arltuner/helper.toml` = `allow_taint_bits`, `/var/lib/arltuner/audit.jsonl`, `/etc/arltuner/accepted`);
+  every root-opened file: `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, fstat regular, nlink 1, owner euid, no g/o write, never `O_TRUNC`. Server `OPS` mirrors these.

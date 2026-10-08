@@ -99,3 +99,7 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   (4) The rate limiters do not slow guessing (a correct token/cookie is checked before the limiter and always accepted, by design, so an
   attacker cannot lock the operator out); brute-force resistance rests on 256-bit token / session-id entropy. Flagged by the automated commit scan
   as "rate-limit bypass" — accepted.
+- **D-029 · 2026-10-08 · Root helper hardening (G-102, 2 review rounds + automated scan).** Root helper accepts no argv but `--device`; all paths
+  and the taint-bit allowance are root-owned constants (`/etc/arltuner/helper.toml`); file opens symlink/FIFO/hardlink-safe (guard lock/audit too).
+  Carried: `check_code_tree` is a tripwire (runs after import) — the gate is G-106's polkit `exec.path` with no argv; lock stays in `/run/lock` (DoS
+  only) until G-106; latent: a future non-long write op would skip `machine.begin` — G2 must mark write ops long or fix the gate.

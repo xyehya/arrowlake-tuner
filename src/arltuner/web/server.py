@@ -48,13 +48,25 @@ _TYPED = re.compile(r"CONFIRM [A-Z2-9]{6}\Z")
 _REQ_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 
 
-# ---- /api/call allowlist (Contract 8 addendum D-027 d): op -> (args validator, long-running). Args schemas are provisional until the ops land.
+# ---- /api/call allowlist (Contract 8 addendum D-027 d): op -> (args validator, long-running). Schemas mirror the G-102 helper validators (helper/ops.py).
 def _empty(a: dict) -> bool:
     return a == {}
 
 
 def _audit_tail(a: dict) -> bool:
-    return set(a) <= {"n"} and (("n" not in a) or (type(a["n"]) is int and 1 <= a["n"] <= 1000))
+    return set(a) <= {"n"} and (("n" not in a) or (type(a["n"]) is int and 1 <= a["n"] <= 200))
+
+
+def _vf_dump(a: dict) -> bool:  # outer filter; the helper (ops._validate_vf_dump) is the authority
+    if not set(a) <= {"cpus", "all_e"} or ("all_e" in a and type(a["all_e"]) is not bool):
+        return False
+    c = a.get("cpus")
+    return c is None or (isinstance(c, list) and 1 <= len(c) <= 64 and all(type(x) is int and 0 <= x < 1024 for x in c))
+
+
+def _telemetry_start(a: dict) -> bool:
+    i = a.get("interval_s", 1.0)
+    return set(a) <= {"interval_s"} and type(i) in (int, float) and 0.2 <= i <= 60.0
 
 
 def _cancel(a: dict) -> bool:
@@ -73,11 +85,11 @@ def _apply(a: dict) -> bool:
 OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "preflight": (_empty, False),
     "audit.tail": (_audit_tail, False),
-    "telemetry.start": (_empty, False),
+    "telemetry.start": (_telemetry_start, False),
     "telemetry.stop": (_empty, False),
     "cancel": (_cancel, False),
     "plan": (_plan, False),
-    "vf.dump": (_empty, True),
+    "vf.dump": (_vf_dump, True),
     "apply": (_apply, True),
     "restore": (_empty, True),
 }

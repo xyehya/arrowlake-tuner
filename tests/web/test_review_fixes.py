@@ -84,7 +84,9 @@ class TestOpsAllowlist(Base):  # item 3
             ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDE1"}), ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEFG"}),
             ("apply", {"plan_id": good_id, "typed": "confirm ABCDEF"}), ("apply", {"plan_id": good_id.upper(), "typed": "CONFIRM ABCDEF"}),
             ("apply", {"plan_id": "ab", "typed": "CONFIRM ABCDEF"}), ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEF", "x": 1}),
-            ("restore", {"x": 1}), ("vf.dump", {"cpus": [0]}),
+            ("restore", {"x": 1}), ("vf.dump", {"cpus": [-1]}), ("vf.dump", {"cpus": []}), ("vf.dump", {"cpus": "0-7"}),
+            ("vf.dump", {"all_e": 1}), ("vf.dump", {"x": 1}), ("telemetry.start", {"interval_s": 0.1}), ("telemetry.start", {"interval_s": True}),
+            ("audit.tail", {"n": 201}),
         ]
         for op, args in bad:
             st, _, _ = self.call(op, args, cookie=ck)
@@ -93,7 +95,7 @@ class TestOpsAllowlist(Base):  # item 3
 
     def test_g1_ops_forwarded(self):
         ck = self.login()
-        for op, args in (("preflight", {}), ("audit.tail", {"n": 10}), ("telemetry.start", {}), ("telemetry.stop", {}), ("cancel", {"op_id": "w1"}),
+        for op, args in (("preflight", {}), ("audit.tail", {"n": 10}), ("telemetry.start", {"interval_s": 1}), ("telemetry.stop", {}), ("cancel", {"op_id": "w1"}),
                          ("plan", {"profile": {}})):
             self.call(op, args, cookie=ck)
         self.assertEqual([r["op"] for r in self.fake.requests],
