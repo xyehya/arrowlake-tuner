@@ -5,7 +5,7 @@
 | G-101 | platform file `platforms/arl-s-285k.toml` + loader; preflight checks (SPEC §3) | lnx | T0 | ready | — |
 | G-102 | root helper: JSON-lines protocol, state machine, lock, read-only ops (`preflight`, `vf.dump` via guard, `audit.tail`) | lnx | T0 build | ready | G-101 |
 | G-103 | web server: bootstrap token → cookie, Host/Origin/CSP, static manifest, SSE; security test suite (SPEC §4.2, §12) | lnx | T0 | ready | — |
-| G-104 | telemetry readers (APERF/MPERF, VID, temps, RAPL, hwmon Vcore, perf IMC) + `docs/knowledge/telemetry-sources.md` + allowlist rows | lnx | T0 build (fake sysfs/MSR) | ready | G-101 |
+| G-104 | telemetry readers (APERF/MPERF, VID, temps, RAPL, hwmon Vcore, perf IMC) + `docs/knowledge/telemetry-sources.md` + allowlist rows | lnx | T0 build (fake sysfs/MSR) | ready | — (parallel to G-101; uses `topology/`) |
 | G-105 | dashboard page (plain JS): live table, preflight, applied-vs-accepted, ops budget | lnx | T0 | ready | G-102, G-103, G-104 |
 | G-106 | install layout: `install.sh`/`uninstall.sh`, polkit action, root-owned paths; CLI audit/lock path move | lnx | T0 build / T1 install | ready | G-102 |
 

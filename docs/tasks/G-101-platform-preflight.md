@@ -9,7 +9,8 @@ Move the platform facts (CPUID, topology, V/F point ratios, fused words `FUSED_P
 `docs/SPEC.md` §3 · `docs/knowledge/platform-285k.md` · `src/arltuner/topology/` · grep `FUSED_POINT` in `src/arltuner`.
 
 ## Owns
-`platforms/`, `src/arltuner/platform/`, `tests/platform/`.
+`platforms/`, `src/arltuner/platform/`, `tests/platform/`; plus, only to switch them to the platform file (no behaviour change): `src/arltuner/topology/`,
+`src/arltuner/msr/__init__.py`, `src/arltuner/msr/measured_baseline.py`, `src/arltuner/msr/sim.py`, the `FUSED_POINT` lines of `src/arltuner/cli.py`.
 
 ## Deliverables
 Loader + schema (stdlib `tomllib`), `preflight(root=Path("/"))` returning named results (pass / read-only / refuse + reason) for: CPUID match,

@@ -130,3 +130,17 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
 ## Update — T-028
 
 `vf_point_offset_bounded` now accepts `P1 in {0, 2}` (core, ring) with `P2` 1..15; an allow entry may bind `p1` only to a subset of `{0, 2}` (P1 1 and 7 stay refused). `linuxmon point-offset --cpu N [--p1 0|2] --p2 N --offset-mv X [--expect-ratio R] [--sim|--device]` runs one guarded session of two operations: read `0x10 P1/P2` (baseline), then write `0x11` with only `[31:21]` replaced (the guard reads it back), and prints before / after / the revert word. The simulator models the ring point table (8,14,20,28,34,37,38,39x; rc `0x11` past point 8; point 8 starts at offset raw -77). The offset window uses the CPU's kind: with the shipped `assumed_bios_offset_mv` P = -50 the floor is -51 raw, so the ring's BIOS -77 needs a policy with `assumed_bios_offset_mv = { P = 0 }`.
+
+## Contract 8 — helper ↔ server protocol (SPEC §4.5; G1, pinned before G-102/G-103)
+- **Transport:** UTF-8 JSON, one object per line (`\n`), over the helper's stdin (requests) / stdout (responses, events); stderr is log only.
+  Max line 64 KiB in both directions; an oversize or unparsable line ⇒ `{"id": null, "ok": false, "error": {"code": "BAD_REQUEST", ...}}`, helper keeps running.
+- **Request:** `{"id": <str, ≤ 64 chars, unique per connection>, "op": <str>, "args": <object>}` — no other top-level keys (unknown ⇒ `BAD_REQUEST`).
+- **Response (exactly one per request):** `{"id", "ok": true, "result": <object>}` or `{"id", "ok": false, "error": {"code": <UPPER_SNAKE>, "message": <str>,
+  "detail": <object, optional>}}`. Codes used so far: `BAD_REQUEST`, `UNKNOWN_OP`, `BUSY` (state machine conflict; `detail.state`), `REFUSED` (guard
+  refusal; `detail.check`), `PREFLIGHT_FAILED`, `PLAN_STALE`, `CONFIRM_MISMATCH`, `CANCELLED`, `INTERNAL`.
+- **Event:** `{"event": <str>, "op_id": <request id or null>, ...}` — never carries `"id"`. Names: `heartbeat` (every 2 s, `{"state"}`), `progress`
+  (`{"step", "of", "ops_used", "ops_budget"}`), `telemetry` (`{"t", "values"}`), `state` (`{"state"}`).
+- **Plan/apply (SPEC §4.3):** `plan` → `result: {"plan_id": <sha256 hex>, "nonce": <6 chars [A-Z2-9]>, "steps": [...], "ops_needed", "ops_left",
+  "expires_s"}`; `apply` args `{"plan_id", "typed"}` — accepted only when `typed == "CONFIRM " + nonce`, plan unchanged, < 600 s old, preflight passes;
+  a nonce is single-use (replay ⇒ `CONFIRM_MISMATCH`).
+- Ops: SPEC §4.5 list; an op not yet implemented ⇒ `UNKNOWN_OP`. Tests use a fake helper that speaks this contract exactly; changes need an update here.
