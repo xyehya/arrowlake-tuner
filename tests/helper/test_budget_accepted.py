@@ -188,6 +188,29 @@ class BudgetMeterTests(HelperCase):
                 want = None
             self.assertEqual(h.budget.snapshot()[0], want, end)
 
+    def test_an_unterminated_giant_line_gives_no_count_and_bounded_memory(self) -> None:
+        write_lines(self.audit, [attempt(BOOT)] * 2)
+        append(self.audit, "a" * (1024 * 1024 + 4096))  # no newline: never a record this helper wrote
+        h = self.helper()
+        self.assertIsNone(h.budget.snapshot()[0])
+        self.assertLessEqual(len(h.budget._tail[1] or ""), 0)  # nothing was kept as a record
+        # a newline-terminated long (but < 1 MiB) record is fine
+        write_lines(self.audit, [attempt(BOOT), json.dumps({"ts": TS, "event": "attempt", "boot_id": BOOT, "pad": "b" * 300_000})])
+        self.assertEqual(self.helper().budget.snapshot()[0], 2)
+
+    def test_a_same_inode_rewrite_to_a_larger_file_is_rescanned(self) -> None:
+        h = self.helper()
+        write_lines(self.audit, [attempt(BOOT)] * 3)
+        inode = self.audit.stat().st_ino
+        self.assertEqual(h.budget.snapshot()[0], 3)
+        write_lines(self.audit, [attempt(OTHER_BOOT)] * 10 + [attempt(BOOT)])  # truncate-and-rewrite in place, larger, different head
+        self.assertEqual(self.audit.stat().st_ino, inode)
+        self.assertGreater(self.audit.stat().st_size, 3 * len(attempt(BOOT)))
+        self.assertEqual(h.budget.snapshot()[0], 1)
+        self.assertEqual(self.guard_count(), 1)
+        append(self.audit, attempt(BOOT) + "\n")  # and appends after the reset are still incremental
+        self.assertEqual(h.budget.snapshot()[0], 2)
+
     def test_heartbeats_carry_the_counts_and_follow_a_dump(self) -> None:
         h = self.start()
         first = h.wait_for(lambda m: m.get("event") == "heartbeat")
@@ -341,6 +364,34 @@ class AcceptedMatchTests(HelperCase):
         self.assertIsNone(gone)
         self.assertIn("absent", note or "")
 
+    def test_an_implausible_word_count_makes_the_file_untrusted(self) -> None:
+        self.write("1 " + " ".join(["F9A00035"] * 17) + "\n")  # 17 words > 16
+        result, note = accepted_match(self.helper(), sample_document())
+        self.assertIsNone(result)
+        self.assertIn("plausible", note or "")
+        self.write("1 " + " ".join(["F9A00035"] * 16) + "\n")  # exactly 16 is accepted
+        self.assertIsNotNone(accepted_match(self.helper(), sample_document())[0])
+
+    def test_diffs_are_capped_per_cpu_and_in_total(self) -> None:
+        def big_document(cpus: int, points: int) -> dict[str, Any]:
+            return {"units": [{"cpus": [{"cpu": c, "oc": {"word": "0x00000001"}, "points": [{"word": f"{0x100 + i:#010x}"} for i in range(points)], "end": "x"} for c in range(cpus)]}]}
+
+        self.write("0 2 " + " ".join(f"{0x200 + i:X}" for i in range(14)) + "\n")
+        (entry,) = accepted_match(self.helper(), big_document(1, 40))[0] or []
+        self.assertEqual((entry["match"], len(entry["diffs"]), entry["truncated"]), (False, 32, True))
+        self.assertEqual([d["point"] for d in entry["diffs"]], list(range(32)))
+        self.write("0 2 8\n")
+        (small,) = accepted_match(self.helper(), big_document(1, 3))[0] or []
+        self.assertNotIn("truncated", small)
+        # the total across CPUs is bounded too (24 CPUs x 32 would be ~50 KB of diffs)
+        self.write("\n".join(f"{c} 2 " + " ".join(f"{0x200 + i:X}" for i in range(14)) for c in range(24)) + "\n")
+        listed, _ = accepted_match(self.helper(), big_document(24, 40))
+        assert listed is not None
+        self.assertEqual(len(listed), 24)
+        self.assertLessEqual(sum(len(c["diffs"]) for c in listed), 200)
+        self.assertTrue(all(c["match"] is False for c in listed))
+        self.assertTrue(all(c.get("truncated") for c in listed[-3:]))
+
     def test_a_malformed_document_never_raises(self) -> None:
         self.write(EXPECTED_TEXT)
         result, note = accepted_match(self.helper(), {"units": [{"cpus": [{"cpu": 1, "points": [{"word": "zz"}]}]}]})
@@ -391,6 +442,35 @@ class VfDumpAcceptedTests(HelperCase):
         self.assertEqual(diff["point"], 2)
         self.assertEqual(int(diff["expected"], 16), int(parts[3], 16))
         self.assertEqual(int(diff["actual"], 16), int(old, 16))
+
+    def test_bogus_expected_words_on_all_cpus_never_turn_a_dump_into_internal(self) -> None:
+        from arltuner.helper.protocol import MAX_LINE
+
+        h = self.started()
+        self.policy.write_text(self.policy.read_text(encoding="utf-8").replace("max_operations_per_boot = 400", "max_operations_per_boot = 2000"), encoding="utf-8", newline="\n")
+        # the reviewer's repro: 2,000 bogus words on each of 24 CPUs. Rejected as implausible: null + note, and the dump is a plain success.
+        self.file.write_text("".join(f"{c} " + " ".join(["DEADBEEF"] * 2000) + "\n" for c in range(24)), encoding="utf-8", newline="\n")
+        os.chmod(self.file, 0o644)
+        reply = h.call("d1", "vf.dump", {"cpus": "0-23"}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertIsNone(reply["result"]["accepted_match"])
+        self.assertIn("larger than", reply["result"]["accepted_note"])  # the 64 KiB file cap fires first for this exact repro
+        self.assertLess(len(json.dumps(reply, separators=(",", ":"))), MAX_LINE)
+        # the same shape under the file cap (24 x 250 words) is stopped by the word-count rule
+        self.file.write_text("".join(f"{c} " + " ".join(["DEADBEEF"] * 250) + "\n" for c in range(24)).replace("DEADBEEF", "F00D"), encoding="utf-8", newline="\n")
+        reply = h.call("d0", "vf.dump", {"cpus": "0-23"}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertIsNone(reply["result"]["accepted_match"])
+        self.assertIn("plausible", reply["result"]["accepted_note"])
+        # the worst case that passes the parser: 16 wrong words per CPU on all 24 CPUs
+        self.file.write_text("".join(f"{c} " + " ".join(["DEADBEEF"] * 16) + "\n" for c in range(24)), encoding="utf-8", newline="\n")
+        reply = h.call("d2", "vf.dump", {"cpus": "0-23"}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertLess(len(json.dumps(reply, separators=(",", ":"))), MAX_LINE)
+        listed = reply["result"]["accepted_match"]
+        self.assertEqual(len(listed), 24)
+        self.assertTrue(all(not c["match"] for c in listed))
+        self.assertTrue(any(c.get("truncated") for c in listed))
 
     def test_an_untrusted_accepted_file_never_fails_the_dump(self) -> None:
         h = self.started()

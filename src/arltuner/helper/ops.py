@@ -6,6 +6,7 @@ state, threads and the one-response rule. Nothing here sends a mailbox request e
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import secrets
@@ -31,7 +32,7 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
-from arltuner.guard.audit import _parse_ts
+from arltuner.guard.audit import parse_audit_ts
 from arltuner.msr import MailboxTransport
 from arltuner.platform.preflight import PreflightReport, Status
 from arltuner.topology import TopologyError, UnknownCore
@@ -53,6 +54,11 @@ TELEMETRY_INTERVAL_RANGE = (0.2, 60.0)
 ACCEPTED_FILE = "EXPECTED-words.txt"  # inside the helper's accepted dir (G-107): the format of profiles/EXPECTED-words.txt
 _ACCEPTED_MAX_BYTES = 64 * 1024
 _AUDIT_CHUNK = 256 * 1024
+_AUDIT_LINE_MAX = 1024 * 1024  # an unterminated audit line longer than this is not our log: no count is claimed (bounds the scan buffer)
+_AUDIT_HEAD_BYTES = 4096
+MAX_EXPECTED_WORDS = 16  # words per EXPECTED line (OC word + points): a P core has 9, an E core 7; more is not an accepted-state file
+MAX_DIFFS_PER_CPU = 32  # diffs reported per CPU (then ``truncated``)
+MAX_DIFFS_TOTAL = 200  # and across all CPUs, so the vf.dump response always fits the 64 KiB line
 
 
 @dataclass
@@ -255,6 +261,7 @@ class BudgetMeter:
         self._by_boot: dict[str | None, int] = {}
         self._audit_error: str | None = None
         self._tail: tuple[str, Any] = ("skip", None)  # the unterminated last line, judged at the last scan
+        self._head = b""  # digest of the first <= 4 KiB of the counted part, to notice a same-inode rewrite
         # policy cache
         self._policy_key: tuple[int, int, int, int] | None = None
         self._budget: int | None = None
@@ -310,11 +317,12 @@ class BudgetMeter:
                 st = os.fstat(handle.fileno())
                 key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
                 replaced = self._audit_key is not None and (st.st_dev, st.st_ino) != self._audit_key[:2]
-                if replaced or st.st_size < self._offset:
-                    self._reset()  # a different or shorter file is not an append to what was counted
+                if replaced or st.st_size < self._offset or (self._offset and self._head_digest(handle) != self._head):
+                    self._reset()  # a different, shorter or rewritten file (same inode, first bytes changed) is not an append to what was counted
                 if key != self._audit_key:
                     self._scan(handle)
                     self._audit_key = key
+                    self._head = self._head_digest(handle)
         except OSError:
             self._reset()
             return None
@@ -324,6 +332,12 @@ class BudgetMeter:
 
     def _reset(self) -> None:
         self._audit_key, self._offset, self._by_boot, self._audit_error, self._tail = None, 0, {}, None, ("skip", None)
+        self._head = b""
+
+    def _head_digest(self, handle: Any) -> bytes:
+        """Digest of the first (up to 4 KiB of the) already-counted bytes: an append never changes them, an in-place rewrite does."""
+        handle.seek(0)
+        return hashlib.sha256(handle.read(min(_AUDIT_HEAD_BYTES, self._offset))).digest()
 
     def _count(self) -> int:
         try:
@@ -347,6 +361,9 @@ class BudgetMeter:
             pending += chunk
             cut = pending.rfind(b"\n")
             if cut < 0:
+                if len(pending) > _AUDIT_LINE_MAX:
+                    self._audit_error = f"an audit record is longer than {_AUDIT_LINE_MAX} bytes"  # not a log this helper wrote; no count is claimed
+                    return
                 continue
             complete, pending = pending[: cut + 1], pending[cut + 1 :]
             for raw in complete.split(b"\n"):  # '\n' only, like read_state's line iteration (bytes.splitlines would also split on '\r')
@@ -359,12 +376,15 @@ class BudgetMeter:
             self._offset += len(complete)
             if self._audit_error is not None:
                 return
+            if len(pending) > _AUDIT_LINE_MAX:
+                self._audit_error = f"an audit record is longer than {_AUDIT_LINE_MAX} bytes"
+                return
         self._tail = self._classify(pending, partial=True)
 
     @staticmethod
     def _classify(raw: bytes, *, partial: bool) -> tuple[str, Any]:
         """One audit line as ``read_state`` sees it: ``("skip", None)``, ``("count", boot_id)`` or ``("error", why)`` (``AuditUnreadable``).
-        The timestamp rule is ``arltuner.guard.audit._parse_ts`` itself (private, reused on purpose so the two can never drift apart)."""
+        The timestamp rule is ``arltuner.guard.audit.parse_audit_ts`` itself (reused on purpose so the two can never drift apart)."""
         text = raw.strip()
         if not text:
             return "skip", None
@@ -377,7 +397,7 @@ class BudgetMeter:
         if record["event"] != "attempt":
             return "skip", None
         try:
-            _parse_ts(record.get("ts"), "audit")
+            parse_audit_ts(record.get("ts"), "audit")
         except AuditUnreadable as exc:
             return "error", str(exc)
         boot = record.get("boot_id")
@@ -402,6 +422,8 @@ def _parse_expected(text: str) -> dict[int, list[int]]:
             words = [int(w, 16) for w in parts[1:]]
         except ValueError:
             raise ValueError(f"line {number}: not '<cpu> <hex words>'") from None
+        if len(words) > MAX_EXPECTED_WORDS:
+            raise ValueError(f"line {number}: {len(words)} words (at most {MAX_EXPECTED_WORDS} are plausible)")
         if cpu < 0 or len(words) < 2 or any(not 0 <= w <= 0xFFFFFFFF for w in words):
             raise ValueError(f"line {number}: needs a cpu, the OC word and at least one point, each a 32-bit hex word")
         if cpu in table:
@@ -459,6 +481,7 @@ def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[
         if table is None:
             return None, note
         out: list[dict[str, Any]] = []
+        shown = 0
         for unit in document.get("units", []):
             for cpu in unit.get("cpus", []):
                 want = table.get(cpu["cpu"])
@@ -468,12 +491,19 @@ def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[
                 got: list[int | None] = [None if oc is None else int(oc["word"], 16)]
                 got += [int(p["word"], 16) for p in cpu.get("points", [])]
                 diffs = []
+                differing = 0
                 for point in range(max(len(want), len(got))):
                     expected = want[point] if point < len(want) else None
                     actual = got[point] if point < len(got) else None
                     if expected != actual:
-                        diffs.append({"point": point, "expected": _hex(expected), "actual": _hex(actual)})
-                out.append({"cpu": cpu["cpu"], "match": not diffs, "diffs": diffs})
+                        differing += 1
+                        if len(diffs) < MAX_DIFFS_PER_CPU and shown < MAX_DIFFS_TOTAL:
+                            diffs.append({"point": point, "expected": _hex(expected), "actual": _hex(actual)})
+                            shown += 1
+                entry: dict[str, Any] = {"cpu": cpu["cpu"], "match": not differing, "diffs": diffs}
+                if differing > len(diffs):
+                    entry["truncated"] = True  # more differences than listed; the response must stay under the 64 KiB line
+                out.append(entry)
         return out, None
     except Exception as exc:  # the compare is informational: it must never fail a dump that read the chip
         return None, f"accepted compare failed: {type(exc).__name__}: {exc}"
