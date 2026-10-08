@@ -29,7 +29,7 @@ RESEED=0
 for arg in "$@"; do
     case $arg in
         --reseed-config) RESEED=1 ;;
-        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $arg (usage: install.sh [--reseed-config])" ;;
     esac
 done
