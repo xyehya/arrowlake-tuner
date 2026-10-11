@@ -188,12 +188,16 @@ class TuneState:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+_STATE_LOCK = threading.Lock()
+
+
 def _state(helper: Helper) -> TuneState:
-    st = getattr(helper, "_tune_state", None)
-    if st is None:
-        st = TuneState(PlanStore(helper.cfg.monotonic))
-        helper._tune_state = st  # type: ignore[attr-defined]
-    return st
+    with _STATE_LOCK:  # tune.plan runs on up to four slow threads: two first callers must not each build a state (one's plan would be lost)
+        st = getattr(helper, "_tune_state", None)
+        if st is None:
+            st = TuneState(PlanStore(helper.cfg.monotonic))
+            helper._tune_state = st  # type: ignore[attr-defined]
+        return st
 
 
 def _last_words(helper: Helper) -> dict[int, list[int]] | None:
@@ -271,7 +275,8 @@ def _decode_document(doc: dict[str, Any], topology: Topology) -> dict[str, Any]:
 
 
 def _fit(result: dict[str, Any]) -> dict[str, Any]:
-    """Keep the result under the 64 KiB line: drop the decoded duplicates of the extra E CPUs first, then mark it truncated."""
+    """Keep the result under the 64 KiB line (the Writer would otherwise replace it by an INTERNAL error): drop the decoded duplicates of the extra E
+    CPUs, then the differences list, then the decoded copy altogether, re-measuring each time."""
     def size() -> int:
         return len(json.dumps(result, separators=(",", ":")))
 
@@ -283,6 +288,11 @@ def _fit(result: dict[str, Any]) -> dict[str, Any]:
         for unit in tune.values():
             unit["cpus"] = unit["cpus"][:1]
         result["tune_truncated"] = True
+    if size() > limit:
+        result["differences"] = []
+        result["differences_truncated"] = True
+    if size() > limit:
+        result["tune"] = None
     return result
 
 
