@@ -21,6 +21,8 @@ from ._support import REPO, copy_checkout, run_script
 
 NOT_ROOT = os.geteuid() != 0  # tests that run a script WITHOUT a DESTDIR are only safe (they die at the root check) when we are not root
 
+ADVANCED_POLICY = "policies/advanced-2026-10-11.toml"  # D-032: the seed source of /etc/arltuner/policy.toml
+
 PY_FILES = sorted(p.relative_to(REPO / "src") for p in (REPO / "src" / "arltuner").rglob("*.py") if "__pycache__" not in p.parts)
 
 
@@ -113,8 +115,7 @@ class InstallLayout(InstallCase):
 
     def test_seeded_config_comes_from_the_repo(self) -> None:
         current = (REPO / "profiles" / "CURRENT").read_text(encoding="utf-8")
-        policy = next(line.split("=", 1)[1].strip() for line in current.splitlines() if line.startswith("policy"))
-        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / policy).read_bytes())
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / ADVANCED_POLICY).read_bytes())  # D-032: the seed is the advanced policy
         self.assertEqual(self.path("/etc/arltuner/accepted/CURRENT").read_bytes(), (REPO / "profiles" / "CURRENT").read_bytes())
         self.assertEqual(self.path("/etc/arltuner/accepted/EXPECTED-words.txt").read_bytes(), (REPO / "profiles" / "EXPECTED-words.txt").read_bytes())
         for line in current.splitlines():
@@ -208,8 +209,7 @@ class Idempotence(InstallCase):
         self.path("/etc/arltuner/policy.toml").write_text("# operator edit\n")
         self.path("/var/lib/arltuner/audit.jsonl").write_text("keep me\n")
         self.ok_install("--reseed-config")
-        policy = [l.split("=", 1)[1].strip() for l in (REPO / "profiles/CURRENT").read_text().splitlines() if l.startswith("policy")][0]
-        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / policy).read_bytes())
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / ADVANCED_POLICY).read_bytes())
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "keep me\n")
 
     def test_no_legacy_log_gives_an_empty_0600_audit_log(self) -> None:
