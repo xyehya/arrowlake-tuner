@@ -686,7 +686,8 @@ class V3Ops:
         self.tuning_version += 1
         self.ops_used_v3 += 3 * n
         self._applying.discard(rid)
-        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])],
+        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])]
+                  + [{"n": len(p["changed"]) + i + 1, "kind": "write_msr", "table": k.lower(), "status": "ok"} for i, k in enumerate(sorted(p["turbo"]))],
                   "readback": readback, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
         if stop_after is not None:
             result["stop"] = {"kind": "refused", "reason": "the guard refused a step: step limit", "tripped": False}

@@ -78,6 +78,7 @@ class SimTableTests(FactsCase):
     def test_the_turbo_registers_are_the_measured_ones(self) -> None:
         self.boot(STOCK)
         self.assertEqual(self.sim.rdmsr(0, 0x1AD), 0x3737373737373939)
+        self.assertEqual(self.sim.rdmsr(8, 0x651), 0x100C080604030201)  # the E bucket counts are not part of the edit
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), 0x0807060504030201)
         self.assertEqual(self.sim.rdmsr(0, 0x650), 0x3030303030303030)
         self.assertEqual(self.sim.rdmsr(0, 0x651), 0x100C080604030201)
@@ -276,6 +277,15 @@ class TurboOrderTests(FactsCase):
         self.assertEqual(self.table(8, 0x650), [48] * 8)
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
         self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)  # no per-core word was written
+
+    def test_a_turbo_only_plan_still_predicts_vccia_from_the_new_table(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        v = p["vccia"]
+        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("prediction", "all", 0.105))
+        self.assertIsNotNone(v["before_v"])
+        self.assertEqual(set(v["light_load"]), {"predicted_v", "set_by", "active_cores"})
 
     def test_a_turbo_only_e_plan_lowering_applies_and_reads_back(self) -> None:
         h = self.boot_with(baseline=False)
