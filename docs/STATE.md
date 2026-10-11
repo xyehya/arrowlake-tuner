@@ -52,7 +52,10 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 2. Open, low priority: `write_percore_enable` still predicted as worst case (no 0x14 at plan time); ring/NGU tuning not in scope (SPEC §2);
    E OC ratio above 48 untested on hardware; P OC ratio (58×) untested in v3; light theme dropped; restore scripts still use their checkout
    policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
-3. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
+3. **Pending operator step:** final build through the real polkit path (`python3 tools/arltuner-gui.py --open`, password) + one Stress screen
+   from the tab, check the child runs as the user (`ps -eo user,args | grep stress`). PKEXEC_UID is set by pkexec [DOC pkexec(1)]; all hardware
+   checks so far used `sudo -n PKEXEC_UID=1000`. Prompt was left open 2026-10-12.
+4. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
 
 ## How we work
 Operator at the machine; orchestrator answers guard tokens only after a go-ahead. One variable at a time; acceptance gate = 60-min OCCT Linpack 2021
