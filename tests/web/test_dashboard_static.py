@@ -78,10 +78,23 @@ class TestHtml(unittest.TestCase):
         self.assertIn("112 to 124", HTML)  # the cost is stated next to the button
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-dump"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
 
+    def test_tabs_are_an_aria_tablist(self):  # G-110
+        self.assertIn('role="tablist"', HTML)
+        for name in ("overview", "cores", "sensors", "vf", "system", "audit"):
+            self.assertRegex(HTML, rf'<button\b[^>]*role="tab"[^>]*id="tab-{name}"[^>]*aria-controls="panel-{name}"')
+            self.assertRegex(HTML, rf'id="panel-{name}" role="tabpanel" aria-labelledby="tab-{name}"')
+        self.assertIn("ArrowRight", JS)
+        self.assertIn("prefers-reduced-motion", CSS)
+
     def test_no_write_controls(self):
         self.assertNotRegex(HTML, r"(?i)<(input|textarea|select)\b")
         buttons = re.findall(r'<button\b[^>]*\bid="([^"]+)"', HTML)
-        self.assertEqual(sorted(buttons), ["btn-audit", "btn-cancel", "btn-dump", "btn-preflight"])
+        tabs = sorted(b for b in buttons if b.startswith("tab-"))
+        self.assertEqual(tabs, ["tab-audit", "tab-cores", "tab-overview", "tab-sensors", "tab-system", "tab-vf"])  # navigation only
+        self.assertEqual(sorted(b for b in buttons if not b.startswith("tab-")), ["btn-audit", "btn-cancel", "btn-dump", "btn-preflight"])
+        for m in re.finditer(r"<button\b([^>]*)>", HTML):  # every other button is a view control (tab or data-goto), never an action
+            attrs = m.group(1)
+            self.assertTrue(re.search(r'\bid="(btn|tab)-', attrs) or "data-goto=" in attrs, attrs)
 
 
 class TestScript(unittest.TestCase):
@@ -140,8 +153,7 @@ class TestScript(unittest.TestCase):
 
 class TestCss(unittest.TestCase):
     def test_theme_and_layout(self):
-        self.assertIn("prefers-color-scheme: dark", CSS)
-        self.assertIn("color-scheme: light dark", CSS)
+        self.assertIn("color-scheme: dark;", CSS)  # G-110: one dark theme by design (instrument at night)
         self.assertIn("[hidden] { display: none !important; }", CSS)  # `hidden` must win over any display rule
         self.assertRegex(CSS, r"@media \(max-width: \d+px\)")
         self.assertIn("grid-template-columns", CSS)
