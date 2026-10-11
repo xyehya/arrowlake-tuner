@@ -18,5 +18,8 @@
       "PowerShell(Start-Service *)",
       "PowerShell(winget install *)"
     ]
+  },
+  "enabledPlugins": {
+    "frontend-design@anthropic-plugin-directory": true
   }
 }
