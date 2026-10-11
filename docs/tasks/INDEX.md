@@ -19,5 +19,6 @@
 | G-115 | UI CPU facts: real point grid + OC point, clamp badges, turbo editor, VccIA panel, fused markers, warnings | lnx | T0 | **merged** 2026-10-11 | v3 |
 | G-116 | helper stress/validation ops (stress-ng cpu, stressapptest memory, ratio cap, health bracket, results) | lnx | T0 | ready 2026-10-11 | v3 |
 | G-117 | turbo-only plans (planner), UI on warning codes, sim offsets at stock | lnx | T0 | ready 2026-10-11 | G-114/G-115 |
+| G-118 | measure fixes: max ratio from turbo tables, retry pass, baseline/stock tagging, fused_point labels | lnx | T0 | ready 2026-10-11 | G-114 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
