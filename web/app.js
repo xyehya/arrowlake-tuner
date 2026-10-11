@@ -1,5 +1,5 @@
 "use strict";
-// arrowlake-tuner web UI (G-105, redesigned in G-110, SPEC-v3 pages in G-113): Dashboard, Curves, Tune, Profiles, System, Audit.
+// arrowlake-tuner web UI (G-105, redesigned in G-110, SPEC-v3 pages in G-113): Dashboard, Curves, Tune, Stress, Profiles, System, Audit.
 // The only writes this page can start are in Tune: tune.plan opens a review dialog, and tune.apply is sent from that dialog's Apply button (D-033 d: one
 // click, no typing), carrying the plan id and "CONFIRM <nonce>" of that plan. Everything else is a read, a cpufreq-only measurement, or curve/profile bookkeeping.
 // All data is written with textContent; no HTML strings are ever parsed and there is no inline style: geometry and colour go through SVG attributes
