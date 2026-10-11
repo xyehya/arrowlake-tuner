@@ -66,7 +66,7 @@ P4_KEPT = P4_BASELINE.with_(offset_raw=-31, v_target_raw=0)  # the word the plan
 class HappyPaths(Case):
     def test_p_core_offset_minus_30_mv_full_sequence(self) -> None:
         s = self.session()
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(report.ok, report.format_report())
         self.assertIsNone(report.stopped_reason)
         self.assertEqual(report.stop_kind, StopKind.NONE)
@@ -102,9 +102,19 @@ class HappyPaths(Case):
                 self.assertEqual(s.sim.vf(cpu), fresh.vf(cpu))
                 self.assertEqual(s.sim.favored_word(cpu), fresh.favored_word(cpu))
 
+    def test_an_offset_only_profile_sends_the_0x11_alone(self) -> None:
+        """G-122: no OC ratio in the profile = no 0x1D (favored ratio) and no 0x27 (granular): the 0x11 word's ratio field is the current one, not a ratio the user set."""
+        s = self.session()
+        report = s.apply(profile(p4(offset_mv=-30)))
+        self.assertTrue(report.ok, report.format_report())
+        self.assertEqual([r.step.kind for r in report.steps], [*P4_KINDS, StepKind.WRITE_PERCORE_ENABLE, StepKind.WRITE_VF])
+        self.assertEqual([cmd for _, cmd, _ in s.write_requests()], [0x15, 0x11])  # the PerCore enable, then the V/F word
+        self.assertEqual(s.sim.vf(4), P4_KEPT)
+        self.assertEqual(s.sim.favored_word(4), SimMsrPort().favored_word(4))  # the favored word was not touched
+
     def test_audit_records_every_operation_and_the_operator(self) -> None:
         s = self.session()
-        s.apply(profile(p4(offset_mv=-30)))
+        s.apply(profile(p4(offset_mv=-30, ratio=55)))
         records = s.audit()
         events = [r["event"] for r in records]
         self.assertEqual(events.count("attempt"), 9)
@@ -128,14 +138,14 @@ class HappyPaths(Case):
 
     def test_every_transport_call_is_preceded_by_a_guard_record(self) -> None:
         s = self.session()
-        s.apply(profile(p4(offset_mv=-30)))
+        s.apply(profile(p4(offset_mv=-30, ratio=55)))
         events = [r["event"] for r in s.audit()]
         self.assertEqual(s.transport.transacts, events.count("attempt") + events.count("readback"))
         self.assertEqual(s.transport.transacts, len(s.sim.requests))
 
     def test_revert_plan_restores_the_baseline_and_runs_in_a_new_session(self) -> None:
         s = self.session()
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(
             [(r.cpu, r.cmd, r.p1, r.p2, r.data, r.purpose) for r in report.revert_plan],
             [
@@ -168,7 +178,7 @@ class HappyPaths(Case):
     def test_dwell_is_honoured_by_waiting(self) -> None:
         s = self.session(policy=policy_with(dwell=60.0))
         start = s.fake.now
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(report.ok, report.format_report())
         self.assertGreaterEqual(s.fake.now - start, 8 * 60.0)  # eight waits between nine operations
         self.assertEqual(len([x for x in s.fake.sleeps if x >= 60.0]), 8)
@@ -176,13 +186,13 @@ class HappyPaths(Case):
 
     def test_no_dwell_no_wait(self) -> None:
         s = self.session(policy=policy_with(dwell=0.0))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(report.ok)
         self.assertTrue(all(x < 1.0 for x in s.fake.sleeps))  # only the transport's busy polls
 
     def test_a_sleep_that_does_not_advance_time_makes_the_guard_refuse_dwell(self) -> None:
         s = self.session(policy=policy_with(dwell=60.0))
-        report = s.apply(profile(p4(offset_mv=-30)), sleep=lambda seconds: None)
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)), sleep=lambda seconds: None)
         self.assertEqual(report.stop_kind, StopKind.REFUSED)
         self.assertIn("DWELL", report.stopped_reason)
         self.assertEqual(len(report.steps), 2)  # step 2 (the second operation) was refused
@@ -191,7 +201,7 @@ class HappyPaths(Case):
     def test_progress_callback_sees_every_step(self) -> None:
         s = self.session()
         lines: list[str] = []
-        s.apply(profile(p4(offset_mv=-30)), progress=lines.append)
+        s.apply(profile(p4(offset_mv=-30, ratio=55)), progress=lines.append)
         self.assertEqual(len([ln for ln in lines if ln.startswith("step ")]), 9)
         self.assertEqual(len([ln for ln in lines if ln.startswith("dwell")]), 8)
 
@@ -201,7 +211,7 @@ class HappyPaths(Case):
                 tmp = self.tmp / f"wide{wide}"
                 tmp.mkdir()
                 s = make_session(tmp, config=sim_config(e_cluster_wide=wide))
-                report = s.apply(profile(e_core(12, offset_mv=-20)))
+                report = s.apply(profile(e_core(12, offset_mv=-20, ratio=48)))
                 self.assertTrue(report.ok, report.format_report())
                 self.assertEqual(report.operations, 1 + 4 * 4 + 1 + 4 * 3)
                 writes = [(c, d) for c, cmd, d in s.requests() if cmd == 0x11]
@@ -217,7 +227,7 @@ class HappyPaths(Case):
 
     def test_mixed_p_and_e_profile(self) -> None:
         s = self.session()
-        report = s.apply(profile(p4(offset_mv=-30), e_core(0, offset_mv=-20)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55), e_core(0, offset_mv=-20, ratio=48)))
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual(report.operations, 1 + 5 * 4 + 1 + 5 * 3)
         self.assertEqual(s.sim.vf(4).offset_raw, -31)
@@ -246,13 +256,13 @@ class HappyPaths(Case):
 
     def test_the_report_shows_runtime_and_effective_offsets(self) -> None:
         s = self.session()
-        text = s.apply(profile(p4(offset_mv=-30), e_core(0, offset_mv=-20))).format_report()
+        text = s.apply(profile(p4(offset_mv=-30, ratio=55), e_core(0, offset_mv=-20, ratio=48))).format_report()
         self.assertIn("runtime offset -30.27 mV, effective -80.27 mV (assumed BIOS offset -50 mV)", text)  # P core: BIOS -50
         self.assertIn("runtime offset -19.53 mV, effective -19.53 mV (assumed BIOS offset +0 mV)", text)  # E core: BIOS 0
 
     def test_per_core_enable_already_set_skips_0x15(self) -> None:
         s = self.session(config=sim_config(misc_global_config=0x8))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual(report.operations, 8)
         self.assertEqual([cmd for _, cmd, _ in s.requests()], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11, 0x10, 0x1D, 0x1C, 0x27, 0x26])  # no 0x15
@@ -261,7 +271,7 @@ class HappyPaths(Case):
 
     def test_per_core_enable_clear_writes_old_or_8(self) -> None:
         s = self.session(config=sim_config(misc_global_config=0x1))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(report.ok, report.format_report())
         self.assertIn((4, 0x15, 0x9), s.requests())  # only bit 3 is added
         self.assertEqual(s.sim.misc_global_config, 0x9)
@@ -272,7 +282,7 @@ class PreflightBeforeAnything(Case):
     def test_needs_higher_limit_with_the_default_policy_sends_nothing(self) -> None:
         s = self.session(policy=default_m1_policy())
         with self.assertRaises(NeedsHigherLimit) as ctx:
-            s.apply(profile(p4(offset_mv=-30)))
+            s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual((ctx.exception.required, ctx.exception.allowed), (13, 1))  # 9 operations + 4 read-backs
         self.assertEqual(s.sim.writes, [])  # no mailbox request - not even a read - was sent
         self.assertEqual(s.sim.reads, [])
@@ -282,7 +292,7 @@ class PreflightBeforeAnything(Case):
     def test_the_limit_is_judged_on_the_worst_case_before_any_read(self) -> None:
         s = self.session(policy=policy_with(max_ops=12), config=sim_config(misc_global_config=0x8))  # would need only 8 + 3 read-backs = 11
         with self.assertRaises(NeedsHigherLimit) as ctx:
-            s.apply(profile(p4(offset_mv=-30)))
+            s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual((ctx.exception.required, ctx.exception.allowed), (13, 12))  # worst case: the 0x15 write and its read-back too
         self.assertEqual(s.sim.writes, [])
 
@@ -290,7 +300,7 @@ class PreflightBeforeAnything(Case):
         policy = dataclasses.replace(policy_with(), cpus=frozenset(range(4)))
         s = self.session(policy=policy)
         with self.assertRaises(PlanRefused) as ctx:
-            s.apply(profile(p4(offset_mv=-30)))
+            s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertTrue(all(r.reason == "CPU_NOT_ALLOWED" for r in ctx.exception.refusals))
         self.assertEqual(s.sim.writes, [])
 
@@ -299,7 +309,7 @@ class PreflightBeforeAnything(Case):
         cases = {
             "overvolt": (profile(p4(oc_voltage_mv=1400)), None, [0x14, 0x10, 0x1C, 0x09, 0x26, 0x28]),  # an OC-point voltage also reads 0x28
             "ratio above baseline": (profile(p4(ratio=57)), None, [0x14, 0x10, 0x1C, 0x09, 0x26]),
-            "static-mode baseline": (profile(p4(offset_mv=-30)), sim_config(initial_vf={4: P4_BASELINE.with_(static=True)}), [0x14, 0x10, 0x1C, 0x09, 0x26]),
+            "static-mode baseline": (profile(p4(offset_mv=-30, ratio=55)), sim_config(initial_vf={4: P4_BASELINE.with_(static=True)}), [0x14, 0x10, 0x1C, 0x09, 0x26]),
         }
         for name, (prof, config, reads) in cases.items():
             with self.subTest(name):
@@ -356,7 +366,7 @@ class PreflightBeforeAnything(Case):
 class Faults(Case):
     def test_oc_locked_stops_at_the_0x15_write(self) -> None:
         s = self.session(config=sim_config(oc_locked=True))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.RC)
         self.assertFalse(report.ok)
         last = report.steps[-1]
@@ -370,7 +380,7 @@ class Faults(Case):
 
     def test_oc_locked_on_the_0x11_write(self) -> None:
         s = self.session(config=sim_config(oc_locked=True, misc_global_config=0x8))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.RC)
         self.assertEqual((report.steps[-1].step.cmd, report.steps[-1].rc_name), (0x11, "OCLocked"))
         self.assertEqual(len(report.steps), 6)
@@ -378,7 +388,7 @@ class Faults(Case):
 
     def test_undervolt_protection_with_a_negative_offset(self) -> None:
         s = self.session(config=sim_config(uvp=True))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.RC)
         last = report.steps[-1]
         self.assertEqual((last.step.cmd, last.rc, last.rc_name), (0x11, 0x13, "UndervoltProtection"))
@@ -391,7 +401,7 @@ class Faults(Case):
     def test_silent_ignore_fails_the_readback_and_trips_the_guard(self) -> None:
         s = self.session()
         s.sim.silent_ignore(0x11)
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.UNVERIFIED)
         self.assertTrue(report.tripped)
         last = report.steps[-1]
@@ -425,13 +435,13 @@ class Faults(Case):
     def test_silent_ignore_stops_an_e_cluster_apply_at_the_first_write(self) -> None:
         s = self.session()
         s.sim.silent_ignore(0x11)
-        report = s.apply(profile(e_core(12, offset_mv=-20)))
+        report = s.apply(profile(e_core(12, offset_mv=-20, ratio=48)))
         self.assertEqual(report.stop_kind, StopKind.UNVERIFIED)
         self.assertEqual(len([1 for _, cmd, _ in s.requests() if cmd == 0x11]), 1)  # cpus 21..23 were never written
 
     def test_stuck_busy_after_the_write_trips_the_guard(self) -> None:
         s = self.session(wrap_port=lambda sim: HookPort(sim, {0x11: lambda cpu: sim.stuck_busy(cpu, before_write=False)}))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.TRANSPORT)
         self.assertTrue(report.tripped)
         last = report.steps[-1]
@@ -446,7 +456,7 @@ class Faults(Case):
     def test_stuck_busy_before_the_first_request_sends_nothing(self) -> None:
         s = self.session()
         s.sim.stuck_busy(4, before_write=True)
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.TRANSPORT)
         self.assertIn("write_sent=False", report.stopped_reason)
         self.assertEqual(len(report.steps), 1)
@@ -456,7 +466,7 @@ class Faults(Case):
     def test_forced_rc_stops_the_report(self) -> None:
         s = self.session(config=sim_config(misc_global_config=0x8))
         s.sim.force_rc(0x11, 3)
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.RC)
         self.assertEqual(report.steps[-1].rc_name, "RatioExceedsLimits")
         self.assertIn("RatioExceedsLimits", report.format_report())
@@ -469,7 +479,7 @@ class Faults(Case):
                 tmp.mkdir()
                 s = make_session(tmp, config=sim_config(misc_global_config=0x8))
                 s.sim.force_rc(cmd, 0x10)  # InvalidParam
-                report = s.apply(profile(p4(offset_mv=-30)))
+                report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
                 self.assertEqual(report.stop_kind, StopKind.RC)
                 self.assertEqual((report.steps[-1].step.kind, report.steps[-1].rc_name), (kind, "InvalidParam"))
                 self.assertEqual(s.sim.vf(4).offset_raw, -31)  # the 0x11 had already been written
@@ -482,7 +492,7 @@ class Faults(Case):
                 tmp.mkdir()
                 s = make_session(tmp)
                 s.sim.force_rc(cmd, 5)
-                report = s.apply(profile(p4(offset_mv=-30)))
+                report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
                 self.assertEqual(report.stop_kind, StopKind.RC)
                 self.assertEqual(s.write_requests(), [])
                 self.assertEqual(report.steps[-1].step.cmd, cmd)
@@ -490,7 +500,7 @@ class Faults(Case):
     def test_msr_error_is_a_transport_stop(self) -> None:
         s = self.session()
         s.sim.eio(4, 0x150)
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.TRANSPORT)
         self.assertIn("MsrError", report.stopped_reason)
         self.assertTrue(report.tripped)
@@ -499,7 +509,7 @@ class Faults(Case):
 class GuardRefusals(Case):
     def test_env_flag_absent(self) -> None:
         s = self.session(env={})
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.REFUSED)
         self.assertEqual(report.steps[0].status, StepStatus.REFUSED)
         self.assertIn("NO_ENV_FLAG", report.stopped_reason)
@@ -510,14 +520,14 @@ class GuardRefusals(Case):
 
     def test_wrong_confirmation(self) -> None:
         s = self.session(confirm_token="not-the-token")
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.REFUSED)
         self.assertIn("BAD_CONFIRMATION", report.stopped_reason)
         self.assertEqual(s.sim.writes, [])
 
     def test_health_gate_before_refuses(self) -> None:
         s = self.session(health_gate=lambda phase: (False, "taint changed") if phase == "before" else (True, "ok"))
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.REFUSED)
         self.assertIn("HEALTH_GATE", report.stopped_reason)
         self.assertEqual(s.sim.writes, [])
@@ -530,7 +540,7 @@ class GuardRefusals(Case):
             return (phase != "after", "delta not clean")
 
         s = self.session(health_gate=gate)
-        report = s.apply(profile(p4(offset_mv=-30)))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(report.stop_kind, StopKind.TRIPPED)
         self.assertTrue(report.tripped)
         self.assertEqual(len(report.steps), 1)  # stopped right after the first step, which itself succeeded
@@ -542,9 +552,9 @@ class GuardRefusals(Case):
     def test_a_guard_that_is_already_tripped_refuses_everything(self) -> None:
         s = self.session()
         s.sim.silent_ignore(0x11)
-        s.apply(profile(p4(offset_mv=-30)))
+        s.apply(profile(p4(offset_mv=-30, ratio=55)))
         n = len(s.sim.requests)
-        again = s.apply(profile(p4(offset_mv=-30)))
+        again = s.apply(profile(p4(offset_mv=-30, ratio=55)))
         self.assertEqual(again.stop_kind, StopKind.TRIPPED)
         self.assertIn("TRIPPED", again.stopped_reason)
         self.assertEqual(len(s.sim.requests), n)
@@ -553,7 +563,7 @@ class GuardRefusals(Case):
         # the executor's policy copy says 60, the guard was built with 3: the guard is authoritative and refuses the 4th request
         guard_policy = policy_with(max_ops=3, dwell=0.0)
         s = self.session(policy=guard_policy)
-        report = s.apply(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=60, dwell=0.0))
+        report = s.apply(profile(p4(offset_mv=-30, ratio=55)), policy=policy_with(max_ops=60, dwell=0.0))
         self.assertEqual(report.stop_kind, StopKind.REFUSED)
         self.assertIn("SESSION_LIMIT", report.stopped_reason)
         self.assertEqual([cmd for _, cmd, _ in s.requests()], [0x14, 0x10, 0x1C])  # 3 operations (reads: no read-back)
@@ -562,7 +572,7 @@ class GuardRefusals(Case):
 class Report(Case):
     def test_format_report_of_a_clean_run(self) -> None:
         s = self.session()
-        text = s.apply(profile(p4(offset_mv=-30))).format_report()
+        text = s.apply(profile(p4(offset_mv=-30, ratio=55))).format_report()
         for needle in (
             "Result: OK", "0x14", "0x10", "0x1C", "0x09", "0x26", "0x15", "0x11", "0x1D", "0x27", "rc 0 (Pass)", "read-back equal",
             "Revert plan", "NOT executed", "0x00054437", "favored ratio 55, fused ratio 55", "fused point ratio 55",
@@ -577,7 +587,7 @@ class Report(Case):
 
     def test_format_report_of_a_stopped_run(self) -> None:
         s = self.session(config=sim_config(oc_locked=True))
-        text = s.apply(profile(p4(offset_mv=-30))).format_report()
+        text = s.apply(profile(p4(offset_mv=-30, ratio=55))).format_report()
         self.assertIn("STOPPED (rc)", text)
         self.assertIn("OCLocked", text)
         self.assertIn("Stopped:", text)

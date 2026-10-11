@@ -69,6 +69,7 @@ from arltuner.profiles import PLATFORM, Profile
 from arltuner.topology import Topology
 
 from .model import (
+    OFFSET_ONLY_WRITES,
     OK_VERDICT,
     PERCORE_ENABLE_BIT,
     READS_PER_CPU,
@@ -221,9 +222,10 @@ def _reads_of(target: Target) -> int:
 
 
 def _max_writes_of(target: Target) -> int:
-    """Writes of one target, worst case: 0x11, 0x1D, 0x27, and a second 0x11 when ratio and V target could move the same way (both set)."""
+    """Writes of one target, worst case: 0x11, and (G-122: only when the profile sets an OC ratio) 0x1D, 0x27; a second 0x11 when ratio and V target could move
+    the same way (both set)."""
     both = target.ratio is not None and target.oc_voltage_mv is not None
-    return WRITES_PER_CPU + (SPLIT_EXTRA_WRITES if both else 0)
+    return (WRITES_PER_CPU if target.ratio is not None else OFFSET_ONLY_WRITES) + (SPLIT_EXTRA_WRITES if both else 0)
 
 
 def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0) -> int:
@@ -241,7 +243,7 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
     G-117: with no targets, no points and ``msr_writes > 0`` (a turbo-table-only plan) nothing touches the mailbox: no ``0x14`` read, no ``0x15`` write; the
     count is the plain-MSR writes alone.
 
-    ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves."""
+    ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves. G-122: a target that sets no OC ratio writes the 0x11 alone (no 0x1D / 0x27)."""
     if isinstance(msr_writes, int) and not isinstance(msr_writes, bool) and msr_writes > 0 and n_points == 0 and not isinstance(targets, int):
         try:
             if not tuple(targets):
@@ -254,7 +256,7 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
         if targets < 1:
             raise ValueError(f"n_targets must be an int >= 1, got {targets!r}")
         reads = 1 + READS_PER_CPU * targets
-        writes = WRITES_PER_CPU * targets
+        writes = OFFSET_ONLY_WRITES * targets  # G-122: plain targets set no OC ratio: one 0x11 each
     else:
         try:
             listed = tuple(targets)
@@ -461,15 +463,34 @@ def plan_warnings(
     return tuple(warnings)
 
 
-def xtu_word(base: VfWord, favored_word: int, fused_word: int) -> VfWord:
+def fill_ratio(base_ratio: int, favored_word: int, kind: str | None = None) -> int:
+    """The ratio of a core's current OC word: the baseline's non-zero ratio, else ``0x1C[7:0]``; with a ``kind`` (G-122) that fill is capped at the top fused
+    ratio of the kind (P 57, E 46), so a zero baseline never creates an OC point -- E's ``0x1C[7:0]`` is 48 (E turbo), above its top fused point 46, and an OC
+    ratio above it adds a point (``P2 = 7``, ``[MEASURED lnx 2026-10-11]``). A non-zero baseline ratio is an existing word and is left alone."""
+    if base_ratio:
+        return base_ratio
+    favored = favored_word & 0xFF
+    return favored if kind is None or not favored else min(favored, top_fused_ratio(kind))
+
+
+def xtu_word(base: VfWord, favored_word: int, fused_word: int, kind: str | None = None) -> VfWord:
     """The word XTU writes for a core before any change ``[MEASURED win 2026-10-01]``: the baseline word with ratio = its non-zero ratio,
     else ``0x1C[7:0]``, and V target = its non-zero V target, else the fused ``0x09`` voltage ``[19:8]``; mode and offset are the baseline's.
     (A baseline of ``0x0`` therefore becomes ``ratio | fused V << 8``, e.g. CPU 1: ``0x00053837``.) This is also the *current state* the
     step limits are measured from. D-016: a V target the core already carries is kept -- it is no longer reset to the fused voltage, which
-    would silently undo an earlier step of a ramp (``[MEASURED]`` XTU only ever met baselines without a V target)."""
-    ratio = base.ratio or (favored_word & 0xFF)
+    would silently undo an earlier step of a ramp (``[MEASURED]`` XTU only ever met baselines without a V target).
+    G-122: with a ``kind`` the filled ratio is capped at the top fused ratio of the kind (``fill_ratio``): a whole-curve offset on E must not write
+    ratio 48 and create an OC point."""
+    ratio = fill_ratio(base.ratio, favored_word, kind)
     v_target = base.v_target_raw or ((fused_word >> 8) & 0xFFF)
     return base.with_(ratio=ratio, v_target_raw=v_target)
+
+
+def current_word(readings: CoreReadings, kind: str, sets_oc: bool = False) -> VfWord:
+    """The current OC word of a core (``xtu_word``) for the planner. G-122: ``fill_ratio`` caps a zero baseline's ratio at the top fused ratio of the kind (E 46, not
+    ``0x1C[7:0]`` = 48), so an offset-only write never creates an OC point ([MEASURED lnx 2026-10-11]: ``P2 = 7`` appears); the guard's ratio-step rule (``vf_bounded``)
+    measures that cold word from the same cap. A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point and keeps the XTU fill."""
+    return xtu_word(readings.vf, readings.favored, readings.fused, None if sets_oc else kind)
 
 
 def has_oc_point(kind: str, ratio: int) -> bool:
@@ -778,7 +799,7 @@ def build_plan(
         )
     for t in targets:
         readings = baseline[t.cpu]
-        current = xtu_word(readings.vf, readings.favored, readings.fused)
+        current = current_word(readings, t.kind, t.ratio is not None or t.oc_voltage_mv is not None)
         currents[t.cpu] = current
         goal = _goal_word(t, current)
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
@@ -819,6 +840,8 @@ def build_plan(
                 )
             )
             sent = word.to_u32()
+        if t.ratio is None:
+            continue  # G-122: an offset / V-target-only write sends no 0x1D (favored ratio) and no 0x27 (granular): its ratio field is the current one, not a ratio the user set -- 0x1D = 46 would likely cap E turbo at 46
         ctx = build_context(policy, t.cpu, vf_word_sent=goal.to_u32(), **facts)
         purpose = f"apply: write favored-core word (0x1D) of {t.label} = ratio {goal.ratio} of the 0x11 word"
         req = Request(t.cpu, int(Cmd.FAVORED_CORE_WRITE), 0, 0, goal.ratio, purpose)

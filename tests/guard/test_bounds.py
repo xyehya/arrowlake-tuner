@@ -342,6 +342,25 @@ class Fundamentals(BoundsCase):
         self.assertFalse(ok)
         self.assertIn("v_target_raw 0", why)
 
+    def test_a_cold_word_at_or_below_the_top_fused_ratio_is_no_ratio_step(self) -> None:
+        """G-122: baseline ratio field 0 (a cold E word; 0x1C[7:0] = 48) written at 46 (target 0, no OC point) is "no ratio change" under max_ratio_step 1; the reference is
+        capped at the top fused ratio only for such a word. A warm baseline, an OC ratio and a real ratio change keep the step rule."""
+        from arltuner.guard.policy import _check_vf_bounded
+
+        def check(base: int, data: int, top: int | None = 46, favored: int = 0x2E30):
+            req = type("R", (), {"p2": 0, "data": data})()
+            return _check_vf_bounded(req, base, {}, CheckContext(offset_floor_raw=-102, favored_word=favored, fused_word=0x4A02E, top_fused_ratio=top))
+
+        self.assertTrue(check(0x0, word(46, 0, -10))[0])  # cold E word: 0 -> 46, reference min(48, 46)
+        self.assertTrue(check(0x0, word(46, E_V, 0))[0])  # the offset-0 word keeps the filled target; still no step
+        ok, why = check(0x0, word(44, 0, -10))
+        self.assertFalse(ok)
+        self.assertIn("ratio step", why)  # a real change (2 below the capped reference) is refused
+        self.assertFalse(check(word(48, E_V), word(46, 0, -10))[0])  # a warm baseline at 48 (an OC point): 48 -> 46 is two bins
+        self.assertTrue(check(0x0, word(46, 0, -10), top=None)[0] is False)  # without the top fused ratio the rule is off (48 -> 46)
+        self.assertTrue(check(0x0, word(55, 0, -10), top=57, favored=0x3737)[0])  # P: 0x1C[7:0] = 55 <= top, unchanged
+        self.assertFalse(check(0x0, word(57, 0, -10), top=57, favored=0x3737)[0])  # a raise past 0x1C[7:0] by two bins is refused
+
     def test_refusals_send_nothing_and_leave_no_revert(self) -> None:
         guard = self.open(E8)
         before = list(self.transport.calls)

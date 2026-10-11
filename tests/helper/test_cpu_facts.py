@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from arltuner.controls import XTU_SHAPE_CAVEAT
 from arltuner.curves import CurveStore
 from arltuner.helper.ops_measure import STOCK_VID, MeasureWiring, RunEnv, SimCpufreq, SimMeasureIO, sim_memory
 from arltuner.mailbox import VfWord
@@ -179,7 +180,7 @@ class PlanFactsTests(FactsCase):
         p = self.plan(h, rows(row("EC1", ratio=48, v=1.147)))  # above point 6: nothing clamped, the point sits at its target
         oc = p["after"]["EC1"]["0"]
         self.assertEqual((oc["clamped_by"], round(oc["effective_v"], 3)), (None, 1.147))
-        self.assertFalse(any("OC point" in w for w in texts(p)), p["warnings"])
+        self.assertFalse(any("OC point" in w and w != XTU_SHAPE_CAVEAT for w in texts(p)), p["warnings"])  # G-122: the standing caveat names the OC point
 
     def test_a_whole_curve_offset_warns_about_no_point_it_does_not_change(self) -> None:
         """G-120 fix 2: the plan -10 mV on every P-core clamps nothing it does not touch (no "57x offset +0.0 clamped" on cores that cannot reach 56/57x)."""

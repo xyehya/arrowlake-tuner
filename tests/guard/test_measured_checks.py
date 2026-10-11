@@ -381,6 +381,28 @@ class RevertPlanIsXtuShaped(MeasuredCase):
         self.apply_cpu(guard, CPU0, 0xFE25B439)
         self.assertEqual([r.data for r in guard.revert_plan()], [0x0005B439, 0x39, 3])  # S-04: XTU's revert word 0x0005B439, not 0x39
 
+    def test_a_baseline_without_an_oc_point_is_reverted_to_the_word_the_hardware_keeps(self) -> None:
+        """G-122 (D-035): baseline 0xFEC00039 = ratio 57 (no OC point), offset -10 mV, no target. Filling the target from 0x09 would write 0xFEC5B439, which the
+        hardware drops (read-back trip); the revert is the baseline exactly. An offset-0 baseline keeps the filled target (0x39 -> 0x0005B439)."""
+        core = dict(CPU0, vf=0xFEC00039)
+        guard = self.session(core)
+        self.apply_cpu(guard, core, 0x0005B439)
+        self.assertEqual([r.data for r in guard.revert_plan()], [0xFEC00039, 0x39, 3])
+        guard = self.session(CPU0)
+        self.apply_cpu(guard, CPU0, 0xFEC00039)
+        self.assertEqual([r.data for r in guard.revert_plan()], [0x0005B439, 0x39, 3])
+
+    def test_an_e_baseline_of_zero_is_reverted_without_an_oc_point_unless_the_applied_word_had_one(self) -> None:
+        """G-122: E 0x0 baseline (0x1C[7:0] = 48, top fused 46). A forward word at ratio 46 is undone at ratio 46 (a 48 would create an OC point); a forward word at
+        48 (XTU's shape, an OC point) keeps the XTU fill 48."""
+        e_core = dict(cpu=8, vf=0x0, favored=0x2E30, fused=0x4A02E, granular=0x3)
+        guard = self.session(e_core)
+        self.apply_cpu(guard, e_core, 0xFF60002E)
+        self.assertEqual([r.data for r in guard.revert_plan()][:2], [0x0004A02E, 0x2E])
+        guard = self.session(e_core)
+        self.apply_cpu(guard, e_core, 0xFF64A030)
+        self.assertEqual([r.data for r in guard.revert_plan()][:2], [0x0004A030, 0x30])
+
     def test_the_revert_requests_pass_every_check_in_a_new_session(self) -> None:
         guard = self.session(CPU1)
         self.apply_cpu(guard, CPU1, 0xFF653837)

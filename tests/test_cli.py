@@ -130,7 +130,7 @@ class CliCase(unittest.TestCase):
         self.audit = self.tmp / "audit.jsonl"
         self.lock = self.tmp / "mailbox.lock"
         self.policy_file = self.write("policy.toml", POLICY_TOML)
-        self.profile_file = self.write("p4.toml", profile_text(p4(offset_mv=-30)))
+        self.profile_file = self.write("p4.toml", profile_text(p4(offset_mv=-30, ratio=55)))
         self.sim = SimMsrPort(sim_config())  # the old SIM-ONLY defaults with the unmeasured rule on; measured(): see Measured below
 
     def write(self, name: str, text: str) -> Path:
@@ -472,7 +472,7 @@ class Measured(CliCase):
         return self.run_cli(*argv, sim_factory=None, **kwargs)
 
     def test_plan_for_cpu_1_prints_xtus_word_and_the_step_list(self) -> None:
-        path = self.write("p1.toml", profile_text('kind = "P"\nindex = 1\noffset_mv = -5'))
+        path = self.write("p1.toml", profile_text('kind = "P"\nindex = 1\noffset_mv = -5\nratio = 55'))
         code, out, err = self.run_default_sim("plan", path, "--sim", "--policy", self.policy_file)
         self.assertEqual((code, err), (0, ""), out)
         self.assertIn("Operations required: 11 mailbox WRMSRs = 8 guard operations", out)  # 0x14 reads 0x8 on the measured machine: no 0x15
@@ -484,7 +484,7 @@ class Measured(CliCase):
         self.assertIn("effective -54.88 mV", out)
 
     def test_apply_cpu_0_and_revert_note_on_the_measured_machine(self) -> None:
-        path = self.write("p0.toml", profile_text('kind = "P"\nindex = 0\noffset_mv = -5'))
+        path = self.write("p0.toml", profile_text('kind = "P"\nindex = 0\noffset_mv = -5\nratio = 57'))
         args = ["apply", path, "--sim", "--policy", self.policy_file, "--audit", self.audit, "--lock", self.lock]
         code, out, err = self.run_default_sim(*args, stdin=self.confirmed())
         self.assertEqual((code, err), (0, ""), out)

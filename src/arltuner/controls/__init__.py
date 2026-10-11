@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .executor import apply_profile
 from .model import (
+    OFFSET_ONLY_WRITES,
     READS_PER_CPU,
     REVERT_NOTE,
     SPLIT_EXTRA_WRITES,
@@ -36,6 +37,7 @@ from .planner import (
     TURBO_MSR,
     build_plan,
     count_operations,
+    fill_ratio,
     pack_turbo,
     plan_warnings,
     predict,
@@ -68,6 +70,7 @@ __all__ = [
     "REVERT_NOTE",
     "SPLIT_EXTRA_WRITES",
     "VMAX_EXTRA_READS",
+    "OFFSET_ONLY_WRITES",
     "WRITES_PER_CPU",
     "XTU_SHAPE_CAVEAT",
     "ApplyPlan",
@@ -97,6 +100,7 @@ __all__ = [
     "format_plan",
     "format_preview",
     "format_revert_plan",
+    "fill_ratio",
     "pack_turbo",
     "plan_warnings",
     "predict",
