@@ -118,3 +118,10 @@ for an OC target below the top fused point; `stock` tagging ignores OC words; ac
   /run/user/<uid>`). Memory: `stressapptest -s 30 -M 1024 -W` as `yk`, 30 s, 0 errors, 59 °C, 143 W.
 - CPU integer, all 24 CPUs, 60 s: 0 errors, P0–P7 55× (5494–5499 MHz), E 48× (4801 MHz), max 67 °C, 170 W, MCE 0, health clean.
 - CPU vector-math, P0–P3 capped at 50×, 30 s: all at 50× (4993–5000 MHz), `cap_valid` true, 70 °C, 85 W; caps/EPP restored (5.7 GHz, balance_performance).
+
+### Offset-only OC words (after G-122) [MEASURED lnx 2026-10-12 ~21:00 UTC]
+- P0 whole-curve −10 mV ⇒ wrote/read `0xFEC00039`; additive to the accepted per-point offsets (57× 1.386→1.376 V, 53× 1.166→1.159 V).
+- EC2 whole-curve −10 mV on a cold E word ⇒ only `0x11` sent (audit: no 0x1D/0x27), word `0xFEC0002E` (ratio 46, target 0); 46× 1.1375−25−10 =
+  1.1025 V, 40× 0.9525 V (moves 40× too ⇒ E40 warning correct); 48× still reachable, **no OC point added**.
+- **Target retention without an OC point is not reliable:** offset-0 word `0x0005B439` was kept at 19:5x (that apply also sent 0x1D/0x27 after
+  the 0x11), but at 21:05 (0x11 only) the CPU kept `0x00000039`. Rule adopted: a no-OC-point OC word is always written with V target 0 (G-124).

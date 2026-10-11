@@ -25,5 +25,6 @@
 | G-121 | stress fixes from real run: user-writable temp/cwd, child abort reason in error_lines | lnx | T0 | **merged** 2026-10-11 | G-116 |
 | G-122 | G-120 follow-ups: revert word shape, E whole-curve without OC point, caveat text, durable tuned_this_boot | lnx | T0 | **merged** 2026-10-11 | G-120 |
 | G-123 | UX continuity: last read per boot (tune.last), profiles.get + compare/load, indicator budget, defaults | lnx | T0 | **merged** 2026-10-11 | G-121 |
+| G-124 | no-OC-point OC words always target 0; plan steps = sent ops | lnx | T0 | ready 2026-10-12 | G-122 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
