@@ -23,7 +23,7 @@ from arltuner.topology import TopologyMismatch, arl_s_285k
 
 from arltuner.controls import XTU_SHAPE_CAVEAT
 
-from .controls._support import P4_BASELINE, p4, profile_text, sim_config
+from .controls._support import P4_BASELINE, e_core, p4, profile_text, sim_config
 
 TOKEN = "tok-cli-7"
 ENV_OK = {ENV_FLAG: "1", "USER": "tester"}
@@ -219,7 +219,7 @@ class Plan(CliCase):
 
     def test_predicted_refusal_exits_2(self) -> None:
         for name, entry in {
-            "overvolt": p4(oc_voltage_mv=1400),
+            "overvolt": e_core(0, oc_voltage_mv=1500),  # G-124: a V target only exists on an OC point (E ratio 48 > 46); P4 at 55x has none
             "ratio up": p4(ratio=57),
             "offset -150": p4(offset_mv=-150),
             "offset -51 (P-core runtime floor, D-015)": p4(offset_mv=-51),
@@ -370,7 +370,7 @@ class Apply(CliCase):
         self.nothing_sent()
 
     def test_predicted_refusal_is_reported_before_the_prompt(self) -> None:
-        path = self.write("bad.toml", profile_text(p4(oc_voltage_mv=1400)))
+        path = self.write("bad.toml", profile_text(e_core(0, oc_voltage_mv=1500)))  # G-124: an OC point carries the V target
         args = self.apply_args()
         args[1] = path
         code, out, err = self.run_cli(*args, stdin=self.confirmed())

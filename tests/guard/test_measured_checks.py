@@ -373,24 +373,24 @@ class RevertPlanIsXtuShaped(MeasuredCase):
         self.apply_cpu(guard, CPU1, 0xFF653837)
         self.assertEqual(
             guard.revert_plan(),
-            [Request(1, 0x11, 0, 0, 0x00053837, "revert"), Request(1, 0x1D, 0, 0, 0x37, "revert"), Request(1, 0x27, 0, 0, 3, "revert")],
-        )  # S-04d: XTU's own revert for CPU 1 is 0x00053837 / 0x37 / 3; the baseline 0x0 cannot be written back
+            [Request(1, 0x11, 0, 0, 0x00000037, "revert"), Request(1, 0x1D, 0, 0, 0x37, "revert"), Request(1, 0x27, 0, 0, 3, "revert")],
+        )  # S-04d: XTU's own revert for CPU 1 is 0x00053837 / 0x37 / 3; G-124: no OC point = V target 0, so the word is 0x00000037; the baseline 0x0 cannot be written back
 
     def test_cpu0_revert_keeps_its_ratio_override_and_fills_the_v_target(self) -> None:
         guard = self.session(CPU0)
         self.apply_cpu(guard, CPU0, 0xFE25B439)
-        self.assertEqual([r.data for r in guard.revert_plan()], [0x0005B439, 0x39, 3])  # S-04: XTU's revert word 0x0005B439, not 0x39
+        self.assertEqual([r.data for r in guard.revert_plan()], [0x00000039, 0x39, 3])  # S-04 + G-124: XTU's 0x0005B439 without the target it cannot keep
 
     def test_a_baseline_without_an_oc_point_is_reverted_to_the_word_the_hardware_keeps(self) -> None:
         """G-122 (D-035): baseline 0xFEC00039 = ratio 57 (no OC point), offset -10 mV, no target. Filling the target from 0x09 would write 0xFEC5B439, which the
-        hardware drops (read-back trip); the revert is the baseline exactly. An offset-0 baseline keeps the filled target (0x39 -> 0x0005B439)."""
+        hardware drops (read-back trip); the revert is the baseline exactly. G-124: an offset-0 baseline gets no filled target either (0x39 -> 0x00000039)."""
         core = dict(CPU0, vf=0xFEC00039)
         guard = self.session(core)
         self.apply_cpu(guard, core, 0x0005B439)
         self.assertEqual([r.data for r in guard.revert_plan()], [0xFEC00039, 0x39, 3])
         guard = self.session(CPU0)
         self.apply_cpu(guard, CPU0, 0xFEC00039)
-        self.assertEqual([r.data for r in guard.revert_plan()], [0x0005B439, 0x39, 3])
+        self.assertEqual([r.data for r in guard.revert_plan()], [0x00000039, 0x39, 3])
 
     def test_an_e_baseline_of_zero_is_reverted_without_an_oc_point_unless_the_applied_word_had_one(self) -> None:
         """G-122: E 0x0 baseline (0x1C[7:0] = 48, top fused 46). A forward word at ratio 46 is undone at ratio 46 (a 48 would create an OC point); a forward word at
@@ -398,7 +398,7 @@ class RevertPlanIsXtuShaped(MeasuredCase):
         e_core = dict(cpu=8, vf=0x0, favored=0x2E30, fused=0x4A02E, granular=0x3)
         guard = self.session(e_core)
         self.apply_cpu(guard, e_core, 0xFF60002E)
-        self.assertEqual([r.data for r in guard.revert_plan()][:2], [0x0004A02E, 0x2E])
+        self.assertEqual([r.data for r in guard.revert_plan()][:2], [0x0000002E, 0x2E])
         guard = self.session(e_core)
         self.apply_cpu(guard, e_core, 0xFF64A030)
         self.assertEqual([r.data for r in guard.revert_plan()][:2], [0x0004A030, 0x30])
@@ -416,7 +416,7 @@ class RevertPlanIsXtuShaped(MeasuredCase):
         self.read_all(second, CPU1)
         for req in plan:
             self.assertIs(second.execute(req, self.confirm).verified, True, req)
-        self.assertEqual(self.transport.state[(1, 0x10, 0, 0)], 0x00053837)
+        self.assertEqual(self.transport.state[(1, 0x10, 0, 0)], 0x00000037)
 
     def test_cpus_are_grouped_newest_first_with_their_0x11_before_their_0x1d_and_the_0x15_last(self) -> None:
         self.transport.state[(1, 0x14, 0, 0)] = 0x1
@@ -431,7 +431,7 @@ class RevertPlanIsXtuShaped(MeasuredCase):
         self.apply_cpu(guard, CPU8, 0xFF64A030)
         plan = guard.revert_plan()
         self.assertEqual([(r.cpu, r.cmd) for r in plan], [(8, 0x11), (8, 0x1D), (8, 0x27), (1, 0x11), (1, 0x1D), (1, 0x27), (1, 0x15)])
-        self.assertEqual([r.data for r in plan], [0x0004A030, 0x30, 3, 0x00053837, 0x37, 3, 0x1])
+        self.assertEqual([r.data for r in plan], [0x0004A030, 0x30, 3, 0x00000037, 0x37, 3, 0x1])
 
     def test_the_plan_is_pure(self) -> None:
         guard = self.session(CPU1)

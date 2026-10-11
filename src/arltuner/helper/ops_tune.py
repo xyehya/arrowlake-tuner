@@ -66,7 +66,7 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.controls.planner import kept_word
-from arltuner.guard.policy import turbo_bytes
+from arltuner.guard.policy import top_fused_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
 from arltuner.platform import default_platform
@@ -1184,8 +1184,14 @@ def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Seque
         if setting.offset_mv is not None:
             changes["offset_raw"] = VfWord.mv_to_offset_raw(setting.offset_mv)
         goal = (cur or VfWord(0, 0, False, 0)).with_(**changes)
+        kind = _kind_of(unit)
         if goal.ratio:
-            goal = kept_word(_kind_of(unit), goal)  # G-120: no OC point (ratio <= the top fused ratio) + an offset = the hardware keeps no V target
+            goal = kept_word(kind, goal)  # G-124: no OC point (ratio <= the top fused ratio) = the hardware keeps no V target, whatever the offset
+        elif goal.v_target_raw:
+            # a cold word (ratio field 0): the planner fills the ratio from 0x1C[7:0] when the plan sets an OC voltage (P 55/57 <= 57: no OC point; E 48 > 46: an OC
+            # point) and caps it at the top fused ratio otherwise -- decide the target on that filled ratio, show the field as read (0 = unset)
+            fill = top_fused_ratio(kind) + (1 if kind == "E" and setting.oc_voltage_mv is not None else 0)
+            goal = kept_word(kind, goal.with_(ratio=fill)).with_(ratio=0)
         before.setdefault(unit, {})["0"] = None if cur is None else show(cur)
         after.setdefault(unit, {})["0"] = show(goal)
     for setting in profile.expand_points(topology):
@@ -1446,7 +1452,9 @@ def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[st
         steps.append({"kind": StepKind.WRITE_VF_POINT.value, "unit": unit_of_cpu(topology, p.cpu), "cpu": p.cpu, "point": p.point, "offset_mv": p.offset_mv})
     for t in targets:
         u = unit_of_cpu(topology, t.cpu)
-        for kind in (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR):
+        # G-124 (as G-122 in the planner): a target that sets no OC ratio sends the 0x11 alone -- no 0x1D (favored) and no 0x27 (granular)
+        kinds = (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) if t.ratio is not None else (StepKind.WRITE_VF,)
+        for kind in kinds:
             steps.append({"kind": kind.value, "unit": u, "cpu": t.cpu, "point": 0})
     if profile.turbo is not None:
         for key in ("e", "p"):

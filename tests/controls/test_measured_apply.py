@@ -73,7 +73,7 @@ class Cpu0(MeasuredCase):
         self.assertNotIn(0x15, [cmd for _, cmd, _ in s.requests()])  # 0x14 bit 3 is set: XTU skips the 0x15, so do we
         self.assertEqual(s.sim.vf(0).to_u32(), 0xFF600039)
         self.assertEqual((s.sim.favored_word(0), s.sim.granular_word(0)), (0x3939, 3))
-        self.assertEqual(report.zero_baseline_cpus, (0,))  # its baseline 0x39 carries no V target
+        self.assertEqual(report.zero_baseline_cpus, ())  # G-124: its baseline 0x39 (57x, no V target) is the word the hardware keeps without an OC point: restorable
         self.assertTrue(all(r.verified for r in report.steps if r.step.kind.is_write))
 
     def test_minus_15_mv_is_xtus_word(self) -> None:
@@ -89,19 +89,19 @@ class Cpu0(MeasuredCase):
         s.sim.clear_log()
         report = s.apply(profile(p_core(0, 0)))
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(self.writes(s), [(0, 0x11, 0x0005B439), (0, 0x1D, 0x39), (0, 0x27, 0x3)])  # S-05
-        self.assertEqual(s.sim.vf(0).to_u32(), 0x0005B439)  # NOT the original 0x39: XTU cannot restore it, a reboot does
+        self.assertEqual(self.writes(s), [(0, 0x11, 0x00000039), (0, 0x1D, 0x39), (0, 0x27, 0x3)])  # S-05 shape; G-124: XTU's 0x0005B439 minus the target the hardware drops
+        self.assertEqual(s.sim.vf(0).to_u32(), 0x00000039)  # G-124: the cold-boot word itself (target 0)
 
     def test_the_revert_plan_of_the_report_is_xtus_revert_and_runs_in_a_new_session(self) -> None:
         s = self.session()
         report = s.apply(profile(p_core(0, -15)))
-        self.assertEqual([(r.cmd, r.data) for r in report.revert_plan], [(0x11, 0x0005B439), (0x1D, 0x39), (0x27, 3)])
+        self.assertEqual([(r.cmd, r.data) for r in report.revert_plan], [(0x11, 0x00000039), (0x1D, 0x39), (0x27, 3)])
         text = report.format_report()
         self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", text)
-        self.assertIn("CPU(s) 0 read a baseline 0x10 word with a zero ratio or V target: only a reboot restores it.", text)
-        self.assertIn("0x0005b439", text)
+        self.assertNotIn("only a reboot restores it", text)  # G-124: the revert word 0x39 equals the cold baseline
+        self.assertIn("0x00000039", text)
         self.run_revert_plan(s, report, [0])
-        self.assertEqual(s.sim.vf(0).to_u32(), 0x0005B439)
+        self.assertEqual(s.sim.vf(0).to_u32(), 0x00000039)
 
 
 class RevertWords(MeasuredCase):
@@ -111,7 +111,7 @@ class RevertWords(MeasuredCase):
         s = self.session(config=SimConfig.measured(initial_vf={0: VfWord.from_u32(0xFEC00039)}))  # a previous tune left CPU 0 at -10 mV, ratio 57, no target
         report = s.apply(profile(p_core(0, 0)))
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(s.sim.vf(0).to_u32(), 0x0005B439)  # offset 0 keeps the target
+        self.assertEqual(s.sim.vf(0).to_u32(), 0x00000039)  # G-124: offset 0 keeps no target either
         self.assertEqual([(r.cmd, r.data) for r in report.revert_plan][0], (0x11, 0xFEC00039))  # not 0xFEC5B439 (the hardware drops that: a read-back trip)
         self.run_revert_plan(s, report, [0])  # every revert request verified (whole-word read-back)
         self.assertEqual(s.sim.vf(0).to_u32(), 0xFEC00039)
@@ -136,7 +136,7 @@ class ECurve(MeasuredCase):
         self.assertEqual(s.sim.favored_word(12), SimMsrPort(SimConfig.measured()).favored_word(12))  # 0x1C[7:0] still 48
         back = s.apply(profile(e_core(4, offset_mv=0)))
         self.assertTrue(back.ok, back.format_report())
-        self.assertEqual({s.sim.vf(c).to_u32() for c in range(12, 16)}, {0x00048C2E})  # offset 0 keeps the target; ratio 46: still no OC point
+        self.assertEqual({s.sim.vf(c).to_u32() for c in range(12, 16)}, {0x0000002E})  # G-124: offset 0 keeps no target either; ratio 46: still no OC point
         self.assertEqual(self.point7_rc(s, 12), 0x11)
 
 
@@ -172,13 +172,13 @@ class Cpu1(MeasuredCase):
         s.sim.clear_log()
         report = s.apply(profile(p_core(1, 0)))
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(self.writes(s), [(1, 0x11, 0x00053837), (1, 0x1D, 0x37), (1, 0x27, 0x3)])
-        self.assertEqual(s.sim.vf(1).to_u32(), 0x00053837)
+        self.assertEqual(self.writes(s), [(1, 0x11, 0x00000037), (1, 0x1D, 0x37), (1, 0x27, 0x3)])  # G-124: XTU's 0x00053837 without the target the hardware drops
+        self.assertEqual(s.sim.vf(1).to_u32(), 0x00000037)
 
     def test_a_plan_that_would_write_the_zero_baseline_back_does_not_exist(self) -> None:
         s = self.session()
         report = s.apply(profile(p_core(1, -5)))
-        self.assertEqual(report.revert_plan[0].data, 0x00053837)  # never the baseline 0x0 (the zero-field sim would answer InvalidParam)
+        self.assertEqual(report.revert_plan[0].data, 0x00000037)  # never the baseline 0x0 (the zero-field sim would answer InvalidParam)
         sim = SimMsrPort(SimConfig.measured(reject_zero_fields=True))
         transport = MailboxTransport(sim, sleep=s.fake.sleep, clock=s.fake.clock)
         self.assertEqual(transport.transact(1, 0x11, 0, 0, 0x0).rc, 0x10)  # the baseline word written back as-is: InvalidParam (SIM-ONLY rule)
@@ -214,7 +214,7 @@ class ECores(MeasuredCase):
                 back = s.apply(profile(*self.ALL_16_REVERT))
                 self.assertTrue(back.ok, back.format_report())
                 for cpu in range(8, 24):
-                    self.assertEqual(s.sim.vf(cpu).to_u32(), 0x0004A02E if cpu < 12 else 0x00048C2E, cpu)  # S-07 shape at ratio 46 (G-122)
+                    self.assertEqual(s.sim.vf(cpu).to_u32(), 0x0000002E, cpu)  # S-07 shape at ratio 46 (G-122); G-124: target 0 at offset 0 too
 
     def test_one_cluster_is_written_as_all_four_cores_never_one(self) -> None:
         s = self.session()
@@ -235,7 +235,9 @@ class RefusalsOnTheMeasuredMachine(MeasuredCase):
 
     def test_overvolt_above_the_fused_point(self) -> None:
         # raw 1536 > fused 0x538 = 1336, the no-raise ceiling of the shipped policy; an OC-point voltage also reads 0x28
-        exc = self.refused(profile('kind = "P"\nindex = 1\noc_voltage_mv = 1500'), reads=[*XTU_READS, 0x28])
+        exc = self.refused(  # G-124: only an OC point carries a V target: P1 sits at 58 (> 57)
+            profile('kind = "P"\nindex = 1\noc_voltage_mv = 1500'), reads=[*XTU_READS, 0x28], config=SimConfig.measured(initial_vf={1: VfWord(58, 0x538, False, 0)})
+        )
         self.assertIn("v_target_raw", exc.refusals[0].detail)
         self.assertIn("no-raise value", exc.refusals[0].detail)
 
