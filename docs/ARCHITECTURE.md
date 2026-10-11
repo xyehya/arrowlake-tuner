@@ -197,3 +197,30 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   0x650/0x651 + 0x1C read). `tune.plan` result gains per unit/point `effective_v` (baseline measured VID + offset, after the F4 clamp) +
   `clamped_by: point|null`, `vccia: {predicted_v, set_by: {unit, ratio}}` (F6), warnings (F4/F8); `REFUSED TURBO_ORDER` (F5). Curve points gain
   `reason` for `unreachable`: `"max_turbo"` | `"cpufreq_granularity"` | `"active_cores"`. A plan's prediction uses the newest `baseline` curve.
+- **Addendum "G-116" (stress / validation; SPEC §9 R7/R10/R11/R27/R28; module `helper/ops_stress.py`, `stress/`):** no mailbox, no MSR write, not write-gated.
+  - **`stress.start {kind: "cpu"|"memory", method?: "integer"|"vector-math"|"cache" (cpu; default "integer"), units?: [unit] (cpu; default all 12), ratio_cap?:
+    int 8..60|null, duration_s: 30..3600 (required), memory_mb?: 256..(MemAvailable-2048) (memory; default 3/4 of that)}`** (long; state `stressing`) ⇒
+    `{id, kind, started, ended, duration_s, elapsed_s, stopped_by: "time"|"cancel"|"error", errors: int, error_lines: [str ≤ 20, each ≤ 200 printable],
+    achieved: {unit: {mhz_mean, ratio_mode}}, cap_valid: bool|null, max_temp_c, max_pkg_w, mce_new: int, health: "clean"|"delta", record_path}` (`id` and `record_path` are `null` if the store refused the file; the reason is in `error_lines`).
+    `duration_s` is the requested length, `elapsed_s` the actual one. `stopped_by`: `cancel` after `stress.stop` / `cancel` / helper exit; `error` for any
+    error count, a non-zero exit of the tool, or a tool the helper had to stop after `duration_s + 20 s`; else `time`. **No "pass" field or wording (D-019):**
+    `errors == 0` and `health == "clean"` is all that is said. `error_lines` = helper notes (prefix `helper:`, `kernel:`) first, then the tool's own error lines.
+    `achieved` = telemetry samples after a 3 s settle, only the units that ran; `mhz_mean` from the sampler's APERF/MPERF reading, `ratio_mode` from
+    `0x198[15:8]`; `null` figures (`max_temp_c`, `max_pkg_w`, empty `achieved`, `cap_valid`) when no telemetry sampler runs (the dashboard keeps one running).
+    `cap_valid`: `null` without a cap or without data; else true iff every unit's `ratio_mode` is within 1 bin of `min(ratio_cap, unit max ratio)`.
+    `health`: `delta` if the health snapshot differs (`health.diff`), `mce_new > 0`, or the kernel log / snapshot could not be read (never called clean unread).
+    `progress` event every 2 s: `{event: "progress", op_id, elapsed_s, of_s, errors}`. Cancel is a result with `stopped_by: "cancel"`, not `CANCELLED`.
+    Errors: `BAD_REQUEST` (args; `memory_mb` out of range ⇒ `detail.check = "MEM_RANGE"`), `BUSY` (any other op running), `REFUSED` with `detail.check` in
+    `NO_INVOKER` (no/unknown/root `PKEXEC_UID`), `TOOL_MISSING`, `TRUST_PATH`, `MEM_RANGE` (too little memory), `NO_CPUFREQ`, `STALE_JOURNAL`, `CAP_WRITE`,
+    `SPAWN`; `INTERNAL` `RESTORE_FAILED` if cpufreq could not be put back (journal kept; the result is stored first).
+  - **`stress.stop {}`** ⇒ `{cancelled: bool, state, op_id?}` (cancels only a running `stress.start`; otherwise `cancelled: false`). **`stress.list {}`** ⇒
+    `{results: [summary row]}` newest first, at most 50: `{id, kind, started, ended, duration_s, elapsed_s, stopped_by, errors, cap_valid, health, mce_new,
+    max_temp_c, max_pkg_w, method, units, ratio_cap, memory_mb}`. Stored `/var/lib/arltuner/stress/<id>.json` (id = curve id shape), root 0700 / 0600, contract 8
+    file rules, at most 200 kept (oldest deleted); the file is the result plus `method, units, ratio_cap, memory_mb, command, returncode`.
+  - **Child:** `/usr/bin/stress-ng` (cpu: `--cpu N --taskset LIST --cpu-method int64|matrixprod --verify --metrics-brief --timeout Ts`; `cache`: `--cache N` and no
+    method) or `/usr/bin/stressapptest` (`-s T -M MB -W`; memory runs on all CPUs, `ratio_cap` applies to all); `realpath` trust-checked before every spawn; run **as
+    the invoking user** by `Popen(user=uid, group=gid, extra_groups=[], start_new_session=True)` (setgroups/setgid/setuid in the child in C, no `preexec_fn`:
+    unsafe in a threaded process); `cwd=/`, env `PATH=/usr/sbin:/usr/bin LC_ALL=C` only, stdin null, stdout+stderr piped and parsed; killed (group TERM, then KILL; only while the leader is alive and unreaped, `poll() is None` right before each `killpg`, so a reused pgid is never signalled) on
+    stop, helper exit and timeout. **Ratio cap** = the measure journal (`/run/arltuner/measure-journal.json`): `scaling_max_freq = cap×100000` and EPP `performance`
+    on the selected CPUs, journaled first, restored in every path; a stale journal is applied before a capped start (`STALE_JOURNAL` if it cannot be) and by the
+    helper at its start. Server `OPS`: `stress.start` (long), `stress.stop`, `stress.list`. `--sim`: simulated children and telemetry, 12× faster than real time.

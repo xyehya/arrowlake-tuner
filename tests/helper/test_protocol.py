@@ -139,7 +139,7 @@ class WireTests(HelperCase):
 
     def test_unknown_op_and_the_g2_g3_ops_are_unknown_op(self) -> None:
         h = self.start()
-        for i, op in enumerate(["nope", "plan", "apply", "restore", "freq.cap", "freq.restore", "stress.start", "stress.stop", "Preflight", "vf.dump "]):
+        for i, op in enumerate(["nope", "plan", "apply", "restore", "freq.cap", "freq.restore", "Preflight", "vf.dump "]):
             with self.subTest(op=op):
                 self.assertEqual(error_code(h.call(f"u{i}", op)), "UNKNOWN_OP")
 

@@ -716,4 +716,7 @@ def builtin_ops() -> dict[str, OpSpec]:
     from .ops_tune import tune_ops  # G-112: vf.dump (now remembering the words in force), tune.*, profiles.*; imported here because ops_tune imports this module
 
     specs.extend(tune_ops())
+    from .ops_stress import stress_ops  # G-116: stress.start / stress.stop / stress.list; imported here because ops_stress imports this module
+
+    specs.extend(stress_ops())
     return {s.name: s for s in specs}
