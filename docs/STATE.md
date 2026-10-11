@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-11 · lnx · G1 read-only exit MET 2026-10-11 (install self-check 17/17; GUI + pkexec helper live). vf.dump pending its go. Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-11 · lnx · G1 read-only exit MET; G-109 (telemetry gaps) + G-110 (dashboard redesign) merged, reinstalled, verified live. vf.dump pending its go. Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -51,6 +51,10 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
    own go) to fill Applied-vs-accepted. UX nits for G2: header says "Mode: write / Writes allowed: yes" on a read-only page; temp sensors show
    raw coretemp ids (Core 0..44), not P/E names; Chrome automation can't open the file:// launcher (own-origin POST /bootstrap works).
    **No restore has run since the 2026-10-11 09:42 UTC boot** (audit last 10-10): next restore = first run on the D-030 paths; stop the GUI first. `vf.dump` (mailbox, ~124 ops) is a separate go-ahead. Restore after the install uses the new paths.
+   **G-109 + G-110 verified live [MEASURED lnx 2026-10-11]** after reinstall: Vcore 0.848 V idle (nct6686 VIN16), DRAM 1.7/0.6 GB/s (root
+   `/usr/bin/perf` child of the helper, trust-checked), 25 temps named P-/E-Core; new tabbed dark UI (Overview core map, Cores, Sensors, V/F,
+   System, Audit), all tabs render real data. Nits: small-range charts autoscale (1 °C looks like a cliff: add minimum spans); dark theme only.
+   Chrome extension disconnected mid-session: screenshots via headless Chrome + CDP; login = own-origin POST /bootstrap.
 2. Orchestrator rule: workers and reviewers run `model: sonnet`, `effort: high` (operator 2026-10-08).
 3. W: first Windows restore from this repo (check the rename end to end).
 
