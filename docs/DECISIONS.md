@@ -137,3 +137,7 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   (installs, sudo, read and write sittings, merges). Unchanged: workers never touch hardware; guard, one transaction at a time, health bracket,
   smallest step first, honest reporting; stop on a traceback, health delta, MCE/WHEA. Operator sequencing: reads + UI to standard first, then writes
   (OC point → adaptive voltage → offsets).
+- **D-035 · 2026-10-11 · Guard: zero V target allowed on an OC word without an OC point.** `_check_vf_bounded` refused every P2=0 word with
+  V target 0 ("XTU never sends one") — an orchestrator choice, not a hardware fact. Measured 2026-10-11: with no OC point (OC ratio ≤ top fused
+  ratio) the hardware drops a written target (`0xFEC5B439` → `0xFEC00039`), so the only verifiable whole-curve offset word there has target 0.
+  Allowed only when ratio ≤ the kind's top fused ratio (P 57 / E 46) and all other bounds hold; a zero target above it (OC point) stays refused.

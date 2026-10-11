@@ -99,3 +99,16 @@ mismatch 0.775 0.963 1.137 (0.775 V = E-cluster VID floor up to 30×). Open: 57�
 - cpufreq caps cannot pin P 42/47/52× nor E 13/18/21/23/26/29× (land on neighbours) → `cpufreq_granularity`. P3 57× missed (active cores),
   P7 55× mismatch: background noise, retry pass (G-118) addresses it.
 - 64 KiB line budget: the result omitted EC3 with `record.omitted_units = ["EC3"]`; `curves.get {units}` returned it.
+
+## First write sittings from the v3 Tune path [MEASURED lnx 2026-10-11 ~19:30–20:10 UTC, D-034; no MCE/hardware-error lines throughout]
+| Test | Words (read-back) | Measured VID effect |
+|---|---|---|
+| EC1 OC point: ratio 48 (> fused top 46), adaptive 1.1367 V | `0x00048C30` on CPUs 12–15 (match) | 48× = 1.1375 (unchanged, neutral). **Table gains `P2 = 7` = 48× ("OC point 7")** — SkatterBencher's point 7 confirmed on E |
+| EC1 OC adaptive +10 mV (1.147 V) | `0x00049730` | 48× **1.1475**, 47× **1.1425** (interpolated), 46× 1.1375 |
+| EC1 OC adaptive 1.117 V (< point 6) | `0x00047830` | 48× = 47× = **1.1375**: clamped up to point 6 (F4 holds for the OC point) |
+| P0 whole-curve −10 mV (P2 = 0 word `[31:21]`) | wrote `0xFEC5B439`, **read `0xFEC00039`** (V target dropped: P0's OC ratio 57 = top fused, no OC point) | every point −10 mV (8× 0.688→0.678 … 57× 1.429→1.419): **P2 = 0 offset = whole-curve offset** (was [UNVERIFIED]) |
+| P0 whole-curve back to 0 (`0x0005B439`) | read-back `0x0005B439` (target kept with offset 0) | — |
+| P7 point 6 (55×) −19.5 mV | `0xFD800037` (match) | 55× 1.376→**1.359**; 54× **1.3137** = midpoint of 53/55 (pred. 1.315) |
+| Restore accepted (profiles/CURRENT, 172 ops, 57 read-back rows) | all match | accepted_match true on 10/12; CPU 0 = `0x5B439` vs accepted `0x39` (XTU-shaped, same V), CPU 12 = EC1 OC point (cannot write 0; clears on reboot) |
+Planner issues found (G-120): write offset-only OC words when no OC point exists; spurious CLAMPED on untouched 57× points; no CLAMPED warning
+for an OC target below the top fused point; `stock` tagging ignores OC words; accepted compare should treat `0x5B439`≡`0x39`-class XTU words.
