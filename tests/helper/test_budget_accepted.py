@@ -292,6 +292,32 @@ class AcceptedMatchTests(HelperCase):
         assert result is not None
         self.assertEqual(result[0]["diffs"], [{"point": 0, "expected": "0x00000039", "actual": "0x00000000"}])
 
+    def test_an_xtu_shaped_oc_word_equals_the_bare_ratio_word(self) -> None:
+        """G-120 fix 5 [MEASURED lnx 2026-10-11]: CPU 0 read 0x5B439 (57x, the fused 0x09 voltage, offset 0) where the accepted state has the cold-boot 0x39."""
+        def doc(oc: int) -> dict[str, Any]:
+            return {"units": [{"cpus": [{"cpu": 0, "oc": {"word": f"{oc:#010x}"}, "points": [{"word": "0x00000008"}], "end": "x"}]}]}
+
+        self.write("0 39 8\n")
+        result, note = accepted_match(self.helper(), doc(0x5B439))
+        self.assertIsNone(note)
+        self.assertEqual(
+            result, [{"cpu": 0, "match": True, "diffs": [], "equivalent": True, "equivalents": [{"point": 0, "expected": "0x00000039", "actual": "0x0005b439"}]}]
+        )
+        self.write("0 5B439 8\n")  # the other direction is as equivalent
+        result, _ = accepted_match(self.helper(), doc(0x39))
+        assert result is not None
+        self.assertEqual((result[0]["match"], result[0]["equivalent"]), (True, True))
+        for label, actual in (("a runtime offset", 0xFEC5B439), ("another voltage", 0x5B539), ("another ratio", 0x5B438), ("the dropped-target word", 0xFEC00039)):
+            with self.subTest(label):
+                self.write("0 39 8\n")
+                result, _ = accepted_match(self.helper(), doc(actual))
+                assert result is not None
+                self.assertFalse(result[0]["match"])
+                self.assertNotIn("equivalent", result[0])
+        self.write("0 39 8\n")  # an identical word is a plain match, not an equivalence
+        result, _ = accepted_match(self.helper(), doc(0x39))
+        self.assertEqual(result, [{"cpu": 0, "match": True, "diffs": []}])
+
     def test_absent_is_null_with_a_note(self) -> None:
         result, note = accepted_match(self.helper(), sample_document())
         self.assertIsNone(result)

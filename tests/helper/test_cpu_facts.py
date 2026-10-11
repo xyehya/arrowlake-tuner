@@ -166,6 +166,36 @@ class PlanFactsTests(FactsCase):
         self.assertEqual((view["6"]["clamped_by"], view["7"]["clamped_by"], view["8"]["clamped_by"]), (5, 5, 5))
         self.assertTrue(any("P2 point 6 (55x)" in w and "point 5" in w for w in texts(p)), p["warnings"])
 
+    def test_an_oc_target_below_the_top_fused_point_is_clamped_and_predicted_at_that_point(self) -> None:
+        """G-120 fixes 2 + 3 [MEASURED lnx 2026-10-11]: EC1 48x with 1.117 V < point 6 (1.137 V) read back 48x = 47x = point 6; 1.147 V gave 1.1475 V."""
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("EC1", ratio=48, v=1.117)))
+        oc = p["after"]["EC1"]["0"]
+        self.assertEqual((oc["ratio"], oc["clamped_by"]), (48, 6))
+        self.assertAlmostEqual(oc["effective_v"], 1.137, places=4)  # max(target, V(point 6)), not the 1.117 asked
+        self.assertTrue(any("EC1 OC point (48x)" in w and "held up" in w for w in texts(p)), p["warnings"])
+        self.assertIn("CLAMPED", [w["code"] for w in p["warnings"]])
+        p = self.plan(h, rows(row("EC1", ratio=48, v=1.147)))  # above point 6: nothing clamped, the point sits at its target
+        oc = p["after"]["EC1"]["0"]
+        self.assertEqual((oc["clamped_by"], round(oc["effective_v"], 3)), (None, 1.147))
+        self.assertFalse(any("OC point" in w for w in texts(p)), p["warnings"])
+
+    def test_a_whole_curve_offset_warns_about_no_point_it_does_not_change(self) -> None:
+        """G-120 fix 2: the plan -10 mV on every P-core clamps nothing it does not touch (no "57x offset +0.0 clamped" on cores that cannot reach 56/57x)."""
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P0", curve=-10), row("P1", curve=-10), row("P2", curve=-10), row("P4", curve=-10)))
+        self.assertEqual([w for w in texts(p) if "clamped" in w], [], p["warnings"])
+        self.assertNotIn("CLAMPED", [w["code"] for w in p["warnings"]])
+
+    def test_a_whole_curve_offset_on_a_core_without_an_oc_point_predicts_the_word_the_hardware_keeps(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P0", curve=-10)))
+        oc = p["after"]["P0"]["0"]
+        self.assertEqual((oc["ratio"], oc["v_target_v"], round(oc["offset_mv"], 1)), (57, None, -9.8))  # 57x = the top fused ratio: ratio | offset << 21, no target
+
     def test_effective_v_adds_the_offset_to_the_measured_stock_vid(self) -> None:
         h = self.boot_with()
         self.read(h)

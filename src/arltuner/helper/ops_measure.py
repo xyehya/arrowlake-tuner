@@ -28,6 +28,7 @@ from typing import Any
 from arltuner import vfdump
 from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
 from arltuner.curves.record import QUICK_RATIOS, RECORD_BUDGET
+from arltuner.msr.measured_baseline import VF_DOMAIN0
 from arltuner.platform import default_platform
 from arltuner.mailbox.vf import VfWord
 from arltuner.vfmodel import complete_baseline, effective_curve, voltage_at
@@ -704,17 +705,25 @@ def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequ
     return point
 
 
+#: G-120 fix 4: the cold-boot OC words (``0x10 P1=0 P2=0``): P0 = ``0x39`` (OC ratio 57 = the top fused ratio, no OC point), every other core ``0x0``
+#: ``[MEASURED win 2026-10-01]`` (S-03d) and ``[MEASURED lnx 2026-10-11]`` (first tune.read of the boot; the platform file's fused point of P0 is 57x).
+_COLD_OC_WORD = dict(VF_DOMAIN0)
+
+
 def _tuning_state(helper: Any) -> dict[str, Any]:
     """From the words G-112's ``tune.read`` / ``vf.dump`` read this helper session (``helper.last_words``: cpu -> list of u32 words), else ``unknown``. ``kind`` is
-    ``stock`` (G-118, contract 9) when the words cover the first CPU of all 12 units (a complete read) and **every** word (OC word included) has offset 0, else ``words``.
-    The words travel with ``words`` only."""
+    ``stock`` (G-118, contract 9) when the words cover the first CPU of all 12 units (a complete read), **every** OC word is the cold-boot one (P0 ``0x39``, all others
+    ``0x0``) and every word has offset 0 (G-120: an OC ratio or voltage raised in the OC word is not stock), and no ``tune.apply`` wrote anything this boot
+    (``helper.tuned_this_boot``: a restored state is not proven stock), else ``words``. The words travel with ``words`` only."""
     words = getattr(helper, "last_words", None)
     if not isinstance(words, dict) or not words:
         return {"kind": "unknown"}
     state: dict[str, Any] = {"kind": "words", "words": {str(cpu): [f"0x{int(w) & 0xFFFFFFFF:08x}" for w in ws] for cpu, ws in sorted(words.items())}}
     try:
         complete = all(words.get(unit_cpus(u)[0]) for u in UNITS)
-        if complete and all(VfWord.from_u32(int(w) & 0xFFFFFFFF).offset_raw == 0 for ws in words.values() for w in ws):
+        cold = all(int(ws[0]) & 0xFFFFFFFF == _COLD_OC_WORD.get(int(cpu)) for cpu, ws in words.items() if ws)
+        zero_offsets = all(VfWord.from_u32(int(w) & 0xFFFFFFFF).offset_raw == 0 for ws in words.values() for w in ws)
+        if complete and cold and zero_offsets and not getattr(helper, "tuned_this_boot", False):
             state = {"kind": "stock"}  # contract 9: ``words`` only accompany kind "words"
     except (TypeError, ValueError):
         pass

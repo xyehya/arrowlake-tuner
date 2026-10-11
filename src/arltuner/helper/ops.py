@@ -33,7 +33,9 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.guard.audit import parse_audit_ts
+from arltuner.mailbox import VfWord
 from arltuner.msr import MailboxTransport
+from arltuner.platform import default_platform
 from arltuner.platform.preflight import PreflightReport, Status
 from arltuner.topology import TopologyError, UnknownCore
 
@@ -472,6 +474,22 @@ def _hex(word: int | None) -> str | None:
     return None if word is None else f"{word:#010x}"
 
 
+def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> bool:
+    """G-120: the OC word (P2 = 0) of a core with no OC point reads either the bare-ratio word (cold boot: ``0x39``) or the XTU shape of it (``0x5B439``: the same
+    ratio, adaptive, offset 0 and the V target of the fused ``0x09`` point) ``[MEASURED lnx 2026-10-11]``; both mean the same state, so they are equivalent."""
+    if expected is None or actual is None or expected == actual:
+        return False
+    fused_word = default_platform().fused_point.get(cpu)
+    if fused_word is None:
+        return False
+    fused_raw = (fused_word >> 8) & 0xFFF
+    bare, shaped = sorted((VfWord.from_u32(expected), VfWord.from_u32(actual)), key=lambda w: w.v_target_raw)
+    return (
+        bare.v_target_raw == 0 and shaped.v_target_raw == fused_raw and fused_raw != 0 and bare.ratio == shaped.ratio != 0
+        and bare.offset_raw == shaped.offset_raw == 0 and not bare.static and not shaped.static
+    )
+
+
 def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
     """Compare the dump ``document`` (``vfdump.to_json``) with the accepted EXPECTED words: ``(per_core, None)`` or ``(None, note)``.
     ``per_core`` has one ``{cpu, match, diffs: [{point, expected, actual}]}`` for each dumped CPU that has an expected line (``point`` 0 is the OC
@@ -491,16 +509,22 @@ def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[
                 got: list[int | None] = [None if oc is None else int(oc["word"], 16)]
                 got += [int(p["word"], 16) for p in cpu.get("points", [])]
                 diffs = []
+                equivalents = []
                 differing = 0
                 for point in range(max(len(want), len(got))):
                     expected = want[point] if point < len(want) else None
                     actual = got[point] if point < len(got) else None
-                    if expected != actual:
+                    if point == 0 and _equivalent_oc_words(cpu["cpu"], expected, actual):
+                        equivalents.append({"point": 0, "expected": _hex(expected), "actual": _hex(actual)})
+                    elif expected != actual:
                         differing += 1
                         if len(diffs) < MAX_DIFFS_PER_CPU and shown < MAX_DIFFS_TOTAL:
                             diffs.append({"point": point, "expected": _hex(expected), "actual": _hex(actual)})
                             shown += 1
                 entry: dict[str, Any] = {"cpu": cpu["cpu"], "match": not differing, "diffs": diffs}
+                if equivalents:
+                    entry["equivalent"] = True
+                    entry["equivalents"] = equivalents
                 if differing > len(diffs):
                     entry["truncated"] = True  # more differences than listed; the response must stay under the 64 KiB line
                 out.append(entry)
