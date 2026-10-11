@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-11 · lnx · G1 met; G-109/G-110 live. **v3 pivot (SPEC-v3, D-032 advanced limits, D-033 Measure→Store→Tune):** G-111/G-112/G-113 in flight._ Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-11 · lnx · G1 met; G-109/G-110 live. **v3 (SPEC-v3, D-032, D-033) merged + installed (`--reseed-config`, advanced policy live)**; stock-baseline curve measured; first write awaits go._ Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -45,12 +45,12 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. **v3 (SPEC-v3, contract 9):** G-111 measure/curves/mem.read/telemetry restart · G-112 D-032 policy + tune.*/profiles.* · G-113 web v3 —
-   Sonnet 5.5 high, parallel worktrees. Merge G-112 → G-111 → G-113 (OPS/builtin_ops registration lines conflict trivially), then
-   `sudo bash install.sh --reseed-config` (advanced policy), Quick **stock-baseline** curve on the machine (cpufreq caps only, authorized by
-   the operator's brief), then ask the operator's go for the **first mailbox write from the new Tune page**.
-2. Operator ran the first GUI `vf.dump` 2026-10-11 16:57 UTC (112 ops, words = ratios, all offsets 0: stock, no restore since boot).
-3. W: first Windows restore from this repo. Orchestrator rule: workers `sonnet`/`high`.
+1. **v3 live [MEASURED lnx 2026-10-11]:** G-111/G-112/G-113 merged (suite 2021 OK), reinstalled with the advanced policy; `mem.read` live
+   (DDR5-7200 G2 2T 36-44-44-96, 6/6 instances); Quick `vf.measure` 88 points in ~2 min, caps/EPP restored, baseline curve
+   `20261011T181718Z-y4c7` (table: knowledge/tuning-results.md). **First mailbox write from Tune needs the operator's go.**
+2. G-114 fixes: mem 0x13D98 cross-check off by ×2 (1800 vs 3600); 57× never settles on P0/P3, E 23× never settles; review dialog asks
+   to type the nonce (D-033 said one click) — operator to choose.
+3. W: first Windows restore from this repo. Restore scripts still use their checkout policy (session-2026-10-02). Workers `sonnet`/`high`.
 
 ## How we work
 Operator at the machine; orchestrator answers guard tokens only after a go-ahead. One variable at a time; acceptance gate = 60-min OCCT Linpack 2021
