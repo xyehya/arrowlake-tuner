@@ -70,6 +70,21 @@ class TestStatic(unittest.TestCase):
         self.assertIn("ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)", JS)
         self.assertIn("47\\u201348\\u00d7 run on point 6 (turbo table); an E OC ratio adds an OC point", JS)
 
+    def test_a_read_oc_point_is_the_oc_point_never_an_extra_fused_column(self):
+        """G-125: a read point flagged oc_point (EC1 P2 = 7 = 48x) stays out of the fused point set the grid and the predictions are built from."""
+        self.assertIn("p.oc_point !== true", body_of("curPts"))
+        self.assertIn("oc_point: p.oc_point === true", JS)
+        self.assertIn("if (p.point > fusedN) p.oc_point = true", JS)   # an older read without the flag: judged by the point number (P 9, E 7)
+        self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)
+
+    def test_the_before_after_table_names_the_unit_on_every_row(self):
+        body = body_of("renderPlanBody")
+        self.assertIn('td(d.unit, "plan-unit")', body)
+        self.assertNotIn('i === 0 ? d.unit : ""', body)
+
+    def test_the_assumed_words_line_follows_the_helper_flag_only(self):
+        self.assertIn("res.words_assumed === true", body_of("renderPlanBody"))
+
     def test_reach_comes_from_the_read_never_from_a_hardcoded_core_list(self):
         body = body_of("reachOf")
         self.assertIn("turbo.favored", body)
@@ -107,6 +122,35 @@ class TestStatic(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and sync_playwright and CHROME, "set ARLTUNER_BROWSER_TESTS=1 (needs playwright + chrome)")
 class TestBrowser(unittest.TestCase):
+    def test_a_read_oc_point_renders_as_the_oc_point_only(self):
+        """G-125: EC1 reads P2 = 7 = 48x flagged oc_point: Tune shows six fused points plus "Point 7 · OC", never a seventh "fused · offset only" column."""
+        from tests.web import v3_harness as h
+
+        srv, fake, stop = h.start(seed=True)
+        fake.oc_point_units = {"EC1"}
+        self.addCleanup(fake.close)
+        self.addCleanup(srv.close)
+        self.addCleanup(stop.set)
+        with sync_playwright() as p:
+            b = p.chromium.launch(executable_path=CHROME, headless=True, args=["--no-sandbox"])
+            try:
+                page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
+                h.login(page, srv)
+                page.goto(srv.origin + "/")
+                page.wait_for_selector("#conn-helper.s-ok", timeout=10000)
+                page.click("#tab-tune")
+                page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
+                page.click("#btn-tune-read")
+                page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
+                page.click("#tn-scope button:has-text('Per unit')")
+                page.locator(".tn-rowwrap").nth(9).locator(".seg button:has-text('Per point')").click()
+                pts = page.locator("#tn-pts-EC1 .tn-pt")
+                self.assertEqual(pts.count(), 7)   # 6 fused + the OC box
+                self.assertEqual(page.locator("#tn-pts-EC1 .tn-pt-tag:has-text('fused')").count(), 6)
+                self.assertIn("Point 7 · OC", page.locator("#tn-pts-EC1 .tn-oc").inner_text())
+            finally:
+                b.close()
+
     def test_facts_on_tune_and_curves(self):
         from tests.web import v3_harness as h
 

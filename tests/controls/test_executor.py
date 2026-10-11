@@ -580,7 +580,7 @@ class Report(Case):
         ):
             self.assertIn(needle, text)
         self.assertIn(XTU_SHAPE_CAVEAT, text)
-        self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", text)  # the revert note, always
+        self.assertIn("a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio", text)  # the revert note, always
         self.assertIn(REVERT_NOTE, text)
         self.assertNotIn("not modelled", text)  # the T-014 ratio caveat is gone
         self.assertTrue(text.isascii())

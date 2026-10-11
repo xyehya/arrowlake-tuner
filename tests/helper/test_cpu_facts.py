@@ -372,3 +372,16 @@ class TurboOrderTests(FactsCase):
         self.apply_ok(h, p)
         self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])
         self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in p["warnings"]))
+
+
+class WordsAssumedTests(FactsCase):
+    def test_words_assumed_only_when_a_written_cpu_has_no_word_from_this_boot(self) -> None:
+        """G-125: words that came from the read (``tune.last``) are not "assumed"; a plan on an unread CPU is."""
+        h = self.boot_with()
+        p = self.plan(h, rows(row("P0", curve=-10)))
+        self.assertTrue(p["words_assumed"])  # nothing read yet: the OC word of P0 is assumed
+        self.read(h)
+        p = self.plan(h, rows(row("P0", curve=-10), row("EC1", curve=-10)))
+        self.assertFalse(p["words_assumed"])
+        p = self.plan(h, rows(row("P3", curve=-10)))
+        self.assertFalse(p["words_assumed"])

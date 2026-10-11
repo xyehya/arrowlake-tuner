@@ -2314,7 +2314,8 @@
 
   function TN_CURVE_WANT() { return T.curveId; }
   function wUnit(u) { return T.words ? T.words.units[u] || null : null; }
-  function curPts(u) { const w = wUnit(u); return w ? w.points.filter((p) => isNum(p.ratio) && isNum(p.offset_mv)) : []; }
+  // The fused points only: a read point flagged oc_point (P2 above the fused count, e.g. EC1 P2 = 7 = 48x after an OC ratio 48) is the OC point, never an extra fused point (G-125).
+  function curPts(u) { const w = wUnit(u); return w ? w.points.filter((p) => p.oc_point !== true && isNum(p.ratio) && isNum(p.offset_mv)) : []; }
 
   // ---- effective (draft over words) and current values --------------------------------------------------------------------------------
   function effPointMv(u, p) {
@@ -2977,7 +2978,8 @@
   function normPoint(p, idx) {
     if (!isObj(p)) return null;
     return { point: isNum(p.point) ? p.point : idx, ratio: isNum(p.ratio) ? p.ratio : null, offset_mv: isNum(p.offset_mv) ? p.offset_mv : null,
-      v_target_v: isNum(p.v_target_v) ? p.v_target_v : null, word: typeof p.word === "string" ? p.word : null, mode: typeof p.mode === "string" ? p.mode : null };
+      v_target_v: isNum(p.v_target_v) ? p.v_target_v : null, word: typeof p.word === "string" ? p.word : null, mode: typeof p.mode === "string" ? p.mode : null,
+      oc_point: p.oc_point === true };
   }
 
   // tune.read (G-112): units[].id, `tune` = {unit: {cpus: [{cpu, points: [{point 0 = OC word, 1..n, ratio, offset_mv, v_target_v, mode}]}]}} (the decoded
@@ -3005,6 +3007,8 @@
           if (isObj(src) && typeof src.word === "string") p.word = src.word;
         }
       }
+      const fusedN = id.charAt(0) === "P" ? 8 : 6;   // F1: P points 1..8 are fused (OC = 9), E 1..6 (OC = 7); an older read without the flag is judged by the point number
+      for (const p of pts) if (p.point > fusedN) p.oc_point = true;
       units[id] = { id: id, cpu: cpu, oc: pts.find((p) => p.point === 0) || null, points: pts.filter((p) => p.point !== 0) };
     }
     const tables = isObj(r.tables) && Array.isArray(r.tables.p) && Array.isArray(r.tables.e) ? { p: r.tables.p.filter(isNum), e: r.tables.e.filter(isNum) } : null;
@@ -3078,7 +3082,7 @@
       if (!u) continue;
       const one = (p) => {
         if (T.hex) return (isNum(p.ratio) ? p.ratio + "x " : "") + (typeof p.word === "string" ? p.word : "no raw word");
-        return (isNum(p.ratio) ? p.ratio + "x " : "") + fmtMv(p.offset_mv, 1) + (p.point === 0 ? (isNum(p.v_target_v) ? " @ " + p.v_target_v.toFixed(3) + " V" : ", target not set") : "");
+        return (p.oc_point === true ? "OC point " : "") + (isNum(p.ratio) ? p.ratio + "x " : "") + fmtMv(p.offset_mv, 1) + (p.point === 0 ? (isNum(p.v_target_v) ? " @ " + p.v_target_v.toFixed(3) + " V" : ", target not set") : "");
       };
       const row = el("tr");
       const oc = u.oc;
@@ -3297,11 +3301,12 @@
     const tb = el("tbody");
     for (const d of P.diff) {
       if (!d.changes && !T.showUnchanged) continue;
-      d.rows.forEach((r, i) => {
+      d.rows.forEach((r) => {
         if (!r.changed && !T.showUnchanged) return;
         const tr = el("tr", r.changed ? "is-changed" : "is-same");
         const x = r.a || r.b;
-        tr.append(td(i === 0 ? d.unit : "", "plan-unit"), td(r.pt === 0 ? "OC point" : "pt " + r.pt),
+        // G-125: the unit id on every row (the first changed row is not always the first row of the unit)
+        tr.append(td(d.unit, "plan-unit"), td(r.pt === 0 ? "OC point" : "pt " + r.pt),
           td(arrow(r.b && r.b.ratio, r.a && r.a.ratio, (v) => (v === null ? "n/a" : v + "×"), r.b && r.b.unread), "n"),
           td(r.pt === 0 && !isNum(x.offset_mv) ? "n/a" : arrow(r.b && r.b.offset_mv, r.a && r.a.offset_mv, (v) => fmtMv(v, v !== null && Math.abs(v - Math.round(v)) < 0.05 ? 0 : 1), r.b && r.b.unread), "n"),
           td(r.pt === 0 ? arrow(r.b && r.b.v_target_v, r.a && r.a.v_target_v, (v) => (v === null ? "n/a" : v.toFixed(3) + " V"), r.b && r.b.unread) : "", "n"));

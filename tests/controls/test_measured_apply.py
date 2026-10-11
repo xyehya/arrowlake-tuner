@@ -97,7 +97,7 @@ class Cpu0(MeasuredCase):
         report = s.apply(profile(p_core(0, -15)))
         self.assertEqual([(r.cmd, r.data) for r in report.revert_plan], [(0x11, 0x00000039), (0x1D, 0x39), (0x27, 3)])
         text = report.format_report()
-        self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", text)
+        self.assertIn("a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio", text)
         self.assertNotIn("only a reboot restores it", text)  # G-124: the revert word 0x39 equals the cold baseline
         self.assertIn("0x00000039", text)
         self.run_revert_plan(s, report, [0])

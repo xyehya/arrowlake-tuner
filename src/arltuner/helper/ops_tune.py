@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Any
 
 from arltuner import vfmodel
 from arltuner.controls import (
-    RAISE_CAVEAT,
     REVERT_NOTE,
     ApplyPlan,
     NeedsBootBudget,
@@ -65,7 +64,7 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
-from arltuner.controls.planner import kept_word
+from arltuner.controls.planner import POINT_CAVEAT, kept_word
 from arltuner.guard.policy import top_fused_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
@@ -1511,6 +1510,25 @@ def _check_turbo_order(profile: Profile) -> None:
             )
 
 
+# G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
+_RAISE_NOTE = (
+    "this plan RAISES a ratio, V target or offset: OC ratio 48 and an adaptive target above the fused curve were accepted and read back on this machine "
+    "[MEASURED lnx 2026-10-11]; the numbers come from the reviewed policy (D-016); take a stability check between steps"
+)
+_POINT_NOTE = (
+    "per-point offsets change one V/F point (0x11 with P2 = the point) and read back as written [MEASURED lnx 2026-10-11]; the hardware keeps V(n) >= V(n-1) "
+    "[MEASURED lnx 2026-10-11, F4]: arltuner models it (CLAMPED warnings) but cannot read the lower fused voltages"
+)
+
+
+def _words_assumed(last: Mapping[int, Sequence[int]] | None, topology: Topology, targets: Sequence[Any], points: Sequence[Any]) -> bool:
+    """G-125: the plan assumed words only when a unit it writes has no CPU in ``last`` (an E cluster is read on one CPU, the others share its words)."""
+    cpus_by_unit: dict[str, list[int]] = {}
+    for item in (*targets, *points):
+        cpus_by_unit.setdefault(unit_of_cpu(topology, item.cpu), []).append(item.cpu)
+    return any(not any(c in (last or {}) for c in unit_cpus(topology, unit)) for unit in cpus_by_unit)
+
+
 def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     intent = args["intent"]
     topology = _topology(helper)
@@ -1532,10 +1550,10 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last)
     steps, writes, reads = _predicted_steps(profile, topology)
-    warnings = list(plan_warnings(targets, policy, points))
+    warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
     if any(t.ratio is not None or t.oc_voltage_mv is not None for t in targets):
-        warnings.append(RAISE_CAVEAT)
+        warnings.append(_RAISE_NOTE)
     for unit, items in after.items():
         for point, now in items.items():
             was = (before.get(unit) or {}).get(point)
@@ -1566,7 +1584,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "predicted": prediction["predicted"],  # G-114 (additive): {unit: {point: {ratio, base_v, offset_mv, effective_v, clamped_by}}} for every point of the touched units
         "vccia": prediction["vccia"],  # contract 9 addendum (F6): {predicted_v, set_by: {unit, ratio}} + label / contributors / before_v / light_load, null without a baseline
         "warnings": warning_objects(warnings),  # [{code, text}]: CLAMPED E40_OFFSET E_TARGET_WHEA POSITIVE_OFFSET NO_BASELINE TURBO_RAISE, everything else NOTE
-        "words_assumed": bool(resolved.refs),
+        "words_assumed": _words_assumed(last, topology, targets, points),  # G-125: true only when a written unit has no word from this boot's read (tune.last)
     }
     while len(json.dumps(result, separators=(",", ":"))) > MAX_LINE - _RESPONSE_SLACK and result["steps"]:
         del result["steps"][len(result["steps"]) // 2 :]
