@@ -98,7 +98,7 @@ class InstallLayout(InstallCase):
         for rel, (mode, _) in snapshot(self.dest).items():
             self.assertFalse(mode & 0o022, f"{rel} is group/world-writable ({mode:04o})")
             if (self.dest / rel).is_dir():
-                self.assertEqual(mode, 0o755, rel)
+                self.assertEqual(mode, 0o700 if rel == "var/lib/arltuner/curves" else 0o755, rel)  # G-111: the curve store is root-only
 
     def test_code_is_precompiled_so_pycache_is_part_of_the_installed_tree(self) -> None:
         for rel in PY_FILES:
@@ -477,7 +477,7 @@ class LegacySeed(InstallCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("larger than 64 MiB", r.stderr)
         self.assertFalse((self.dest / "var/lib/arltuner/audit.jsonl").exists())
-        self.assertEqual([p.name for p in (self.dest / "var/lib/arltuner").iterdir()], [], "no staging file left behind")
+        self.assertEqual([p.name for p in (self.dest / "var/lib/arltuner").iterdir()], ["curves"], "no staging file left behind (the curve directory is made before the audit log)")
 
     def test_a_legacy_log_of_exactly_64_mib_is_accepted(self) -> None:
         with open(self.legacy, "wb") as fh:

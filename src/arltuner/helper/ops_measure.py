@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from arltuner import vfdump
-from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, new_curve_id, summary, unit_cpus, unit_kind, validate_name
+from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
 from arltuner.curves.record import QUICK_RATIOS
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only
@@ -318,6 +318,7 @@ class MeasureWiring:
     settle_s: float = SETTLE_S
     samples: int = SAMPLES
     interval_s: float = SAMPLE_INTERVAL_S
+    prepare: Callable[[], None] = lambda: None  # called before a run writes anything: --sim creates its scratch state directory here, lazily (a killed sim helper leaves nothing)
 
 
 def sim_memory() -> dict[str, Any]:
@@ -341,7 +342,6 @@ def sim_memory() -> dict[str, Any]:
 def sim_wiring(state_dir: Path | str, *, time_scale: float = SIM_TIME_SCALE) -> MeasureWiring:
     """``--sim``: the model, an in-memory cpufreq, the store and the journal under ``state_dir`` (never ``/var/lib``)."""
     state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
     cpufreq = SimCpufreq()
     io = SimMeasureIO(cpufreq, cpufreq.model)
     return MeasureWiring(
@@ -351,6 +351,7 @@ def sim_wiring(state_dir: Path | str, *, time_scale: float = SIM_TIME_SCALE) -> 
         journal_path=state / "measure-journal.json",
         mem_fn=sim_memory,
         kernel_fn=lambda: "sim",
+        prepare=lambda: state.mkdir(mode=0o700, parents=True, exist_ok=True),
     )
 
 
@@ -558,6 +559,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
     mode, units, name = args["mode"], args["units"], args["name"]
     cancel = ctx.cancel
     try:
+        w.prepare()
         run = w.make_run()
     except Exception as exc:
         raise OpError(REFUSED, f"the measurement cannot start: {type(exc).__name__}: {exc}", {"check": "MEASURE_UNAVAILABLE"}) from None
@@ -695,8 +697,8 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
 # =============================================================================================================================================
 def _id_arg(args: dict[str, Any]) -> str:
     curve_id = args.get("id")
-    if not isinstance(curve_id, str) or len(curve_id) > 64:
-        raise OpError(BAD_REQUEST, "'id' must be a curve id string")
+    if not is_curve_id(curve_id):
+        raise OpError(BAD_REQUEST, "'id' must be a curve id (YYYYMMDDTHHMMSSZ-xxxx)")
     return curve_id
 
 

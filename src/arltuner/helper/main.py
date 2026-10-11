@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
+import shutil
 import sys
 import tempfile
 import tomllib
@@ -233,7 +235,7 @@ def measure_wiring(args: argparse.Namespace, *, lstat_fn: Callable[[str], Any] =
 
     if args.sim:
         state_dir = getattr(args, "state_dir", None)
-        return ops_measure.sim_wiring(Path(state_dir) if state_dir else tempfile.mkdtemp(prefix="arltuner-sim-"))
+        return ops_measure.sim_wiring(Path(state_dir) if state_dir else Path(tempfile.gettempdir()) / f"arltuner-sim-{os.getpid()}-{secrets.token_hex(4)}")  # created lazily, 0700
     return ops_measure.device_wiring(lstat_fn=lstat_fn)
 
 
@@ -296,8 +298,13 @@ def main(
         return EXIT_USAGE if str(exc) else 0
     helper = Helper(cfg)
     helper.measure_wiring = measure_wiring(args, lstat_fn=lstat_fn)
+    scratch = helper.measure_wiring.journal_path.parent if args.sim and not getattr(args, "state_dir", None) else None  # our own mkdtemp: removed on exit
     helper.install_signal_handlers()
-    return helper.run(inp, out)
+    try:
+        return helper.run(inp, out)
+    finally:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def process_main() -> None:

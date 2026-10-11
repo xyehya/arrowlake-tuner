@@ -239,6 +239,7 @@ fi
 # --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$STATE"
+install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/curves"  # G-111: measured V/F curves (root-only, kept across upgrades); the helper refuses anything looser
 
 as_user() {  # run a command as the invoking user (root only reads the legacy log THROUGH that user's permissions)
     if [ "$(id -u)" -eq 0 ]; then runuser -u "$INVOKER" -- "$@"; else "$@"; fi
