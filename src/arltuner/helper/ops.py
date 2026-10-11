@@ -475,19 +475,23 @@ def _hex(word: int | None) -> str | None:
 
 
 def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> bool:
-    """G-120: the OC word (P2 = 0) of a core with no OC point reads either the bare-ratio word (cold boot: ``0x39``) or the XTU shape of it (``0x5B439``: the same
-    ratio, adaptive, offset 0 and the V target of the fused ``0x09`` point) ``[MEASURED lnx 2026-10-11]``; both mean the same state, so they are equivalent."""
+    """G-120/G-124: an OC word (P2 = 0) of a core with **no OC point** is *neutral* when it is 0 (cold E word) or carries offset 0, adaptive mode, a
+    ratio at or below the top fused ratio and a V target of 0 or the fused ``0x09`` voltage (cold P0 ``0x39``, XTU shape ``0x5B439``, E after an
+    offset-0 write ``0x2E``) ``[MEASURED lnx 2026-10-11/12]``. Two neutral words mean the same state (no OC point, no whole-curve offset)."""
     if expected is None or actual is None or expected == actual:
         return False
     fused_word = default_platform().fused_point.get(cpu)
     if fused_word is None:
         return False
-    fused_raw = (fused_word >> 8) & 0xFFF
-    bare, shaped = sorted((VfWord.from_u32(expected), VfWord.from_u32(actual)), key=lambda w: w.v_target_raw)
-    return (
-        bare.v_target_raw == 0 and shaped.v_target_raw == fused_raw and fused_raw != 0 and bare.ratio == shaped.ratio != 0
-        and bare.offset_raw == shaped.offset_raw == 0 and not bare.static and not shaped.static
-    )
+    fused_raw, top_ratio = (fused_word >> 8) & 0xFFF, fused_word & 0xFF
+
+    def neutral(word: int) -> bool:
+        if word == 0:
+            return True
+        w = VfWord.from_u32(word)
+        return not w.static and w.offset_raw == 0 and 0 < w.ratio <= top_ratio and w.v_target_raw in (0, fused_raw)
+
+    return fused_raw != 0 and top_ratio != 0 and neutral(expected) and neutral(actual)
 
 
 def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
