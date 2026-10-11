@@ -1,0 +1,274 @@
+"""G-114: SPEC-v3 section 9 (CPU facts) through the helper: sim tables (F1/F2), tune.read ``fused`` / ``turbo`` (F5/F7), tune.plan ``effective_v`` /
+``clamped_by`` / ``vccia`` / warnings (F4/F6/F8) and ``REFUSED TURBO_ORDER`` (F5). Simulator and the real advanced policy file only; no hardware.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from arltuner.curves import CurveStore
+from arltuner.helper.ops_measure import STOCK_VID, MeasureWiring, RunEnv, SimCpufreq, SimMeasureIO, sim_memory
+from arltuner.mailbox import VfWord
+from arltuner.msr import SimConfig, SimMsrPort
+
+from ._support import Harness
+from .test_tune import ADVANCED, TuneCase, error_code, row, rows, texts
+
+P_TABLE = [8, 20, 30, 48, 53, 55, 56, 57]
+E_TABLE = [8, 15, 23, 30, 40, 46]
+FUSED = {  # platform-285k.md section 4 [MEASURED win 2026-10-01 / lnx 2026-10-02]: cpu -> (word, V)
+    0: (0x5B439, 1.4258), 1: (0x53839, 1.3047), 2: (0x57439, 1.3633), 3: (0x59439, 1.3945), 4: (0x54439, 1.3164), 5: (0x56C39, 1.3555), 6: (0x56039, 1.3438),
+    7: (0x58039, 1.3750), 8: (0x4A02E, 1.1563), 12: (0x48C2E, 1.1367), 16: (0x48C2E, 1.1367), 20: (0x48C2E, 1.1367),
+}
+STOCK = SimConfig.measured(per_point=True, reject_zero_fields=True, point_offsets={})  # runtime offsets 0, as the baseline curve was measured
+
+
+def baseline_record(created: str = "20261011T181718Z-y4c7") -> dict[str, Any]:
+    """A stock baseline as vf.measure stores it: ok points from the measured table, 56/57x of the non-favored P-cores and E 23x absent (unreachable)."""
+    units = {}
+    for unit, table in STOCK_VID.items():
+        cpus = [int(unit[1:])] if unit.startswith("P") else list(range(8 + 4 * int(unit[2:]), 12 + 4 * int(unit[2:])))
+        points = [{"ratio": r, "mhz": r * 100, "vid_v": v, "vid_min": v, "vid_max": v, "kept": 10, "total": 10, "status": "ok"} for r, v in table.items()]
+        units[unit] = {"cpus": cpus, "points": points}
+    return {"id": created, "name": "Stock", "created": "2026-10-11T18:17:18Z", "boot_id": None, "mode": "quick", "complete": True, "kernel": "sim",
+            "tuning_state": {"kind": "unknown"}, "temps": {"min_c": 28, "max_c": 80}, "units": units, "baseline": True}
+
+
+class FactsCase(TuneCase):
+    def boot_with(self, config: SimConfig | None = None, baseline: bool = True, **overrides: Any) -> Harness:
+        h = self.boot(config or STOCK, **overrides)
+        if baseline:
+            store = CurveStore(self.tmp / "curves")
+            store.save(baseline_record())
+            cf = SimCpufreq()
+            io = SimMeasureIO(cf, cf.model)
+            h.helper.measure_wiring = MeasureWiring(cpufreq=cf, make_run=lambda: RunEnv(io, io.read_perf), store=store, journal_path=self.tmp / "j.json", mem_fn=sim_memory)
+        return h
+
+
+class SimTableTests(FactsCase):
+    def test_every_p_core_has_the_same_eight_points_and_every_e_cluster_the_same_six(self) -> None:
+        """F1 [MEASURED lnx 2026-10-02]: the tables are fixed per domain; the simulator no longer invents a per-core table."""
+        self.boot(STOCK)
+        for cpu in range(8):
+            self.assertEqual([self.sim.vf(cpu, 0, p).ratio for p in range(1, 9)], P_TABLE, cpu)
+        for cpu in (8, 12, 16, 20):
+            self.assertEqual([self.sim.vf(cpu, 0, p).ratio for p in range(1, 7)], E_TABLE, cpu)
+
+    def test_oc_word_fused_words_and_favored_words_are_the_measured_ones(self) -> None:
+        """F2: P0's OC word is 0x39 (BIOS favored 57x), the others 0; 0x09 and 0x1C as in platform-285k.md section 4."""
+        self.boot(STOCK)
+        self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)
+        self.assertEqual({self.sim.vf(c, 0, 0).to_u32() for c in range(1, 24)}, {0})
+        for cpu, (word, _) in FUSED.items():
+            self.assertEqual(self.sim.fused_word(cpu), word, cpu)
+        self.assertEqual([self.sim.favored_word(c) for c in range(8)], [0x3939, 0x3737, 0x3737, 0x3939, 0x3737, 0x3737, 0x3737, 0x3737])
+        self.assertEqual(self.sim.favored_word(8), 0x2E30)
+
+    def test_the_turbo_registers_are_the_measured_ones(self) -> None:
+        self.boot(STOCK)
+        self.assertEqual(self.sim.rdmsr(0, 0x1AD), 0x3737373737373939)
+        self.assertEqual(self.sim.rdmsr(0, 0x1AE), 0x0807060504030201)
+        self.assertEqual(self.sim.rdmsr(0, 0x650), 0x3030303030303030)
+        self.assertEqual(self.sim.rdmsr(0, 0x651), 0x100C080604030201)
+
+
+class ReadFactsTests(FactsCase):
+    def test_tune_read_returns_fused_and_turbo_and_labels_the_points(self) -> None:
+        h = self.boot_with(baseline=False)
+        res = self.read(h)
+        self.assertEqual(sorted(res["fused"], key=int), [str(c) for c in sorted(FUSED)])
+        for cpu, (word, volts) in FUSED.items():
+            f = res["fused"][str(cpu)]
+            self.assertEqual((f["word"], f["ratio"], f["v"]), (f"0x{word:08x}", word & 0xFF, volts), cpu)
+        self.assertEqual(res["fused"]["0"]["ratio"], 57)
+        self.assertEqual(res["fused"]["8"]["ratio"], 46)
+        t = res["turbo"]
+        self.assertEqual(t["P"], {"ratios": [57, 57, 55, 55, 55, 55, 55, 55], "counts": [1, 2, 3, 4, 5, 6, 7, 8]})
+        self.assertEqual(t["E"], {"ratios": [48] * 8, "counts": [1, 2, 3, 4, 6, 8, 12, 16]})
+        self.assertEqual(t["favored"], {str(c): (57 if c in (0, 3) else 55) for c in range(8)})
+        self.assertEqual(res["tables"], {"e": [48] * 8, "p": [57, 57, 55, 55, 55, 55, 55, 55]})  # G-112 shape kept
+        labels = [p["point_label"] for p in res["tune"]["P0"]["cpus"][0]["points"]]
+        self.assertEqual(labels, ["OC (point 9)"] + [f"point {n}" for n in range(1, 9)])
+        self.assertEqual(res["tune"]["EC0"]["cpus"][0]["points"][0]["point_label"], "OC (point 7)")
+        self.assertEqual(res["tune"]["EC0"]["cpus"][0]["points"][6]["point_label"], "point 6")
+
+    def test_the_extra_reads_are_20_mailbox_reads_and_4_rdmsr_and_never_a_write(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h, cpus=[0])  # the dump of CPU 0 (10 reads: OC word, 8 points, the rc 0x11) plus the extras of the same call
+        cmds = [r.cmd for r in self.sim.requests]
+        self.assertEqual((cmds.count(0x09), cmds.count(0x1C), cmds.count(0x10)), (12, 8, 10))
+        self.assertEqual(len(self.sim.writes), len(self.sim.requests))  # every mailbox read is exactly one WRMSR 0x150, nothing else
+        self.assertTrue(all(msr == 0x150 for _, msr, _ in self.sim.writes))
+        self.assertTrue(all(r.cmd in (0x09, 0x1C, 0x10) for r in self.sim.requests))
+
+    def test_an_old_policy_without_bucket_count_reads_keeps_the_ratio_tables(self) -> None:
+        text = ADVANCED.read_text()
+        for name in ("msr_0x1ae_read", "msr_0x651_read"):  # a policy seeded before 2026-10-11 has no allow entry for the bucket counts
+            start = text.index(f'name = "{name}"')
+            start = text.rindex("[[msr_allow]]", 0, start)
+            text = text[:start] + text[text.index("[[msr_allow]]", start + 1):]
+        self.policy.write_text(text)
+        h = self.boot_with(baseline=False)
+        res = self.read(h)
+        self.assertEqual(res["tables"]["p"], [57, 57, 55, 55, 55, 55, 55, 55])
+        self.assertIsNone(res["turbo"]["P"]["counts"])
+        self.assertIn("bucket counts not read", res["extras_notes"]["counts"])
+
+    def test_an_oc_ratio_above_the_top_point_reads_as_the_oc_point_not_an_extra_fused_point(self) -> None:
+        cfg = SimConfig.measured(per_point=True, reject_zero_fields=True, point_offsets={}, oc_adds_point=True, initial_vf={0: VfWord(58, 0, False, 0)})
+        h = self.boot_with(cfg, baseline=False)
+        res = self.read(h, cpus=[0])
+        pts = res["tune"]["P0"]["cpus"][0]["points"]
+        self.assertEqual(len(pts), 10)  # OC word + 8 fused + the OC point
+        self.assertEqual((pts[9]["point"], pts[9]["point_label"], pts[9].get("oc_point")), (9, "OC (point 9)", True))
+        self.assertNotIn("oc_point", pts[8])
+        self.assertIn("rc 0x11", res["units"][0]["cpus"][0]["end"])  # the table end is not an error
+        plan = h.call("pp", "tune.plan", {"intent": rows(row("P0", points={"58": -10}))})
+        self.assertEqual(error_code(plan), "BAD_REQUEST")  # no per-point write at the OC point
+
+
+class PlanFactsTests(FactsCase):
+    def test_the_measured_p0_57x_case_is_clamped_up_to_the_56x_voltage(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P0", points={"57": -50})))
+        a = p["after"]["P0"]["8"]
+        self.assertEqual((a["ratio"], a["clamped_by"]), (57, 7))
+        self.assertAlmostEqual(a["effective_v"], 1.386, places=4)  # not 1.4288 - 0.05 = 1.379
+        self.assertEqual(p["before"]["P0"]["8"]["clamped_by"], None)
+        self.assertAlmostEqual(p["before"]["P0"]["8"]["effective_v"], 1.4288, places=4)
+        self.assertTrue(any("P0 point 8 (57x)" in w and "clamped up" in w and "point 7" in w for w in texts(p)), p["warnings"])
+        self.assertIn("CLAMPED", [w["code"] for w in p["warnings"]])
+        view = p["predicted"]["P0"]
+        self.assertEqual(sorted(view, key=int), [str(n) for n in range(1, 9)])  # every point of a touched unit
+        self.assertEqual((view["8"]["clamped_by"], view["7"]["clamped_by"]), (7, None))
+        self.assertAlmostEqual(view["5"]["effective_v"], 1.216, places=4)
+        self.assertNotIn("P1", p["predicted"])
+
+    def test_a_point_that_is_not_written_but_moves_with_the_clamp_is_warned_about(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P2", points={"53": 150})))  # 53x 1.271 -> 1.421 V: the 55x (1.366) and 56x/57x (fused 1.3633) points ride up
+        self.assertEqual(p["after"]["P2"]["5"]["clamped_by"], None)
+        view = p["predicted"]["P2"]
+        self.assertEqual((view["6"]["clamped_by"], view["7"]["clamped_by"], view["8"]["clamped_by"]), (5, 5, 5))
+        self.assertTrue(any("P2 point 6 (55x)" in w and "point 5" in w for w in texts(p)), p["warnings"])
+
+    def test_effective_v_adds_the_offset_to_the_measured_stock_vid(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P4", points={"53": -50, "55": -30})))
+        self.assertAlmostEqual(p["after"]["P4"]["5"]["effective_v"], 1.226 + p["after"]["P4"]["5"]["offset_mv"] / 1000, places=3)  # the offset is rounded to 1/1024 V
+        self.assertAlmostEqual(p["after"]["P4"]["6"]["effective_v"], 1.319 + p["after"]["P4"]["6"]["offset_mv"] / 1000, places=3)
+        self.assertAlmostEqual(p["after"]["P4"]["5"]["effective_v"], 1.176, delta=0.0005)
+        self.assertEqual(p["after"]["P4"]["5"]["clamped_by"], None)
+
+    def test_no_baseline_means_no_predictions_and_one_warning(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, rows(row("P0", points={"57": -50})))
+        self.assertEqual((p["after"]["P0"]["8"]["effective_v"], p["after"]["P0"]["8"]["clamped_by"]), (None, None))
+        self.assertIsNone(p["vccia"])
+        self.assertIsNone(p["predicted"])
+        self.assertEqual([w["code"] for w in p["warnings"] if w["code"] == "NO_BASELINE"], ["NO_BASELINE"])
+        self.assertTrue(texts(p)[[w["code"] for w in p["warnings"]].index("NO_BASELINE")].startswith("measure a stock baseline for predictions"))
+
+    def test_vccia_is_set_by_the_unit_with_the_highest_allowed_vid(self) -> None:
+        """F6: stock, all-core: P7 at 55x (1.376 V) + 0.105 V. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P0", points={"55": -40})))
+        v = p["vccia"]
+        self.assertEqual(v["set_by"], {"unit": "P7", "ratio": 55})
+        self.assertAlmostEqual(v["predicted_v"], 1.481, places=3)
+        self.assertEqual(v["label"], "prediction")
+        self.assertAlmostEqual(v["before_v"], 1.481, places=3)  # P0 does not set VccIA: nothing changes
+        self.assertEqual(v["light_load"]["set_by"], {"unit": "P0", "ratio": 57})  # 1-2 active cores: the favored 57x points count
+        p2 = self.plan(h, rows(row("P7", points={"55": -100})))
+        self.assertEqual(p2["vccia"]["set_by"], {"unit": "P2", "ratio": 55})
+        self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366 + 0.105, places=3)
+        self.assertAlmostEqual(p2["vccia"]["before_v"], 1.481, places=3)
+        self.assertTrue(any("VccIA is a prediction" in w for w in texts(p)))
+        c = p2["vccia"]["contributors"]
+        self.assertEqual(set(c), {"P", "E", "ring"})
+        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]["v"]), ("P2", 55, "EC0", 48, 1.201))
+
+    def test_e_40x_offset_and_e_target_above_1_2_v_are_warned_about(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("EC1", points={"40": -20}), row("EC2", v=1.25)))
+        self.assertTrue(any("EC1" in w and "40x" in w and "never offset E point 5" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w for w in texts(p)), p["warnings"])
+        quiet = self.plan(h, rows(row("EC1", points={"46": -25})))
+        self.assertFalse(any("point 5" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
+
+    def test_positive_offsets_still_warn(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, rows(row("P6", points={"53": 15})))
+        self.assertTrue(any("positive offset" in w and "P6" in w for w in texts(p)), p["warnings"])
+
+
+class TurboOrderTests(FactsCase):
+    def accepted(self, p_table: list[int]) -> Path:
+        acc = self.tmp / "accepted"
+        (acc / "profiles").mkdir(parents=True)
+        (acc / "CURRENT").write_text("policy = policies/x.toml\nprofile = profiles/t.toml\n")
+        (acc / "profiles/t.toml").write_text(f'[meta]\nname = "t"\nplatform = "arl-s-285k"\n[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -50\nexpect_ratio = 53\n[turbo]\np = {p_table}\n')
+        return acc
+
+    def test_a_table_that_rises_with_the_active_core_count_is_refused(self) -> None:
+        h = self.boot_with(baseline=False, accepted_dir=self.accepted([55, 57, 55, 55, 55, 55, 55, 55]))
+        r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
+        self.assertEqual(error_code(r), "REFUSED")
+        d = r["error"]["detail"]
+        self.assertEqual((d["check"], d["table"], d["bucket"]), ("TURBO_ORDER", "P", 1))
+        self.assertIn("not non-increasing", r["error"]["message"])
+        self.assertIn("Nothing was sent", r["error"]["message"])
+
+    def test_a_non_increasing_table_is_planned(self) -> None:
+        h = self.boot_with(baseline=False, accepted_dir=self.accepted([57, 57, 56, 55, 55, 55, 55, 55]))
+        r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
+        self.assertTrue(r["ok"], r)
+
+    def table(self, cpu: int = 0, msr: int = 0x1AD) -> list[int]:
+        return [(self.sim.rdmsr(cpu, msr) >> (8 * k)) & 0xFF for k in range(8)]
+
+    def test_an_intent_turbo_table_that_rises_is_refused_with_turbo_order(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        for intent in ({"turbo": {"E": [48, 48, 49, 48, 48, 48, 48, 48]}}, {**rows(row("P1", curve=-10)), "turbo": {"P": [55, 57, 55, 55, 55, 55, 55, 55]}}):
+            r = h.call(f"t{len(h.messages)}", "tune.plan", {"intent": intent})
+            self.assertEqual(error_code(r), "REFUSED", r)
+            self.assertEqual(r["error"]["detail"]["check"], "TURBO_ORDER")
+        self.assertEqual(r["error"]["detail"]["table"], "P")
+
+    def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
+        h = self.boot_with(baseline=False)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
+
+    def test_a_valid_turbo_only_intent_is_refused_until_the_planner_supports_it(self) -> None:
+        """Gap (reported): controls/planner.py cannot plan a table write without a core / point write beside it."""
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        r = h.call("tonly", "tune.plan", {"intent": {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}}})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "TURBO_ONLY_UNSUPPORTED"))
+
+    def test_a_raise_is_flagged_with_its_code(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {**rows(row("P1", curve=-10)), "turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        self.assertTrue(any(w["code"] == "TURBO_RAISE" and "bucket(s) 3" in w["text"] for w in p["warnings"]), p["warnings"])
+        self.apply_ok(h, p)
+        self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
+        self.assertEqual(self.table(8, 0x650), [48] * 8)  # untouched
+
+    def test_turbo_rides_with_rows(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {**rows(row("P1", curve=-10)), "turbo": {"E": [48, 47, 46, 46, 46, 46, 46, 46]}})
+        self.apply_ok(h, p)
+        self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])
+        self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in p["warnings"]))

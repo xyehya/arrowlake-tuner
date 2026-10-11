@@ -57,7 +57,8 @@ POINT_RATIOS_ARL_S: dict[tuple[str, int], int] = {
 POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15, ("P", 8): -51}
 #: T-026 SIM-ONLY: the point ratios of a NON-favored P-core. Only CPU 0 (favored) was measured; SkatterBencher ``[COMMUNITY]``: 57x is the boost ratio of the
 #: favored P-cores (CPU 0 and 3), the others top out lower and may have another set of points. ``SimConfig.measured()`` uses this for the other six P-cores
-#: so the per-core ratio flagging has something to find; it is NOT a hardware fact.
+#: so the per-core ratio flagging has something to find; it is NOT a hardware fact. G-114: no longer used by ``measured()`` (F1: the tables are identical on all
+#: eight P-cores); a test that wants per-core flags builds ``cpu_point_ratios`` from this tuple itself.
 POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
 #: T-028 ``[MEASURED lnx 2026-10-02]`` (docs/research/skatterbencher-285k.md ring section, ring-community.md): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
 #: points 8,14,20,28,34,37,38,39x (V target 0), ``P2 = 9`` -> rc ``0x11``; point 8 = ``0xF6600027`` = 39x with the BIOS offset -75.2 mV (raw -77).
@@ -222,12 +223,9 @@ class SimConfig:
             "point_offsets": dict(POINT_OFFSETS_ARL_S),
             "ring_point_ratios": dict(RING_POINT_RATIOS_ARL_S),  # T-028
             "ring_point_offsets": dict(RING_POINT_OFFSETS_ARL_S),
-            "cpu_point_ratios": {  # T-026 SIM-ONLY: the non-favored P-cores have their own table (see POINT_RATIOS_P_NONFAVORED_SIM)
-                (c.cpu, n): r for c in topo.cores if c.kind == "P" and not c.favored for n, r in enumerate(POINT_RATIOS_P_NONFAVORED_SIM, start=1)
-            },
+            # G-114 (SPEC-v3 F1): every P-core carries the SAME eight points (8,20,30,48,53,55,56,57x) [MEASURED lnx 2026-10-02, platform-285k.md section 3];
+            # non-favored cores simply cannot reach 56/57x. The T-026 SIM-ONLY per-core table (POINT_RATIOS_P_NONFAVORED_SIM) is opt-in via ``cpu_point_ratios``.
         }
-        if "point_ratios" in overrides:  # a caller that defines its own point tables opts out of the SIM-ONLY non-favored P table
-            fields.pop("cpu_point_ratios")
         fields.update(overrides)
         return cls(**fields)  # type: ignore[arg-type]
 
