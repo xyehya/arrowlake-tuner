@@ -194,9 +194,12 @@ current_values() {  # current_values KEY: the values of "KEY = value" lines of p
     done
 }
 
-POLICY_SRC=$(current_values policy)  # captured whole (no head: no SIGPIPE), and there must be exactly one
-[ -n "$POLICY_SRC" ] || die "profiles/CURRENT has no 'policy =' line"
-case $POLICY_SRC in *$'\n'*) die "profiles/CURRENT has more than one 'policy =' line; refusing to pick one" ;; esac
+RESTORE_POLICY=$(current_values policy)  # the restore scripts' policy (profiles/CURRENT): captured whole (no head: no SIGPIPE), and there must be exactly one
+[ -n "$RESTORE_POLICY" ] || die "profiles/CURRENT has no 'policy =' line"
+case $RESTORE_POLICY in *$'\n'*) die "profiles/CURRENT has more than one 'policy =' line; refusing to pick one" ;; esac
+# D-032 (operator yes, 2026-10-11): the root policy that /etc/arltuner/policy.toml is seeded from is the advanced-user policy, whatever CURRENT names.
+POLICY_SRC=policies/advanced-2026-10-11.toml
+[ -f "$SRC/$POLICY_SRC" ] && [ ! -L "$SRC/$POLICY_SRC" ] || die "incomplete checkout: $SRC/$POLICY_SRC is not a regular file"
 
 if [ -e "$ETC/policy.toml" ] && [ "$RESEED" -eq 0 ]; then
     if cmp -s "$SRC/$POLICY_SRC" "$ETC/policy.toml"; then
@@ -239,6 +242,8 @@ fi
 # --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$STATE"
+install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/curves"  # G-111: measured V/F curves (root-only, kept across upgrades); the helper refuses anything looser
+install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/profiles"  # G-112: saved tuning intents (root-only, kept across upgrades; never overwritten by the helper)
 
 as_user() {  # run a command as the invoking user (root only reads the legacy log THROUGH that user's permissions)
     if [ "$(id -u)" -eq 0 ]; then runuser -u "$INVOKER" -- "$@"; else "$@"; fi

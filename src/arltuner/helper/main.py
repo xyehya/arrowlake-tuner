@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
+import shutil
 import sys
+import tempfile
 import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -37,7 +40,7 @@ from .trust import TrustError, check_code_tree, check_trusted_path, open_checked
 
 __all__ = [
     "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "device_imc", "load_taint_bits",
-    "main", "process_main", "root_argv_refusal",
+    "main", "measure_wiring", "process_main", "root_argv_refusal",
 ]
 
 EXIT_USAGE = 64
@@ -48,7 +51,7 @@ INSTALLED_AUDIT = Path("/var/lib/arltuner/audit.jsonl")
 INSTALLED_HELPER_TOML = Path("/etc/arltuner/helper.toml")
 INSTALLED_ACCEPTED_DIR = Path("/etc/arltuner/accepted")
 
-_ROOT_FORBIDDEN_NAMED = ("--sim", "--audit", "--lock", "--policy", "--allow-taint-bit")
+_ROOT_FORBIDDEN_NAMED = ("--sim", "--audit", "--lock", "--policy", "--allow-taint-bit", "--state-dir")
 
 
 class _Usage(Exception):
@@ -72,6 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to ~/.local/state/linuxmon/audit.jsonl)")
     p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/linuxmon-mailbox.lock; --sim: always the latter)")
     p.add_argument("--allow-taint-bit", metavar="N", type=int, action="append", default=[], help="kernel taint bit the first write is expected to set (health gate)")
+    p.add_argument("--state-dir", metavar="DIR", help="--sim only: where the simulated curve store and measurement journal live (default: a fresh private temp directory; never /var/lib)")
     return p
 
 
@@ -224,6 +228,17 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
     )
 
 
+def measure_wiring(args: argparse.Namespace, *, lstat_fn: Callable[[str], Any] = os.lstat) -> Any:
+    """G-111: cpufreq / MSR-read / store / journal for ``vf.measure``, ``curves.*`` and ``mem.read``. ``--sim``: the model and a scratch ``--state-dir`` (or a fresh
+    private temp directory); hardware: the installed root-owned paths only."""
+    from . import ops_measure
+
+    if args.sim:
+        state_dir = getattr(args, "state_dir", None)
+        return ops_measure.sim_wiring(Path(state_dir) if state_dir else Path(tempfile.gettempdir()) / f"arltuner-sim-{os.getpid()}-{secrets.token_hex(4)}")  # created lazily, 0700
+    return ops_measure.device_wiring(lstat_fn=lstat_fn)
+
+
 def _startup_refusal(args: argparse.Namespace, euid: int) -> str | None:
     """Hardware mode only: root, and the whole installed package tree trusted (never a git checkout or ~/.local)."""
     if args.sim:
@@ -266,7 +281,7 @@ def main(
             bad = root_argv_refusal(argv)
             if bad is not None:
                 return refuse(*bad)
-            args = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[])
+            args = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[], state_dir=None)
         else:
             args = _parser().parse_args(argv)
             if args.device and (not args.policy or not args.audit):
@@ -282,8 +297,14 @@ def main(
             err.write(f"arltuner-helper: {exc}\n")
         return EXIT_USAGE if str(exc) else 0
     helper = Helper(cfg)
+    helper.measure_wiring = measure_wiring(args, lstat_fn=lstat_fn)
+    scratch = helper.measure_wiring.journal_path.parent if args.sim and not getattr(args, "state_dir", None) else None  # our own mkdtemp: removed on exit
     helper.install_signal_handlers()
-    return helper.run(inp, out)
+    try:
+        return helper.run(inp, out)
+    finally:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def process_main() -> None:
