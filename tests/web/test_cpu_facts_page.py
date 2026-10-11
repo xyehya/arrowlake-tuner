@@ -1,0 +1,164 @@
+"""G-115: the page shows and enforces the CPU facts of SPEC-v3 section 9 (F1-F9) on Tune and Curves, bound to the contract 9 addendum.
+
+Static checks on the three files (always run) plus an opt-in browser check (``ARLTUNER_BROWSER_TESTS=1``, Playwright + Chrome) against the fake helper.
+No hardware, no real helper code."""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import unittest
+from pathlib import Path
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:  # pragma: no cover
+    sync_playwright = None
+
+WEB = Path(__file__).resolve().parents[2] / "web"
+HTML = (WEB / "index.html").read_text(encoding="utf-8")
+JS = (WEB / "app.js").read_text(encoding="utf-8")
+CSS = (WEB / "style.css").read_text(encoding="utf-8")
+CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or shutil.which("chromium") or ""
+
+
+def body_of(name: str) -> str:
+    m = re.search(r"function " + re.escape(name) + r"\(.*?\) \{(.*?)\n  \}\n", JS, re.S)
+    assert m, name
+    return m.group(1)
+
+
+class TestStatic(unittest.TestCase):
+    def test_addendum_fields_are_bound(self):
+        for name in ("effective_v", "clamped_by", "vccia", "predicted_v", "set_by", "fused", "turbo", "favored", "counts", "reason"):
+            self.assertIn(name, JS, name)
+        for reason in ("max_turbo", "cpufreq_granularity", "active_cores"):
+            self.assertIn(reason, JS, reason)
+        self.assertIn('chk === "TURBO_ORDER"', JS)
+
+    def test_grid_uses_the_community_point_names(self):
+        self.assertIn('"Point " + (no === null ? "?" : no) + " \\u00b7 " + ratio', JS)   # Point 1 . 8x ... Point 8 . 57x
+        self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)                  # Point 9 . OC (P) / Point 7 . OC (E)
+        self.assertIn("fused \\u00b7 offset only", JS)
+        self.assertIn("ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)", JS)
+        self.assertIn("47\\u201348\\u00d7 run on point 6 (turbo table); an E OC ratio adds an OC point", JS)
+
+    def test_reach_comes_from_the_read_never_from_a_hardcoded_core_list(self):
+        body = body_of("reachOf")
+        self.assertIn("turbo.favored", body)
+        self.assertNotRegex(body, r"\bFAVORED\b")   # P0 / P3 are not named: they reach 57x because the read says so
+        self.assertIn("not reachable on this core", JS)
+
+    def test_clamp_is_the_monotonic_rule(self):
+        self.assertIn("want < prev.v", body_of("predictUnit"))   # V(n) = max(base + offset, V(n-1))
+        self.assertIn("clamped to Vn\\u22121", JS)
+
+    def test_turbo_editor_never_offers_a_rising_bucket(self):
+        self.assertIn("i === 0 ? POLICY.ratioMax[k] : eff[i - 1]", body_of("renderTurbo"))
+        self.assertIn("Math.min(t[j], v)", body_of("setBucket"))
+
+    def test_f8_warnings(self):
+        for text in ("OCCT errors", "WHEA", "a positive offset raises the voltage"):
+            self.assertIn(text, JS)
+        self.assertIn(".tn-warn li.bad", CSS)
+
+    def test_vccia_constants_cite_the_measured_model(self):
+        self.assertIn("ring: 1.20, margin: 0.105", JS)
+        self.assertIn("MEASURED lnx 2026-10-03", JS)
+
+    def test_new_ids_exist_and_csp_rules_hold(self):
+        for i in ("tn-vccia-card", "tn-vccia-line", "tn-vccia-list", "tn-turbo-card", "tn-turbo", "cv-base-note", "cv-unreach"):
+            self.assertIn(f'id="{i}"', HTML, i)
+        self.assertNotRegex(JS, r"\.style\.")
+        self.assertNotIn("innerHTML", JS)
+
+    def test_pins_are_svg_with_titles_built_via_dom(self):
+        self.assertIn('sv("title")', JS)
+        self.assertIn(".vc-pin.reach circle", CSS)
+        self.assertIn(".vc-pin.fused path", CSS)
+
+
+@unittest.skipUnless(os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and sync_playwright and CHROME, "set ARLTUNER_BROWSER_TESTS=1 (needs playwright + chrome)")
+class TestBrowser(unittest.TestCase):
+    def test_facts_on_tune_and_curves(self):
+        from tests.web import v3_harness as h
+
+        srv, fake, stop = h.start(seed=True)
+        self.addCleanup(fake.close)
+        self.addCleanup(srv.close)
+        self.addCleanup(stop.set)
+        logs: list[tuple[str, str]] = []
+        with sync_playwright() as p:
+            b = p.chromium.launch(executable_path=CHROME, headless=True, args=["--no-sandbox"])
+            try:
+                page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
+                page.on("console", lambda m: logs.append((m.type, m.text)))
+                page.on("pageerror", lambda e: logs.append(("pageerror", str(e))))
+                h.login(page, srv)
+                page.goto(srv.origin + "/")
+                page.wait_for_selector("#conn-helper.s-ok", timeout=10000)
+                page.click("#tab-tune")
+                page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
+                page.click("#btn-tune-read")
+                page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
+                page.click("#tn-scope button:has-text('Per unit')")
+                for idx in (0, 1, 9):   # P0, P1, EC1
+                    page.locator(".tn-rowwrap").nth(idx).locator(".seg button:has-text('Per point')").click()
+                # F1 / F2: the unit's real points, then the OC point column
+                p0 = page.locator("#tn-pts-P0 .tn-pt")
+                self.assertEqual(p0.count(), 9)
+                self.assertIn("Point 1 · 8×", p0.nth(0).inner_text())
+                self.assertIn("fused · offset only", p0.nth(0).inner_text())
+                self.assertIn("Point 9 · OC", p0.nth(8).inner_text())
+                self.assertIn("57× (BIOS)", p0.nth(8).inner_text())   # P0 reads the BIOS 57x
+                self.assertIn("not set", page.locator("#tn-pts-P1 .tn-oc").inner_text())
+                self.assertIn("Point 7 · OC", page.locator("#tn-pts-EC1 .tn-oc").inner_text())
+                self.assertIn("47–48× run on point 6", page.locator("#tn-pts-EC1").inner_text())
+                # F3: 56x / 57x on P1 are dimmed; the same points on P0 (favored) are not
+                self.assertEqual(page.locator("#tn-pts-P1 .tn-pt.unreach").count(), 2)
+                self.assertEqual(page.locator("#tn-pts-P0 .tn-pt.unreach").count(), 0)
+                self.assertIn("not reachable on this core", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
+                # F4: a deep offset on 57x with a milder one on 56x is clamped; the badge shows
+                self.assertEqual(page.locator("#tn-pts-P0 .tn-badge:visible").count(), 0)
+                p0.nth(7).locator("select").select_option("-100")
+                p0.nth(6).locator("select").select_option("-10")
+                page.wait_for_selector("#tn-pts-P0 .tn-badge:visible")
+                self.assertIn("clamped to Vn−1", p0.nth(7).inner_text())
+                v56 = re.search(r"→ ([\d.]+) V", p0.nth(6).inner_text()).group(1)
+                v57 = re.search(r"→ ([\d.]+) V", p0.nth(7).inner_text()).group(1)
+                self.assertEqual(v56, v57)
+                # F8: an E 40x offset is red
+                page.locator("#tn-pts-EC1 .tn-pt").nth(4).locator("select").select_option("-20")
+                self.assertTrue(page.locator(".tn-warn li.bad").first.is_visible())
+                self.assertIn("OCCT", page.locator(".tn-warn li.bad").first.inner_text())
+                # F6 / F5: the VccIA panel names the unit that sets it; a turbo bucket cannot be raised above its left neighbour
+                self.assertIn("Predicted VccIA ≈", page.inner_text("#tn-vccia-line"))
+                sel = page.locator("#tn-turbo .turbo-kind").nth(0).locator("select")
+                values = [int(o) for o in sel.nth(3).locator("option").evaluate_all("els => els.map(e => e.value)")]
+                self.assertEqual(max(values), int(sel.nth(2).input_value()))
+                sel.nth(1).select_option("53")   # lowering bucket 1 brings the right-hand buckets down with it
+                self.assertEqual({sel.nth(i).input_value() for i in range(2, 8)}, {"53"})
+                page.click("#btn-tn-plan")
+                page.wait_for_selector("#dlg-plan[open]")
+                dlg = page.inner_text("#dlg-plan")
+                self.assertIn("Predicted VccIA", dlg)
+                self.assertIn("clamped to Vn−1", dlg)
+                self.assertIn("Turbo ratio tables", dlg)
+                page.keyboard.press("Escape")
+                # F3 / F7 / F9 on Curves
+                page.click("#tab-curves")
+                page.wait_for_selector("#cv-chart .vc-pin.reach", timeout=5000)
+                page.locator("#cv-primary").select_option(label=page.locator("#cv-primary option:has-text('baseline')").first.inner_text())
+                page.wait_for_selector("#cv-chart .vc-pin.fused", timeout=5000)
+                self.assertEqual(page.locator("#cv-chart .vc-pin.fused").count(), 12)
+                self.assertIn("max_turbo", page.locator("#cv-chart .vc-pin.reach title").first.text_content())
+                self.assertIn("cpufreq_granularity", page.inner_text("#cv-unreach"))
+                self.assertIn("fused V/F table as applied", page.inner_text("#cv-base-note"))
+            finally:
+                b.close()
+        errors = [m for m in logs if m[0] in ("error", "pageerror", "warning") and "favicon" not in m[1] and "404" not in m[1]]
+        self.assertEqual(errors, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
