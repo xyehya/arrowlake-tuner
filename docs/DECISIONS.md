@@ -116,3 +116,19 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   and pass `HOME` through sudo (pre-install path unchanged). Known and accepted: the operator restore scripts (`tools/lnx/*.sh`) still run the
   checkout's Python and the checkout `--policy` as root via sudo — that is the human/orchestrator CLI path (D-022), outside the helper trust rule
   (SPEC §4.4 applies to the pkexec helper). A later phase may move restore onto the installed helper.
+- **D-032 · 2026-10-11 · Advanced-user limits (operator yes).** Operator, verbatim: "remove the limitations on the mailbox writes and the amount
+  of offsets or target voltages - this is for advanced users to they knw what they are doing. although in the drop down menus i dont think we can go
+  above/below 200mv in offsets or the fused max of the p and e cores in the cpu". New root policy `policies/advanced-2026-10-11.toml` (seeded with
+  `install.sh --reseed-config`): runtime offset **−200…+200 mV** (`effective_offset_floor_mv = -200`, `offset_ceiling_mv = 200`, code sanity
+  ceiling raised 100 → 200); per-write steps opened to the code maxima (offset 200 mV, V 200 mV, ratio 8); V target ceiling = the **hardware**
+  maximum from cmd 0x28 minus one (P 1625 mV, E 1355 mV) [MEASURED win 2026-10-01]; ratio ceiling P 57 (fused max, `0x1C[15:8]` on the favored
+  cores [MEASURED]), E 49 (D-017, already run; `0x1C` 46 is not an E cap [MEASURED]); **op caps become indicators**: per-boot/per-session
+  100000, dwell 0. **Kept (not limits, safety mechanisms):** one mailbox transaction at a time (2026-08-26 incident: sweeps, not budgets), the
+  guard + allowlist, the health gate, the audit log, the plan-bound nonce, read-back. Consequence: the restore scripts read the same root policy,
+  so they also lose the 55 mV step (the boot ramp profile still exists but is no longer required). Static/override voltage stays out (D-016).
+- **D-033 · 2026-10-11 · Product v3 flow: Measure → Store → Tune (SPEC-v3).** Operator: "first we lay the ground, then we tune according to what we
+  have in hands". (a) "Read V/F curve" now means **measure** volts vs frequency per P-core and per E-cluster (12 curves): cpufreq cap per ratio +
+  pinned load + VID from `0x198`, no mailbox (the T-026/T-027 method as a helper op); results are stored root-owned and comparable. (b) The mailbox
+  word read (`vf.dump`) is renamed **"Read tuning words"** and lives on the Tune page. (c) SPEC §5 hardware gates become informational badges, not
+  locks. (d) O-4 changes: apply = before/after diff modal + one **Apply** click that carries the plan nonce (no typing); plan-binding, expiry and
+  single-use stay. (e) The orchestrator still asks for a go before the first mailbox write from the new UI.

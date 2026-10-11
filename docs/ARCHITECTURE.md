@@ -162,3 +162,33 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
 - **Addendum (G-107, D-030):** `heartbeat {state, ops_used, ops_budget}` (per-boot count from the helper's audit log; budget from root policy) —
   the dashboard's budget source. `vf.dump` result gains `accepted_match`: per core `{cpu, match: bool, diffs: [{point, expected, actual}]}` computed by
   the helper against `/etc/arltuner/accepted` EXPECTED words; `null` when no trusted accepted state exists.
+
+## Contract 9 — v3 ops (SPEC-v3, D-032/D-033; pinned 2026-10-11 before G-111/G-112/G-113)
+Same transport/response/event rules as contract 8. `R` = telemetry reading `{value|null, unit, source, status: "ok"|"unavailable", reason?}`.
+Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[16..19]`, `[20..23]`). Long ops answer at the end (202 + SSE
+`result`, D-027) and emit `progress`. Server `OPS` allowlists every op below with the same arg schema; page `ALLOWED_OPS` gains them.
+- **`telemetry.start {interval_s?: 0.2..60}`** (changed): if running with a different interval ⇒ stop + restart at the new one, result
+  `{running: true, restarted: bool, interval_s}`; same interval ⇒ `already_running: true` as before.
+- **`mem.read {}`** (short; root; not write-gated: no mailbox, no write) ⇒ `{available: bool, reason?, mts, qclk_mhz, gear, cmd_rate: "1T"|"2T",
+  bclk_mhz, timings: {tCL, tRCD, tRP, tRAS, tRC, tRFC, tRFCpb, tREFI, tFAW, tRRD_L, tRRD_S, tCWL, tRTP, tWR, tWTP, tRCDW, tRPab, tREFSBRD},
+  turnaround: {RDRD|RDWR|WRRD|WRWR: {SG, DG, SD, DD}}, instances_ok: int, cross_check: {agree: bool|null, mhz_a, mhz_b}, max_bandwidth_mbs,
+  dimms: [{locator, size, part, manufacturer, speed, configured_speed, voltage, rank, temp_c: R}]}` (knowledge `memory-mchbar.md`).
+- **`vf.measure {mode: "quick"|"dense", units?: [unit] (default all 12), name?: str ≤ 64}`** (long; state `measuring`; **not mailbox**; writes
+  cpufreq only, journaled) ⇒ `{curve_id, record}`. `progress` events: `{step, of, unit, ratio, eta_s}`; per finished point an event
+  `vf.point {unit, ratio, mhz, vid_v, status}` so the chart fills live. Cancel ⇒ `CANCELLED` with `detail.partial` = the record so far (also stored,
+  `complete: false`). Caps/EPP restored in every exit path and from a stale journal at helper start.
+- **Curve record** `{id, name, created, boot_id, mode, complete, kernel, tuning_state: {kind: "stock"|"words"|"unknown", words?: {cpu: [hex]}},
+  temps: {min_c, max_c}, units: {unit: {cpus: [int], points: [{ratio, mhz, vid_v, vid_min, vid_max, kept, total, status:
+  "ok"|"mismatch"|"unreachable"}]}}, baseline: bool}`.
+- **`curves.list {}`** ⇒ `{curves: [{id, name, created, mode, complete, tuning_state.kind, units: [unit], baseline}]}` (newest first);
+  **`curves.get {id}`** ⇒ record; **`curves.update {id, name?, baseline?: bool}`** (one baseline at most); **`curves.delete {id}`**.
+  Storage `/var/lib/arltuner/curves/` root 0700, files 0600, id `^[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}$`, same open rules as contract 8.
+- **`tune.read {}`** = old `vf.dump` (alias kept), result adds per unit/point decoded `{ratio, offset_mv, v_target_v|null, mode}`.
+- **`tune.plan {intent}`** (short) — `intent`: `{scope: "simple"|"unit", rows: [{target: "P"|"E"|unit, offset: {kind: "curve", mv} | {kind:
+  "points", mv: {ratio: mv}} | null, v_target_v: float|null, ratio: int|null}]}` or `{profile: name}` or `{reset: "stock"}` or
+  `{restore: "accepted"}` ⇒ contract 8 plan result + `before`/`after` per unit/point `{ratio, offset_mv, v_target_v}`, `warnings: [str]`.
+  Out-of-policy ⇒ `REFUSED detail.check="POLICY_RANGE"` naming the field and the limit.
+- **`tune.apply {plan_id, typed}`** (long; write-gated) — contract 8 apply rules ⇒ `{steps: [...], readback: [{unit, point, expected, actual,
+  match}], ops_used}`.
+- **`profiles.list {}`** ⇒ `{profiles: [{name, source: "accepted"|"saved", created}]}`; **`profiles.save {name, intent}`** (never overwrite ⇒
+  `REFUSED detail.check="EXISTS"`); stored `/var/lib/arltuner/profiles/` (root, same rules).

@@ -25,7 +25,8 @@ never only in chat · `git push` (remote in STATE).
   driver load, cpufreq caps). **Worker/worktree agents NEVER do** — they work against the simulator and fake sysfs only.
 - The orchestrator needs an explicit go-ahead in chat for each write sitting. Every mailbox request — reads too — is a WRMSR.
 - Mailbox traffic: one transaction at a time, never a sweep (`docs/SAFETY.md`, 2026-08-26 incident). Reads: allowlisted registers only.
-- Never widen the policy (55 mV max change per write, −100 mV floor, per-boot op cap 600) without the operator's yes. Never work around a guard refusal.
+- Never widen the policy beyond D-032 (advanced limits 2026-10-11: offsets ±200 mV, V target ≤ hardware max, ratio ≤ P 57 / E 49, op caps as
+  indicators) without the operator's yes. Never work around a guard refusal. One mailbox transaction at a time stays.
 - Never download or install software/drivers without naming it (name, source, size) and a yes. OCCT never elevated. The Windows ThrottleStop
   driver is carved from the operator's own exe, never committed, stopped after applying.
 - The operator's monitor repos `~/AI/turbostat` and `~/AI/turbostat+` are **orchestrator-only, read-only**; workers never get access; facts come in

@@ -53,6 +53,8 @@ Volatility is an assumption until measured: the first write of any kind is treat
 - Source: `docs/research/lnx-interfaces.md` §5 (verify on the actual install before relying).
 
 ## Mailbox-session discipline (lesson of the 2026-08-26 incident, from the operator's turbostat+ repo)
+_2026-10-11 (D-032): numeric limits (caps, dwell, steps, floor) are the operator's advanced-user policy; the one-at-a-time rule, health
+bracket, audit and guard below still apply._
 A broad OC-mailbox *Get* sweep (`WRMSR 0x150`) was followed ~5.5 min later by an abrupt boot end (no panic/MCE/AER/watchdog/thermal trip) and, on the next warm boot, a lost PCI device (Intel BE200) until **AC power was physically removed**.
 Causality unproven; the mailbox burst was the only identified low-level mutation. Therefore:
 - **One transaction at a time. Never a sweep, loop or "enumerate everything".** After each transaction: dwell, then check kernel/RAS/PCI health before the next.
