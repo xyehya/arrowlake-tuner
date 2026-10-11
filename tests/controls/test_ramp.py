@@ -13,6 +13,7 @@ from arltuner.controls import (
     RAISE_CAVEAT,
     CoreReadings,
     NeedsRamp,
+    PlanError,
     PlanRefused,
     StepKind,
     build_plan,
@@ -89,7 +90,7 @@ class TheTwoWordSplit(unittest.TestCase):
     def test_opposite_directions_and_single_changes_are_one_word(self) -> None:
         for kw in ({"ratio": 49}, {"oc_voltage_mv": 1176}, {"ratio": 47}, {"offset_mv": -10}, {"ratio": 49, "oc_voltage_mv": 1137}):
             with self.subTest(kw=kw):
-                plan = e_plan(profile(e_core(0, **kw)))
+                plan = e_plan(profile(e_core(0, **kw)), vf=w(48, E_V).to_u32())  # G-122: a zero E baseline + offset only is its own case (no OC point, ratio 46)
                 steps = vf_steps(plan, 8)
                 self.assertEqual(len(steps), 1)
                 self.assertEqual(steps[0].stage, "")
@@ -130,7 +131,7 @@ class TheNoRaiseDefaultsOfTheShippedPolicy(unittest.TestCase):
     def test_an_undervolt_offset_and_lowering_are_allowed(self) -> None:
         for kw in ({"offset_mv": -20}, {"ratio": 47}, {"oc_voltage_mv": 1150}, {"ratio": 47, "offset_mv": -20}):
             with self.subTest(kw=kw):
-                self.assertTrue(e_plan(profile(e_core(0, **kw)), policy=self.SHIPPED).allowed)
+                self.assertTrue(e_plan(profile(e_core(0, **kw)), policy=self.SHIPPED, vf=w(48, E_V).to_u32()).allowed)  # G-122: baseline with the 48x OC word
 
 
 class NextAllowedStep(unittest.TestCase):
@@ -236,6 +237,10 @@ class NextAllowedStep(unittest.TestCase):
             kw = {k: v for k, v in (("ratio", ratio), ("oc_voltage_mv", mv), ("offset_mv", off)) if v is not None}
             vf = VfWord(0, 0, False, 0)
             goal = profile(e_core(0, **kw))
+            if ratio is None and mv is None:  # G-122: an offset-only E word on a zero baseline is ratio 46 (no OC point): a step of 2 the default limits refuse outright
+                with self.assertRaises(PlanError):
+                    build_plan(goal, TOPO, {c: measured_readings(c, vf.to_u32()) for c in (8, 9, 10, 11)}, per_core_enabled=True, policy=policy)
+                continue
             for step in range(12):
                 plan = build_plan(goal, TOPO, {c: measured_readings(c, vf.to_u32()) for c in (8, 9, 10, 11)}, per_core_enabled=True, policy=policy)
                 if plan.next_profile_text is None:

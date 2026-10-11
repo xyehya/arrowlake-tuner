@@ -98,7 +98,7 @@ class RaiseWithinTheCeilings(RaiseCase):
         self.assertEqual(s.sim.vf(1), VfWord(56, 0x538, False, 0))
 
     def test_a_positive_offset_up_to_the_ceiling(self) -> None:
-        s = self.session(offset_ceiling_mv=25, **RAISE)
+        s = self.session(offset_ceiling_mv=25, max_ratio_step=2, **RAISE)  # G-122: the offset-only E word is ratio 46, 2 below the guard's reference 48
         self.assertTrue(s.apply(profile(e_core(0, offset_mv=25))).ok)
         self.assertEqual(s.sim.vf(8).offset_raw, 26)  # +25 mV = raw 26, exactly the ceiling and the step limit
 
@@ -283,10 +283,11 @@ class Ramp(RaiseCase):
         # a profile with a small change on cluster 1 and a big one on cluster 0: the next step keeps the small one as requested
         s = self.session(**RAISE)
         with self.assertRaises(NeedsRamp) as ctx:
-            s.apply(profile(e_core(0, ratio=50), e_core(4, offset_mv=-10)))
+            s.apply(profile(e_core(0, ratio=50), e_core(4, oc_voltage_mv=1150)))  # G-122: an offset-only E word needs max_ratio_step 2 here
         text = ctx.exception.next_profile_text
         entries = load_profile(text).entries
-        self.assertEqual([(e.kind, e.index, e.ratio, e.offset_mv) for e in entries], [("E", 0, 49, None), ("E", 4, None, -10)])
+        self.assertEqual([(e.kind, e.index, e.ratio, e.offset_mv) for e in entries], [("E", 0, 49, None), ("E", 4, None, None)])
+        self.assertEqual(entries[1].oc_voltage_mv, 1150)
         self.assertEqual(s.write_requests(), [])  # the small change is not applied alone: the whole plan was refused
 
 

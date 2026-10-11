@@ -239,22 +239,24 @@ class MeasuredShapes(unittest.TestCase):
         refused = build_plan(profile(e_core(0, ratio=47)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
         self.assertTrue(any("v_target_raw 0" in r.detail for r in refused.refusals), refused.refusals)
 
-    def test_a_small_ratio_step_policy_keeps_the_legacy_e_fill_and_says_so(self) -> None:
-        """G-122: the E offset-only word at ratio 46 (no OC point) is a ratio step of 2 from the guard's reference (0x1C[7:0] = 48); under max_ratio_step 1 the
-        planner keeps XTU's ratio 48 (an OC point) and warns, rather than plan a refused word or widen the policy."""
+    def test_a_small_ratio_step_policy_refuses_the_e_offset_only_word_instead_of_making_an_oc_point(self) -> None:
+        """G-122: the E offset-only word at ratio 46 (no OC point) is a ratio step of 2 from the guard's reference (0x1C[7:0] = 48). Under max_ratio_step 1 the
+        planner raises PlanError (nothing sent): the legacy ratio 48 would create an OC point, and the capped word has no ramp (47 is an OC point too)."""
         prof = profile(e_core(4, offset_mv=-10))
         readings = {c: measured_readings(c) for c in range(12, 16)}
-        small = build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
-        self.assertEqual({VfWord.from_u32(write_words(small, c)[0]).ratio for c in range(12, 16)}, {48})
-        self.assertTrue(small.allowed, small.refusals)
-        self.assertTrue(any("creates an OC point" in w for w in small.warnings), small.warnings)
+        with self.assertRaises(PlanError) as ctx:
+            build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
+        self.assertIn("max_ratio_step >= 2", str(ctx.exception))
+        self.assertIn("create an OC point", str(ctx.exception))
         wide = build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=2))
         self.assertEqual({write_words(wide, c)[0] for c in range(12, 16)}, {0xFEC0002E})  # ratio 46, target 0, -10 mV
         self.assertTrue(wide.allowed, wide.refusals)
-        self.assertFalse(any("creates an OC point" in w for w in wide.warnings), wide.warnings)
-        # an OC ratio the profile sets itself is the user's: no cap, no note
-        own = build_plan(profile(e_core(4, ratio=48)), TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=2))
-        self.assertEqual({VfWord.from_u32(write_words(own, c)[0]).ratio for c in range(12, 16)}, {48})
+        # an OC ratio / OC voltage the profile sets itself is the user's: the XTU fill (48, an OC point), whatever the step limit
+        for entry in (e_core(4, ratio=48), e_core(4, oc_voltage_mv=1137)):
+            own = build_plan(profile(entry), TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
+            self.assertEqual({VfWord.from_u32(write_words(own, c)[0]).ratio for c in range(12, 16)}, {48}, entry)
+        # a P core is unaffected (0x1C[7:0] <= 57): the same step-1 policy plans it
+        build_plan(profile(p_core(1, -5)), TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
 
     def test_fill_ratio_caps_a_zero_baseline_at_the_top_fused_ratio_only(self) -> None:
         self.assertEqual(fill_ratio(0, 0x2E30, "E"), 46)

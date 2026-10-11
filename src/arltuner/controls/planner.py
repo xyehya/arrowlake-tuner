@@ -484,22 +484,23 @@ def xtu_word(base: VfWord, favored_word: int, fused_word: int, kind: str | None 
     return base.with_(ratio=ratio, v_target_raw=v_target)
 
 
-def current_word(readings: CoreReadings, kind: str, policy: Policy, sets_ratio: bool = False) -> tuple[VfWord, str | None]:
-    """The current OC word of a core (``xtu_word``) for the planner, and a warning when the no-OC-point fill (G-122, ``fill_ratio``) cannot be used. The guard
-    measures the ratio step from ``max(base ratio, 0x1C[7:0])`` (E: 48), so the capped fill (E: 46) is a step of ``48 - 46`` that only a policy with
-    ``max_ratio_step`` >= 2 allows; under a smaller limit the legacy fill is kept (its ratio 48 > 46 makes an OC point) and the plan says so, rather than
-    be refused outright or widen the policy (SAFETY). A profile that sets an OC ratio itself (``sets_ratio``) keeps the legacy fill: the OC ratio is the user's."""
-    capped = xtu_word(readings.vf, readings.favored, readings.fused, kind)
+def current_word(readings: CoreReadings, kind: str, policy: Policy, sets_oc: bool = False, label: str = "") -> VfWord:
+    """The current OC word of a core (``xtu_word``) for the planner (G-122: ``fill_ratio`` caps a zero baseline's ratio at the top fused ratio, so an offset-only
+    write never creates an OC point). The guard measures the ratio step from ``max(base ratio, 0x1C[7:0])`` (E: 48), so the capped fill (E: 46) is a step of 2 that
+    only a policy with ``max_ratio_step`` >= 2 allows. Under a smaller limit it is a ``PlanError``: the legacy fill (48 > 46) would create an OC point
+    ([MEASURED lnx 2026-10-11]: ``P2 = 7`` appears), the capped word would be refused as step-only and no ramp exists (47 is an OC point too). Nothing widens the policy.
+    A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point: it keeps the XTU fill."""
     legacy = xtu_word(readings.vf, readings.favored, readings.fused)
-    if sets_ratio:
-        return legacy, None
-    if capped.ratio == legacy.ratio or abs(capped.ratio - legacy.ratio) <= policy.max_ratio_step:
-        return capped, None
-    return legacy, (
-        f"a V/F write to a {kind} core whose OC word reads 0 starts from ratio {legacy.ratio} (0x1C[7:0]), above the top fused ratio {capped.ratio}: it creates an "
-        f"OC point ([MEASURED lnx 2026-10-11]: P2 = 7 appears). The word without one ({capped.ratio}) is a ratio step of {legacy.ratio - capped.ratio} from the guard's "
-        f"reference, over max_ratio_step {policy.max_ratio_step}; use a policy with max_ratio_step >= {legacy.ratio - capped.ratio} to write it"
-    )
+    if sets_oc:
+        return legacy
+    capped = xtu_word(readings.vf, readings.favored, readings.fused, kind)
+    if abs(capped.ratio - legacy.ratio) > policy.max_ratio_step:
+        raise PlanError(
+            f"{label}: a runtime offset on a {kind} core whose OC word reads 0 is written as ratio {capped.ratio} (the top fused ratio; 0x1C[7:0] = {legacy.ratio} would "
+            f"create an OC point), a ratio step of {legacy.ratio - capped.ratio} from the guard's reference, over max_ratio_step {policy.max_ratio_step}; use a policy "
+            f"with max_ratio_step >= {legacy.ratio - capped.ratio} (nothing was sent)"
+        )
+    return capped
 
 
 def has_oc_point(kind: str, ratio: int) -> bool:
@@ -808,9 +809,7 @@ def build_plan(
         )
     for t in targets:
         readings = baseline[t.cpu]
-        current, fill_note = current_word(readings, t.kind, policy, t.ratio is not None)
-        if fill_note and fill_note not in oc_notes:
-            oc_notes.append(f"{t.label}: {fill_note}")
+        current = current_word(readings, t.kind, policy, t.ratio is not None or t.oc_voltage_mv is not None, t.label)
         currents[t.cpu] = current
         goal = _goal_word(t, current)
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
