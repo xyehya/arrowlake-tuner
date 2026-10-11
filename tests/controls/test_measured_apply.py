@@ -102,6 +102,41 @@ class Cpu0(MeasuredCase):
         self.assertEqual(s.sim.vf(0).to_u32(), 0x0005B439)
 
 
+class RevertWords(MeasuredCase):
+    """G-122: the revert writes the word the hardware keeps (D-035), so the read-back matches."""
+
+    def test_a_no_oc_point_baseline_with_an_offset_is_restored_exactly(self) -> None:
+        s = self.session(config=SimConfig.measured(initial_vf={0: VfWord.from_u32(0xFEC00039)}))  # a previous tune left CPU 0 at -10 mV, ratio 57, no target
+        report = s.apply(profile(p_core(0, 0)))
+        self.assertTrue(report.ok, report.format_report())
+        self.assertEqual(s.sim.vf(0).to_u32(), 0x0005B439)  # offset 0 keeps the target
+        self.assertEqual([(r.cmd, r.data) for r in report.revert_plan][0], (0x11, 0xFEC00039))  # not 0xFEC5B439 (the hardware drops that: a read-back trip)
+        self.run_revert_plan(s, report, [0])  # every revert request verified (whole-word read-back)
+        self.assertEqual(s.sim.vf(0).to_u32(), 0xFEC00039)
+
+
+class ECurve(MeasuredCase):
+    """G-122: a whole-curve offset on E must not create an OC point (the OC ratio above 46 adds ``P2 = 7``)."""
+
+    def point7_rc(self, s, cpu: int) -> int:
+        return MailboxTransport(s.sim, sleep=s.fake.sleep, clock=s.fake.clock).transact(cpu, 0x10, 0, 7, 0).rc
+
+    def test_e_whole_curve_minus_10_mv_adds_no_oc_point_and_back(self) -> None:
+        s = self.session(config=SimConfig.measured(per_point=True))
+        self.assertEqual(self.point7_rc(s, 12), 0x11)  # E has no P2 = 7 at stock
+        report = s.apply(profile(e_core(4, offset_mv=-10)))  # E-Core 4 = cluster 1 = CPUs 12..15
+        self.assertTrue(report.ok, report.format_report())
+        for cpu in range(12, 16):
+            word = s.sim.vf(cpu)
+            self.assertEqual((word.ratio, word.v_target_raw, word.offset_raw), (46, 0, -10), cpu)  # ratio <= 46: no OC point, target 0 (D-035)
+            self.assertEqual(self.point7_rc(s, cpu), 0x11, cpu)  # no OC point appeared
+        self.assertIn((12, 0x1D, 46), s.write_requests())  # [UNVERIFIED] what 0x1D 46 does to E turbo (0x1C[7:0] reads 48); the guard ties 0x1D to the 0x11 ratio
+        back = s.apply(profile(e_core(4, offset_mv=0)))
+        self.assertTrue(back.ok, back.format_report())
+        self.assertEqual({s.sim.vf(c).to_u32() for c in range(12, 16)}, {0x00048C2E})  # offset 0 keeps the target; ratio 46: still no OC point
+        self.assertEqual(self.point7_rc(s, 12), 0x11)
+
+
 class Cpu1(MeasuredCase):
     def test_minus_5_mv_fills_ratio_from_0x1c_and_v_target_from_0x09(self) -> None:
         s = self.session()
@@ -154,10 +189,10 @@ class ECores(MeasuredCase):
                 writes = s.write_requests()
                 self.assertEqual(len(writes), 16 * 3)
                 for cpu in range(8, 24):
-                    want = 0xFF64A030 if cpu < 12 else 0xFF648C30  # S-06: ratio 0x30, V target 0x4A0 / 0x48C, offset -5
+                    want = 0xFF60002E  # G-122: ratio 0x2E = 46 (top fused E ratio: no OC point), V target 0 (the hardware keeps none), offset -5
                     self.assertEqual(s.sim.vf(cpu).to_u32(), want, cpu)
                     self.assertIn((cpu, 0x11, want), writes)
-                    self.assertIn((cpu, 0x1D, 0x30), writes)
+                    self.assertIn((cpu, 0x1D, 0x2E), writes)
                     self.assertIn((cpu, 0x27, 0x3), writes)
                 for cpu in range(8):
                     self.assertEqual(s.sim.vf(cpu).to_u32(), 0x39 if cpu == 0 else 0, cpu)  # P cores untouched
@@ -166,7 +201,7 @@ class ECores(MeasuredCase):
                 back = s.apply(profile(*self.ALL_16_REVERT))
                 self.assertTrue(back.ok, back.format_report())
                 for cpu in range(8, 24):
-                    self.assertEqual(s.sim.vf(cpu).to_u32(), 0x0004A030 if cpu < 12 else 0x00048C30, cpu)  # S-07 revert words
+                    self.assertEqual(s.sim.vf(cpu).to_u32(), 0x0004A02E if cpu < 12 else 0x00048C2E, cpu)  # S-07 shape at ratio 46 (G-122)
 
     def test_one_cluster_is_written_as_all_four_cores_never_one(self) -> None:
         s = self.session()

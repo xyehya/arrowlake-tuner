@@ -86,6 +86,7 @@ from .policy import (
     Policy,
     build_context,
     build_msr_context,
+    top_fused_ratio,
     turbo_bytes,
 )
 
@@ -140,15 +141,25 @@ _READBACK_MATCH: Mapping[int, Callable[[int, int], bool]] = MappingProxyType(
 )
 
 
-def _revert_vf_word(baseline: int, favored: int | None, fused: int | None) -> int:
+def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, kind: str = "P", cap_ratio: bool = True) -> int:
     """The XTU-shaped word that puts a core's *offset* (and the other fields) back: the baseline word, with a zero ratio / V target
-    filled the way XTU fills it (``0x1C[7:0]`` / the fused ``0x09`` voltage). **A baseline word with a zero field (``0x0``, 23 of 24
-    cores at boot) cannot itself be written back** -- XTU never sends one and the hardware's acceptance is unverified; a reboot
-    restores it."""
+    filled the way XTU fills it (``0x1C[7:0]`` / the fused ``0x09`` voltage) -- **G-122:** with ``cap_ratio`` the filled ratio is capped at the top fused ratio of
+    the core ``kind`` (P 57, E 46), so reverting a word that had no OC point never creates one (the caller passes ``False`` when the word being undone had an OC
+    ratio: its undo keeps the XTU fill, which that ratio's step limits were measured from) -- and then **the word the hardware keeps** (D-035, ``[MEASURED lnx 2026-10-11]``):
+    with no OC point (ratio <= the top fused ratio) and a non-zero offset the *filled* V target is dropped (0), because the hardware drops a written one (``0xFEC5B439`` read back
+    ``0xFEC00039``); with offset 0 it is kept. (Same rule as ``controls.planner.kept_word`` / ``has_oc_point``, which this module cannot import.) So a baseline
+    ``0xFEC00039`` is restored exactly. **A baseline word with a zero field (``0x0``, 23 of 24 cores at boot) cannot itself be written back** -- XTU never
+    sends one; a reboot restores it."""
     base = VfWord.from_u32(baseline)
-    ratio = base.ratio or ((favored or 0) & 0xFF)
+    top = top_fused_ratio(kind)
+    fav = (favored or 0) & 0xFF
+    ratio = base.ratio or (min(fav, top) if fav and cap_ratio else fav)
     v_target = base.v_target_raw or (((fused or 0) >> 8) & 0xFFF)
+    if not base.v_target_raw and base.offset_raw != 0 and 0 < ratio <= top:  # only a FILLED target: one the baseline carries is restored as read
+        v_target = 0
     return base.with_(ratio=ratio, v_target_raw=v_target).to_u32()
+
+
 _U32_MAX = 0xFFFFFFFF
 _OPERATOR_LOG_MAX = 200
 _BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"  # one UUID per boot; Linux only
@@ -438,8 +449,7 @@ class WriteGuard:
             (msr_last if raises else msr_first).append(undo)
         return msr_first + mailbox + msr_last
 
-    @staticmethod
-    def _undo_vf_word(entry: _Executed) -> int:
+    def _undo_vf_word(self, entry: _Executed) -> int:
         """The word before a ``0x11``: the previous ``0x11`` of its chain, else the XTU-shaped baseline. T-025: a **point** word (``P2 != 0``)
         is undone with the baseline word of that point **exactly** (its V target is 0 by design: filling it from ``0x09`` would turn a
         per-point offset write into a voltage write)."""
@@ -447,13 +457,14 @@ class WriteGuard:
             return entry.prior
         if int(entry.request.p2) != 0:
             return entry.baseline
-        return _revert_vf_word(entry.baseline, entry.favored, entry.fused)
+        kind = self._policy.core_kind(entry.request.cpu)
+        written_oc_ratio = VfWord.from_u32(entry.request.data).ratio > top_fused_ratio(kind)  # G-122: that word made an OC point (e.g. XTU's E 48)
+        return _revert_vf_word(entry.baseline, entry.favored, entry.fused, kind, cap_ratio=not written_oc_ratio)
 
-    @staticmethod
-    def _inverse_data(entry: _Executed, entries: list[_Executed]) -> int:
+    def _inverse_data(self, entry: _Executed, entries: list[_Executed]) -> int:
         cmd = int(entry.request.cmd)
         if cmd == int(Cmd.VOLTAGE_FREQ_WRITE):
-            return WriteGuard._undo_vf_word(entry)
+            return self._undo_vf_word(entry)
         if cmd == int(Cmd.FAVORED_CORE_WRITE):
             for other in entries:  # the ratio of the LAST undo word of this CPU = its oldest 0x11's undo (what the 0x1D check wants)
                 if (
@@ -461,7 +472,7 @@ class WriteGuard:
                     and int(other.request.cmd) == int(Cmd.VOLTAGE_FREQ_WRITE)
                     and (int(other.request.p1), int(other.request.p2)) == (0, 0)  # T-025: a point word's ratio is not the 0x1D ratio
                 ):
-                    return VfWord.from_u32(WriteGuard._undo_vf_word(other)).ratio
+                    return VfWord.from_u32(self._undo_vf_word(other)).ratio
             return entry.baseline & 0xFF
         return entry.baseline
 

@@ -21,6 +21,7 @@ from arltuner.controls import (
     StepKind,
     build_plan,
     count_operations,
+    fill_ratio,
     format_plan,
     preflight,
     resolve_targets,
@@ -205,26 +206,23 @@ class MeasuredShapes(unittest.TestCase):
                 w = VfWord.from_u32(write_words(plan, c)[0])
                 self.assertNotEqual((w.ratio, w.v_target_raw == 0), (0, True), c)
                 self.assertGreater(w.ratio, 0, c)
-                if cpu < 8:  # G-120: ratio <= 57 = no OC point -> the kept word has no target
-                    self.assertEqual(w.v_target_raw, 0, c)
-                else:  # an E word takes ratio 0x1C[7:0] = 48 > 46 = the top fused ratio: it IS an OC point (XTU's shape), so it carries the fused target
-                    self.assertGreater(w.v_target_raw, 0, c)
+                # G-120/G-122: P ratio <= 57, E ratio capped at 46 (not 0x1C[7:0] = 48): no OC point -> the kept word has no target
+                self.assertEqual(w.v_target_raw, 0, c)
+                self.assertLessEqual(w.ratio, 57 if cpu < 8 else 46, c)
                 self.assertFalse(w.static)
             self.assertTrue(plan.allowed, (cpu, plan.refusals))
 
     def test_e_cluster_words_equal_xtus_for_all_16_cores(self) -> None:
         prof = profile(e_core(0, offset_mv=-5), e_core(4, offset_mv=-5), e_core(8, offset_mv=-5), e_core(12, offset_mv=-5))
         plan = self.plan(prof, range(8, 24))
-        for cpu in range(8, 12):
-            self.assertEqual(write_words(plan, cpu), (0xFF64A030, 0x30, 0x3), cpu)
-        for cpu in range(12, 24):
-            self.assertEqual(write_words(plan, cpu), (0xFF648C30, 0x30, 0x3), cpu)
+        for cpu in range(8, 24):  # G-122: ratio 46 = the top fused E ratio (not 0x1C[7:0] = 48: an OC point), V target 0, offset -5 << 21; 0x1D carries the ratio
+            self.assertEqual(write_words(plan, cpu), (0xFF60002E, 0x2E, 0x3), cpu)
         self.assertTrue(plan.allowed, plan.refusals)
         self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 7 * 16, 1 + 7 * 16 + 3 * 16))
         reverts = profile(e_core(0, offset_mv=0), e_core(4, offset_mv=0), e_core(8, offset_mv=0), e_core(12, offset_mv=0))
         rplan = self.plan(reverts, range(8, 24))
-        self.assertEqual({write_words(rplan, c)[0] for c in range(8, 12)}, {0x0004A030})
-        self.assertEqual({write_words(rplan, c)[0] for c in range(12, 24)}, {0x00048C30})
+        self.assertEqual({write_words(rplan, c)[0] for c in range(8, 12)}, {0x0004A02E})  # offset 0 keeps the target (kept_word)
+        self.assertEqual({write_words(rplan, c)[0] for c in range(12, 24)}, {0x00048C2E})
 
     def test_a_baseline_word_is_used_when_non_zero_and_a_missing_reference_is_refused_not_invented(self) -> None:
         # a core whose 0x10 word carries ratio 50: XTU keeps it (ratio = the non-zero baseline ratio, not 0x1C[7:0])
@@ -237,8 +235,34 @@ class MeasuredShapes(unittest.TestCase):
         refused = build_plan(profile(p_core(1, -5)), TOPO, {1: none}, per_core_enabled=True, policy=POLICY)
         self.assertFalse(refused.allowed)
         self.assertTrue(any("ratio 0" in r.detail for r in refused.refusals), refused.refusals)
-        refused = build_plan(profile(e_core(0, -5)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
+        # G-122: an offset-only E word has no OC point and needs no voltage reference; an OC ratio above 46 does (its point carries a target)
+        refused = build_plan(profile(e_core(0, ratio=47)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
         self.assertTrue(any("v_target_raw 0" in r.detail for r in refused.refusals), refused.refusals)
+
+    def test_a_small_ratio_step_policy_keeps_the_legacy_e_fill_and_says_so(self) -> None:
+        """G-122: the E offset-only word at ratio 46 (no OC point) is a ratio step of 2 from the guard's reference (0x1C[7:0] = 48); under max_ratio_step 1 the
+        planner keeps XTU's ratio 48 (an OC point) and warns, rather than plan a refused word or widen the policy."""
+        prof = profile(e_core(4, offset_mv=-10))
+        readings = {c: measured_readings(c) for c in range(12, 16)}
+        small = build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
+        self.assertEqual({VfWord.from_u32(write_words(small, c)[0]).ratio for c in range(12, 16)}, {48})
+        self.assertTrue(small.allowed, small.refusals)
+        self.assertTrue(any("creates an OC point" in w for w in small.warnings), small.warnings)
+        wide = build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=2))
+        self.assertEqual({write_words(wide, c)[0] for c in range(12, 16)}, {0xFEC0002E})  # ratio 46, target 0, -10 mV
+        self.assertTrue(wide.allowed, wide.refusals)
+        self.assertFalse(any("creates an OC point" in w for w in wide.warnings), wide.warnings)
+        # an OC ratio the profile sets itself is the user's: no cap, no note
+        own = build_plan(profile(e_core(4, ratio=48)), TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=2))
+        self.assertEqual({VfWord.from_u32(write_words(own, c)[0]).ratio for c in range(12, 16)}, {48})
+
+    def test_fill_ratio_caps_a_zero_baseline_at_the_top_fused_ratio_only(self) -> None:
+        self.assertEqual(fill_ratio(0, 0x2E30, "E"), 46)
+        self.assertEqual(fill_ratio(0, 0x3737, "P"), 55)
+        self.assertEqual(fill_ratio(0, 0x3939, "P"), 57)
+        self.assertEqual(fill_ratio(48, 0x2E30, "E"), 48)  # a real baseline ratio (an existing OC point) is left alone
+        self.assertEqual(fill_ratio(0, 0x2E30), 48)  # no kind: XTU's fill
+        self.assertEqual(fill_ratio(0, 0, "E"), 0)
 
     def test_xtu_word_helper(self) -> None:
         self.assertEqual(xtu_word(VfWord.from_u32(0x39), 0x3939, 0x5B439).to_u32(), 0x0005B439)
@@ -510,7 +534,10 @@ class Warnings(unittest.TestCase):
             self.assertIn(XTU_SHAPE_CAVEAT, plan_for(prof).warnings)
         self.assertIn("UNVERIFIED", XTU_SHAPE_CAVEAT)
         self.assertIn("0x1D/0x27", XTU_SHAPE_CAVEAT)
-        self.assertIn("zero ratio or V target", XTU_SHAPE_CAVEAT)
+        self.assertIn("A V target of 0 is sent only on a word with no OC point", XTU_SHAPE_CAVEAT)  # G-122: D-035, the zero target is sent there
+        self.assertIn("[MEASURED lnx 2026-10-11, D-035]", XTU_SHAPE_CAVEAT)
+        self.assertIn("A zero ratio is never sent", XTU_SHAPE_CAVEAT)
+        self.assertNotIn("this plan never does", XTU_SHAPE_CAVEAT)
         self.assertIn("[MEASURED win 2026-10-01]", XTU_SHAPE_CAVEAT)
         self.assertTrue(XTU_SHAPE_CAVEAT.isascii())
         self.assertNotIn("not modelled", XTU_SHAPE_CAVEAT)  # the T-014 ratio caveat is gone

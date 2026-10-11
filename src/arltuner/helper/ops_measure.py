@@ -33,7 +33,7 @@ from arltuner.platform import default_platform
 from arltuner.mailbox.vf import VfWord
 from arltuner.vfmodel import complete_baseline, effective_curve, voltage_at
 
-from .ops import OpContext, OpSpec, _is_int, _no_args, _only
+from .ops import OpContext, OpSpec, _is_int, _no_args, _only, _trust
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, OpError
 from .state import State
 from .trust import TrustError, check_trusted_path, open_checked
@@ -710,11 +710,67 @@ def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequ
 _COLD_OC_WORD = dict(VF_DOMAIN0)
 
 
+_AUDIT_LINE_MAX = 1024 * 1024  # a longer line is not a record this helper's guard wrote: nothing can be proven from it
+
+
+def audit_shows_tuning(helper: Any) -> bool:
+    """G-122: has the audit log (``cfg.audit_path``) an ``attempt`` of a ``0x11`` V/F write (the OC word or a point) under the **current** ``boot_id``?
+    ``attempt`` is written before the request is sent, so a write that died midway counts (the same "may have written" rule as G-120's ``tuned_this_boot``).
+    Called once when the helper starts (``Helper.__init__``): a restart then keeps ``stock`` tagging honest instead of forgetting an earlier apply of this boot.
+    No audit log (or an empty one) = nothing was written = ``False``. A log that cannot be read or trusted, or whose lines it cannot parse, = ``True`` (stock
+    cannot be proven). A current boot id that is unknown counts any ``0x11`` attempt at all, whatever its ``boot_id``."""
+    cfg = helper.cfg
+    path = cfg.audit_path
+    try:
+        boot = cfg.boot_id_fn()
+    except Exception:
+        boot = None
+    boot_id = boot.strip() or None if isinstance(boot, str) else None
+    try:
+        _trust(helper, path, want="file", must_exist=False)
+        fd = open_checked(path, write=False, create=False, euid=cfg.euid_fn(), what="audit log")
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return True
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            while True:
+                raw = handle.readline(_AUDIT_LINE_MAX + 1)
+                if not raw:
+                    return False
+                partial = not raw.endswith(b"\n")
+                text = raw.strip()
+                if not text:
+                    continue
+                if len(raw) > _AUDIT_LINE_MAX:
+                    return True
+                try:
+                    record = json.loads(text.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    if partial:
+                        continue  # a write cut short at the end of the file: ignored, as the guard's read_state does
+                    return True
+                if not isinstance(record, dict):
+                    return True
+                if record.get("event") != "attempt" or "cmd" not in record:
+                    continue
+                try:
+                    is_vf_write = int(str(record["cmd"]), 16) == 0x11
+                except ValueError:
+                    return True  # an attempt whose command cannot be read: it may have been a write
+                if is_vf_write and (boot_id is None or record.get("boot_id") == boot_id):
+                    return True
+    except OSError:
+        return True
+
+
 def _tuning_state(helper: Any) -> dict[str, Any]:
     """From the words G-112's ``tune.read`` / ``vf.dump`` read this helper session (``helper.last_words``: cpu -> list of u32 words), else ``unknown``. ``kind`` is
     ``stock`` (G-118, contract 9) when the words cover the first CPU of all 12 units (a complete read), **every** OC word is the cold-boot one (P0 ``0x39``, all others
     ``0x0``) and every word has offset 0 (G-120: an OC ratio or voltage raised in the OC word is not stock), and no ``tune.apply`` wrote anything this boot
-    (``helper.tuned_this_boot``: a restored state is not proven stock), else ``words``. The words travel with ``words`` only."""
+    (``helper.tuned_this_boot``: a restored state is not proven stock; G-122: set at helper start from the audit log's ``0x11`` attempts of this boot, so a
+    restart keeps it), else ``words``. The words travel with ``words`` only."""
     words = getattr(helper, "last_words", None)
     if not isinstance(words, dict) or not words:
         return {"kind": "unknown"}

@@ -247,6 +247,49 @@ class ApplyWordTests(TuneCase):
         self.assertEqual(self.sim.vf(12, 0, 7).ratio, 48)  # the OC point appeared as P2 = 7
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
 
+    def test_a_restart_keeps_tuned_this_boot_from_the_audit_log(self) -> None:
+        """G-122: ``tuned_this_boot`` is derived at helper start from the audit log's ``0x11`` attempts of this boot_id, so a restarted helper does not call a tuned machine stock."""
+        h = self.boot()
+        self.read(h)
+        self.apply_ok(h, self.plan(h, rows(row("P0", curve=-10))))
+        self.assertTrue(h.helper.tuned_this_boot)
+        h.stop()
+        self.assertIn("0x11", self.audit_attempt_cmds())  # the guard logged the write
+        restarted = self.boot()  # a new helper on the same audit log and the same boot
+        restarted.call("sync", "audit.tail", {})  # the derivation runs before the first frame
+        self.assertTrue(restarted.helper.tuned_this_boot)
+
+    def audit_attempt_cmds(self) -> list[str]:
+        return [r.get("cmd") for r in (json.loads(line) for line in self.audit.read_text().splitlines() if line.strip()) if r.get("event") == "attempt"]
+
+    def derived(self, text: str | None, boot: str = "11111111-2222-3333-4444-555555555555") -> bool:
+        """``tuned_this_boot`` of a helper started on an audit log with this text (``None`` = no file) under boot id ``boot``."""
+        if text is None:
+            self.audit.unlink(missing_ok=True)
+        else:
+            self.audit.write_text(text)
+            self.audit.chmod(0o644)
+        h = self.boot(boot_id_fn=lambda: boot)
+        h.call("sync", "audit.tail", {})  # the derivation runs before the first frame
+        value = h.helper.tuned_this_boot
+        h.stop()
+        return value
+
+    def test_tuned_this_boot_derivation_rules(self) -> None:
+        line = lambda event, cmd, boot: json.dumps({"ts": "2026-10-11T20:00:00.000+00:00", "seq": 0, "event": event, "cmd": cmd, "boot_id": boot}) + "\n"
+        here, other = "11111111-2222-3333-4444-555555555555", "99999999-2222-3333-4444-555555555555"
+        self.assertFalse(self.derived(None))  # no audit log: nothing was written
+        self.assertFalse(self.derived(""))
+        self.assertFalse(self.derived(line("attempt", "0x10", here) + line("attempt", "0x1C", here)))  # reads are not tuning
+        self.assertFalse(self.derived(line("refused", "0x11", here)))  # a refusal sent nothing
+        self.assertFalse(self.derived(line("attempt", "0x11", other)))  # an earlier boot
+        self.assertTrue(self.derived(line("attempt", "0x10", here) + line("attempt", "0x11", here)))
+        self.assertTrue(self.derived(line("attempt", "0x11", other) + line("attempt", "0x11", here)))
+        self.assertFalse(self.derived(line("attempt", "0x11", None), boot=here))  # an unknown-boot record is its own bucket, not this boot's
+        self.assertTrue(self.derived(line("attempt", "0x11", here), boot=None))  # an unknown current boot cannot exclude it
+        self.assertTrue(self.derived("this is not json\n" + line("attempt", "0x10", here)))  # unreadable: stock cannot be proven
+        self.assertFalse(self.derived(line("attempt", "0x10", here) + '{"event":"attempt","cm'))  # a truncated last line is ignored, as the guard's read_state does
+
     def test_per_point_offset_by_ratio_leaves_the_point_ratio_and_v_target_alone(self) -> None:
         h = self.boot(ALL_P_53)
         self.read(h)

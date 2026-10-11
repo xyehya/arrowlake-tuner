@@ -202,7 +202,7 @@ class Ordering(PointCase):
         for cpu in E_CPUS:
             self.assertEqual(s.sim.vf(cpu, 0, 6), VfWord(46, 0, False, -20), cpu)
             self.assertEqual(s.sim.vf(cpu).offset_raw, -10, cpu)  # the whole-curve offset (P2 = 0) is its own word
-            self.assertEqual(s.sim.vf(cpu).ratio, 48, cpu)
+            self.assertEqual(s.sim.vf(cpu).ratio, 46, cpu)  # G-122: no OC point (48 would add one)
 
     def test_a_lowering_turbo_table_comes_before_the_points_and_a_raising_one_after_the_cores(self) -> None:
         # documented order: 0x15, lowering-only turbo table, point writes, core words, raising turbo table

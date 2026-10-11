@@ -119,6 +119,7 @@ class Helper:
         self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
         self.last_words: dict[int, list[int]] | None = None  # G-112: cpu -> [OC word, point 1, point 2, ...] after the last complete tune.read / vf.dump (and the read-backs of tune.apply); None = unknown
+        self.tuned_this_boot = False  # G-120/G-122: a V/F write happened this boot (tune.apply sets it; ``run()`` derives it from the audit log of this boot_id at start); "stock" is never claimed after it
         self.measure_wiring: Any = None  # ops_measure.MeasureWiring (G-111): cpufreq / MSR read / store / journal for vf.measure, curves.*, mem.read; set by main (None: those ops answer INTERNAL)
 
     # ---------------------------------------------------------------- output
@@ -165,6 +166,7 @@ class Helper:
             self._send(error_response(None, REFUSED, f"the helper is already running on this machine: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
+        self._derive_tuned_this_boot()
         self._recover_measure_journal()  # a stale journal = a measurement that died with the previous helper: put cpufreq back before anything else runs
         frames: queue.Queue[Frame] = queue.Queue(maxsize=QUEUE_MAX)
         threading.Thread(target=self._reader, args=(stdin, frames), name="helper-stdin", daemon=True).start()
@@ -188,6 +190,15 @@ class Helper:
             self._finish(frames)
             lock.release()
         return 0
+
+    def _derive_tuned_this_boot(self) -> None:
+        """G-122: after the instance lock (so a restart sees what the previous helper's guard logged), before any frame: ``tuned_this_boot`` from the audit log."""
+        from .ops_measure import audit_shows_tuning  # lazy: ops_measure imports ops
+
+        try:
+            self.tuned_this_boot = self.tuned_this_boot or audit_shows_tuning(self)
+        except Exception:  # cannot prove "stock": the conservative answer
+            self.tuned_this_boot = True
 
     def _recover_measure_journal(self) -> None:
         wiring = self.measure_wiring

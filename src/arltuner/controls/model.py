@@ -61,8 +61,9 @@ __all__ = [
 #: it does on Linux is not known. ASCII only.
 XTU_SHAPE_CAVEAT = (
     "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sent on Windows [MEASURED win 2026-10-01]; on Linux the semantics of "
-    "0x1D/0x27 and the hardware's acceptance of a 0x11 with a zero ratio or V target are UNVERIFIED (XTU never sends a zero field; this "
-    "plan never does)"
+    "0x1D/0x27 are UNVERIFIED. A V target of 0 is sent only on a word with no OC point (ratio at or below the top fused ratio, P 57 / E 46): "
+    "the hardware keeps no target next to an offset there [MEASURED lnx 2026-10-11, D-035]. A zero ratio is never sent (its acceptance "
+    "by the hardware is UNVERIFIED)"
 )
 
 #: Line of every revert plan (docs/tasks/T-021, T-022): XTU cannot restore a baseline of 0x0 either, and a reboot restores whatever the

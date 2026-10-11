@@ -461,15 +461,45 @@ def plan_warnings(
     return tuple(warnings)
 
 
-def xtu_word(base: VfWord, favored_word: int, fused_word: int) -> VfWord:
+def fill_ratio(base_ratio: int, favored_word: int, kind: str | None = None) -> int:
+    """The ratio of a core's current OC word: the baseline's non-zero ratio, else ``0x1C[7:0]``; with a ``kind`` (G-122) that fill is capped at the top fused
+    ratio of the kind (P 57, E 46), so a zero baseline never creates an OC point -- E's ``0x1C[7:0]`` is 48 (E turbo), above its top fused point 46, and an OC
+    ratio above it adds a point (``P2 = 7``, ``[MEASURED lnx 2026-10-11]``). A non-zero baseline ratio is an existing word and is left alone."""
+    if base_ratio:
+        return base_ratio
+    favored = favored_word & 0xFF
+    return favored if kind is None or not favored else min(favored, top_fused_ratio(kind))
+
+
+def xtu_word(base: VfWord, favored_word: int, fused_word: int, kind: str | None = None) -> VfWord:
     """The word XTU writes for a core before any change ``[MEASURED win 2026-10-01]``: the baseline word with ratio = its non-zero ratio,
     else ``0x1C[7:0]``, and V target = its non-zero V target, else the fused ``0x09`` voltage ``[19:8]``; mode and offset are the baseline's.
     (A baseline of ``0x0`` therefore becomes ``ratio | fused V << 8``, e.g. CPU 1: ``0x00053837``.) This is also the *current state* the
     step limits are measured from. D-016: a V target the core already carries is kept -- it is no longer reset to the fused voltage, which
-    would silently undo an earlier step of a ramp (``[MEASURED]`` XTU only ever met baselines without a V target)."""
-    ratio = base.ratio or (favored_word & 0xFF)
+    would silently undo an earlier step of a ramp (``[MEASURED]`` XTU only ever met baselines without a V target).
+    G-122: with a ``kind`` the filled ratio is capped at the top fused ratio of the kind (``fill_ratio``): a whole-curve offset on E must not write
+    ratio 48 and create an OC point."""
+    ratio = fill_ratio(base.ratio, favored_word, kind)
     v_target = base.v_target_raw or ((fused_word >> 8) & 0xFFF)
     return base.with_(ratio=ratio, v_target_raw=v_target)
+
+
+def current_word(readings: CoreReadings, kind: str, policy: Policy, sets_ratio: bool = False) -> tuple[VfWord, str | None]:
+    """The current OC word of a core (``xtu_word``) for the planner, and a warning when the no-OC-point fill (G-122, ``fill_ratio``) cannot be used. The guard
+    measures the ratio step from ``max(base ratio, 0x1C[7:0])`` (E: 48), so the capped fill (E: 46) is a step of ``48 - 46`` that only a policy with
+    ``max_ratio_step`` >= 2 allows; under a smaller limit the legacy fill is kept (its ratio 48 > 46 makes an OC point) and the plan says so, rather than
+    be refused outright or widen the policy (SAFETY). A profile that sets an OC ratio itself (``sets_ratio``) keeps the legacy fill: the OC ratio is the user's."""
+    capped = xtu_word(readings.vf, readings.favored, readings.fused, kind)
+    legacy = xtu_word(readings.vf, readings.favored, readings.fused)
+    if sets_ratio:
+        return legacy, None
+    if capped.ratio == legacy.ratio or abs(capped.ratio - legacy.ratio) <= policy.max_ratio_step:
+        return capped, None
+    return legacy, (
+        f"a V/F write to a {kind} core whose OC word reads 0 starts from ratio {legacy.ratio} (0x1C[7:0]), above the top fused ratio {capped.ratio}: it creates an "
+        f"OC point ([MEASURED lnx 2026-10-11]: P2 = 7 appears). The word without one ({capped.ratio}) is a ratio step of {legacy.ratio - capped.ratio} from the guard's "
+        f"reference, over max_ratio_step {policy.max_ratio_step}; use a policy with max_ratio_step >= {legacy.ratio - capped.ratio} to write it"
+    )
 
 
 def has_oc_point(kind: str, ratio: int) -> bool:
@@ -778,7 +808,9 @@ def build_plan(
         )
     for t in targets:
         readings = baseline[t.cpu]
-        current = xtu_word(readings.vf, readings.favored, readings.fused)
+        current, fill_note = current_word(readings, t.kind, policy, t.ratio is not None)
+        if fill_note and fill_note not in oc_notes:
+            oc_notes.append(f"{t.label}: {fill_note}")
         currents[t.cpu] = current
         goal = _goal_word(t, current)
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
