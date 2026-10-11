@@ -239,13 +239,31 @@ class ApplyWordTests(TuneCase):
         self.assertEqual(self.word(0).to_u32(), 0xFEC00039)
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
         self.assertTrue(h.helper.tuned_this_boot)  # fix 4: any apply this boot ends "stock"
-        res = self.apply_ok(h, self.plan(h, rows(row("P0", curve=0))))  # back to 0: XTU-shaped word, target kept with offset 0 (read back 0x0005B439)
-        self.assertEqual(self.word(0).to_u32(), 0x0005B439)
+        res = self.apply_ok(h, self.plan(h, rows(row("P0", curve=0))))  # back to 0: G-124: no OC point = target 0 at offset 0 too (0x0005B439 read back 0x00000039 when only the 0x11 was sent)
+        self.assertEqual(self.word(0).to_u32(), 0x00000039)
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
         res = self.apply_ok(h, self.plan(h, rows(row("EC1", ratio=48, v=1.1367))))
         self.assertEqual(self.word(12).to_u32(), 0x00048C30)
         self.assertEqual(self.sim.vf(12, 0, 7).ratio, 48)  # the OC point appeared as P2 = 7
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
+
+    def test_plan_steps_list_exactly_what_the_executor_sends(self) -> None:
+        """G-124: an offset-only target sends the 0x11 alone, so ``tune.plan`` lists ``write_vf`` only (the conditional 0x15 aside); a target that sets an OC ratio
+        also lists ``write_favored`` and ``write_granular``. ``ops_needed`` counts the same writes (plus a read-back each)."""
+        h = self.boot()
+        self.read(h)
+        plan = self.plan(h, rows(row("P0", curve=-10)))
+        self.assertEqual([s["kind"] for s in plan["steps"]], ["write_percore_enable", "write_vf"])
+        self.assertTrue(plan["steps"][0]["conditional"])
+        self.assertEqual(plan["writes"], 2)
+        self.assertEqual(plan["ops_needed"], 9)  # 0x14 + 4 reads, 0x11 + the worst-case 0x15, and a read-back for each write
+        sent = self.audit_attempt_cmds()
+        self.apply_ok(h, plan)
+        new = self.audit_attempt_cmds()[len(sent):]
+        self.assertEqual([c for c in new if c in ("0x11", "0x1D", "0x27")], ["0x11"])  # nothing the plan did not list
+        plan = self.plan(h, rows(row("EC1", ratio=48, v=1.1367)))
+        per_cpu = [s["kind"] for s in plan["steps"] if s["kind"] != "write_percore_enable"]
+        self.assertEqual(per_cpu, ["write_vf", "write_favored", "write_granular"] * 4)  # the OC-ratio target keeps its triple on each of the cluster's 4 CPUs
 
     def test_a_restart_keeps_tuned_this_boot_from_the_audit_log(self) -> None:
         """G-122: ``tuned_this_boot`` is derived at helper start from the audit log's ``0x11`` attempts of this boot_id, so a restarted helper does not call a tuned machine stock."""
@@ -330,11 +348,15 @@ class ApplyWordTests(TuneCase):
         self.read(h)
         p5_before = self.word(4, 5)
         plan = self.plan(h, rows(row("P4", v=1.300)))
-        self.assertEqual(plan["after"]["P4"]["0"]["v_target_v"], round(1331 / 1024, 4))
         self.assertEqual(sorted(plan["after"]["P4"]), ["0"])  # no point word is part of a V target change
         self.apply_ok(h, plan)
-        self.assertEqual(self.word(4).v_target_raw, round(1.3 * 1024))
+        self.assertEqual(self.word(4).v_target_raw, 0)  # G-124: P4 sits at 55x, no OC point: a requested V target is not written
         self.assertEqual(self.word(4, 5), p5_before)  # a point word keeps its (zero) V target field
+        plan = self.plan(h, rows(row("EC1", ratio=48, v=1.1367)))  # an OC point (48 > 46) carries its target, on the OC word only
+        self.assertEqual(sorted(plan["after"]["EC1"]), ["0"])
+        self.apply_ok(h, plan)
+        self.assertEqual({self.word(c).v_target_raw for c in range(12, 16)}, {round(1.1367 * 1024)})
+        self.assertEqual(self.word(12, 5).v_target_raw, 0)
 
     def test_ratio_raise_adds_the_turbo_table_write(self) -> None:
         h = self.boot()

@@ -37,6 +37,7 @@ from .fakes import FakeClock, FakeMailboxTimeout, FakeMsrError, RecordingTranspo
 
 STOCK = VfWord(ratio=55, v_target_raw=0x4A0, static=False, offset_raw=0)
 STOCK_WORD = STOCK.to_u32()
+STOCK_REVERT = STOCK.with_(v_target_raw=0).to_u32()  # G-124: a revert word without an OC point (ratio <= the top fused ratio) carries V target 0
 #: the session facts a 0x11 needs (T-021): the 0x1C word (favored ratio [7:0], fused [15:8]) and the 0x09 P1=0x11 fused point
 FAVORED_WORD = 55 | 55 << 8
 FUSED_WORD = 55 | 0x4A0 << 8
@@ -857,7 +858,7 @@ class Readback(GuardCase):
         guard.execute(self.write_req(STOCK.with_(offset_raw=-45).to_u32()), self.confirm)
         # D-016: the writes are undone newest first through the state each one left (the second is undone to the first's word, the first
         # to the word the OPERATOR read), never with the word a read-back returned
-        self.assertEqual([r.data for r in guard.revert_plan()], [STOCK.with_(offset_raw=-40).to_u32(), STOCK_WORD])
+        self.assertEqual([r.data for r in guard.revert_plan()], [STOCK.with_(offset_raw=-40).to_u32(), STOCK_REVERT])
 
 
 class RevertPlan(GuardCase):
@@ -881,8 +882,8 @@ class RevertPlan(GuardCase):
         self.assertEqual(
             plan,
             [
-                Request(3, 0x11, 0, 0, other, "revert"),
-                Request(0, 0x11, 0, 0, STOCK_WORD, "revert"),
+                Request(3, 0x11, 0, 0, STOCK.with_(ratio=54, v_target_raw=0, offset_raw=-2).to_u32(), "revert"),
+                Request(0, 0x11, 0, 0, STOCK_REVERT, "revert"),
                 Request(0, 0x15, 0, 0, 0x1, "revert"),
             ],
         )
@@ -900,7 +901,7 @@ class RevertPlan(GuardCase):
         self.transport.raise_on_call[4] = FakeMailboxTimeout("no completion")  # may or may not have been applied
         with self.assertRaises(FakeMailboxTimeout):
             guard.execute(self.write_req(STOCK.with_(offset_raw=-5).to_u32()), self.confirm)
-        self.assertEqual(guard.revert_plan(), [Request(0, 0x11, 0, 0, STOCK_WORD, "revert")])
+        self.assertEqual(guard.revert_plan(), [Request(0, 0x11, 0, 0, STOCK_REVERT, "revert")])
 
     def test_plan_requests_go_through_the_same_checks(self) -> None:
         self.policy = dataclasses.replace(self.policy, max_operations_per_session=5)
@@ -909,7 +910,7 @@ class RevertPlan(GuardCase):
         (revert,) = guard.revert_plan()
         result = guard.execute(revert, self.confirm)  # fifth operation: allowed, baseline word satisfies vf_undervolt
         self.assertIs(result.verified, True)
-        self.assertEqual(self.transport.state[(0, 0x10, 0, 0)], STOCK_WORD)
+        self.assertEqual(self.transport.state[(0, 0x10, 0, 0)], STOCK_REVERT)
         self.assert_refused(guard, revert, Refusal.SESSION_LIMIT)
 
 

@@ -93,9 +93,9 @@ class RaiseWithinTheCeilings(RaiseCase):
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual(
             self.log(s, 1),
-            [(0x14, 0), (0x10, 0), (0x1C, 0), (0x09, 0), (0x26, 0), (0x11, word(56, 0x538)), (0x10, 0), (0x1D, 56), (0x1C, 0), (0x27, 3), (0x26, 0)],
+            [(0x14, 0), (0x10, 0), (0x1C, 0), (0x09, 0), (0x26, 0), (0x11, word(56, 0)), (0x10, 0), (0x1D, 56), (0x1C, 0), (0x27, 3), (0x26, 0)],
         )
-        self.assertEqual(s.sim.vf(1), VfWord(56, 0x538, False, 0))
+        self.assertEqual(s.sim.vf(1), VfWord(56, 0, False, 0))  # G-124: ratio 56 <= 57 is no OC point: the word carries no V target
 
     def test_a_positive_offset_up_to_the_ceiling(self) -> None:
         s = self.session(offset_ceiling_mv=25, **RAISE)

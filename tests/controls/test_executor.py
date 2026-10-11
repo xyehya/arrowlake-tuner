@@ -149,7 +149,7 @@ class HappyPaths(Case):
         self.assertEqual(
             [(r.cpu, r.cmd, r.p1, r.p2, r.data, r.purpose) for r in report.revert_plan],
             [
-                (4, 0x11, 0, 0, P4_BASELINE.to_u32(), "revert"),
+                (4, 0x11, 0, 0, P4_BASELINE.with_(v_target_raw=0).to_u32(), "revert"),  # G-124: no OC point = target 0
                 (4, 0x1D, 0, 0, 55, "revert"),  # the ratio of the revert 0x11 word (what the 0x1D check wants)
                 (4, 0x27, 0, 0, 3, "revert"),
                 (4, 0x15, 0, 0, 0, "revert"),
@@ -173,7 +173,7 @@ class HappyPaths(Case):
             g2.execute(Request(4, cmd, p1, 0, 0, "baseline"), confirm)
         results = [g2.execute(req, confirm) for req in report.revert_plan[:3]]
         self.assertTrue(all(r.verified for r in results))
-        self.assertEqual(sim.vf(4), P4_BASELINE)
+        self.assertEqual(sim.vf(4), P4_BASELINE.with_(v_target_raw=0))  # G-124: the revert word carries no V target at 55x
 
     def test_dwell_is_honoured_by_waiting(self) -> None:
         s = self.session(policy=policy_with(dwell=60.0))
@@ -307,7 +307,7 @@ class PreflightBeforeAnything(Case):
     def test_predicted_refusals_abort_after_the_reads_and_before_every_write(self) -> None:
         # the refusals that depend on the words read: the planner's prediction and the real guard agree on the very same write
         cases = {
-            "overvolt": (profile(p4(oc_voltage_mv=1400)), None, [0x14, 0x10, 0x1C, 0x09, 0x26, 0x28]),  # an OC-point voltage also reads 0x28
+            "overvolt": (profile(p4(oc_voltage_mv=1400)), sim_config(initial_vf={4: P4_BASELINE.with_(ratio=58)}), [0x14, 0x10, 0x1C, 0x09, 0x26, 0x28]),  # an OC-point voltage also reads 0x28; G-124: only an OC point (58 > 57) carries a V target
             "ratio above baseline": (profile(p4(ratio=57)), None, [0x14, 0x10, 0x1C, 0x09, 0x26]),
             "static-mode baseline": (profile(p4(offset_mv=-30, ratio=55)), sim_config(initial_vf={4: P4_BASELINE.with_(static=True)}), [0x14, 0x10, 0x1C, 0x09, 0x26]),
         }

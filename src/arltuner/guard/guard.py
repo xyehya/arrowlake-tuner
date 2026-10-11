@@ -146,8 +146,8 @@ def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, kind:
     filled the way XTU fills it (``0x1C[7:0]`` / the fused ``0x09`` voltage) -- **G-122:** with ``cap_ratio`` the filled ratio is capped at the top fused ratio of
     the core ``kind`` (P 57, E 46), so reverting a word that had no OC point never creates one (the caller passes ``False`` when the word being undone had an OC
     ratio: its undo keeps the XTU fill, which that ratio's step limits were measured from) -- and then **the word the hardware keeps** (D-035, ``[MEASURED lnx 2026-10-11]``):
-    with no OC point (ratio <= the top fused ratio) and a non-zero offset the *filled* V target is dropped (0), because the hardware drops a written one (``0xFEC5B439`` read back
-    ``0xFEC00039``); with offset 0 it is kept. (Same rule as ``controls.planner.kept_word`` / ``has_oc_point``, which this module cannot import.) So a baseline
+    with no OC point (ratio <= the top fused ratio) the V target is 0 whatever the offset (G-124: the hardware drops a written one, ``0xFEC5B439`` read back
+    ``0xFEC00039``, and at offset 0 it kept ``0x00000039`` for ``0x0005B439`` when only the 0x11 was sent). (Same rule as ``controls.planner.kept_word`` / ``has_oc_point``, which this module cannot import.) So a baseline
     ``0xFEC00039`` is restored exactly. **A baseline word with a zero field (``0x0``, 23 of 24 cores at boot) cannot itself be written back** -- XTU never
     sends one; a reboot restores it."""
     base = VfWord.from_u32(baseline)
@@ -155,7 +155,7 @@ def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, kind:
     fav = (favored or 0) & 0xFF
     ratio = base.ratio or (min(fav, top) if fav and cap_ratio else fav)
     v_target = base.v_target_raw or (((fused or 0) >> 8) & 0xFFF)
-    if not base.v_target_raw and base.offset_raw != 0 and 0 < ratio <= top:  # only a FILLED target: one the baseline carries is restored as read
+    if 0 < ratio <= top:  # G-124: no OC point = V target 0, whatever the offset or where the target came from
         v_target = 0
     return base.with_(ratio=ratio, v_target_raw=v_target).to_u32()
 

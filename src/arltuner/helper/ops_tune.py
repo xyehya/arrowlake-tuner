@@ -1446,7 +1446,9 @@ def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[st
         steps.append({"kind": StepKind.WRITE_VF_POINT.value, "unit": unit_of_cpu(topology, p.cpu), "cpu": p.cpu, "point": p.point, "offset_mv": p.offset_mv})
     for t in targets:
         u = unit_of_cpu(topology, t.cpu)
-        for kind in (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR):
+        # G-124 (as G-122 in the planner): a target that sets no OC ratio sends the 0x11 alone -- no 0x1D (favored) and no 0x27 (granular)
+        kinds = (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) if t.ratio is not None else (StepKind.WRITE_VF,)
+        for kind in kinds:
             steps.append({"kind": kind.value, "unit": u, "cpu": t.cpu, "point": 0})
     if profile.turbo is not None:
         for key in ("e", "p"):

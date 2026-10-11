@@ -65,6 +65,25 @@ def write_words(plan, cpu: int) -> tuple[int, int, int]:
     return by_cmd[0x11], by_cmd.get(0x1D), by_cmd.get(0x27)  # G-122: 0x1D / 0x27 only when the profile sets an OC ratio (else None)
 
 
+class KeptWord(unittest.TestCase):
+    """G-124 [MEASURED lnx 2026-10-11/12]: a word without an OC point (ratio <= the top fused ratio) always keeps V target 0, whatever the offset."""
+
+    def test_no_oc_point_drops_the_target_at_every_offset(self) -> None:
+        from arltuner.controls.planner import kept_word
+
+        for kind, ratio in (("P", 57), ("P", 55), ("E", 46), ("E", 40)):
+            for offset in (0, -10, 5):
+                word = VfWord(ratio, 0x5B4, False, offset)
+                self.assertEqual(kept_word(kind, word), word.with_(v_target_raw=0), (kind, ratio, offset))
+
+    def test_an_oc_point_keeps_its_target(self) -> None:
+        from arltuner.controls.planner import kept_word
+
+        for kind, ratio in (("P", 58), ("E", 47), ("E", 48)):
+            word = VfWord(ratio, 0x48C, False, 0)
+            self.assertEqual(kept_word(kind, word), word, (kind, ratio))
+
+
 class StepSequence(unittest.TestCase):
     def test_p_core_offset_sequence_follows_the_xtu_procedure(self) -> None:
         plan = plan_for(profile(p4(offset_mv=-30)))
@@ -107,12 +126,15 @@ class StepSequence(unittest.TestCase):
         self.assertEqual(write.request().data, write.data)
 
     def test_ratio_only_and_voltage_only_leave_the_rest_alone(self) -> None:
-        def word(prof):
-            return next(s for s in plan_for(prof).steps if s.kind is StepKind.WRITE_VF).after
+        def word(prof, baseline=None):
+            return next(s for s in plan_for(prof, baseline).steps if s.kind is StepKind.WRITE_VF).after
 
-        self.assertEqual(word(profile(p4(ratio=50))), P4_BASELINE.with_(ratio=50))
-        w = word(profile(p4(oc_voltage_mv=1300)))
-        self.assertEqual(w, P4_BASELINE.with_(v_target_raw=VfWord.v_to_raw(1.3)))  # 1331: integer mV snaps to 1/1024 V
+        # G-124: P4 at 55x has no OC point, so any word on it carries V target 0 (the hardware keeps none)
+        self.assertEqual(word(profile(p4(ratio=50))), P4_BASELINE.with_(ratio=50, v_target_raw=0))
+        self.assertEqual(word(profile(p4(oc_voltage_mv=1300))), P4_BASELINE.with_(v_target_raw=0))
+        oc = {4: readings_of(P4_BASELINE.with_(ratio=58))}  # an OC point (58 > 57) carries the target
+        w = word(profile(p4(oc_voltage_mv=1300)), oc)
+        self.assertEqual(w, P4_BASELINE.with_(ratio=58, v_target_raw=VfWord.v_to_raw(1.3)))  # 1331: integer mV snaps to 1/1024 V
         self.assertEqual(w.v_target_raw, 1331)
         # ratio 55 -> 50 and V target 1348 -> 1331 both fall: two 0x11 words (frequency first); the LAST one is the full word
         full = [s for s in plan_for(profile(p4(offset_mv=-30, ratio=50, oc_voltage_mv=1300))).steps if s.kind is StepKind.WRITE_VF][-1]
@@ -179,13 +201,13 @@ class MeasuredShapes(unittest.TestCase):
 
     def test_cpu0_revert_word_keeps_the_fused_v_target_not_the_zero_one(self) -> None:
         plan = self.plan(profile(p_core(0, 0)), [0])
-        self.assertEqual(write_words(plan, 0), (0x0005B439, None, None))  # XTU's revert word; the baseline 0x39 is NOT rewritten
+        self.assertEqual(write_words(plan, 0), (0x00000039, None, None))  # G-124: XTU's revert word minus the V target the hardware cannot keep (= the cold-boot word)
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu1_ratio_comes_from_0x1c_and_v_target_from_0x09(self) -> None:
         plan = self.plan(profile(p_core(1, -5)), [1])
         self.assertEqual(write_words(plan, 1), (0xFF600037, None, None))  # ratio 0x37 = 55 (0x1C), not 57 (0x09); no OC point -> V target 0
-        self.assertEqual(write_words(self.plan(profile(p_core(1, 0)), [1]), 1), (0x00053837, None, None))
+        self.assertEqual(write_words(self.plan(profile(p_core(1, 0)), [1]), 1), (0x00000037, None, None))  # G-124: no OC point, target 0
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu1_step_list_equals_xtus_with_and_without_the_0x15(self) -> None:
@@ -219,8 +241,8 @@ class MeasuredShapes(unittest.TestCase):
         self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 5 * 16, 1 + 5 * 16 + 16))
         reverts = profile(e_core(0, offset_mv=0), e_core(4, offset_mv=0), e_core(8, offset_mv=0), e_core(12, offset_mv=0))
         rplan = self.plan(reverts, range(8, 24))
-        self.assertEqual({write_words(rplan, c)[0] for c in range(8, 12)}, {0x0004A02E})  # offset 0 keeps the target (kept_word)
-        self.assertEqual({write_words(rplan, c)[0] for c in range(12, 24)}, {0x00048C2E})
+        self.assertEqual({write_words(rplan, c)[0] for c in range(8, 12)}, {0x0000002E})  # G-124: offset 0 keeps no target either (kept_word)
+        self.assertEqual({write_words(rplan, c)[0] for c in range(12, 24)}, {0x0000002E})
 
     def test_a_baseline_word_is_used_when_non_zero_and_a_missing_reference_is_refused_not_invented(self) -> None:
         # a core whose 0x10 word carries ratio 50: XTU keeps it (ratio = the non-zero baseline ratio, not 0x1C[7:0])
@@ -432,7 +454,7 @@ class PredictedVerdicts(unittest.TestCase):
 
     def test_overvolt(self) -> None:
         # raw 1434 > 0x544 = 1348, the no-raise ceiling of the shipped policy; step 8: an OC-point voltage adds the 0x28 read before the writes
-        self.assertIn("v_target_raw", self.refused(profile(p4(oc_voltage_mv=1400)), step=8).detail)
+        self.assertIn("v_target_raw", self.refused(profile(p4(oc_voltage_mv=1400)), {4: readings_of(P4_BASELINE.with_(ratio=58))}, step=8).detail)  # G-124: P4 needs an OC point (58 > 57) to carry a V target
 
     def test_ratio_above_baseline(self) -> None:
         self.assertIn("ratio", self.refused(profile(p4(ratio=57))).detail)

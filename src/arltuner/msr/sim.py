@@ -136,7 +136,7 @@ class SimConfig:
     point_counts: dict[str, int] | None = None  # core kind -> fused points (domain 0): P2 above it -> rc 0x11; None = legacy: every P2 1..15 answers
     point_ratios: dict[tuple[str, int], int] = field(default_factory=lambda: {("E", 6): 46})  # (kind, point) -> the ratio field the point starts with
     cpu_point_ratios: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> ratio field; wins over ``point_ratios`` (per-core tables)
-    drop_target_without_oc_point: bool = True  # G-120: a domain-0 P2 = 0 word whose ratio is <= the top fused ratio has no OC point: with a non-zero offset the V target is dropped (needs point_counts) [MEASURED lnx 2026-10-11]
+    drop_target_without_oc_point: bool = True  # G-120: a domain-0 P2 = 0 word whose ratio is <= the top fused ratio has no OC point: the V target is dropped whatever the offset (G-124; needs point_counts) [MEASURED lnx 2026-10-11/12]
     oc_adds_point: bool = False  # T-026: an OC ratio (P2 = 0 word) above the top fused ratio of the core creates ONE extra point (``[COMMUNITY]``, SkatterBencher)
     point_offsets: dict[tuple[str, int], int] = field(default_factory=dict)  # T-026: (kind, point) -> the offset field (raw) the point starts with (default 0)
     cpu_point_offsets: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> offset raw; wins over ``point_offsets`` (a BIOS that differs per core)
@@ -751,7 +751,7 @@ class SimMsrPort(MsrPort):
             return int(Rc.UndervoltProtection), 0
         if word.static and not cfg.allow_static:
             return int(Rc.InvalidParam), 0
-        if p1 == Domain.CORE and p2 == 0 and cfg.drop_target_without_oc_point and word.offset_raw != 0:
+        if p1 == Domain.CORE and p2 == 0 and cfg.drop_target_without_oc_point:
             top = self._top_fused_ratio(cpu)
             if top is not None and word.ratio <= top:  # no OC point: the hardware keeps ratio + offset only ([MEASURED lnx 2026-10-11]: 0xFEC5B439 read back 0xFEC00039)
                 word = VfWord(word.ratio, 0, word.static, word.offset_raw)

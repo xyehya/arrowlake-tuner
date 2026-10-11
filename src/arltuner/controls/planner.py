@@ -500,10 +500,10 @@ def has_oc_point(kind: str, ratio: int) -> bool:
 
 
 def kept_word(kind: str, word: VfWord) -> VfWord:
-    """The word the hardware keeps for ``word`` on a core of ``kind`` (G-120, ``[MEASURED lnx 2026-10-11]``): with no OC point and a non-zero offset the V target
-    is dropped (0xFEC5B439 read back 0xFEC00039); with offset 0 it is kept (0x0005B439 read back 0x0005B439). The planner writes the kept word, so the guard's
-    whole-word read-back compares equal."""
-    if word.v_target_raw and word.offset_raw != 0 and not has_oc_point(kind, word.ratio):
+    """The word the hardware keeps for ``word`` on a core of ``kind`` (G-124, ``[MEASURED lnx 2026-10-11/12]``): with no OC point (ratio <= the top fused ratio)
+    the V target is always 0, whatever the offset (0xFEC5B439 read back 0xFEC00039; offset 0: 0x0005B439 was kept once, but 0x00000039 when only the 0x11 was
+    sent). The planner writes the kept word, so the guard's whole-word read-back compares equal. Only an OC point (ratio above the top fused ratio) carries a target."""
+    if word.v_target_raw and not has_oc_point(kind, word.ratio):
         return word.with_(v_target_raw=0)
     return word
 
@@ -527,17 +527,17 @@ def _vf_words(current: VfWord, goal: VfWord, kind: str = "P", label: str = "") -
     """The 0x11 words to send, in order, with their stage label. Ratio and V target moving the same way take two words (registers.md
     "Ordering"): rising -> V target first (the old ratio stays), falling -> ratio first (the old V target stays); the offset moves in the
     second word. Otherwise one word. A goal without an OC point (V target 0, ``kept_word``) is always one word: there is no target to order.
-    G-120: a voltage-first word sent while the ratio is still at or below the top fused ratio has no OC point either; the hardware keeps its target
-    only next to an offset of 0 (``[MEASURED lnx 2026-10-11]``), so with a runtime offset in place that two-word raise cannot be planned."""
+    G-124: a voltage-first word sent while the ratio is still at or below the top fused ratio has no OC point either; the hardware keeps no target there
+    (``[MEASURED lnx 2026-10-11/12]``), so that two-word raise cannot be planned."""
     if goal.v_target_raw == 0:
         return ((goal, ""),)
     d_ratio = goal.ratio - current.ratio
     d_v = goal.v_target_raw - current.v_target_raw
     if d_ratio > 0 and d_v > 0:
-        if not has_oc_point(kind, current.ratio) and current.offset_raw != 0:
+        if not has_oc_point(kind, current.ratio):
             raise PlanError(
                 f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
-                f"V target next to a runtime offset ({current.offset_mv:+.1f} mV); set the offset to 0 first, raise ratio and voltage, then apply the offset"
+                f"V target (G-124: a word without an OC point always keeps target 0), so the voltage-first word cannot be verified"
             )
         return ((current.with_(v_target_raw=goal.v_target_raw), "1/2 voltage first"), (goal, "2/2 full word"))
     if d_ratio < 0 and d_v < 0:

@@ -145,12 +145,12 @@ class MeasuredMachine(Rig):
 class LinuxWriteSittings(Rig):
     """G-120: what the first real Linux write sittings showed (``docs/knowledge/tuning-results.md`` "First write sittings", [MEASURED lnx 2026-10-11])."""
 
-    def test_no_oc_point_drops_the_v_target_next_to_an_offset(self) -> None:
+    def test_no_oc_point_drops_the_v_target_whatever_the_offset(self) -> None:
         self.use(per_point=True)
         self.assertEqual(self.tx(0, WR_VF, 0, 0, 0xFEC5B439).rc, Rc.Pass)  # P0 whole-curve -10 mV with the fused target, OC ratio 57 = top fused
         self.assertEqual(self.tx(0, RD_VF).data, 0xFEC00039)  # read back with the target dropped
-        self.assertEqual(self.tx(0, WR_VF, 0, 0, 0x0005B439).rc, Rc.Pass)  # offset 0: the target is kept
-        self.assertEqual(self.tx(0, RD_VF).data, 0x0005B439)
+        self.assertEqual(self.tx(0, WR_VF, 0, 0, 0x0005B439).rc, Rc.Pass)  # G-124 [MEASURED lnx 2026-10-12]: offset 0 drops it too (0x00000039 read back)
+        self.assertEqual(self.tx(0, RD_VF).data, 0x00000039)
 
     def test_an_oc_point_keeps_its_target_and_adds_p2_top_plus_one(self) -> None:
         self.use(per_point=True)
