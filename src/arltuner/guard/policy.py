@@ -364,7 +364,9 @@ def _check_vf_bounded(
     direction. Order of the tests (absolute bounds first, so a refusal names the root cause):
 
     1. mode adaptive in baseline and word (static / Power-Gate stay out of scope); ``ratio != 0`` and ``v_target_raw != 0`` (XTU never sends
-       a zero field and the hardware's acceptance of one was never observed, ``[UNVERIFIED]``);
+       a zero field and the hardware's acceptance of one was never observed, ``[UNVERIFIED]``) -- except (G-120, D-035) a zero V target on a word with
+       no OC point (``0 < ratio <= ctx.top_fused_ratio``: P 57, E 46), which is ``ratio | offset << 21`` as the hardware keeps it
+       ``[MEASURED lnx 2026-10-11]``; that word skips the V reference / V step / V ordering tests, every other bound applies;
     2. ``ratio <= ratio ceiling`` and ``v_target_raw <= V target ceiling``: the policy's per-kind number, **else the no-raise value**
        (``max`` of the non-zero baseline and ``0x1C[7:0]`` / fused ``0x09`` voltage), so the shipped policy refuses every raise;
     3. the hardware maximum: ``v_target_raw <= hw_v_max_raw(0x28 word)`` whenever the session read ``0x28``; a V target above the no-raise

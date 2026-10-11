@@ -196,7 +196,7 @@ class MeasuredShapes(unittest.TestCase):
         clear = self.plan(profile(p_core(1, -5)), [1], per_core_enabled=False)
         self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11, 0x1D, 0x27])
 
-    def test_no_word_with_a_zero_ratio_or_v_target_is_ever_planned(self) -> None:
+    def test_no_word_with_a_zero_ratio_is_ever_planned_and_a_zero_v_target_only_without_an_oc_point(self) -> None:
         for cpu in range(24):
             prof = profile(p_core(cpu, -5)) if cpu < 8 else profile(e_core(cpu - 8, -5))
             cpus = [cpu] if cpu < 8 else list(range(8 + 4 * ((cpu - 8) // 4), 12 + 4 * ((cpu - 8) // 4)))
