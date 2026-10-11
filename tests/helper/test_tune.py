@@ -138,11 +138,11 @@ class PlanTests(TuneCase):
     def test_a_ratio_the_unit_does_not_have_is_an_error_per_unit_and_a_skip_in_simple_scope(self) -> None:
         h = self.boot()
         self.read(h)
-        r = h.call("p1", "tune.plan", {"intent": rows(row("P1", points={"57": -10}))})  # the simulator's P1 table stops at 55
+        r = h.call("p1", "tune.plan", {"intent": rows(row("P1", points={"58": -10}))})  # F1: every P-core's table stops at 57
         self.assertEqual(error_code(r), "BAD_REQUEST")
-        self.assertIn("no V/F point at ratio 57", r["error"]["message"])
-        p = self.plan(h, rows(row("P", points={"57": -10, "53": -10}), scope="simple"))
-        self.assertTrue(any("P1 has no V/F point at ratio 57" in w for w in p["warnings"]))
+        self.assertIn("no V/F point at ratio 58", r["error"]["message"])
+        p = self.plan(h, rows(row("P", points={"58": -10, "53": -10}), scope="simple"))
+        self.assertTrue(any("P1 has no V/F point at ratio 58" in w for w in p["warnings"]))
 
     def test_policy_range_plus_minus_200_accepted_205_refused(self) -> None:
         h = self.boot()

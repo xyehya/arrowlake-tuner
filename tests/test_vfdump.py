@@ -18,6 +18,7 @@ from arltuner.guard import policy as guard_policy
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort
 from arltuner.msr.port import MsrError
+from arltuner.msr.sim import POINT_RATIOS_P_NONFAVORED_SIM
 from arltuner.topology import arl_s_285k
 
 from .test_cli import POLICY_TOML, TOKEN, CliCase
@@ -44,8 +45,21 @@ P_RATIOS = [8, 20, 30, 48, 53, 55, 56, 57]
 E_RATIOS = [8, 15, 23, 30, 40, 46]
 
 
+def non_favored_tables() -> dict[tuple[int, int], int]:
+    """G-114: ``SimConfig.measured()`` gives every P-core the same table (F1); the flagging tests opt in to the T-026 SIM-ONLY per-core table."""
+    return {(c, n): r for c in (1, 2, 4, 5, 6, 7) for n, r in enumerate(POINT_RATIOS_P_NONFAVORED_SIM, start=1)}
+
+
+def non_favored_tables() -> dict[tuple[int, int], int]:
+    """G-114: ``SimConfig.measured()`` gives every P-core the same table (F1); the flagging tests opt in to the T-026 SIM-ONLY per-core table."""
+    return {(c, n): r for c in (1, 2, 4, 5, 6, 7) for n, r in enumerate(POINT_RATIOS_P_NONFAVORED_SIM, start=1)}
+
+
 def dump_sim(**overrides: object) -> SimMsrPort:
     overrides.setdefault("per_point", True)
+    if "point_ratios" not in overrides:  # a caller that defines its own point tables opts out of the SIM-ONLY non-favored P table
+        overrides.setdefault("cpu_point_ratios", non_favored_tables())
+    overrides.setdefault("cpu_point_ratios", non_favored_tables())
     overrides.setdefault("reject_zero_fields", True)
     return SimMsrPort(SimConfig.measured(**overrides))
 
