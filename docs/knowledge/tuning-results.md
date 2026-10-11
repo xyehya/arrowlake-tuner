@@ -137,3 +137,5 @@ Restore accepted from the same page: 57 words read back as written (P7 `0xF46000
   49× **1.1675 V**, 48× 1.1475, 47× 1.130 (linear between point 6 = 1.1125 with −25 mV and the OC point). HWP highest on CPU 12: 0x44 → 0x45,
   `cpuinfo_max_freq` 4.9 → **5.0 GHz**, but **`scaling_max_freq` stays 4.9 GHz ⇒ uncapped load runs 48×** (intel_pstate N→N−1). After raising
   `scaling_max_freq` to 5.0 GHz on CPUs 12–15: stress ran **49× (4901 MHz), 0 errors, 43 °C**. Reverted (48× @ 1.137, table 48×8, 4.9 GHz).
+- After G-126 [MEASURED lnx 2026-10-12]: `tune.apply` EC1 48→49× reported `cpufreq` 4.9→5.0 GHz on CPUs 12–15 by itself; stress EC1 49× (4901 MHz),
+  0 errors; revert 49→48× lowered them to 4.9 GHz. The kernel's `cpuinfo_max_freq` had updated by the time the apply finished.

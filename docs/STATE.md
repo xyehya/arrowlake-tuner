@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-12 · lnx · **v3 complete on the reference machine**: G-111…G-124 merged (suite 2260 OK), installed, verified on hardware end to end. User guide: `docs/USER-GUIDE.md`._
+_Updated: 2026-10-12 · lnx · **v3 complete on the reference machine**: G-111…G-126 merged (suite 2277 OK), installed, verified on hardware end to end. User guide: `docs/USER-GUIDE.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -49,8 +49,8 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
    curves), writes via the Tune path (OC point ⇒ P2=7 on E, adaptive follows/clamps, P2=0 whole-curve offset P and E (offset-only = 0x11 only),
    per-point, Restore accepted 172 ops), stress screens (CPU/memory/capped). Machine on the accepted tuning; 11/12 match, CPU 12 = EC1 neutral OC
    point 48× from the stage-1 test (clears at cold boot).
-2. Open, low priority: `write_percore_enable` still predicted as worst case (no 0x14 at plan time); ring/NGU tuning not in scope (SPEC §2);
-   E OC ratio above 48 untested on hardware; P OC ratio (58×) untested in v3; light theme dropped; restore scripts still use their checkout
+2. Also verified 2026-10-12: turbo-table writes (P 54× / E 47× all-core, restored), E OC 49× with automatic cpufreq lift (G-126). Open, low
+   priority: `write_percore_enable` predicted as worst case; ring/NGU not in scope (SPEC §2); P OC ratio 58× is above the D-032 cap (P 57); light theme dropped; restore scripts still use their checkout
    policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
 3. **Pending operator step:** final build through the real polkit path (`python3 tools/arltuner-gui.py --open`, password) + one Stress screen
    from the tab, check the child runs as the user (`ps -eo user,args | grep stress`). PKEXEC_UID is set by pkexec [DOC pkexec(1)]; all hardware
