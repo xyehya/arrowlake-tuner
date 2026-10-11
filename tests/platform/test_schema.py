@@ -124,11 +124,22 @@ class ValidationTests(unittest.TestCase):
     def test_turbo_missing_msr(self):
         self.bad(lambda d: d["turbo"].pop("msr_0x650"), "msr_0x650")
 
-    def test_empty_sensor_name_allowed_only_for_vcore_name(self):
+    def test_empty_sensor_name_allowed_only_for_vcore_name_and_label(self):
         self.bad(lambda d: d["sensors"].update(temp_hwmon_name=""), "temp_hwmon_name")
         d = _doc()
         d["sensors"]["vcore_hwmon_name"] = ""
-        parse_platform(d)
+        d["sensors"]["vcore_hwmon_label"] = ""
+        s = parse_platform(d).sensors
+        self.assertEqual((s.vcore_hwmon_name, s.vcore_hwmon_label), ("", ""))
+
+    def test_vcore_chip_and_label_are_parsed(self):
+        s = parse_platform(_doc()).sensors
+        self.assertEqual((s.vcore_hwmon_name, s.vcore_hwmon_label), ("nct6686", "VIN16"))  # [MEASURED lnx 2026-10-11]
+
+    def test_vcore_label_must_be_a_string_and_unknown_sensor_keys_refused(self):
+        self.bad(lambda d: d["sensors"].update(vcore_hwmon_label=16), "vcore_hwmon_label")
+        self.bad(lambda d: d["sensors"].pop("vcore_hwmon_label"), "vcore_hwmon_label")
+        self.bad(lambda d: d["sensors"].update(vcore_in="in0"), "vcore_in")
 
 
 class LoadErrorTests(unittest.TestCase):

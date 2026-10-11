@@ -74,7 +74,8 @@ class TopologySpec:
 class Sensors:
     temp_hwmon_name: str
     vcore_hwmon_vendor: str
-    vcore_hwmon_name: str  # "" = not recorded
+    vcore_hwmon_name: str  # hwmon ``name`` of the board Super-I/O chip; "" = not recorded
+    vcore_hwmon_label: str  # its ``in*_label`` that is Vcore; "" = not recorded
 
 
 @dataclass(frozen=True)
@@ -248,11 +249,12 @@ def parse_platform(data: Mapping[str, object]) -> Platform:
     turbo = {m: _int(tu, f"msr_0x{m:X}", "turbo", 0, 1 << 64) for m in _TURBO_MSRS}
 
     s = _table(data, "sensors")
-    _check_known(s, "sensors", {"temp_hwmon_name", "vcore_hwmon_vendor", "vcore_hwmon_name"})
+    _check_known(s, "sensors", {"temp_hwmon_name", "vcore_hwmon_vendor", "vcore_hwmon_name", "vcore_hwmon_label"})
     sensors = Sensors(
         temp_hwmon_name=_str(s, "temp_hwmon_name", "sensors"),
         vcore_hwmon_vendor=_str(s, "vcore_hwmon_vendor", "sensors"),
         vcore_hwmon_name=_str(s, "vcore_hwmon_name", "sensors", allow_empty=True),
+        vcore_hwmon_label=_str(s, "vcore_hwmon_label", "sensors", allow_empty=True),
     )
 
     return Platform(

@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from arltuner.platform import Sensors, default_platform
 from arltuner.topology import cpumap
 
 from . import cpu as cpumod
@@ -26,12 +27,13 @@ NO_MSR = "no MSR access (needs root)"
 class Sampler:
     def __init__(self, msr: TelemetryMsr | None, topology: cpumap.Topology | None = None,
                  hwmon_root: Path = DEFAULT_HWMON_ROOT, powercap_root: Path = DEFAULT_POWERCAP_ROOT,
-                 imc: ImcStat | None = None, clock: Callable[[], float] = time.monotonic,
+                 imc: ImcStat | None = None, sensors: Sensors | None = None, clock: Callable[[], float] = time.monotonic,
                  interval_s: float = 1.0) -> None:
         self._msr = msr
         self._topo = topology or cpumap.arl_s_285k()
         self._cpus = sorted(c.cpu for c in self._topo.cores)
         self._hwmon, self._imc, self._interval = Path(hwmon_root), imc, interval_s
+        self._sensors = sensors or default_platform().sensors  # Vcore chip + label (platforms/arl-s-285k.toml [sensors])
         self._freq: cpumod.FreqSampler | None = None
         self._tsc = unavailable("msr 0xCE", NO_MSR, "MHz")
         if msr is not None:
@@ -72,7 +74,7 @@ class Sampler:
             unavailable("powercap intel-rapl:0:0", "no 'core' subdomain", "W")
         rd, wr = self._imc.latest() if self._imc else (unavailable("perf stat", "IMC sampling not enabled", "GB/s"),) * 2
         return {
-            "ts": time.time(), "cores": cores, "temps": temps, "vcore": read_vcore(self._hwmon).to_json(),
+            "ts": time.time(), "cores": cores, "temps": temps, "vcore": read_vcore(self._hwmon, self._sensors.vcore_hwmon_name, self._sensors.vcore_hwmon_label).to_json(),
             "power": {"package": pkg.to_json(), "core": core_w.to_json()},
             "dram": {"read": rd.to_json(), "write": wr.to_json()},
             "limit_reasons_raw": (cpumod.read_limit_reasons_raw(msr).to_json() if msr else no("msr 0x6B0", "raw").to_json()),

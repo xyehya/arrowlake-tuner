@@ -34,16 +34,27 @@ class Hwmon(unittest.TestCase):
         self.assertEqual(read_coretemp(self.root / "nope"), {})
 
     def test_vcore(self):
-        self.assertIsNone(read_vcore(self.root).value)  # empty root
-        w(self.root / "hwmon5/name", "nct6799\n")
-        w(self.root / "hwmon5/in0_label", "AVCC\n")
-        w(self.root / "hwmon5/in0_input", "3300\n")
-        self.assertIsNone(read_vcore(self.root).value)  # no Vcore label -> unavailable, not another rail
-        w(self.root / "hwmon5/in1_label", "Vcore\n")
-        w(self.root / "hwmon5/in1_input", "1296\n")
-        r = read_vcore(self.root)
-        self.assertAlmostEqual(r.value, 1.296)
+        chip, label = "nct6686", "VIN16"
+        self.assertIsNone(read_vcore(self.root, chip, label).value)  # empty root
+        w(self.root / "hwmon5/name", "nct6686\n")
+        w(self.root / "hwmon5/in1_label", "VIN0\n")
+        w(self.root / "hwmon5/in1_input", "1000\n")
+        r = read_vcore(self.root, chip, label)
+        self.assertIsNone(r.value)  # VIN0 is present but is not Vcore -> unavailable, never another rail
+        self.assertIn("VIN16", r.reason)
+        w(self.root / "hwmon5/in0_label", "VIN16\n")
+        w(self.root / "hwmon5/in0_input", "1456\n")
+        r = read_vcore(self.root, chip, label)
+        self.assertAlmostEqual(r.value, 1.456)
         self.assertEqual(r.unit, "V")
+        self.assertIsNone(read_vcore(self.root, "nct6799", label).value)  # a different chip name does not match
+        self.assertIsNone(read_vcore(self.root, chip, "Vcore").value)  # nor a different label
+        self.assertIsNone(read_vcore(self.root, "", label).value)  # not recorded
+        self.assertIsNone(read_vcore(self.root, chip, "").value)
+        w(self.root / "hwmon6/name", "nct6799\n")
+        w(self.root / "hwmon6/in0_label", "VIN16\n")
+        w(self.root / "hwmon6/in0_input", "999\n")
+        self.assertAlmostEqual(read_vcore(self.root, chip, label).value, 1.456)  # only the named chip is read
 
 
 class Powercap(unittest.TestCase):

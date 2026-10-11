@@ -2,9 +2,9 @@
 
 * coretemp: ``temp*_input`` millidegrees C with ``temp*_label`` "Package id N" / "Core N" [DOC kernel Documentation/hwmon/coretemp.rst].
   Whether coretemp labels E-cores on Arrow Lake is [UNVERIFIED]; we report exactly the labels present, nothing inferred.
-* Vcore: board Super-I/O driver, ``in*_input`` millivolts (hwmon ABI) with ``in*_label`` matching a configurable name
-  (default "Vcore"). The chip is [MEASURED lnx 2026-10-01] only as "Nuvoton Super-I/O, 16 mV step" (linux-path.md s7); the exact
-  hwmon ``name`` and label are [UNVERIFIED] -> no match => unavailable, never a guess.
+* Vcore: board Super-I/O driver, ``in*_input`` millivolts (hwmon ABI). The chip ``name`` and the ``in*_label`` that is Vcore come from the
+  platform file (``[sensors] vcore_hwmon_name / vcore_hwmon_label``): on this board hwmon ``nct6686`` (driver nct6683), ``in0`` label
+  "VIN16" [MEASURED lnx 2026-10-11]. Chip or label absent => unavailable, never another input.
 """
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from pathlib import Path
 from .readings import Reading, unavailable
 
 DEFAULT_HWMON_ROOT = Path("/sys/class/hwmon")
-VCORE_CHIP_CANDIDATES = ("nct6775", "nct6776", "nct6779", "nct6791", "nct6792", "nct6793", "nct6795", "nct6796", "nct6797",
-                         "nct6798", "nct6799")  # kernel nct6775 driver names [DOC]; which one this board binds: [UNVERIFIED]
 
 
 def _read(p: Path) -> str | None:
@@ -53,12 +51,15 @@ def read_coretemp(root: Path = DEFAULT_HWMON_ROOT) -> dict[str, Reading]:
     return out
 
 
-def read_vcore(root: Path = DEFAULT_HWMON_ROOT, chips: tuple[str, ...] = VCORE_CHIP_CANDIDATES,
-               label: str = "Vcore") -> Reading:
-    """Board Vcore in V (hwmon ``in*_input`` is mV). First device in ``chips`` with a matching label wins."""
-    for dev in _devices(root, chips):
+def read_vcore(root: Path = DEFAULT_HWMON_ROOT, chip: str = "", label: str = "") -> Reading:
+    """Board Vcore in V (hwmon ``in*_input`` is mV) from the ``in*`` whose label is exactly ``label`` on the hwmon device named ``chip``.
+
+    Nothing else is ever read: ``VIN0`` / ``in1`` on this board is a CPU-0-activity-gated signal, not Vcore [MEASURED lnx 2026-10-11]."""
+    if not chip or not label:
+        return unavailable("hwmon", "Vcore chip/label not recorded in the platform file", "V")
+    for dev in _devices(root, (chip,)):
         for lab in sorted(dev.glob("in*_label")):
             if _read(lab) == label:
                 inp = dev / (lab.name[:-6] + "_input")
                 return _milli(inp, "V", 1000.0, f"hwmon {dev.name}/{inp.name}")
-    return unavailable("hwmon", f"no hwmon device in {chips[0]}..{chips[-1]} with label {label!r}", "V")
+    return unavailable("hwmon", f"no hwmon device {chip!r} with label {label!r}", "V")
