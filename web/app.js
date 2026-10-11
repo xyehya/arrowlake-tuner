@@ -5,8 +5,8 @@
 // All data is written with textContent; no HTML strings are ever parsed and there is no inline style: geometry and colour go through SVG attributes
 // and classes only (CSP style-src 'self'). Contracts 8 and 9: docs/ARCHITECTURE.md.
 (function () {
-  const COST_LOW = 112;   // tune.read estimate, mailbox operations (G-102 / G-105 task)
-  const COST_HIGH = 124;
+  const COST_LOW = 124;   // tune.read estimate, mailbox operations: 112 V/F reads + 12 fused-point reads (G-123; the favored-ratio reads come on top)
+  const COST_HIGH = 136;
   const HEARTBEAT_STALE_MS = 7000;  // the helper beats every 2 s
   const EVENTS_URL = "/api/events";
   const HISTORY_MS = 900000;        // client-side history window: 15 min (wall-clock time, not sample counts)
@@ -22,6 +22,8 @@
     mode: null,            // "write" | "read-only" | "refuse" | null (unknown)
     writesAllowed: null,   // boolean | null
     hbState: null, hbOpId: null, opsUsed: null, opsBudget: null, hbAt: 0,
+    opsHist: [],           // [{t, v}]: mailbox operations used this boot, noted whenever the heartbeat's count changes (the session sparkline)
+    lastTried: false,      // tune.last answered once (a reconnect must not wipe the editor)
     teleAt: 0,
     intervalS: 1,          // the sampler interval this page asked for
     opId: null,            // request id of the long op (tune.read, vf.measure, tune.apply) this page started, or adopted after a reload
@@ -387,6 +389,7 @@
     S.hbOpId = typeof ev.op_id === "string" ? ev.op_id : null;
     S.opsUsed = isNum(ev.ops_used) ? ev.ops_used : null;
     S.opsBudget = isNum(ev.ops_budget) && ev.ops_budget > 0 ? ev.ops_budget : null;
+    noteOps();
     if (S.hbState && S.hbState !== "idle" && S.hbOpId && !S.opId && !S.doneIds.has(S.hbOpId)) {  // re-attach to a running op after a reload
       adoptOp(S.hbOpId, S.hbState);
     } else if (S.hbState === "idle" && S.adopted && S.opId) {  // the adopted op ended and its result was missed
@@ -402,24 +405,47 @@
     return S.opsUsed !== null && S.opsBudget !== null ? Math.max(S.opsBudget - S.opsUsed, 0) : null;
   }
 
-  function setRing(id, left, budget) {
-    const r = $(id);
-    if (left === null) { r.setAttribute("stroke-dasharray", "0 100"); r.setAttribute("class", "ring-used"); return; }
-    const f = clamp(left / budget, 0, 1) * 100;
-    r.setAttribute("stroke-dasharray", f.toFixed(2) + " 100");
-    r.setAttribute("class", "ring-used" + (left < COST_HIGH ? " low" : ""));
+  // The budget is an indicator (D-032): how many mailbox operations this boot has used, and the shape of that over the session. The cap is a small note.
+  const OPS_HIST_MAX = 720;
+  function noteOps() {
+    if (S.opsUsed === null) return;
+    const h = S.opsHist, last = h.length ? h[h.length - 1] : null;
+    if (!last || last.v !== S.opsUsed) {
+      h.push({ t: Date.now(), v: S.opsUsed });
+      if (h.length > OPS_HIST_MAX) h.shift();
+    }
+  }
+
+  // A step line, newest at the right edge: the count only changes when something is sent. Left of the first heartbeat this page saw there is no history (dashed). At least a minute wide, so the first seconds of a session are not stretched.
+  function drawOpsSpark(id) {
+    const svg = $(id), h = S.opsHist;
+    if (!h.length) { svg.replaceChildren(); return; }
+    const now = Date.now(), t0 = h[0].t, span = Math.max(now - t0, 60000);
+    let lo = Infinity, hi = -Infinity;
+    for (const q of h) { lo = Math.min(lo, q.v); hi = Math.max(hi, q.v); }
+    const top = Math.max(hi, lo + 10);   // a quiet session draws a flat line, not noise
+    const X = (t) => (159 - ((now - t) / span) * 158).toFixed(1), Y = (v) => (40 - ((v - lo) / (top - lo)) * 34).toFixed(1);
+    let d = "M" + X(h[0].t) + " " + Y(h[0].v);
+    for (let i = 1; i < h.length; i++) d += " H" + X(h[i].t) + " V" + Y(h[i].v);
+    d += " H" + X(now);
+    const area = d + " V43 H" + X(h[0].t) + " Z";
+    const pre = "M1 " + Y(h[0].v) + " H" + X(h[0].t);   // before this page opened: only the count at that moment is known, drawn dashed
+    fill(svg, [sv("path", { d: "M1 41.5 H159", "vector-effect": "non-scaling-stroke" }, "ops-base"), sv("path", { d: pre, "vector-effect": "non-scaling-stroke" }, "ops-pre"),
+      sv("path", { d: area }, "ops-area"), sv("path", { d: d, "vector-effect": "non-scaling-stroke" }, "ops-line")]);
+    svg.setAttribute("aria-label", "Mailbox operations used this boot: " + lo + " at the start of this session, " + h[h.length - 1].v + " now");
   }
 
   function renderHelper() {
-    const left = opsLeft();
+    const used = S.opsUsed === null ? "n/a" : S.opsUsed;
+    const cap = S.opsBudget === null ? "" : "Per-boot cap " + S.opsBudget + " (policy). The guard refuses past it; it is a limit, not a target.";
     setText("hb-state", S.hbState === null ? "n/a" : S.hbState);
-    setText("hb-used", S.opsUsed === null ? "n/a" : S.opsUsed);
-    setText("hb-budget", S.opsBudget === null ? "n/a" : S.opsBudget);
-    setText("hb-left", left === null ? "n/a" : left);
-    setText("ov-left", left === null ? "n/a" : left);
-    setText("ov-state", S.hbState === null ? "helper: n/a" : "of " + S.opsBudget + ", helper " + S.hbState);
-    setRing("ring-ov", left, S.opsBudget);
-    setRing("ring-sys", left, S.opsBudget);
+    setText("hb-used", used);
+    setText("ov-used", used);
+    setText("hb-cap", cap);
+    setText("ov-cap", cap);
+    setText("ov-state", S.hbState === null ? "helper: n/a" : "helper " + S.hbState);
+    drawOpsSpark("sp-ops-ov");
+    drawOpsSpark("sp-ops-sys");
     if (S.hbState === null) setPill("conn-helper", "helper: n/a", "s-unknown");
     else setPill("conn-helper", "helper: " + S.hbState, S.hbState === "idle" ? "s-ok" : "s-busy");
   }
@@ -1172,7 +1198,7 @@
     if (kind === "measure") { setText("cv-status", "The measurement ended while this page was away. Stored curves were reloaded."); loadCurves(true); }
     else if (kind === "stress") { ST.run = null; setText("st-status", "A stress screen ended while this page was away. It is in the list below."); renderStress(); loadStressList(); }
     else if (kind === "commit") setText("tn-status", "An apply ended while this page was away. Read the tuning words to see where things stand.");
-    else setText("tn-status", "A read ended while this page was away. Read again to see it.");
+    else { setText("tn-status", "A read ended while this page was away."); S.lastTried = false; loadLastRead(); }
   }
 
   // ---- gates ----------------------------------------------------------------------------------------------------------------------------
@@ -1388,6 +1414,17 @@
     if (S.opKind === "commit") { setCommitProgress(ev.step, ev.of, t); return; }
     $("tn-bar").max = ev.of; $("tn-bar").value = Math.min(ev.step, ev.of);
     setText("tn-progress", t);
+  }
+
+  // On load: this boot's stored read (tune.last). No mailbox operation: the helper kept the last complete read in a root-owned file.
+  async function loadLastRead() {
+    if (T.words || S.lastTried) return;
+    const { status, body } = await api("tune.last", {});
+    if (status !== 200 || !body.ok || !isObj(body.result)) return;
+    S.lastTried = true;
+    if (T.words || body.result.available !== true || !isObj(body.result.result)) return;   // a read finished meanwhile, or none exists for this boot
+    setWords(body.result.result, { at: body.result.at, applied_at: body.result.applied_at });
+    setText("tn-status", "Showing the read kept by the helper (no mailbox operations used). " + (T.words && T.words.appliedSince ? "It was updated from the last apply's read-back. " : "") + "Press Re-read tuning words for a fresh read.");
   }
 
   function onReadResult(ev) {
@@ -1706,7 +1743,8 @@
     const ids = new Set(CV.list.map((c) => c.id));
     for (const k of Object.keys(CV.cache)) if (!ids.has(k)) delete CV.cache[k];
     if (CV.compare && !ids.has(CV.compare)) CV.compare = null;
-    if (selectNewest || !CV.primary || !ids.has(CV.primary)) CV.primary = CV.list.length ? CV.list[0].id : null;
+    if (selectNewest) CV.primary = CV.list.length ? CV.list[0].id : null;   // a measurement just ended: show it
+    else if (!CV.primary || !ids.has(CV.primary)) CV.primary = defaultCurveId();
     renderCurves();
     await Promise.all([CV.primary, CV.compare, baselineId(), TN_CURVE_WANT()].filter(Boolean).map(ensureRecord));
     renderCurves();
@@ -1714,6 +1752,15 @@
   }
 
   function baselineId() { const b = CV.list.find((c) => c.baseline === true); return b ? b.id : null; }
+
+  // The curve shown first (G-123): the newest baseline, else the newest complete curve of all 12 units, else the newest (the list is newest first).
+  function defaultCurveId() {
+    const b = baselineId();
+    if (b) return b;
+    const all = CV.list.find((c) => c.complete !== false && Array.isArray(c.units) && UNIT_IDS.every((u) => c.units.indexOf(u) >= 0));
+    if (all) return all.id;
+    return CV.list.length ? CV.list[0].id : null;
+  }
 
   // A large record comes back within the helper's 64 KiB line with omitted_units: [unit, ...]; the rest is fetched with curves.get {id, units} and merged.
   async function mergeOmitted(rec) {
@@ -2671,13 +2718,22 @@
     r.warn.hidden = msgs.length === 0;
   }
 
-  function setSel(sel, value, tol) {
+  // fmt (optional): a value the dropdown does not offer (a loaded profile's -28 mV on a 5 mV grid) is added as an extra option, so the control shows it instead of going blank.
+  function setSel(sel, value, tol, fmt) {
+    for (const o of Array.from(sel.options)) if (o.dataset.extra) o.remove();
     if (value === MIXED) sel.value = "__mixed";
     else if (value === null) sel.value = "__none";
     else sel.value = String(value);
     if (value !== MIXED && value !== null && sel.value !== String(value)) {  // a value between grid steps (never picked, only "now")
       const o = Array.from(sel.options).find((x) => x.value !== "__mixed" && x.value !== "__none" && same(Number(x.value), value, tol));
       if (o) sel.value = o.value;
+      else if (fmt && isNum(value)) {
+        const extra = Object.assign(el("option", "", fmt(value) + "  \u00b7 edit"), { value: String(value) });
+        extra.dataset.extra = "1";
+        const after = Array.from(sel.options).find((x) => x.value !== "__mixed" && x.value !== "__none" && Number(x.value) > value);
+        sel.insertBefore(extra, after || null);
+        sel.value = extra.value;
+      }
     }
   }
 
@@ -2708,14 +2764,14 @@
       r.offHint.hidden = open;
       if (open) buildPointPanel(r);
       const effCurve = curveOf(def.units, true), curCurve = curveOf(def.units, false);
-      setSel(r.offSel, effCurve, MV_TOL);
+      setSel(r.offSel, effCurve, MV_TOL, (v) => fmtMv(v));
       r.offCell.classList.toggle("changed", !open && !(effCurve === curCurve || (isNum(effCurve) && isNum(curCurve) && same(effCurve, curCurve, MV_TOL))));
       r.offHint.textContent = isNum(effCurve) && !same(effCurve, curCurve, MV_TOL) ? "writes " + fmtMv(snapMv(effCurve), 2) : "";
       let nPtChanged = 0;
       for (const ratio of Object.keys(r.ptSels)) {
         const p = r.ptSels[ratio];
         const e = pointOf(def.units, Number(ratio), true), c = pointOf(def.units, Number(ratio), false);
-        setSel(p.sel, e, MV_TOL);
+        setSel(p.sel, e, MV_TOL, (v) => fmtMv(v));
         const ch = !(e === c || (isNum(e) && isNum(c) && same(e, c, MV_TOL)));
         p.lab.classList.toggle("changed", ch);
         if (ch) nPtChanged++;
@@ -2725,12 +2781,12 @@
       if (open) refreshOcCell(r);
       refreshRowWarn(r);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
-      setSel(r.vtSel, effVtv, V_TOL);
+      setSel(r.vtSel, effVtv, V_TOL, (v) => v.toFixed(4) + " V");
       const vtCh = !(effVtv === curVtv || (isNum(effVtv) && isNum(curVtv) && same(effVtv, curVtv, V_TOL)));
       r.vtCell.classList.toggle("changed", vtCh);
       r.vtHint.textContent = vtCh && isNum(effVtv) ? "writes " + snapV(effVtv).toFixed(4) + " V" : "";
       const effR = ratioOf(def.units, true), curR = ratioOf(def.units, false);
-      setSel(r.rSel, effR, 0.5);
+      setSel(r.rSel, effR, 0.5, (v) => v + "\u00d7");
       const rCh = !(effR === curR || (isNum(effR) && isNum(curR) && effR === curR));
       r.rCell.classList.toggle("changed", rCh);
       r.rHint.textContent = rCh && isNum(effR) ? ratioHint(def.kind, effR) : (!rCh && curR === null ? "OC ratio reads 0 (not set)" : "");
@@ -2970,15 +3026,19 @@
   }
 
   function appliedFromWords(w) {
-    const offs = UNIT_IDS.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.map((p) => p.offset_mv)).filter(isNum);
+    // the OC word (P2 = 0) carries the whole-curve offset, so it counts too: a curve offset on it is tuning even when every point reads 0
+    const offs = UNIT_IDS.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)).filter(isNum);
     if (!offs.length) return { kind: "unknown", text: "unknown", title: "The read returned no offsets." };
     if (offs.every((x) => Math.abs(x) < MV_TOL)) return { kind: "stock", text: "stock", title: "Every offset read back as 0 mV." };
-    const grp = (ids) => agg(ids.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.map((p) => p.offset_mv)), MV_TOL);
+    const grp = (ids) => agg(ids.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)), MV_TOL);
     const f = (g) => (isNum(g) ? fmtMv(g) : g === MIXED ? "mixed" : "n/a");
     return { kind: "words", text: "tuned (P " + f(grp(UNIT_IDS.slice(0, 8))) + ", E " + f(grp(UNIT_IDS.slice(8))) + ")", title: "Offsets read from the CPU this boot." };
   }
 
-  function setWords(r) {
+  function clockText(ms) { return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); }
+
+  // meta (tune.last): {at (epoch s), applied_at (epoch s | null)}: the words are the helper's stored read of this boot, not a fresh one.
+  function setWords(r, meta) {
     const w = normWords(r);
     if (!Object.keys(w.units).length) { setText("tn-status", "The read returned no V/F units for the 12 tuning units. Nothing to edit."); return; }
     T.words = w;
@@ -2993,7 +3053,12 @@
     $("tn-console").hidden = false;
     $("tn-preview-card").hidden = false;
     $("tn-words-card").hidden = false;
-    setText("tn-sub", "Choose values below. Dropdowns show what the CPU holds now and only offer what the policy allows.");
+    if (isObj(meta) && isNum(meta.at)) w.at = meta.at * 1000;
+    w.stored = isObj(meta);
+    w.appliedSince = isObj(meta) && isNum(meta.applied_at);
+    setText("tn-sub", "Read at " + clockText(w.at) + " this boot" + (w.stored ? ", kept by the helper" : "") + (w.appliedSince ? "; the words follow the last apply" : "") +
+      ". Dropdowns show what the CPU holds now and only offer what the policy allows.");
+    setText("btn-tune-read", "Re-read tuning words");
     renderScopeNote();
     buildRows();
     renderWordsTable();
@@ -3068,7 +3133,7 @@
     $("tn-reason").textContent = reading ? "" : why !== "" ? why : "Ready. This is the only part of Tune that sends mailbox reads.";
     $("tn-run").hidden = !reading;
     $("btn-tune-cancel").disabled = !reading || S.cancelling || S.sessionLost;
-    setText("tn-left", opsLeft() === null ? "n/a" : opsLeft());
+    setText("tn-used", S.opsUsed === null ? "n/a" : S.opsUsed);
     const idle = idleGate() === "";
     $("btn-tn-plan").disabled = !idle || (unitsChanged().length === 0 && turboKinds().length === 0);
     $("btn-tn-reset").disabled = !idle || !T.words;
@@ -3542,7 +3607,7 @@
   }
 
   function setTuneCurveDefault() {
-    if (!T.curveId || !CV.list.some((c) => c.id === T.curveId)) T.curveId = CV.list.length ? CV.list[0].id : null;
+    if (!T.curveId || !CV.list.some((c) => c.id === T.curveId)) T.curveId = defaultCurveId();
     if (T.curveId) ensureRecord(T.curveId).then(renderTunePreview);
   }
 
@@ -3552,7 +3617,7 @@
     const opts = CV.list.map((c) => Object.assign(el("option", "", curveTitle(c)), { value: c.id }));
     if (!opts.length) opts.push(Object.assign(el("option", "", "No stored curves"), { value: "" }));
     if (sel.options.length !== opts.length || Array.from(sel.options).some((o, i) => o.value !== opts[i].value)) fill(sel, opts);
-    if (!CV.list.some((c) => c.id === T.curveId)) T.curveId = CV.list.length ? CV.list[0].id : null;
+    if (!CV.list.some((c) => c.id === T.curveId)) T.curveId = defaultCurveId();
     sel.value = T.curveId || "";
     sel.disabled = !CV.list.length;
     if (T.curveId && !CV.cache[T.curveId]) ensureRecord(T.curveId).then(renderTunePreview);
@@ -3956,8 +4021,10 @@
   }
 
   // ---- Profiles ---------------------------------------------------------------------------------------------------------------------------------
+  // profiles.list names them; profiles.get (G-123) says what each holds: {contents: {rows: [{target: unit, offset, v_target_v, ratio}], turbo}, summary}, and for an
+  // accepted step also {position, of, chain, cumulative} = the state after applying the chain up to that step (what "Load into Tune" loads).
   const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;
-  const PR = { list: [], loaded: false };
+  const PR = { list: [], loaded: false, note: "", info: {}, open: new Set(), basis: "applied", seq: 0 };
   V.pr = PR;
 
   async function loadProfiles() {
@@ -3970,40 +4037,127 @@
     }
     else { PR.list = []; setText("pr-empty", "Profiles unavailable: " + errText(body)); }
     renderProfiles();
+    loadProfileInfo();
+  }
+
+  // What each profile holds, a few at a time (each is a small file read in the helper); the list renders again as they arrive.
+  async function loadProfileInfo() {
+    const seq = ++PR.seq;
+    const todo = PR.list.map((p) => p.name).filter((n) => !PR.info[n]).slice(0, 60);
+    for (let i = 0; i < todo.length; i += 6) {
+      await Promise.all(todo.slice(i, i + 6).map(async (name) => {
+        const { status, body } = await api("profiles.get", { name: name });
+        PR.info[name] = status === 200 && body.ok && isObj(body.result) && isObj(body.result.contents) && Array.isArray(body.result.contents.rows) ? body.result : { error: errText(body) };
+      }));
+      if (seq !== PR.seq) return;
+      renderProfiles();
+    }
+  }
+
+  const infoOf = (name) => (PR.info[name] && !PR.info[name].error ? PR.info[name] : null);
+  const rowsOf = (c) => (isObj(c) && Array.isArray(c.rows) ? c.rows.filter(isObj) : []);
+  // the state a profile stands for when the Compare basis is "as applied": an accepted step is the chain up to and including it
+  function stateOf(name, basis) {
+    const i = infoOf(name);
+    if (!i) return null;
+    return basis === "applied" && isObj(i.cumulative) ? i.cumulative : i.contents;
   }
 
   function offsetText(o) {
     if (!isObj(o)) return "unchanged";
     if (o.kind === "curve") return fmtMv(o.mv) + " (whole curve)";
-    if (o.kind === "points" && isObj(o.mv)) return Object.keys(o.mv).map((r) => r + "× " + fmtMv(o.mv[r])).join(", ");
+    if (o.kind === "points" && isObj(o.mv)) return Object.keys(o.mv).sort((a, b) => a - b).map((r) => r + "× " + fmtMv(o.mv[r])).join(", ");
     return "unchanged";
   }
+  // a short form for a table cell: all points when there are few, else the count and the range
+  function offsetShort(o) {
+    if (!isObj(o)) return "–";
+    if (o.kind === "curve") return fmtMv(o.mv) + " all";
+    const ks = Object.keys(o.mv).sort((a, b) => a - b);
+    if (ks.length <= 3) return ks.map((r) => r + "× " + fmtMv(o.mv[r])).join(", ");
+    const vs = ks.map((r) => o.mv[r]);
+    return ks.length + " points, " + fmtMv(Math.min(...vs)) + " to " + fmtMv(Math.max(...vs));
+  }
 
-  // intent -> {unit: {offset, target, ratio}} with the group rows spread over their units
-  function intentTable(intent) {
-    const out = {};
-    const rows = isObj(intent) && Array.isArray(intent.rows) ? intent.rows : [];
+  function summaryText(s) {
+    if (!isObj(s)) return "";
+    const bits = [s.units + (s.units === 1 ? " unit" : " units")];
+    if (isNum(s.deepest_offset_mv)) bits.push("deepest " + fmtMv(s.deepest_offset_mv));
+    if (s.oc_ratios) bits.push(s.oc_ratios + " OC ratio" + (s.oc_ratios === 1 ? "" : "s"));
+    if (s.v_targets) bits.push(s.v_targets + " target voltage" + (s.v_targets === 1 ? "" : "s"));
+    if (s.turbo) bits.push("turbo table");
+    return bits.join(" · ");
+  }
+
+  function renderChain() {
+    const acc = PR.list.filter((p) => p.source === "accepted");
+    $("pr-chain-card").hidden = acc.length === 0;
+    if (!acc.length) return;
+    setText("pr-chain-note", "Restore accepted applies these in this order. Each step builds on the one before.");
+    fill($("pr-chain"), acc.map((p, i) => {
+      const li = el("li", "pr-step" + (i === acc.length - 1 ? " tip" : ""));
+      const info = infoOf(p.name);
+      li.append(el("span", "pr-step-no", String(i + 1)), el("span", "pr-step-name", p.name), el("span", "pr-step-sum muted", info ? summaryText(info.summary) : "reading..."));
+      return li;
+    }));
+  }
+
+  function detailTable(name) {
+    const info = infoOf(name);
+    const box = el("div", "pr-detail");
+    if (!info) { box.append(el("p", "muted", PR.info[name] ? "Contents unavailable: " + PR.info[name].error : "Reading the contents...")); return box; }
+    const rows = rowsOf(info.contents);
+    if (!rows.length && !isObj(info.contents.turbo)) { box.append(el("p", "muted", "This profile sets nothing.")); return box; }
+    const t = el("table", "grid num pr-detail-table");
+    t.append(el("caption", "sr", "What " + name + " sets"));
+    const head = el("tr");
+    for (const h of ["Unit", "Voltage offset", "OC target voltage", "OC ratio"]) head.append(Object.assign(el("th", h === "Unit" || h === "Voltage offset" ? "" : "n", h), { scope: "col" }));
+    const th = el("thead"), tb = el("tbody");
+    th.append(head);
     for (const r of rows) {
-      if (!isObj(r)) continue;
-      const units = r.target === "P" ? UNIT_IDS.slice(0, 8) : r.target === "E" ? UNIT_IDS.slice(8) : UNIT_IDS.indexOf(r.target) >= 0 ? [r.target] : [];
-      for (const u of units) out[u] = { offset: offsetText(r.offset), target: isNum(r.v_target_v) ? r.v_target_v.toFixed(3) + " V" : "unchanged", ratio: isNum(r.ratio) ? r.ratio + "×" : "unchanged" };
+      const tr = el("tr");
+      tr.append(td(r.target), td(offsetShort(r.offset), "mono", offsetText(r.offset)), td(isNum(r.v_target_v) ? fmtV(r.v_target_v) : "–", "n mono"), td(isNum(r.ratio) ? r.ratio + "×" : "–", "n mono"));
+      tb.append(tr);
     }
-    return out;
+    t.append(th, tb);
+    const sc = el("div", "scroll");
+    sc.append(t);
+    box.append(sc);
+    const tu = info.contents.turbo;
+    if (isObj(tu)) for (const k of ["P", "E"]) if (Array.isArray(tu[k])) box.append(el("p", "muted", k + " turbo table: " + tu[k].map((x) => x + "×").join(" ")));
+    if (isNum(info.position) && info.position > 1) box.append(el("p", "muted", "Only this step's own entries are shown. After steps 1 to " + info.position + " the chain holds: " + summaryText(info.cumulative_summary) + "."));
+    return box;
   }
 
   function renderProfiles() {
     $("pr-empty").hidden = PR.list.length > 0;
     if (!PR.list.length && PR.loaded) setText("pr-empty", "No profiles yet. Change something in Tune and save it here." + (PR.note ? " Helper note: " + PR.note : ""));
+    renderChain();
+    const accepted = PR.list.filter((p) => p.source === "accepted");
     fill($("pr-list"), PR.list.map((p) => {
       const li = el("li", "pr-item");
+      const info = infoOf(p.name);
       const main = el("div", "pr-main");
-      main.append(el("span", "pr-name", p.name), pill(p.source === "accepted" ? "accepted state" : "saved", p.source === "accepted" ? "s-ok" : "s-neutral"), el("span", "muted", fmtDate(p.created)));
+      const where = p.source === "accepted" ? "accepted, step " + (accepted.indexOf(p) + 1) + " of " + accepted.length : "saved";
+      main.append(el("span", "pr-name", p.name), pill(where, p.source === "accepted" ? "s-ok" : "s-neutral"));
+      if (p.source !== "accepted") main.append(el("span", "muted", fmtDate(p.created)));
+      main.append(el("span", "pr-sum muted", info ? summaryText(info.summary) : PR.info[p.name] ? "contents unavailable" : "reading..."));
       const act = el("div", "row-tight");
+      const open = PR.open.has(p.name);
+      const det = el("button", "", open ? "Hide contents" : "Show contents");
+      det.type = "button";
+      det.setAttribute("aria-expanded", open ? "true" : "false");
+      det.addEventListener("click", () => { if (PR.open.has(p.name)) PR.open.delete(p.name); else PR.open.add(p.name); renderProfiles(); });
+      const load = el("button", "pr-load", "Load into Tune");
+      load.type = "button";
+      load.disabled = !info;
+      load.title = "Fills the Tune editor with " + (p.source === "accepted" ? "the state after this step of the accepted chain" : "this profile") + ". Nothing is written until you press Review changes and then Apply.";
+      load.addEventListener("click", () => loadIntoTune(p.name));
       const rev = el("button", "pr-act", "Review and apply");
       rev.type = "button";
       rev.title = "Plans this profile against what the CPU holds now and opens the review dialog. Nothing is written until you confirm there.";
       rev.addEventListener("click", () => requestPlan({ profile: p.name }, (m) => setText("pr-status", "Could not plan \"" + p.name + "\": " + m)));
-      act.append(rev);
+      act.append(det, load, rev);
       if (p.source !== "accepted") {
         const acc = el("button", "", "Propose as accepted");
         acc.type = "button";
@@ -4012,6 +4166,7 @@
         act.append(acc);
       }
       li.append(main, act);
+      if (open) li.append(detailTable(p.name));
       return li;
     }));
     const opts = (sel, keep) => {
@@ -4022,10 +4177,58 @@
     opts($("pr-a"), a);
     opts($("pr-b"), b);
     if (!b && PR.list.length > 1) $("pr-b").value = PR.list[1].name;
+    $("pr-basis").hidden = accepted.length === 0;
     renderProfileDiff();
     updateSaveState();
     updateGate();
   }
+
+  // ---- compare: one table, a row per setting that differs, with the change -----------------------------------------------------------
+  const unitRank = (u) => UNIT_IDS.indexOf(u);
+  function valueAt(o, ratio) {
+    if (!isObj(o)) return null;
+    if (o.kind === "curve") return o.mv;
+    return isObj(o.mv) && isNum(o.mv[ratio]) ? o.mv[ratio] : null;
+  }
+  // Rows {unit, label, a, b, kind} where the two states differ. A whole-curve value stands for every point of a unit the other side sets point by point.
+  function compareRows(ca, cb) {
+    const ra = {}, rb = {};
+    for (const r of rowsOf(ca)) ra[r.target] = r;
+    for (const r of rowsOf(cb)) rb[r.target] = r;
+    const out = [];
+    const units = Array.from(new Set(Object.keys(ra).concat(Object.keys(rb)))).filter((u) => unitRank(u) >= 0).sort((x, y) => unitRank(x) - unitRank(y));
+    for (const u of units) {
+      const xa = ra[u] || {}, xb = rb[u] || {};
+      const oa = isObj(xa.offset) ? xa.offset : null, ob = isObj(xb.offset) ? xb.offset : null;
+      if (oa || ob) {
+        const bothCurve = (!oa || oa.kind === "curve") && (!ob || ob.kind === "curve");
+        if (bothCurve) {
+          const a = oa ? oa.mv : null, b = ob ? ob.mv : null;
+          if (a !== b) out.push({ unit: u, label: "Offset, whole curve", a: a, b: b, fmt: fmtMv, delta: fmtDeltaMv });
+        } else {
+          const ratios = Array.from(new Set([oa, ob].flatMap((o) => (o && o.kind === "points" ? Object.keys(o.mv).map(Number) : [])))).sort((x, y) => x - y);
+          for (const r of ratios) {
+            const a = valueAt(oa, r), b = valueAt(ob, r);
+            if (a !== b) out.push({ unit: u, label: "Offset at " + r + "×", a: a, b: b, fmt: fmtMv, delta: fmtDeltaMv });
+          }
+        }
+      }
+      const va = isNum(xa.v_target_v) ? xa.v_target_v : null, vb = isNum(xb.v_target_v) ? xb.v_target_v : null;
+      if (va !== vb) out.push({ unit: u, label: "OC target voltage", a: va, b: vb, fmt: (x) => fmtV(x, 3), delta: (a, b) => (isNum(a) && isNum(b) ? fmtMv((b - a) * 1000) : "–") });
+      const na = isNum(xa.ratio) ? xa.ratio : null, nb = isNum(xb.ratio) ? xb.ratio : null;
+      if (na !== nb) out.push({ unit: u, label: "OC ratio", a: na, b: nb, fmt: (x) => x + "×", delta: (a, b) => (isNum(a) && isNum(b) ? (b - a > 0 ? "+" : b - a < 0 ? MINUS : "") + Math.abs(b - a) + "×" : "–") });
+    }
+    for (const k of ["P", "E"]) {
+      const ta = isObj(ca) && isObj(ca.turbo) && Array.isArray(ca.turbo[k]) ? ca.turbo[k] : null, tb = isObj(cb) && isObj(cb.turbo) && Array.isArray(cb.turbo[k]) ? cb.turbo[k] : null;
+      if (!ta && !tb) continue;
+      for (let i = 0; i < 8; i++) {
+        const a = ta ? ta[i] : null, b = tb ? tb[i] : null;
+        if (a !== b) out.push({ unit: k + " turbo", label: "Bucket " + i, a: a, b: b, fmt: (x) => x + "×", delta: (x, y) => (isNum(x) && isNum(y) ? (y - x > 0 ? "+" : y - x < 0 ? MINUS : "") + Math.abs(y - x) + "×" : "–") });
+      }
+    }
+    return out;
+  }
+  function fmtDeltaMv(a, b) { return isNum(a) && isNum(b) ? fmtMv(b - a) : "–"; }
 
   function renderProfileDiff() {
     const note = $("pr-diff-note"), tbl = $("pr-diff");
@@ -4033,22 +4236,68 @@
     const pa = PR.list.find((p) => p.name === $("pr-a").value), pb = PR.list.find((p) => p.name === $("pr-b").value);
     if (PR.list.length < 2) { note.textContent = "Needs two profiles."; return; }
     if (!pa || !pb || pa.name === pb.name) { note.textContent = "Pick two different profiles."; return; }
-    if (!isObj(pa.intent) || !isObj(pb.intent)) {
-      note.textContent = "n/a: " + (!isObj(pa.intent) ? pa.name : pb.name) + " has no editable rows to compare (the accepted state is an installed file, and some helpers do not return profile contents). " +
-        "\"Review and apply\" shows any profile against the CPU instead.";
+    const ca = stateOf(pa.name, PR.basis), cb = stateOf(pb.name, PR.basis);
+    if (!ca || !cb) {
+      const bad = !ca ? pa.name : pb.name;
+      note.textContent = PR.info[bad] && PR.info[bad].error ? "Contents of \"" + bad + "\" unavailable: " + PR.info[bad].error : "Reading the contents of \"" + bad + "\"...";
       return;
     }
-    const ta = intentTable(pa.intent), tb = intentTable(pb.intent);
-    const rows = [];
-    for (const u of UNIT_IDS) {
-      for (const [k, label] of [["offset", "Offset"], ["target", "Target voltage"], ["ratio", "OC ratio"]]) {
-        const x = ta[u] ? ta[u][k] : "unchanged", y = tb[u] ? tb[u][k] : "unchanged";
-        if (x !== y) { const tr = el("tr"); tr.append(td(u), td(label), td(x, "mono"), td(y, "mono")); rows.push(tr); }
-      }
-    }
-    fill($("pr-diff-body"), rows);
+    const rows = compareRows(ca, cb);
+    setText("pr-th-a", pa.name);
+    setText("pr-th-b", pb.name);
+    fill($("pr-diff-body"), rows.map((r) => {
+      const tr = el("tr");
+      const cell = (x) => td(x === null ? "–" : r.fmt(x), "n mono", x === null ? "not set by this profile" : "");
+      tr.append(td(r.unit), td(r.label), cell(r.a), cell(r.b), td(r.delta(r.a, r.b), "n mono"));
+      return tr;
+    }));
     tbl.hidden = rows.length === 0;
-    note.textContent = rows.length ? rows.length + " differences between \"" + pa.name + "\" and \"" + pb.name + "\"." : "These two profiles set the same values.";
+    const basisNote = PR.list.some((p) => p.source === "accepted") ? (PR.basis === "applied" ? " Accepted profiles are compared as applied: the chain up to and including that step." : " Accepted profiles are compared by their own file only.") : "";
+    note.textContent = (rows.length ? rows.length + " differences between \"" + pa.name + "\" and \"" + pb.name + "\"; the change is second minus first." : "These two profiles set the same values.") + basisNote;
+  }
+
+  // ---- Load into Tune: fill the editor (nothing is written until Review changes, then Apply) -------------------------------------------
+  async function loadIntoTune(name) {
+    const info = infoOf(name);
+    const c = info ? (isObj(info.cumulative) ? info.cumulative : info.contents) : null;
+    if (!c) return;
+    if (!T.words) { setText("pr-load-status", "Read the tuning words first (Tune): the editor shows each change against what the CPU holds now."); return; }
+    if (unitsChanged().length || turboKinds().length) {
+      const ok = await confirmDialog("Replace the edits in Tune?", "Tune holds unapplied choices. Loading \"" + name + "\" replaces them. Nothing is written either way.", "Replace");
+      if (!ok) return;
+    }
+    T.draft = {}; T.turbo = {}; T.uiMode = {};
+    T.expanded = new Set();
+    T.scope = "unit";   // a profile is per unit
+    syncSegmented($("tn-scope"), "unit");
+    renderScopeNote();
+    const skipped = [];
+    for (const r of rowsOf(c)) {
+      const u = r.target;
+      if (!wUnit(u)) { skipped.push(u); continue; }
+      const o = r.offset;
+      if (isObj(o) && o.kind === "curve") setCurve([u], o.mv);
+      else if (isObj(o) && o.kind === "points") {
+        for (const k of Object.keys(o.mv)) {
+          if (curPts(u).some((p) => p.ratio === Number(k))) setPoint([u], Number(k), o.mv[k]); else skipped.push(u + " " + k + "×");
+        }
+        T.uiMode[u] = "points";
+        T.expanded.add(u);
+      }
+      if (isNum(r.v_target_v)) setVt([u], r.v_target_v);
+      if (isNum(r.ratio)) setRatio([u], r.ratio);
+    }
+    const tu = isObj(c.turbo) ? c.turbo : {};
+    for (const k of ["P", "E"]) {
+      const cur = turboCur(k);
+      if (Array.isArray(tu[k]) && tu[k].length === 8 && cur && tu[k].some((x, i) => x !== cur[i])) T.turbo[k] = tu[k].slice();
+    }
+    selectTab("tune", false);
+    buildRows();
+    const n = unitsChanged().length;
+    setText("tn-status", "Loaded \"" + name + "\" into the editor: " + (n ? n + (n === 1 ? " unit differs" : " units differ") + " from what the CPU holds now." : "the CPU already holds these values.") +
+      (skipped.length ? " Not shown (no such point in the read): " + skipped.join(", ") + "." : "") + " Nothing is written until you press Review changes and then Apply.");
+    setText("pr-load-status", "");
   }
 
   function updateSaveState() {
@@ -4077,11 +4326,13 @@
   }
 
   function initProfiles() {
-    $("btn-pr-refresh").addEventListener("click", loadProfiles);
+    $("btn-pr-refresh").addEventListener("click", () => { PR.info = {}; loadProfiles(); });
     $("pr-name").addEventListener("input", () => { updateSaveState(); });
     $("btn-pr-save").addEventListener("click", saveProfile);
     $("pr-a").addEventListener("change", renderProfileDiff);
     $("pr-b").addEventListener("change", renderProfileDiff);
+    segmented($("pr-basis"), [{ value: "applied", label: "As applied", title: "An accepted profile counts as the state after its step of the chain" }, { value: "own", label: "This file only", title: "Only the entries in the profile's own file" }], PR.basis,
+      (b) => { PR.basis = b; renderProfileDiff(); });
   }
 
   // ---- tab entry hooks -----------------------------------------------------------------------------------------------------------------------------
@@ -4137,6 +4388,7 @@
     loadMem();
     loadCurves(false);
     loadProfiles();
+    loadLastRead();
   }
 
   function onError() {

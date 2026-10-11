@@ -51,7 +51,7 @@ OFFSET_LIMIT = 200
 CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
 PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
 V3_OPS = frozenset({"mem.read", "vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "tune.read", "tune.plan", "tune.apply",
-                    "profiles.list", "profiles.save", "stress.start", "stress.stop", "stress.list"})
+                    "profiles.list", "profiles.save", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list"})
 
 
 class W(str):
@@ -218,8 +218,11 @@ class V3Ops:
         self.plan_steps_truncated = False
         self.apply_stop_after: int | None = None   # stop the apply after this many units: complete False + stop (G-112)
         self.profiles: dict[str, dict] = {"accepted": {"name": "accepted", "source": "accepted", "created": "2026-10-06T21:14:02Z", "intent": None}}
-        self.profiles_include_intent = True
+        self.profiles_include_intent = False   # the real profiles.list never carries contents (G-123: profiles.get does)
         self.tuning_read = False          # tune.read happened this boot (decides a record's tuning_state)
+        self.last_read_at: float | None = None        # G-123: when the stored read (tune.last) was made, epoch seconds
+        self.last_applied_at: float | None = None     # G-123: set when an apply changed the words after that read
+        self.last_read_refused = False                # G-123: tune.last answers available:false although a read happened (another boot)
         self.measure_delay = 0.0          # seconds between vf.point events
         self.measure_gate = threading.Event()
         self.measure_gate.set()
@@ -462,6 +465,12 @@ class V3Ops:
 
     def _op_tune_read(self, rid, args):
         self.tuning_read = True
+        self.last_read_at, self.last_applied_at = time.time(), None
+        self.ops_used_v3 += 112
+        self._reply(rid, True, result=self._read_result())
+
+    def _read_result(self) -> dict:
+        """The ``tune.read`` result for the tuning in force now (also what ``tune.last`` serves, with the words of any apply since the read)."""
         units, tune = [], {}
         for u in UNITS:
             t = self.tuning[u]
@@ -477,11 +486,22 @@ class V3Ops:
                                                                                 "v_target_v": None, "mode": "adaptive"} for p in t["points"]]}]}
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
-        self.ops_used_v3 += 112
         fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}
-        self._reply(rid, True, result={"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
-                                       "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
-                                       "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)})
+        return {"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
+                "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
+                "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)}
+
+    def seed_last_read(self, at: float | None = None) -> None:
+        """A read made earlier this boot by another page / helper process: ``tune.last`` serves it (G-123)."""
+        self.tuning_read = True
+        self.last_read_at = at if at is not None else time.time() - 1500
+        self.last_applied_at = None
+
+    def _op_tune_last(self, rid, args):
+        if not self.tuning_read or self.last_read_refused or self.last_read_at is None:
+            return self._reply(rid, True, result={"available": False})
+        self._reply(rid, True, result={"available": True, "boot_id": "fake-boot-0001", "at": self.last_read_at, "applied_at": self.last_applied_at,
+                                       "result": self._read_result()})
 
     # ---- plan ----
     def _refuse_range(self, rid, field: str, limit: str):
@@ -762,6 +782,8 @@ class V3Ops:
             readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
         sent += len(p["turbo"])
         self.tuning_version += 1
+        if self.last_read_at is not None and sent:
+            self.last_applied_at = time.time()
         self.ops_used_v3 += 3 * n
         self._applying.discard(rid)
         result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])]
@@ -780,6 +802,85 @@ class V3Ops:
                 row["intent"] = r["intent"]
             rows.append(row)
         self._reply(rid, True, result={"profiles": rows})
+
+    # G-123: the accepted chain of the reference machine (profiles/CURRENT: e-p6-split3 -> p-boot-ramp -> p-step7), as profiles.get returns it
+    def seed_accepted_chain(self) -> None:
+        def pts(**by_ratio) -> dict:
+            return {"kind": "points", "mv": {r[1:]: v for r, v in by_ratio.items()}}
+
+        def row(unit, offset=None, v=None, ratio=None) -> dict:
+            return {"target": unit, "offset": offset, "v_target_v": v, "ratio": ratio}
+
+        e_split = [row("EC0", pts(r40=0, r46=-35))] + [row(f"EC{i}", pts(r40=0, r46=-25)) for i in (1, 2, 3)]
+        ramp = [row(f"P{i}", pts(r48=0, r53=-50, r55=-50 if i in (0, 3) else -30, r56=-50, r57=-50)) for i in range(8)]
+        step7_55 = {0: -28, 3: -28, 1: -36, 4: -33, 5: -73, 6: -61, 2: -81, 7: -91}
+        step7 = []
+        for i in range(8):
+            kw = dict(r48=0, r53=-50, r55=step7_55[i])
+            if i == 0:
+                kw.update(r56=-26, r57=-43)
+            if i == 3:
+                kw.update(r56=-28, r57=-31)
+            step7.append(row(f"P{i}", pts(**kw)))
+        chain = [("e-p6-split3", e_split), ("p-boot-ramp", ramp), ("p-step7", step7)]
+        self.profiles.pop("accepted", None)
+        self.accepted_chain = chain
+        for name, _rows in chain:
+            self.profiles[name] = {"name": name, "source": "accepted", "created": None, "intent": None}
+
+    @staticmethod
+    def _spread(intent: dict) -> list[dict]:
+        out = {}
+        for r in intent.get("rows", []):
+            for u in ([x for x in UNITS if x.startswith("P")] if r.get("target") == "P" else [x for x in UNITS if x.startswith("EC")] if r.get("target") == "E" else [r.get("target")]):
+                if u in UNITS:
+                    out[u] = {"target": u, "offset": r.get("offset"), "v_target_v": r.get("v_target_v"), "ratio": r.get("ratio")}
+        return [out[u] for u in UNITS if u in out]
+
+    @staticmethod
+    def _summary_of(rows: list[dict]) -> dict:
+        vals = []
+        points = 0
+        for r in rows:
+            o = r.get("offset")
+            if o:
+                vals += [o["mv"]] if o["kind"] == "curve" else list(o["mv"].values())
+                points += len(o["mv"]) if o["kind"] == "points" else 0
+        return {"units": len(rows), "points": points, "deepest_offset_mv": min(vals) if vals else None,
+                "oc_ratios": sum(r.get("ratio") is not None for r in rows), "v_targets": sum(r.get("v_target_v") is not None for r in rows), "turbo": False}
+
+    def _op_profiles_get(self, rid, args):
+        name = args.get("name")
+        if not isinstance(name, str) or not PROFILE_NAME.match(name):
+            return self._err(rid, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -")
+        chain = getattr(self, "accepted_chain", [])
+        for i, (stem, rows) in enumerate(chain):
+            if stem != name:
+                continue
+            merged: dict[str, dict] = {}
+            for _s, rs in chain[: i + 1]:
+                for r in rs:
+                    cur = merged.setdefault(r["target"], {"target": r["target"], "offset": None, "v_target_v": None, "ratio": None})
+                    if r["offset"] is not None:
+                        old = cur["offset"]["mv"] if cur["offset"] else {}
+                        cur["offset"] = {"kind": "points", "mv": {**old, **r["offset"]["mv"]}}
+                    for k in ("v_target_v", "ratio"):
+                        if r[k] is not None:
+                            cur[k] = r[k]
+            cum = [merged[u] for u in UNITS if u in merged]
+            return self._reply(rid, True, result={"name": name, "source": "accepted", "created": None, "position": i + 1, "of": len(chain),
+                                                  "chain": [s for s, _ in chain], "contents": {"rows": rows, "turbo": None}, "cumulative": {"rows": cum, "turbo": None},
+                                                  "summary": self._summary_of(rows), "cumulative_summary": self._summary_of(cum)})
+        rec = self.profiles.get(name)
+        if rec is not None and rec["source"] == "accepted":   # the placeholder "accepted" entry (no chain seeded): the state the fake treats as accepted
+            rows = [{"target": u, "offset": {"kind": "points", "mv": {str(p["ratio"]): p["offset_mv"] for p in self.accepted[u]["points"]}}, "v_target_v": None, "ratio": None} for u in UNITS]
+            return self._reply(rid, True, result={"name": name, "source": "accepted", "created": rec["created"], "position": 1, "of": 1, "chain": [name],
+                                                  "contents": {"rows": rows, "turbo": None}, "cumulative": {"rows": rows, "turbo": None},
+                                                  "summary": self._summary_of(rows), "cumulative_summary": self._summary_of(rows)})
+        if rec is None or rec.get("intent") is None:
+            return self._err(rid, "BAD_REQUEST", f"no saved profile named {name!r}", check="PROFILE_NOT_FOUND")
+        rows = self._spread(rec["intent"])
+        self._reply(rid, True, result={"name": name, "source": "saved", "created": rec["created"], "contents": {"rows": rows, "turbo": None}, "summary": self._summary_of(rows)})
 
     def _op_profiles_save(self, rid, args):
         name, intent = args.get("name"), args.get("intent")

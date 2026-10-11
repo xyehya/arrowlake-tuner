@@ -18,7 +18,7 @@ CSS = (WEB / "style.css").read_text(encoding="utf-8")
 
 # Ops the page may name at a call site: contract 8 reads, contract 9 (SPEC-v3) measure / curves / memory / tune / profiles, and cancel. Nothing else.
 ALLOWED_OPS = {"preflight", "audit.tail", "telemetry.start", "cancel", "mem.read", "vf.measure", "curves.list", "curves.get", "curves.update",
-               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save", "stress.start", "stress.stop", "stress.list"}
+               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list"}
 # Raw contract 8 write / frequency ops stay out of the page (it uses the tune.* ops instead). G-119: the stress ops (no mailbox, no MSR write) are the
 # Stress tab's.
 FORBIDDEN_OPS = ("apply", "restore", "plan", "vf.dump", "telemetry.stop", "freq.cap", "freq.restore")
@@ -90,7 +90,8 @@ class TestHtml(unittest.TestCase):
             self.assertIn(f'id="{ident}"', HTML)
         self.assertIn("Read tuning words", HTML)
         self.assertIn("each request is a WRMSR", HTML)  # stated next to the mailbox read button
-        self.assertIn("112 to 124", HTML)               # with the op estimate
+        self.assertIn("124&#8211;136", HTML)            # with the op estimate (112 V/F reads + 12 fused-point reads, G-123)
+        self.assertIn("112 V/F reads + 12 fused-point reads", HTML)
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tune-read"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-measure"[^>]*\bdisabled\b')
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tn-plan"[^>]*\bdisabled\b')
@@ -206,8 +207,8 @@ class TestScript(unittest.TestCase):
         gate = func_body("gateReason")
         for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < COST_HIGH"):
             self.assertIn(needle, gate)
-        self.assertIn("const COST_LOW = 112;", JS)
-        self.assertIn("const COST_HIGH = 124;", JS)
+        self.assertIn("const COST_LOW = 124;", JS)
+        self.assertIn("const COST_HIGH = 136;", JS)
 
     def test_apply_is_only_sent_from_the_review_dialog_with_the_nonce(self):
         """Exactly one call site; it sits in the Apply handler; it sends the plan id and CONFIRM + the nonce of that plan itself (D-033 d: one click, no

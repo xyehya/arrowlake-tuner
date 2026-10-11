@@ -381,7 +381,11 @@ class TestProfilesAndSampler(V3Base):
         self.ok("profiles.save", {"name": "e-minus-60", "intent": intent})
         rows = {p["name"]: p for p in self.ok("profiles.list")["profiles"]}
         self.assertEqual((rows["e-minus-60"]["source"], rows["accepted"]["source"]), ("saved", "accepted"))
-        self.assertEqual(rows["e-minus-60"]["intent"], intent)
+        self.assertNotIn("intent", rows["e-minus-60"])   # like the real helper: the list names profiles, profiles.get says what they hold (G-123)
+        got = self.ok("profiles.get", {"name": "e-minus-60"})
+        self.assertEqual([r["target"] for r in got["contents"]["rows"]], ["EC0", "EC1", "EC2", "EC3"])
+        self.assertEqual(got["summary"]["deepest_offset_mv"], -60)
+        self.err("profiles.get", {"name": "nope"}, "BAD_REQUEST")
         e = self.err("profiles.save", {"name": "e-minus-60", "intent": intent}, "REFUSED")
         self.assertEqual(e["detail"]["check"], "EXISTS")
         self.err("profiles.save", {"name": "Bad Name", "intent": intent}, "BAD_REQUEST")
@@ -491,3 +495,25 @@ class TestCpuFacts(V3Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestContinuityOps(V3Base):
+    def test_tune_last_serves_this_boots_read_and_follows_an_apply(self):
+        self.assertEqual(self.ok("tune.last"), {"available": False})
+        self.ok("tune.read")
+        got = self.ok("tune.last")
+        self.assertTrue(got["available"])
+        self.assertIsNone(got["applied_at"])
+        self.assertEqual(sorted(got["result"]["tune"]), sorted(v3.UNITS))
+        self.fake.last_read_refused = True   # another boot
+        self.assertEqual(self.ok("tune.last"), {"available": False})
+
+    def test_accepted_chain_contents_and_cumulative_state(self):
+        self.fake.seed_accepted_chain()
+        names = [p["name"] for p in self.ok("profiles.list")["profiles"]]
+        self.assertEqual(names, ["e-p6-split3", "p-boot-ramp", "p-step7"])
+        last = self.ok("profiles.get", {"name": "p-step7"})
+        self.assertEqual((last["position"], last["of"], last["chain"]), (3, 3, names))
+        cum = {r["target"]: r for r in last["cumulative"]["rows"]}
+        self.assertEqual(cum["P5"]["offset"]["mv"]["55"], -73)
+        self.assertEqual(cum["EC0"]["offset"]["mv"]["46"], -35)

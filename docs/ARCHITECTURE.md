@@ -226,3 +226,26 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     helper at its start. Server `OPS`: `stress.start` (long), `stress.stop`, `stress.list`. `--sim`: simulated children and telemetry, 12× faster than real time.
 - **Addendum (G-119):** `tune.apply` result gains `msr_writes` (plain-MSR turbo-table writes); `ops_used` includes them. A turbo-only profile
   (`[turbo]` table, no core/point entries) is valid.
+- **Addendum "G-123" (UX continuity; `helper/ops_tune.py`, `profiles/lastread.py`, `profiles/contents.py`):** no mailbox, no MSR, not write-gated; both ops are `slow` (own thread).
+  - **`tune.last {}`** ⇒ `{available: false}` or `{available: true, boot_id, at: <epoch s>, applied_at: <epoch s>|null, result: <the tune.read result>}`. A *complete* `tune.read`
+    (all 12 units, known boot id) is stored `<state>/last-read.json` (`<state>` = `dirname(audit)/state` = `/var/lib/arltuner/state`; **dir 0700, file 0600**, created
+    `O_EXCL|O_NOFOLLOW` as a temp file, `fsync`, `rename` over the final name (a planted symlink is replaced, never followed); read `O_NOFOLLOW|O_NONBLOCK`, descriptor
+    checked: regular, 1 link, helper-owned, no group/other write; ≤ 256 KiB; the directory must be helper-owned and not group/world-writable, else the file is ignored
+    and logged, never an error). The record `{version: 1, boot_id, at, applied_at, words: {cpu: ["0x…"…]}, result}`; `words` is authoritative: after a `tune.apply` that wrote
+    (`writes_sent > 0`) the verified read-back words replace those of the stored read and `applied_at` is set; `tune.last` then overlays them on `result.units[*].cpus[*]`, rebuilds
+    `tune`, empties `differences` (`differences_stale: true`) and recomputes `accepted_match`. `available` only when the stored and the current boot id are both known and equal;
+    a subset read (`cpus` given) is not stored. **Lazy restore:** the first tune.* call of a helper process (`_last_words`, `tune.last`) sets `helper.last_words` and the tune state's
+    turbo tables / fused / favored facts from the stored read of this boot, unless this process already read; so `tune.plan` works after a helper restart without a new read.
+    A read made outside the helper (CLI restore during the session) is not seen: the page shows the read's time so the operator can tell. Not restored: `tuned_this_boot` (G-122).
+  - **`profiles.get {name}`** ⇒ `{name, source: "accepted"|"saved", created, contents: {rows: [{target: unit, offset: {kind: "curve", mv}|{kind: "points", mv: {ratio: mv}}|null,
+    v_target_v: float|null, ratio: int|null}], turbo: {P?: [8], E?: [8]}|null}, summary: {units, points, deepest_offset_mv, oc_ratios, v_targets, turbo}}`; rows are per unit
+    (P0..P7, EC0..EC3) in that order, saved P/E group rows spread over their units; an accepted file's numbered `[[point]]` entries become ratios (platform point ratios;
+    a unit with a `[[core]]` offset and points ⇒ `points` over every fused ratio, the curve value under the point entries). An accepted chain member also carries `position`, `of`,
+    `chain` (names in `CURRENT` order), `cumulative` (the same shape after applying the chain up to and including it: what Load into Tune loads) and `cumulative_summary`.
+    Unknown name ⇒ `BAD_REQUEST detail.check = "PROFILE_NOT_FOUND"` (store errors `PROFILE_UNTRUSTED` / `PROFILE_IO`); accepted files are trust-checked as for `tune.plan`.
+    `profiles.list` is unchanged (no contents). Server `OPS`: both ops, `tune.last` with no args, `profiles.get` `{name}` (`^[a-z0-9._-]{1,64}$`).
+  - **Page:** `tune.last` on load (only when Tune has no words: a reconnect never wipes an editor) fills Tune and the applied chip with no mailbox op; Profiles shows the accepted chain,
+    a per-profile summary, a compare table (as applied / this file only) and **Load into Tune** (fills the editor; nothing is sent until Review changes then Apply); System and
+    Dashboard show "Mailbox ops this boot: N" with a session sparkline and the per-boot cap as a note (D-032); the read estimate is "≈ 124–136" (112 V/F reads + 12 fused-point
+    reads; `_read_extras` also sends 8 favored-ratio mailbox reads, so a read costs about 132); the default curve is the newest baseline, else the newest complete all-units curve.
+  - `install.sh` creates `/var/lib/arltuner/state` 0700.
