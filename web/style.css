@@ -241,10 +241,10 @@ button.link:hover { text-decoration: underline; }
 .ch-line.s2 { stroke: var(--s2); }
 .ch-cross { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .ch-empty {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: center;
-  justify-self: center;
+  position: absolute;
+  top: 50%;
+  left: calc(50% + 24px);
+  transform: translate(-50%, -50%);
   margin: 0;
   padding: 6px 12px;
   max-width: 90%;

@@ -37,6 +37,7 @@
     selected: null,        // selected cpu key (Cores tab)
     metric: "mhz",         // core-map colouring
     filter: "all",         // Cores tab filter
+    probing: false,        // a core-map tile is hovered or focused (its readings are in the probe line)
   };
 
   // ---- DOM helpers (textContent only) ----------------------------------------------------------------------------------------------
@@ -488,8 +489,10 @@
     const open = () => { V.selected = c.cpu; selectTab("cores", false); renderCoreSelection(); };
     g.addEventListener("click", open);
     g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
-    g.addEventListener("pointerenter", () => probe(c));
-    g.addEventListener("focus", () => probe(c));
+    g.addEventListener("pointerenter", () => { V.probing = true; probe(c); });
+    g.addEventListener("focus", () => { V.probing = true; probe(c); });
+    g.addEventListener("pointerleave", () => { V.probing = false; });
+    g.addEventListener("blur", () => { V.probing = false; });
     tileRefs[c.cpu] = { g: g, rect: rect, val: val, name: name, title: title };
     return g;
   }
@@ -523,6 +526,12 @@
         ref.title.textContent = c.name + " (cpu " + c.cpu + "): n/a, " + x.title;
         ref.g.setAttribute("aria-label", c.name + ", " + m.label + " not available: " + x.title + ". Open in Cores.");
       }
+    }
+    if (!V.probing) {
+      const reasons = V.coreInfo.map((c) => reading(coreReading(c.cpu, V.metric))).filter((x) => !x.ok).map((x) => x.title);
+      setText("probe", V.coreInfo.length && reasons.length === V.coreInfo.length
+        ? m.label + " is n/a on every core: " + reasons[0] + "."
+        : "Point at a core for its readings. Click to open it in Cores.");
     }
     setText("ramp-lo", m.digits === 3 ? m.lo.toFixed(1) : m.lo);
     setText("ramp-hi", m.digits === 3 ? m.hi.toFixed(1) : m.hi);
@@ -992,6 +1001,12 @@
     renderVfPlot(curves, r.simulator === true);
   }
 
+  function vfPlotPlaceholder() {
+    const t = sv("text", { x: 320, y: 150, "text-anchor": "middle" }, "plot-empty");
+    t.textContent = "After a read, each core's offset per V/F point is drawn here.";
+    fill($("vf-plot"), [t]);
+  }
+
   // V/F diagram: offset (mV) per V/F point index, one line per core; P-cores and E-cores in the two series colours.
   function renderVfPlot(curves, simulated) {
     const svg = $("vf-plot");
@@ -1167,6 +1182,7 @@
     (k) => { V.metric = k; buildRamp(); renderDie(); });
   buildRamp();
   initCharts();
+  vfPlotPlaceholder();
   syncCoreSet({});
   $("btn-preflight").addEventListener("click", loadPreflight);
   $("btn-audit").addEventListener("click", loadAudit);
