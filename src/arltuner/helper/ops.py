@@ -703,6 +703,8 @@ def op_cancel(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str,
 
 
 def builtin_ops() -> dict[str, OpSpec]:
+    from .ops_measure import measure_ops  # lazy: ops_measure imports this module (G-111: vf.measure, curves.*, mem.read)
+
     specs = [
         OpSpec("preflight", op_preflight, _no_args, slow=True),
         OpSpec("audit.tail", op_audit_tail, _validate_audit_tail, slow=True),
@@ -711,5 +713,6 @@ def builtin_ops() -> dict[str, OpSpec]:
         OpSpec("cancel", op_cancel, _validate_cancel),
         # a mailbox read is a WRMSR (docs/SAFETY.md), so vf.dump needs the write gate on hardware
         OpSpec("vf.dump", op_vf_dump, _validate_vf_dump, long=True, write=True, state=State.PLANNING),
+        *measure_ops(),
     ]
     return {s.name: s for s in specs}

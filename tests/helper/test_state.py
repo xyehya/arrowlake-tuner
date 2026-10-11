@@ -28,8 +28,8 @@ class MachineTests(unittest.TestCase):
         m.end("a")
         self.assertEqual(m.state, State.IDLE)
 
-    def test_the_five_spec_states(self) -> None:
-        self.assertEqual([s.value for s in State], ["idle", "planning", "applying", "capped", "stressing"])
+    def test_the_five_spec_states_and_measuring(self) -> None:
+        self.assertEqual([s.value for s in State], ["idle", "planning", "applying", "capped", "stressing", "measuring"])  # measuring: G-111, contract 9
 
     def test_idle_is_not_a_long_op_state(self) -> None:
         with self.assertRaises(ValueError):
@@ -292,8 +292,10 @@ class HelperObjectTests(HelperCase):
         self.assertIn("stub.read", h.ops)
         self.assertEqual(set(h.ops) & {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"}, {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"})
 
-    def test_only_the_g1_ops_exist(self) -> None:
-        self.assertEqual(set(Helper(self.config()).ops), {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"})
+    def test_the_g1_ops_and_the_g111_ops_exist(self) -> None:
+        g1 = {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"}
+        g111 = {"vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "mem.read"}
+        self.assertEqual(set(Helper(self.config()).ops) & (g1 | g111), g1 | g111)
 
 
 if __name__ == "__main__":
