@@ -163,7 +163,7 @@ System install only for the helper: `/usr/lib/arltuner/` (code), `/usr/share/arl
 | lm-sensors · nvidia-smi | lm_sensors · nvidia driver | lm-sensors · nvidia-utils-* | lm_sensors · nvidia-utils |
 
 ## 12. Phases (vertical slices; detail in `docs/ROADMAP.md`)
-G1 skeleton (install layout, helper + server + security, preflight, platform file, read-only dashboard) → G2 offsets (editor, profiles, plan/
+**Status 2026-10-12: G1–G5 delivered (v3, `SPEC-v3.md`); G6 autostart and G7 portability remain.** G1 skeleton (install layout, helper + server + security, preflight, platform file, read-only dashboard) → G2 offsets (editor, profiles, plan/
 CONFIRM/apply/restore, acceptance proposal) → G3 stress (caps, screens, Linpack launcher) → G4 E ratios → G5 P ratios + `0x1AD` → G6 autostart
 (after D-021) → G7 portability. **W** (any time): keep the Windows restore working after renames; sync check of `$Expected`.
 G1 security tests: Host/Origin/cookie/bootstrap, CSRF simple-POST, oversize body, path traversal, slow client, plan-bound nonce replay.
