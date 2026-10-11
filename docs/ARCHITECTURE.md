@@ -192,3 +192,8 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   match}], ops_used}`.
 - **`profiles.list {}`** ⇒ `{profiles: [{name, source: "accepted"|"saved", created}]}`; **`profiles.save {name, intent}`** (never overwrite ⇒
   `REFUSED detail.check="EXISTS"`); stored `/var/lib/arltuner/profiles/` (root, same rules).
+- **Addendum (SPEC-v3 §9, 2026-10-11):** `tune.read` result gains `fused: {cpu: {word, ratio, v}}` (cmd `0x09 P1=0x11 P2=0`, one per P-core +
+  one per E-cluster, guarded reads) and `turbo: {P: {ratios: [8], counts: [8]}, E: {...}, favored: {cpu: ratio}}` (plain rdmsr 0x1AD/0x1AE/
+  0x650/0x651 + 0x1C read). `tune.plan` result gains per unit/point `effective_v` (baseline measured VID + offset, after the F4 clamp) +
+  `clamped_by: point|null`, `vccia: {predicted_v, set_by: {unit, ratio}}` (F6), warnings (F4/F8); `REFUSED TURBO_ORDER` (F5). Curve points gain
+  `reason` for `unreachable`: `"max_turbo"` | `"cpufreq_granularity"` | `"active_cores"`. A plan's prediction uses the newest `baseline` curve.

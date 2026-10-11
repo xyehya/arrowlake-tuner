@@ -77,3 +77,16 @@ only from the installed tree. The orchestrator asks for a go before the first ma
 ## 8. Phase mapping
 G-111 helper ops (measure, curves store, mem, telemetry restart) · G-112 policy D-032 + tune ops (read/plan/apply/reset/restore) · G-113 web
 (all pages) · then one reinstall with `--reseed-config`, a Quick stock-baseline measurement on the machine, and the first-write go.
+
+## 9. CPU facts the app must respect (operator 2026-10-11; evidence `docs/knowledge/platform-285k.md` §3–5, `tuning-results.md`)
+| # | Fact | Where it binds |
+|---|---|---|
+| F1 | **Point tables are fixed and per domain:** P-cores (all 8) `P2 1..8` = 8, 20, 30, 48, 53, 55, 56, 57×; E-clusters `P2 1..6` = 8, 15, 23, 30, 40, 46×. Beyond ⇒ rc 0x11. Tables come from `tune.read`; the simulator models exactly these (never invented per-core tables) [MEASURED lnx 2026-10-02] | sim, measure, Tune grid |
+| F2 | **OC point = `P2 = 0` word** (ratio + adaptive V target). A ratio above the top fused ratio adds an OC point; P0 reads `0x39` (BIOS favored 57×), others 0 at stock. E 48× today comes from `0x1C`/`0x650` (turbo), **not** an OC point; at 47–48× E voltage follows point 6 (46×) | Tune OC column, curve labels |
+| F3 | **Reachability:** non-favored P-cores carry 56/57× points but top out at 55× (max turbo); favored P0/P3 reach 57× only with ≤ 2 active cores. Measure labels these "point exists, not reachable on this core", not errors | measure, Curves |
+| F4 | **Monotonic clamp:** effective V(n) ≥ V(n−1); a deeper offset is silently clamped up (P0 57× −49.8 mV → −42.5 mV) [MEASURED]. Between points VID interpolates (54× = midpoint 53/55×); an offset at the top point moves the bins above it (E 46× moves 47–48×) | Tune prediction (clamped line + "clamped by Vn−1" badge), plan warnings |
+| F5 | **Turbo tables** `0x1AD` (P, with `0x1AE` counts) / `0x650` (E, `0x651`): bucket ratios must be **non-increasing** with active-core count; the favored ratio `0x1C` per core sits on top. A plan that breaks the order ⇒ `REFUSED TURBO_ORDER` | tune.plan, Tune turbo editor |
+| F6 | **VccIA** ≈ max(highest *allowed* VID over P-cores at the current active-core count, E-clusters, ring ~1.20 V at 40×) + ~100–110 mV [MEASURED lnx 2026-10-03, hypothesis on 3+ points]. Lowering a unit that does not set the max does not lower Vcore | Tune "VccIA set by …" panel |
+| F7 | **Fused top point** per core = cmd `0x09 P1=0x11 P2=0` (P0 1.4258 V @57×, …, EC0 1.1563 / EC1–3 1.1367 V @46×; P2 selects the domain, not a point). Lower fused points are not exposed by any known command: the **stock-baseline measured curve (offsets 0) is the fused table as applied**; the 0x09 value cross-checks its top point | tune.read (`fused`), Curves baseline badge |
+| F8 | **Never offset E 40×** (−20 mV ⇒ OCCT errors) [MEASURED lnx 2026-10-02]; E > ~1.2 V ⇒ WHEA reports [COMMUNITY] | Tune warnings |
+| F9 | Measurement ratio sets include each unit's **max turbo ratio** when it lies above the top point (E 47, 48×); E 23× and 52× are not pinnable through cpufreq caps (land on neighbours) ⇒ `unreachable (cpufreq granularity)` | measure |
