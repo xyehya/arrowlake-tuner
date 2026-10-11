@@ -93,9 +93,8 @@ class VfWithSessionFacts(MeasuredCase):
         guard = self.session(CPU0)
         for label, word in (
             ("ratio 0", VfWord(0, 0x5B4, False, -5)),
-            ("V target 0", VfWord(0x39, 0, False, -5)),
+            ("V target 0 above the top fused ratio", VfWord(0x3A, 0, False, -5)),  # G-120: at or below 57 (no OC point) a zero target is allowed, see test_bounds
             ("both 0", VfWord(0, 0, False, -5)),
-            ("the baseline word itself", VfWord.from_u32(0x39)),  # V target 0: XTU cannot write it back either
         ):
             with self.subTest(label):
                 exc = self.assert_refused(guard, self.write_req(word.to_u32(), cpu=0), Refusal.CHECK_FAILED)
@@ -208,6 +207,7 @@ class EffectiveOffsetFloor(MeasuredCase):
         self.assertEqual(
             c,
             CheckContext(
+                top_fused_ratio=46,
                 offset_floor_raw=-102,
                 favored_word=1,
                 fused_word=2,
@@ -225,7 +225,7 @@ class EffectiveOffsetFloor(MeasuredCase):
 
     def test_the_shipped_defaults_are_the_check_context_defaults(self) -> None:
         shipped = build_context(default_m1_policy(), 8, favored_word=1, fused_word=2, vf_word_sent=3)
-        self.assertEqual(shipped, CheckContext(offset_floor_raw=-102, favored_word=1, fused_word=2, vf_word_sent=3))
+        self.assertEqual(shipped, CheckContext(offset_floor_raw=-102, favored_word=1, fused_word=2, vf_word_sent=3, top_fused_ratio=46))
         self.assertEqual((shipped.max_ratio_step, shipped.max_v_step_raw, shipped.max_offset_step_raw, shipped.offset_ceiling_raw), (1, 20, 26, 0))
 
     def test_policy_bounds_are_resolved_per_core_kind(self) -> None:

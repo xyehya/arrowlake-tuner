@@ -118,7 +118,7 @@ class MeasuredMachine(Rig):
         self.assertEqual(self.tx(0, int(Cmd.ICC_MAX_READ), 5, 0), Response(Rc.UnrecognizedCommand, 0))  # only P1 0 and 1
 
     def test_xtus_cpu0_sequence_is_accepted_and_reads_back(self) -> None:
-        self.use(reject_zero_fields=True)
+        self.use(reject_zero_fields=True, drop_target_without_oc_point=False)  # XTU on Windows read its word back whole; the Linux drop is tested in LinuxWriteSittings
         self.assertEqual(self.tx(0, WR_VF, 0, 0, 0xFF65B439), Response(Rc.Pass, 0xFF65B439))
         self.assertEqual(self.tx(0, WR_FAV, 0, 0, 0x39), Response(Rc.Pass, 0x39))
         self.assertEqual(self.tx(0, RD_GRAN), Response(Rc.Pass, 3))
@@ -142,6 +142,26 @@ class MeasuredMachine(Rig):
         self.assertEqual(self.tx(12, RD_FUSED, 0x11, 0).data, 0x48C2E)
 
 
+class LinuxWriteSittings(Rig):
+    """G-120: what the first real Linux write sittings showed (``docs/knowledge/tuning-results.md`` "First write sittings", [MEASURED lnx 2026-10-11])."""
+
+    def test_no_oc_point_drops_the_v_target_next_to_an_offset(self) -> None:
+        self.use(per_point=True)
+        self.assertEqual(self.tx(0, WR_VF, 0, 0, 0xFEC5B439).rc, Rc.Pass)  # P0 whole-curve -10 mV with the fused target, OC ratio 57 = top fused
+        self.assertEqual(self.tx(0, RD_VF).data, 0xFEC00039)  # read back with the target dropped
+        self.assertEqual(self.tx(0, WR_VF, 0, 0, 0x0005B439).rc, Rc.Pass)  # offset 0: the target is kept
+        self.assertEqual(self.tx(0, RD_VF).data, 0x0005B439)
+
+    def test_an_oc_point_keeps_its_target_and_adds_p2_top_plus_one(self) -> None:
+        self.use(per_point=True)
+        self.assertEqual(self.tx(12, RD_VF, 0, 7).rc, 0x11)  # E: P2 = 7 does not exist at stock
+        self.assertEqual(self.tx(12, WR_VF, 0, 0, 0x00048C30).rc, Rc.Pass)  # EC1: ratio 48 > 46, adaptive 1.1367 V
+        self.assertEqual(self.tx(12, RD_VF).data, 0x00048C30)
+        point7 = VfWord.from_u32(self.tx(12, RD_VF, 0, 7).data)
+        self.assertEqual(point7.ratio, 48)  # the OC point is point 7
+        self.assertEqual(self.tx(12, WR_VF, 0, 0, 0x00047830).data, 0x00047830)
+
+
 class ZeroFieldKnob(Rig):
     def test_default_is_off_and_a_zero_field_word_is_accepted(self) -> None:
         self.assertFalse(SimConfig().reject_zero_fields)
@@ -151,10 +171,15 @@ class ZeroFieldKnob(Rig):
 
     def test_on_it_rejects_ratio_zero_and_v_target_zero_in_domain_0_only(self) -> None:
         self.use(reject_zero_fields=True)
-        for word in (0xFF000038, 0xFF053800, 0x0, 0x00000039, 0x00053800):  # V target 0 / ratio 0 / both / V target 0 / ratio 0
+        # ratio 0 / both 0 / ratio 0 / V target 0 ABOVE the top fused ratio (58 > 57: an OC point needs a target; G-120)
+        for word in (0xFF053800, 0x0, 0x00053800, 0xFF00003A):
             with self.subTest(word=hex(word)):
                 self.assertEqual(self.tx(1, WR_VF, 0, 0, word), Response(Rc.InvalidParam, 0))
                 self.assertEqual(self.tx(1, RD_VF).data, 0)  # nothing was stored
+        for word in (0xFF000038, 0x00000039):  # G-120: V target 0 at ratio <= the top fused ratio = no OC point = the shape the planner writes
+            with self.subTest(word=hex(word)):
+                self.assertEqual(self.tx(1, WR_VF, 0, 0, word).rc, Rc.Pass)
+        self.use(reject_zero_fields=True)
         self.assertEqual(self.tx(1, WR_VF, 0, 0, 0x00053837).rc, Rc.Pass)
         self.assertEqual(self.tx(0, WR_VF, 0, 0, 0xFF65B439).rc, Rc.Pass)
         # the domain-2 (ring) word may carry zero fields: the knob is about the per-core word

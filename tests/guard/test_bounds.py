@@ -322,6 +322,26 @@ class Fundamentals(BoundsCase):
         self.refuse(guard, E8, word(0, E_V), "ratio 0")
         self.refuse(guard, E8, word(48, 0), "v_target_raw 0")
 
+    def test_a_zero_v_target_is_allowed_only_without_an_oc_point(self) -> None:
+        """G-120 (D-035): ratio <= the top fused ratio (E 46, P 57) = no OC point = ratio | offset << 21 with target 0 [MEASURED lnx 2026-10-11]."""
+        guard = self.open(E8)
+        self.accept(guard, E8, word(46, 0, -10))  # E top fused ratio: no OC point, whole-curve offset
+        self.refuse(guard, E8, word(47, 0, -10), "v_target_raw 0")  # above the top fused ratio an OC point needs a real target
+        self.refuse(guard, E8, word(0, 0, -10), "ratio 0")
+        self.refuse(guard, E8, word(46, 0, -200), "offset_raw")  # every other bound still applies (floor)
+        self.fresh()
+        guard = self.open(P1, **RAISE)
+        self.accept(guard, P1, word(55, 0, -10))  # P1's 0x1C ratio; the top fused ratio of a P core is 57
+        self.refuse(guard, P1, word(58, 0, -10), "v_target_raw 0")
+
+    def test_the_zero_target_exception_needs_the_top_fused_ratio(self) -> None:
+        from arltuner.guard.policy import _check_vf_bounded
+
+        req = type("R", (), {"p2": 0, "data": word(46, 0, -10)})()
+        ok, why = _check_vf_bounded(req, 0x2E, {}, CheckContext(offset_floor_raw=-102, favored_word=0x2E30, fused_word=0x4A02E))
+        self.assertFalse(ok)
+        self.assertIn("v_target_raw 0", why)
+
     def test_refusals_send_nothing_and_leave_no_revert(self) -> None:
         guard = self.open(E8)
         before = list(self.transport.calls)

@@ -253,7 +253,9 @@ class NextAllowedStep(unittest.TestCase):
                 if "ratio" in kw:
                     self.assertEqual(final.ratio, kw["ratio"], kw)
                 if "oc_voltage_mv" in kw:
-                    self.assertEqual(final.v_target_raw, VfWord.v_to_raw(kw["oc_voltage_mv"] / 1000), kw)
+                    # G-120: ratio <= the E top fused ratio (46) with a runtime offset = no OC point: the word carries no target
+                    dropped = final.ratio <= 46 and final.offset_raw != 0
+                    self.assertEqual(final.v_target_raw, 0 if dropped else VfWord.v_to_raw(kw["oc_voltage_mv"] / 1000), kw)
 
 
 class ClusterEntries(unittest.TestCase):

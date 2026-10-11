@@ -63,7 +63,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from arltuner.guard import CHECKS, MSR_CHECKS, AllowEntry, MsrAllowEntry, MsrRequest, Policy, Refusal, Request
-from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, turbo_bytes
+from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, top_fused_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import PLATFORM, Profile
 from arltuner.topology import Topology
@@ -472,8 +472,23 @@ def xtu_word(base: VfWord, favored_word: int, fused_word: int) -> VfWord:
     return base.with_(ratio=ratio, v_target_raw=v_target)
 
 
+def has_oc_point(kind: str, ratio: int) -> bool:
+    """G-120: an OC ratio (the ``P2 = 0`` word) above the top fused ratio of the core kind (P 57, E 46) creates the OC point; at or below it there is none
+    ``[MEASURED lnx 2026-10-11]`` (docs/knowledge/tuning-results.md "First write sittings")."""
+    return ratio > top_fused_ratio(kind)
+
+
+def kept_word(kind: str, word: VfWord) -> VfWord:
+    """The word the hardware keeps for ``word`` on a core of ``kind`` (G-120, ``[MEASURED lnx 2026-10-11]``): with no OC point and a non-zero offset the V target
+    is dropped (0xFEC5B439 read back 0xFEC00039); with offset 0 it is kept (0x0005B439 read back 0x0005B439). The planner writes the kept word, so the guard's
+    whole-word read-back compares equal."""
+    if word.v_target_raw and word.offset_raw != 0 and not has_oc_point(kind, word.ratio):
+        return word.with_(v_target_raw=0)
+    return word
+
+
 def _goal_word(target: Target, current: VfWord) -> VfWord:
-    """``current`` with the profile's fields applied (``static`` is never in the changes)."""
+    """``current`` with the profile's fields applied (``static`` is never in the changes); the V target is 0 when the ratio leaves no OC point (``kept_word``)."""
     try:
         changes: dict[str, int] = {}
         if target.ratio is not None:
@@ -482,18 +497,27 @@ def _goal_word(target: Target, current: VfWord) -> VfWord:
             changes["v_target_raw"] = VfWord.v_to_raw(target.oc_voltage_mv / 1000)
         if target.offset_mv is not None:
             changes["offset_raw"] = VfWord.mv_to_offset_raw(target.offset_mv)
-        return current.with_(**changes)
+        return kept_word(target.kind, current.with_(**changes))
     except ValueError as exc:
         raise PlanError(f"{target.label}: requested value does not fit the V/F word: {exc}") from exc
 
 
-def _vf_words(current: VfWord, goal: VfWord) -> tuple[tuple[VfWord, str], ...]:
+def _vf_words(current: VfWord, goal: VfWord, kind: str = "P", label: str = "") -> tuple[tuple[VfWord, str], ...]:
     """The 0x11 words to send, in order, with their stage label. Ratio and V target moving the same way take two words (registers.md
     "Ordering"): rising -> V target first (the old ratio stays), falling -> ratio first (the old V target stays); the offset moves in the
-    second word. Otherwise one word."""
+    second word. Otherwise one word. A goal without an OC point (V target 0, ``kept_word``) is always one word: there is no target to order.
+    G-120: a voltage-first word sent while the ratio is still at or below the top fused ratio has no OC point either; the hardware keeps its target
+    only next to an offset of 0 (``[MEASURED lnx 2026-10-11]``), so with a runtime offset in place that two-word raise cannot be planned."""
+    if goal.v_target_raw == 0:
+        return ((goal, ""),)
     d_ratio = goal.ratio - current.ratio
     d_v = goal.v_target_raw - current.v_target_raw
     if d_ratio > 0 and d_v > 0:
+        if not has_oc_point(kind, current.ratio) and current.offset_raw != 0:
+            raise PlanError(
+                f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
+                f"V target next to a runtime offset ({current.offset_mv:+.1f} mV); set the offset to 0 first, raise ratio and voltage, then apply the offset"
+            )
         return ((current.with_(v_target_raw=goal.v_target_raw), "1/2 voltage first"), (goal, "2/2 full word"))
     if d_ratio < 0 and d_v < 0:
         return ((current.with_(ratio=goal.ratio), "1/2 frequency first"), (goal, "2/2 full word"))
@@ -539,15 +563,18 @@ def _next_ramp(target: Target, current: VfWord, goal: VfWord, ctx: CheckContext)
     """The goal moved by at most the step limits from ``current``; fields the profile did not set are left alone. A field already within its
     limit keeps the exact requested value."""
     ratio = _step_toward(current.ratio, goal.ratio, ctx.max_ratio_step)
-    v_raw = _step_toward(current.v_target_raw, goal.v_target_raw, ctx.max_v_step_raw)
+    if goal.v_target_raw == 0:  # no OC point at the goal (G-120): the word carries no target once its ratio leaves the OC range; until then the current one stays
+        v_raw = 0 if ratio <= (ctx.top_fused_ratio or 0) else current.v_target_raw
+    else:
+        v_raw = _step_toward(current.v_target_raw, goal.v_target_raw, ctx.max_v_step_raw)
     offset_raw = _step_toward(current.offset_raw, goal.offset_raw, ctx.max_offset_step_raw)
     word = current.with_(ratio=ratio, v_target_raw=v_raw, offset_raw=offset_raw)
     return _Ramp(
         word,
         None if target.ratio is None else ratio,
         None
-        if target.oc_voltage_mv is None
-        else (target.oc_voltage_mv if v_raw == goal.v_target_raw else _mv_toward(v_raw, current.v_target_raw, _v_raw_of_mv)),
+        if target.oc_voltage_mv is None or (goal.v_target_raw == 0 and v_raw != 0)  # no OC point at the goal: until the ratio is out of the OC range the voltage stays as it is
+        else (target.oc_voltage_mv if v_raw == goal.v_target_raw or goal.v_target_raw == 0 else _mv_toward(v_raw, current.v_target_raw, _v_raw_of_mv)),
         None
         if target.offset_mv is None
         else (target.offset_mv if offset_raw == goal.offset_raw else _mv_toward(offset_raw, current.offset_raw, VfWord.mv_to_offset_raw)),
@@ -715,6 +742,7 @@ def build_plan(
     point_ramps: dict[tuple[int, int], int] = {}
     step_only: set[int] = set()  # numbers of the 0x11 steps refused ONLY because a step limit is exceeded
     currents: dict[int, VfWord] = {}
+    oc_notes: list[str] = []
     raises = False
     for pt in point_targets:  # T-025: V/F point offsets first, then the per-core words
         word = point_words[(pt.cpu, pt.point)]
@@ -753,9 +781,14 @@ def build_plan(
         current = xtu_word(readings.vf, readings.favored, readings.fused)
         currents[t.cpu] = current
         goal = _goal_word(t, current)
+        if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
+            oc_notes.append(
+                f"{t.label}: OC-point voltage {t.oc_voltage_mv} mV is not written: ratio {goal.ratio} is at or below the top fused ratio {top_fused_ratio(t.kind)}, so there is "
+                f"no OC point and the hardware keeps no V target (the word is ratio | offset << 21) [MEASURED lnx 2026-10-11]"
+            )
         raises = raises or goal.ratio > current.ratio or goal.v_target_raw > current.v_target_raw or goal.offset_raw > current.offset_raw
         facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax)
-        words = _vf_words(current, goal)
+        words = _vf_words(current, goal, t.kind, t.label)
         sent: int | None = None
         for word, stage in words:
             ctx = build_context(policy, t.cpu, vf_word_sent=sent, **facts)
@@ -826,6 +859,7 @@ def build_plan(
     append_turbo(raising)
     warnings = list(plan_warnings(targets, policy, point_targets))
     warnings.extend(turbo_notes)
+    warnings.extend(oc_notes)
     if raising:
         warnings.append(TURBO_RAISE_CAVEAT)
     if profile.turbo is None or profile.turbo.e is None:
