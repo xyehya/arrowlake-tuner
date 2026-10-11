@@ -186,8 +186,6 @@ class Ordering(PointCase):
                 (StepKind.WRITE_VF_POINT, 4, 8),
                 *[(StepKind.WRITE_VF_POINT, c, 6) for c in E_CPUS],
                 (StepKind.WRITE_VF, 4, 0),
-                (StepKind.WRITE_FAVORED, 4, 0),
-                (StepKind.WRITE_GRANULAR, 4, 0),
             ],
         )
         reads = [(r.step.kind, r.step.cpu, r.step.p2) for r in report.steps if not r.step.kind.is_write]

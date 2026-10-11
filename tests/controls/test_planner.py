@@ -62,7 +62,7 @@ def p_core(index: int, offset_mv: int | None = None) -> str:
 def write_words(plan, cpu: int) -> tuple[int, int, int]:
     """(0x11 word, 0x1D data, 0x27 data) of ``cpu``."""
     by_cmd = {s.cmd: s.data for s in plan.steps if s.cpu == cpu and s.kind.is_write}
-    return by_cmd[0x11], by_cmd[0x1D], by_cmd[0x27]
+    return by_cmd[0x11], by_cmd.get(0x1D), by_cmd.get(0x27)  # G-122: 0x1D / 0x27 only when the profile sets an OC ratio (else None)
 
 
 class StepSequence(unittest.TestCase):
@@ -78,12 +78,10 @@ class StepSequence(unittest.TestCase):
                 (StepKind.READ_GRANULAR, 0x26, 4, 0, 0),
                 (StepKind.WRITE_PERCORE_ENABLE, 0x15, 4, 0, 0),
                 (StepKind.WRITE_VF, 0x11, 4, 0, 0),
-                (StepKind.WRITE_FAVORED, 0x1D, 4, 0, 0),
-                (StepKind.WRITE_GRANULAR, 0x27, 4, 0, 0),
             ],
         )
-        self.assertEqual([s.number for s in plan.steps], list(range(1, 10)))
-        self.assertEqual((plan.guard_operations, plan.required_operations), (9, 13))  # 9 operations + 4 read-backs (0x15, 0x11, 0x1D, 0x27)
+        self.assertEqual([s.number for s in plan.steps], list(range(1, 8)))
+        self.assertEqual((plan.guard_operations, plan.required_operations), (7, 9))  # 7 operations + 2 read-backs (0x15, 0x11); G-122: no 0x1D / 0x27 without an OC ratio
         self.assertTrue(plan.allowed)
         self.assertTrue(all(s.purpose.strip() for s in plan.steps))
 
@@ -129,16 +127,16 @@ class StepSequence(unittest.TestCase):
 
     def test_per_core_state_decides_the_0x15_step(self) -> None:
         enabled = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=True)
-        self.assertEqual([s.cmd for s in enabled.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27])
-        self.assertEqual((enabled.guard_operations, enabled.read_back_requests, enabled.required_operations), (8, 3, 11))
+        self.assertEqual([s.cmd for s in enabled.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11])
+        self.assertEqual((enabled.guard_operations, enabled.read_back_requests, enabled.required_operations), (6, 1, 7))
         clear = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=False)
-        self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11, 0x1D, 0x27])
+        self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11])
         unknown = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=None)
         step = unknown.steps[5]
         self.assertEqual(step.cmd, 0x15)
         self.assertTrue(step.conditional)
         self.assertIsNone(step.data)  # old|0x8 is not known yet
-        self.assertEqual((unknown.guard_operations, unknown.required_operations), (9, 13))  # worst case: + one read-back per write
+        self.assertEqual((unknown.guard_operations, unknown.required_operations), (7, 9))  # worst case: + one read-back per write
         with self.assertRaises(ValueError):
             step.request()
 
@@ -149,7 +147,7 @@ class StepSequence(unittest.TestCase):
         self.assertFalse(plan.steps[5].conditional)
         derived = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=None, misc_word=0x8)
         self.assertTrue(derived.per_core_enabled)
-        self.assertEqual([s.cmd for s in derived.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27])
+        self.assertEqual([s.cmd for s in derived.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11])
         with self.assertRaises(ValueError):
             plan_for(profile(p4(offset_mv=-30)), per_core_enabled=False, misc_word=0x8)
         with self.assertRaises(ValueError):
@@ -173,29 +171,29 @@ class MeasuredShapes(unittest.TestCase):
 
     def test_cpu0_minus_5_mv_is_xtus_word(self) -> None:
         plan = self.plan(profile(p_core(0, -5)), [0])
-        self.assertEqual(write_words(plan, 0), (0xFF600039, 0x39, 0x3))  # G-120: P0's OC ratio 57 = top fused ratio, no OC point: ratio | offset << 21, target 0 [MEASURED lnx 2026-10-11]
+        self.assertEqual(write_words(plan, 0), (0xFF600039, None, None))  # G-120: P0's OC ratio 57 = top fused ratio, no OC point: ratio | offset << 21, target 0 [MEASURED lnx 2026-10-11]
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu0_minus_15_mv_is_xtus_word(self) -> None:
-        self.assertEqual(write_words(self.plan(profile(p_core(0, -15)), [0]), 0), (0xFE200039, 0x39, 0x3))
+        self.assertEqual(write_words(self.plan(profile(p_core(0, -15)), [0]), 0), (0xFE200039, None, None))
 
     def test_cpu0_revert_word_keeps_the_fused_v_target_not_the_zero_one(self) -> None:
         plan = self.plan(profile(p_core(0, 0)), [0])
-        self.assertEqual(write_words(plan, 0), (0x0005B439, 0x39, 0x3))  # XTU's revert word; the baseline 0x39 is NOT rewritten
+        self.assertEqual(write_words(plan, 0), (0x0005B439, None, None))  # XTU's revert word; the baseline 0x39 is NOT rewritten
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu1_ratio_comes_from_0x1c_and_v_target_from_0x09(self) -> None:
         plan = self.plan(profile(p_core(1, -5)), [1])
-        self.assertEqual(write_words(plan, 1), (0xFF600037, 0x37, 0x3))  # ratio 0x37 = 55 (0x1C), not 57 (0x09); no OC point -> V target 0
-        self.assertEqual(write_words(self.plan(profile(p_core(1, 0)), [1]), 1), (0x00053837, 0x37, 0x3))
+        self.assertEqual(write_words(plan, 1), (0xFF600037, None, None))  # ratio 0x37 = 55 (0x1C), not 57 (0x09); no OC point -> V target 0
+        self.assertEqual(write_words(self.plan(profile(p_core(1, 0)), [1]), 1), (0x00053837, None, None))
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu1_step_list_equals_xtus_with_and_without_the_0x15(self) -> None:
         enabled = self.plan(profile(p_core(1, -5)), [1], per_core_enabled=True)
-        self.assertEqual([s.cmd for s in enabled.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27])
+        self.assertEqual([s.cmd for s in enabled.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11])
         self.assertEqual([(s.cmd, s.p1) for s in enabled.steps if s.cmd == 0x09], [(0x09, 0x11)])
         clear = self.plan(profile(p_core(1, -5)), [1], per_core_enabled=False)
-        self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11, 0x1D, 0x27])
+        self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11])
 
     def test_no_word_with_a_zero_ratio_is_ever_planned_and_a_zero_v_target_only_without_an_oc_point(self) -> None:
         for cpu in range(24):
@@ -216,9 +214,9 @@ class MeasuredShapes(unittest.TestCase):
         prof = profile(e_core(0, offset_mv=-5), e_core(4, offset_mv=-5), e_core(8, offset_mv=-5), e_core(12, offset_mv=-5))
         plan = self.plan(prof, range(8, 24))
         for cpu in range(8, 24):  # G-122: ratio 46 = the top fused E ratio (not 0x1C[7:0] = 48: an OC point), V target 0, offset -5 << 21; 0x1D carries the ratio
-            self.assertEqual(write_words(plan, cpu), (0xFF60002E, 0x2E, 0x3), cpu)
+            self.assertEqual(write_words(plan, cpu), (0xFF60002E, None, None), cpu)
         self.assertTrue(plan.allowed, plan.refusals)
-        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 7 * 16, 1 + 7 * 16 + 3 * 16))
+        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 5 * 16, 1 + 5 * 16 + 16))
         reverts = profile(e_core(0, offset_mv=0), e_core(4, offset_mv=0), e_core(8, offset_mv=0), e_core(12, offset_mv=0))
         rplan = self.plan(reverts, range(8, 24))
         self.assertEqual({write_words(rplan, c)[0] for c in range(8, 12)}, {0x0004A02E})  # offset 0 keeps the target (kept_word)
@@ -229,7 +227,6 @@ class MeasuredShapes(unittest.TestCase):
         r = dataclasses.replace(measured_readings(1), vf=VfWord(50, 0, False, 0))
         plan = build_plan(profile(p_core(1, -5)), TOPO, {1: r}, per_core_enabled=True, policy=POLICY)
         self.assertEqual(VfWord.from_u32(write_words(plan, 1)[0]).ratio, 50)
-        self.assertEqual(write_words(plan, 1)[1], 50)
         # no 0x1C ratio and no baseline ratio: the word would carry ratio 0 -> predicted refusal, nothing made up
         none = dataclasses.replace(measured_readings(1), favored=0)
         refused = build_plan(profile(p_core(1, -5)), TOPO, {1: none}, per_core_enabled=True, policy=POLICY)
@@ -239,24 +236,25 @@ class MeasuredShapes(unittest.TestCase):
         refused = build_plan(profile(e_core(0, ratio=47)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
         self.assertTrue(any("v_target_raw 0" in r.detail for r in refused.refusals), refused.refusals)
 
-    def test_a_small_ratio_step_policy_refuses_the_e_offset_only_word_instead_of_making_an_oc_point(self) -> None:
-        """G-122: the E offset-only word at ratio 46 (no OC point) is a ratio step of 2 from the guard's reference (0x1C[7:0] = 48). Under max_ratio_step 1 the
-        planner raises PlanError (nothing sent): the legacy ratio 48 would create an OC point, and the capped word has no ramp (47 is an OC point too)."""
-        prof = profile(e_core(4, offset_mv=-10))
+    def test_the_e_offset_only_word_passes_the_default_step_limit_and_a_ratio_raise_does_not(self) -> None:
+        """G-122: the E offset-only word has ratio 46 (no OC point); the guard measures a cold word at or below the top fused ratio from min(0x1C[7:0], top fused), so
+        0 -> 46 is no ratio step under max_ratio_step 1. A user-set OC ratio keeps the XTU fill and its step rules."""
         readings = {c: measured_readings(c) for c in range(12, 16)}
-        with self.assertRaises(PlanError) as ctx:
-            build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
-        self.assertIn("max_ratio_step >= 2", str(ctx.exception))
-        self.assertIn("create an OC point", str(ctx.exception))
-        wide = build_plan(prof, TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=2))
-        self.assertEqual({write_words(wide, c)[0] for c in range(12, 16)}, {0xFEC0002E})  # ratio 46, target 0, -10 mV
-        self.assertTrue(wide.allowed, wide.refusals)
-        # an OC ratio / OC voltage the profile sets itself is the user's: the XTU fill (48, an OC point), whatever the step limit
+        small = policy_with(max_ops=200, max_ratio_step=1)
+        plan = build_plan(profile(e_core(4, offset_mv=-10)), TOPO, readings, per_core_enabled=True, policy=small)
+        self.assertEqual({write_words(plan, c) for c in range(12, 16)}, {(0xFEC0002E, None, None)})  # ratio 46, target 0, -10 mV; no 0x1D / 0x27
+        self.assertTrue(plan.allowed, plan.refusals)
+        self.assertEqual([s.cmd for s in plan.steps if s.cpu == 12 and s.kind.is_write], [0x11])
+        # an OC ratio / OC voltage the profile sets itself is the user's: the XTU fill (48, an OC point)
         for entry in (e_core(4, ratio=48), e_core(4, oc_voltage_mv=1137)):
-            own = build_plan(profile(entry), TOPO, readings, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
+            own = build_plan(profile(entry), TOPO, readings, per_core_enabled=True, policy=small)
             self.assertEqual({VfWord.from_u32(write_words(own, c)[0]).ratio for c in range(12, 16)}, {48}, entry)
-        # a P core is unaffected (0x1C[7:0] <= 57): the same step-1 policy plans it
-        build_plan(profile(p_core(1, -5)), TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=policy_with(max_ops=200, max_ratio_step=1))
+        raise_p = build_plan(profile(p_core(1, -5)), TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=small)
+        self.assertEqual(VfWord.from_u32(write_words(raise_p, 1)[0]).ratio, 55)  # a P core is unaffected
+        # a real ratio raise is still refused beyond max_ratio_step: P1 cold (0x1C[7:0] = 55) asking for 57 is two bins
+        two = build_plan(profile('kind = "P"\nindex = 1\nratio = 57'), TOPO, {1: measured_readings(1)}, per_core_enabled=True,
+                         policy=dataclasses.replace(small, ratio_max={"P": 57, "E": None}))
+        self.assertFalse(two.allowed)
 
     def test_fill_ratio_caps_a_zero_baseline_at_the_top_fused_ratio_only(self) -> None:
         self.assertEqual(fill_ratio(0, 0x2E30, "E"), 46)
@@ -289,8 +287,8 @@ class Targets(unittest.TestCase):
         writes = [s for s in plan.steps if s.kind is StepKind.WRITE_VF]
         self.assertEqual([s.cpu for s in writes], [20, 21, 22, 23])
         self.assertEqual({s.data for s in writes}, {E_BASELINE.with_(offset_raw=-20).to_u32()})
-        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 4 * 4 + 1 + 4 * 3, 1 + 4 * 4 + 1 + 4 * 3 + 1 + 4 * 3))
-        self.assertEqual({s.cpu for s in plan.steps if s.kind is StepKind.WRITE_FAVORED}, {20, 21, 22, 23})
+        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 4 * 4 + 1 + 4, 1 + 4 * 4 + 1 + 4 + 1 + 4))
+        self.assertEqual([s for s in plan.steps if s.kind is StepKind.WRITE_FAVORED], [])  # G-122: offset-only, no 0x1D
 
     def test_entries_of_one_cluster_are_deduplicated(self) -> None:
         both = profile(e_core(12, offset_mv=-20), e_core(13, offset_mv=-20))
@@ -302,8 +300,8 @@ class Targets(unittest.TestCase):
         self.assertEqual([t.cpu for t in targets], [4, 8, 9, 10, 11])
         base = {4: P4_READINGS, **{c: E_READINGS for c in (8, 9, 10, 11)}}
         plan = plan_for(prof, base)
-        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 5 * 4 + 1 + 5 * 3, 1 + 5 * 4 + 1 + 5 * 3 + 1 + 5 * 3))
-        self.assertEqual([s.cmd for s in plan.steps], [0x14] + [0x10, 0x1C, 0x09, 0x26] * 5 + [0x15] + [0x11, 0x1D, 0x27] * 5)
+        self.assertEqual((plan.guard_operations, plan.required_operations), (1 + 5 * 4 + 1 + 5, 1 + 5 * 4 + 1 + 5 + 1 + 5))
+        self.assertEqual([s.cmd for s in plan.steps], [0x14] + [0x10, 0x1C, 0x09, 0x26] * 5 + [0x15] + [0x11] * 5)
         self.assertEqual(plan.steps[0].cpu, 4)  # 0x14 / 0x15 go to the first target CPU
         self.assertEqual([s.core_kind for s in plan.steps if s.kind is StepKind.WRITE_VF], ["P", "E", "E", "E", "E"])
 
@@ -322,18 +320,18 @@ class Targets(unittest.TestCase):
             "builtins.open", side_effect=AssertionError("planner must not do I/O")
         ):
             plan = plan_for(profile(p4(offset_mv=-30)))
-        self.assertEqual(plan.required_operations, 13)
+        self.assertEqual(plan.required_operations, 9)
 
 
 class Counting(unittest.TestCase):
     def test_count_operations(self) -> None:
-        # every WRMSR: the 0x14 read + per CPU (4 reads + 3 writes) + the 0x15 write unless known set + ONE READ-BACK PER WRITE (T-022)
-        self.assertEqual(count_operations(1, True), 1 + 4 + 3 + 3)
-        self.assertEqual(count_operations(1, False), 1 + 4 + 4 + 4)
-        self.assertEqual(count_operations(1, None), 13)  # unknown = worst case (the 0x15 write and its read-back included)
-        self.assertEqual(count_operations(4, False), 17 + 13 + 13)
-        self.assertEqual(count_operations(5, True), 21 + 15 + 15)
-        self.assertEqual(count_operations(16, True), 65 + 48 + 48)
+        # every WRMSR: the 0x14 read + per CPU (4 reads + 1 write: the 0x11; G-122: 0x1D / 0x27 only with an OC ratio) + the 0x15 write unless known set + ONE READ-BACK PER WRITE (T-022)
+        self.assertEqual(count_operations(1, True), 1 + 4 + 1 + 1)
+        self.assertEqual(count_operations(1, False), 1 + 4 + 2 + 2)
+        self.assertEqual(count_operations(1, None), 9)  # unknown = worst case (the 0x15 write and its read-back included)
+        self.assertEqual(count_operations(4, False), 17 + 5 + 5)
+        self.assertEqual(count_operations(5, True), 21 + 5 + 5)
+        self.assertEqual(count_operations(16, True), 65 + 16 + 16)
         with self.assertRaises(ValueError):
             count_operations(0, None)
         for bad in (True, [], (), None, 1.5, ["x"]):
@@ -346,10 +344,10 @@ class Counting(unittest.TestCase):
         )
         base = count_operations(offset_only, True)
         self.assertEqual(base, count_operations(1, True))
-        self.assertEqual(count_operations(ratio_only, True), base)  # a ratio alone: one 0x11, no 0x28
+        self.assertEqual(count_operations(ratio_only, True), base + 2 + 2)  # a ratio alone: one 0x11, no 0x28, but the 0x1D and 0x27 (and their read-backs)
         self.assertEqual(count_operations(volts_only, True), base + 1)  # + the 0x28 read, still one 0x11
-        self.assertEqual(count_operations(both, True), base + 1 + 2)  # + the 0x28 read + a second 0x11 and its read-back
-        self.assertEqual(count_operations(both, None), base + 1 + 2 + 2)  # unknown 0x15 state: + the write and its read-back
+        self.assertEqual(count_operations(both, True), base + 1 + 6)  # + the 0x28 read + the 0x1D, 0x27 and a second 0x11, each with its read-back
+        self.assertEqual(count_operations(both, None), base + 1 + 6 + 2)  # unknown 0x15 state: + the write and its read-back
 
     def test_the_guard_operations_and_the_budget_differ_by_the_read_backs_only(self) -> None:
         plan = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=False)
@@ -371,35 +369,35 @@ class Counting(unittest.TestCase):
         plan = plan_for(profile(p4(offset_mv=-30)), policy=default_m1_policy())
         self.assertTrue(plan.needs_higher_limit)
         self.assertFalse(plan.allowed)
-        self.assertEqual((plan.required_operations, plan.allowed_operations), (13, 1))
+        self.assertEqual((plan.required_operations, plan.allowed_operations), (9, 1))
         with self.assertRaises(NeedsHigherLimit) as ctx:
             plan.require_allowed()
-        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (13, 1))
+        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (9, 1))
         with self.assertRaises(NeedsHigherLimit):
             preflight(profile(p4(offset_mv=-30)), TOPO, default_m1_policy())
 
     def test_exact_limit_is_enough(self) -> None:
-        # 9 guard operations + 4 read-backs = 13 WRMSRs: the budget counts the read-backs although the guard's own counter does not
-        self.assertTrue(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=13)).allowed)
-        self.assertFalse(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=12)).allowed)
-        self.assertFalse(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=9)).allowed)  # enough for the guard, not for the budget
-        preflight(profile(p4(offset_mv=-30)), TOPO, policy_with(max_ops=13))
+        # 7 guard operations + 2 read-backs = 9 WRMSRs (G-122: no 0x1D / 0x27 for an offset-only profile): the budget counts the read-backs although the guard's own counter does not
+        self.assertTrue(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=9)).allowed)
+        self.assertFalse(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=8)).allowed)
+        self.assertFalse(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(max_ops=7)).allowed)  # enough for the guard, not for the budget
+        preflight(profile(p4(offset_mv=-30)), TOPO, policy_with(max_ops=9))
         with self.assertRaises(NeedsHigherLimit) as ctx:
-            preflight(profile(p4(offset_mv=-30)), TOPO, policy_with(max_ops=12))
-        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (13, 12))
+            preflight(profile(p4(offset_mv=-30)), TOPO, policy_with(max_ops=8))
+        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (9, 8))
 
     def test_the_default_per_boot_cap_cannot_cover_an_e_cluster(self) -> None:
         pol = dataclasses.replace(default_m1_policy(), max_operations_per_session=60)  # per-boot cap stays 12
         with self.assertRaises(NeedsBootBudget) as ctx:
             preflight(profile(e_core(12, offset_mv=-20)), TOPO, pol)
-        self.assertEqual((ctx.exception.required, ctx.exception.remaining), (43, 12))  # 30 operations + 13 read-backs
+        self.assertEqual((ctx.exception.required, ctx.exception.remaining), (27, 12))  # 22 operations + 5 read-backs
 
     def test_preflight_counts_the_per_boot_budget_before_anything_is_sent(self) -> None:
-        pol = policy_with(max_ops=60, boot_ops=20)  # a plan for one P-core needs 13 WRMSRs (9 operations + 4 read-backs)
-        preflight(profile(p4(offset_mv=-30)), TOPO, pol, boot_ops_used=7)  # exactly enough: 20 - 7 == 13
+        pol = policy_with(max_ops=60, boot_ops=16)  # a plan for one P-core needs 9 WRMSRs (7 operations + 2 read-backs)
+        preflight(profile(p4(offset_mv=-30)), TOPO, pol, boot_ops_used=7)  # exactly enough: 16 - 7 == 9
         with self.assertRaises(NeedsBootBudget) as ctx:
             preflight(profile(p4(offset_mv=-30)), TOPO, pol, boot_ops_used=8)  # one short
-        self.assertEqual((ctx.exception.required, ctx.exception.remaining, ctx.exception.used, ctx.exception.cap), (13, 12, 8, 20))
+        self.assertEqual((ctx.exception.required, ctx.exception.remaining, ctx.exception.used, ctx.exception.cap), (9, 8, 8, 16))
         with self.assertRaises(NeedsBootBudget) as ctx:  # an already exhausted budget never goes negative
             preflight(profile(p4(offset_mv=-30)), TOPO, pol, boot_ops_used=99)
         self.assertEqual(ctx.exception.remaining, 0)
@@ -409,9 +407,9 @@ class Counting(unittest.TestCase):
                 preflight(profile(p4(offset_mv=-30)), TOPO, pol, boot_ops_used=bad)  # type: ignore[arg-type]
 
     def test_estimated_min_seconds_is_dwell_times_operations(self) -> None:
-        self.assertEqual(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(dwell=60.0)).estimated_min_seconds, 540.0)
+        self.assertEqual(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(dwell=60.0)).estimated_min_seconds, 420.0)
         self.assertEqual(plan_for(profile(p4(offset_mv=-30)), policy=policy_with(dwell=0.0)).estimated_min_seconds, 0.0)
-        self.assertEqual(plan_for(profile(p4(offset_mv=-30)), per_core_enabled=True, policy=policy_with(dwell=10.0)).estimated_min_seconds, 80.0)
+        self.assertEqual(plan_for(profile(p4(offset_mv=-30)), per_core_enabled=True, policy=policy_with(dwell=10.0)).estimated_min_seconds, 60.0)
 
 
 class PredictedVerdicts(unittest.TestCase):
@@ -497,7 +495,7 @@ class PredictedVerdicts(unittest.TestCase):
         policy = dataclasses.replace(POLICY, cpus=frozenset({0, 1, 2, 3}))
         plan = plan_for(profile(p4(offset_mv=-30)), policy=policy)
         self.assertEqual({r.reason for r in plan.refusals}, {"CPU_NOT_ALLOWED"})
-        self.assertEqual(len(plan.refusals), 9)  # every step is on cpu 4
+        self.assertEqual(len(plan.refusals), 7)  # every step is on cpu 4
         with self.assertRaises(PlanRefused):
             preflight(profile(p4(offset_mv=-30)), TOPO, policy)  # refused before any read
 
@@ -517,12 +515,12 @@ class PredictedVerdicts(unittest.TestCase):
                 with self.assertRaises(PlanRefused) as ctx:
                     preflight(profile(p4(offset_mv=-30)), TOPO, policy)
                 self.assertEqual(ctx.exception.refusals[0].cmd, cmd)
-        for cmd, step_number in ((0x1D, 8), (0x27, 9)):  # a write the policy does not list: caught by pre-flight too
+        for cmd, step_number in ((0x1D, 8), (0x27, 9)):  # a write the policy does not list: caught by pre-flight too (G-122: 0x1D / 0x27 exist only with an OC ratio)
             with self.subTest(write=hex(cmd)):
                 policy = without(cmd)
-                self.assertEqual([r.step_number for r in plan_for(profile(p4(offset_mv=-30)), policy=policy).refusals], [step_number])
+                self.assertEqual([r.step_number for r in plan_for(profile(p4(offset_mv=-30, ratio=55)), policy=policy).refusals], [step_number])
                 with self.assertRaises(PlanRefused) as ctx:
-                    preflight(profile(p4(offset_mv=-30)), TOPO, policy)
+                    preflight(profile(p4(offset_mv=-30, ratio=55)), TOPO, policy)
                 self.assertEqual([r.cmd for r in ctx.exception.refusals], [cmd])
 
     def test_0x15_is_predicted_ok_by_construction(self) -> None:

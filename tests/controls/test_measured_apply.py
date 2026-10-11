@@ -10,18 +10,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arltuner.controls import PlanRefused, StepKind, StopKind
+from arltuner.controls import NeedsRamp, PlanRefused, StepKind, StopKind
 from arltuner.guard import ENV_FLAG, AuditLog, Confirmation, Request, WriteGuard
 from arltuner.mailbox import VfWord
 from arltuner.msr import MailboxTransport, SimConfig, SimMsrPort
 
-from ._support import e_core, make_session, policy_with, profile
+from ._support import DEFAULT_STEPS, e_core, make_session, policy_with, profile
 
 XTU_READS = [0x14, 0x10, 0x1C, 0x09, 0x26]  # misc (bit 3 already set: no 0x15), then the four reads of the core
 
 
 def p_core(index: int, offset_mv: int) -> str:
-    return f'kind = "P"\nindex = {index}\noffset_mv = {offset_mv}'
+    """XTU's per-core entry: it also writes the ratio (0x1D) and the granular word (0x27), so the golden sequences below carry the core's favored ratio (P0/P3 57, others 55).
+    G-122: an offset-only profile sends the 0x11 alone; see ``ECurve`` / ``OffsetOnly``."""
+    return f'kind = "P"\nindex = {index}\noffset_mv = {offset_mv}\nratio = {57 if index in (0, 3) else 55}'
 
 
 class MeasuredCase(unittest.TestCase):
@@ -130,11 +132,24 @@ class ECurve(MeasuredCase):
             word = s.sim.vf(cpu)
             self.assertEqual((word.ratio, word.v_target_raw, word.offset_raw), (46, 0, -10), cpu)  # ratio <= 46: no OC point, target 0 (D-035)
             self.assertEqual(self.point7_rc(s, cpu), 0x11, cpu)  # no OC point appeared
-        self.assertIn((12, 0x1D, 46), s.write_requests())  # [UNVERIFIED] what 0x1D 46 does to E turbo (0x1C[7:0] reads 48); the guard ties 0x1D to the 0x11 ratio
+        self.assertEqual([(c, cmd) for c, cmd, _ in s.write_requests()], [(c, 0x11) for c in range(12, 16)])  # G-122: the 0x11 alone: no 0x1D = 46 (would likely cap E turbo at 46), no 0x27
+        self.assertEqual(s.sim.favored_word(12), SimMsrPort(SimConfig.measured()).favored_word(12))  # 0x1C[7:0] still 48
         back = s.apply(profile(e_core(4, offset_mv=0)))
         self.assertTrue(back.ok, back.format_report())
         self.assertEqual({s.sim.vf(c).to_u32() for c in range(12, 16)}, {0x00048C2E})  # offset 0 keeps the target; ratio 46: still no OC point
         self.assertEqual(self.point7_rc(s, 12), 0x11)
+
+
+    def test_the_default_step_limits_pass_the_cold_e_word_and_stop_a_real_raise(self) -> None:
+        """G-122: max_ratio_step 1 (the shipped default): a cold E word at ratio 46 is no ratio step; an OC ratio two bins above the reference is still refused."""
+        s = self.session(config=SimConfig.measured(per_point=True), policy=policy_with(max_ops=400, dwell=0.0, boot_ops=2000, **DEFAULT_STEPS))
+        report = s.apply(profile(e_core(4, offset_mv=-10)))
+        self.assertTrue(report.ok, report.format_report())
+        self.assertEqual([(c, cmd) for c, cmd, _ in s.write_requests()], [(c, 0x11) for c in range(12, 16)])  # steps = [0x11 only]
+        self.assertEqual(self.point7_rc(s, 12), 0x11)  # no OC point
+        with self.assertRaises((NeedsRamp, PlanRefused)):
+            s.apply(profile(e_core(0, ratio=50)))  # 48 -> 50: beyond max_ratio_step 1 (and above the policy ratio ceiling)
+        self.assertEqual(len([r for r in s.write_requests() if r[1] == 0x11]), 4)
 
 
 class Cpu1(MeasuredCase):
@@ -185,15 +200,13 @@ class ECores(MeasuredCase):
                 )
                 report = s.apply(profile(*self.ALL_16))
                 self.assertTrue(report.ok, report.format_report())
-                self.assertEqual(report.operations, 1 + 16 * 7)
+                self.assertEqual(report.operations, 1 + 16 * 5)  # G-122: reads 0x10 0x1C 0x09 0x26 + the 0x11 per CPU; no 0x1D / 0x27 without an OC ratio
                 writes = s.write_requests()
-                self.assertEqual(len(writes), 16 * 3)
+                self.assertEqual(len(writes), 16)
                 for cpu in range(8, 24):
                     want = 0xFF60002E  # G-122: ratio 0x2E = 46 (top fused E ratio: no OC point), V target 0 (the hardware keeps none), offset -5
                     self.assertEqual(s.sim.vf(cpu).to_u32(), want, cpu)
                     self.assertIn((cpu, 0x11, want), writes)
-                    self.assertIn((cpu, 0x1D, 0x2E), writes)
-                    self.assertIn((cpu, 0x27, 0x3), writes)
                 for cpu in range(8):
                     self.assertEqual(s.sim.vf(cpu).to_u32(), 0x39 if cpu == 0 else 0, cpu)  # P cores untouched
                 self.assertEqual(report.zero_baseline_cpus, tuple(range(8, 24)))

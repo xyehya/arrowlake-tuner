@@ -69,6 +69,7 @@ from arltuner.profiles import PLATFORM, Profile
 from arltuner.topology import Topology
 
 from .model import (
+    OFFSET_ONLY_WRITES,
     OK_VERDICT,
     PERCORE_ENABLE_BIT,
     READS_PER_CPU,
@@ -221,9 +222,10 @@ def _reads_of(target: Target) -> int:
 
 
 def _max_writes_of(target: Target) -> int:
-    """Writes of one target, worst case: 0x11, 0x1D, 0x27, and a second 0x11 when ratio and V target could move the same way (both set)."""
+    """Writes of one target, worst case: 0x11, and (G-122: only when the profile sets an OC ratio) 0x1D, 0x27; a second 0x11 when ratio and V target could move
+    the same way (both set)."""
     both = target.ratio is not None and target.oc_voltage_mv is not None
-    return WRITES_PER_CPU + (SPLIT_EXTRA_WRITES if both else 0)
+    return (WRITES_PER_CPU if target.ratio is not None else OFFSET_ONLY_WRITES) + (SPLIT_EXTRA_WRITES if both else 0)
 
 
 def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0) -> int:
@@ -241,7 +243,7 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
     G-117: with no targets, no points and ``msr_writes > 0`` (a turbo-table-only plan) nothing touches the mailbox: no ``0x14`` read, no ``0x15`` write; the
     count is the plain-MSR writes alone.
 
-    ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves."""
+    ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves. G-122: a target that sets no OC ratio writes the 0x11 alone (no 0x1D / 0x27)."""
     if isinstance(msr_writes, int) and not isinstance(msr_writes, bool) and msr_writes > 0 and n_points == 0 and not isinstance(targets, int):
         try:
             if not tuple(targets):
@@ -254,7 +256,7 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
         if targets < 1:
             raise ValueError(f"n_targets must be an int >= 1, got {targets!r}")
         reads = 1 + READS_PER_CPU * targets
-        writes = WRITES_PER_CPU * targets
+        writes = OFFSET_ONLY_WRITES * targets  # G-122: plain targets set no OC ratio: one 0x11 each
     else:
         try:
             listed = tuple(targets)
@@ -484,23 +486,11 @@ def xtu_word(base: VfWord, favored_word: int, fused_word: int, kind: str | None 
     return base.with_(ratio=ratio, v_target_raw=v_target)
 
 
-def current_word(readings: CoreReadings, kind: str, policy: Policy, sets_oc: bool = False, label: str = "") -> VfWord:
-    """The current OC word of a core (``xtu_word``) for the planner (G-122: ``fill_ratio`` caps a zero baseline's ratio at the top fused ratio, so an offset-only
-    write never creates an OC point). The guard measures the ratio step from ``max(base ratio, 0x1C[7:0])`` (E: 48), so the capped fill (E: 46) is a step of 2 that
-    only a policy with ``max_ratio_step`` >= 2 allows. Under a smaller limit it is a ``PlanError``: the legacy fill (48 > 46) would create an OC point
-    ([MEASURED lnx 2026-10-11]: ``P2 = 7`` appears), the capped word would be refused as step-only and no ramp exists (47 is an OC point too). Nothing widens the policy.
-    A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point: it keeps the XTU fill."""
-    legacy = xtu_word(readings.vf, readings.favored, readings.fused)
-    if sets_oc:
-        return legacy
-    capped = xtu_word(readings.vf, readings.favored, readings.fused, kind)
-    if abs(capped.ratio - legacy.ratio) > policy.max_ratio_step:
-        raise PlanError(
-            f"{label}: a runtime offset on a {kind} core whose OC word reads 0 is written as ratio {capped.ratio} (the top fused ratio; 0x1C[7:0] = {legacy.ratio} would "
-            f"create an OC point), a ratio step of {legacy.ratio - capped.ratio} from the guard's reference, over max_ratio_step {policy.max_ratio_step}; use a policy "
-            f"with max_ratio_step >= {legacy.ratio - capped.ratio} (nothing was sent)"
-        )
-    return capped
+def current_word(readings: CoreReadings, kind: str, sets_oc: bool = False) -> VfWord:
+    """The current OC word of a core (``xtu_word``) for the planner. G-122: ``fill_ratio`` caps a zero baseline's ratio at the top fused ratio of the kind (E 46, not
+    ``0x1C[7:0]`` = 48), so an offset-only write never creates an OC point ([MEASURED lnx 2026-10-11]: ``P2 = 7`` appears); the guard's ratio-step rule (``vf_bounded``)
+    measures that cold word from the same cap. A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point and keeps the XTU fill."""
+    return xtu_word(readings.vf, readings.favored, readings.fused, None if sets_oc else kind)
 
 
 def has_oc_point(kind: str, ratio: int) -> bool:
@@ -809,7 +799,7 @@ def build_plan(
         )
     for t in targets:
         readings = baseline[t.cpu]
-        current = current_word(readings, t.kind, policy, t.ratio is not None or t.oc_voltage_mv is not None, t.label)
+        current = current_word(readings, t.kind, t.ratio is not None or t.oc_voltage_mv is not None)
         currents[t.cpu] = current
         goal = _goal_word(t, current)
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
@@ -850,6 +840,8 @@ def build_plan(
                 )
             )
             sent = word.to_u32()
+        if t.ratio is None:
+            continue  # G-122: an offset / V-target-only write sends no 0x1D (favored ratio) and no 0x27 (granular): its ratio field is the current one, not a ratio the user set -- 0x1D = 46 would likely cap E turbo at 46
         ctx = build_context(policy, t.cpu, vf_word_sent=goal.to_u32(), **facts)
         purpose = f"apply: write favored-core word (0x1D) of {t.label} = ratio {goal.ratio} of the 0x11 word"
         req = Request(t.cpu, int(Cmd.FAVORED_CORE_WRITE), 0, 0, goal.ratio, purpose)

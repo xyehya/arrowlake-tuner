@@ -434,6 +434,11 @@ def _check_vf_bounded(
             f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset, D-015; "
             f"runtime ceiling {ctx.offset_ceiling_raw}; entry params {dict(params)})"
         )
+    if base.ratio == 0 and ctx.top_fused_ratio is not None and 0 < new.ratio <= ctx.top_fused_ratio:
+        # G-122: a cold word (ratio field 0) written at or below the top fused ratio has no OC point: its ratio field is not a ratio change. The reference is then
+        # capped at the top fused ratio (E: 0x1C[7:0] reads 48, the E turbo, but the word without an OC point is 46), so 0 -> 46 / 57 is no step. A real raise past
+        # the cap, or any ratio change above it, still measures from 0x1C[7:0] as before.
+        ratio_now = min(ratio_now, ctx.top_fused_ratio)
     if abs(new.ratio - ratio_now) > ctx.max_ratio_step:
         return False, f"ratio step {new.ratio - ratio_now:+d} from {ratio_now} exceeds the per-operation limit {ctx.max_ratio_step}"
     if not no_oc_point and abs(new.v_target_raw - v_now) > ctx.max_v_step_raw:

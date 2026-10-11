@@ -38,6 +38,7 @@ __all__ = [
     "REVERT_NOTE",
     "SPLIT_EXTRA_WRITES",
     "VMAX_EXTRA_READS",
+    "OFFSET_ONLY_WRITES",
     "WRITES_PER_CPU",
     "XTU_SHAPE_CAVEAT",
     "ApplyPlan",
@@ -78,6 +79,8 @@ REVERT_NOTE = (
 #: (an extra WRMSR that the guard itself does not count, but the plan's budget does -- ``ApplyPlan.required_operations``).
 READS_PER_CPU = 4
 WRITES_PER_CPU = 3
+#: G-122: a target that sets no OC ratio (offset / V target only) writes the 0x11 alone: a 0x1D / 0x27 would restate its ratio field, which is not a ratio the user set.
+OFFSET_ONLY_WRITES = 1
 #: A profile that sets an OC-point voltage also reads 0x28 (the hardware maximum voltage) of the CPU (D-016) ...
 VMAX_EXTRA_READS = 1
 #: ... and one that sets a ratio and an OC-point voltage may need a second 0x11 (voltage first when rising, frequency first when falling).
