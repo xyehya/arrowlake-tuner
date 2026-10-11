@@ -109,6 +109,17 @@ def _vf_measure(a: dict) -> bool:  # contract 9; the helper (ops_measure._valida
             and ("units" not in a or _unit_list(a["units"])) and ("name" not in a or _name(a["name"])))
 
 
+def _stress_start(a: dict) -> bool:  # contract 9 (G-116); the helper (ops_stress._validate_stress_start) is the authority
+    cap = a.get("ratio_cap")
+    if not set(a) <= {"kind", "method", "units", "ratio_cap", "duration_s", "memory_mb"} or a.get("kind") not in ("cpu", "memory"):
+        return False
+    return (type(a.get("duration_s")) is int and 30 <= a["duration_s"] <= 3600
+            and ("method" not in a or a["method"] in ("integer", "vector-math", "cache"))
+            and ("units" not in a or _unit_list(a["units"]))
+            and (cap is None or (type(cap) is int and 8 <= cap <= 60))
+            and ("memory_mb" not in a or (type(a["memory_mb"]) is int and 256 <= a["memory_mb"] <= 1 << 20)))
+
+
 def _curves_get(a: dict) -> bool:
     return set(a) <= {"id", "units"} and "id" in a and _curve_id(a["id"]) and ("units" not in a or _unit_list(a["units"]))
 
@@ -144,6 +155,9 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "curves.update": (_curves_update, False),
     "curves.delete": (_curves_delete, False),
     "mem.read": (_empty, False),
+    "stress.start": (_stress_start, True),  # G-116, contract 9 addendum
+    "stress.stop": (_empty, False),
+    "stress.list": (_empty, False),
 }
 
 # HTTP status for a helper error code (Contract 8 codes; unknown codes -> 422)
