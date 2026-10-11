@@ -288,7 +288,8 @@ def format_preview(
             f"  plain MSR {'0x650 (E' if key == 'e' else '0x1AD (P'} turbo table): rdmsr 0xCE and the table first, then wrmsr {'/'.join(map(str, ratios))} "
             "(raising a bucket: after all per-core words; only lowering: before them), read back on two CPUs of different core kinds;"
         )
-    lines.append(f"  read 0x14 on cpu {points[0].cpu if points else targets[0].cpu}; write 0x15 (old|0x8) only if bit 3 is clear;")
+    if points or targets:
+        lines.append(f"  read 0x14 on cpu {points[0].cpu if points else targets[0].cpu}; write 0x15 (old|0x8) only if bit 3 is clear;")
     if targets:
         lines.append(f"  read 0x10, 0x1C, 0x09 P1=0x11 and 0x26 on each of the {n} CPU(s) (and 0x28, the hardware maximum voltage, where an OC-point voltage is set);")
         lines.append("  then, per CPU, write 0x11 (the word XTU builds: ratio and V target filled in from 0x1C / 0x09, only the requested fields")

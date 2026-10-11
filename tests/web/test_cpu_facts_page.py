@@ -22,6 +22,12 @@ CSS = (WEB / "style.css").read_text(encoding="utf-8")
 CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or shutil.which("chromium") or ""
 
 
+def body_of_const(name: str) -> str:
+    m = re.search(r"const " + re.escape(name) + r" = \{(.*?)\n  \};", JS, re.S)
+    assert m, name
+    return m.group(1)
+
+
 def body_of(name: str) -> str:
     m = re.search(r"function " + re.escape(name) + r"\(.*?\) \{(.*?)\n  \}\n", JS, re.S)
     assert m, name
@@ -41,6 +47,21 @@ class TestStatic(unittest.TestCase):
         body = body_of("requestPlan")
         self.assertIn("intent.turbo !== undefined", body)
         self.assertIn("does not accept turbo table edits (intent.turbo)", body)
+
+    def test_plan_warnings_are_rendered_by_code_not_by_regex(self):
+        """G-117: warnings[].code picks the look; the old text regexes are gone; the VccIA block shows label / margin_v / light_load."""
+        for code in ("CLAMPED", "E40_OFFSET", "E_TARGET_WHEA", "POSITIVE_OFFSET", "NO_BASELINE", "TURBO_RAISE", "NOTE"):
+            self.assertIn(code + ":", body_of_const("WARN_CODES"), code)
+        self.assertNotIn("warnClass", JS)
+        self.assertNotRegex(JS, r"/40\\s\*\[x")
+        self.assertIn("w.code", body_of("planWarnings"))
+        node = body_of("vcciaNode")
+        for field in ("vc.label", "vc.margin_v", "vc.light_load", "vc.before_v", "vc.set_by"):
+            self.assertIn(field, node, field)
+
+    def test_a_turbo_only_edit_sends_turbo_alone(self):
+        self.assertIn("unitsChanged().length ? buildIntent() : {}", JS)
+        self.assertIn("(x) => isObj(x) && x.kind === \"write_msr\"", JS)   # the review says the plan is plain MSR writes only
 
     def test_grid_uses_the_community_point_names(self):
         self.assertIn('"Point " + (no === null ? "?" : no) + " \\u00b7 " + ratio', JS)   # Point 1 . 8x ... Point 8 . 57x
@@ -150,6 +171,22 @@ class TestBrowser(unittest.TestCase):
                 self.assertIn("Predicted VccIA", dlg)
                 self.assertIn("clamped to Vn−1", dlg)
                 self.assertIn("Turbo ratio tables", dlg)
+                # G-117: the review badges warnings by code; the VccIA block carries the label, the headroom and the 1-2 core case
+                self.assertEqual(page.locator('#dlg-plan .plan-warn li[data-code="E40_OFFSET"].bad').count(), 1)
+                self.assertIn("clamped", page.locator('#dlg-plan .plan-warn li[data-code="CLAMPED"] .tn-badge').first.inner_text())
+                self.assertIn("prediction", page.inner_text("#dlg-plan .plan-vccia"))
+                self.assertIn("regulator headroom", page.inner_text("#dlg-plan .plan-vccia"))
+                self.assertIn("1\u20132 cores loaded", page.inner_text("#dlg-plan .plan-vccia"))
+                page.keyboard.press("Escape")
+                # G-117: a turbo-only edit sends {turbo} alone and the review describes plain MSR writes
+                page.click("#btn-tn-discard")
+                page.locator("#tn-turbo .turbo-kind").nth(0).locator("select").nth(1).select_option("53")
+                page.click("#btn-tn-plan")
+                page.wait_for_selector("#dlg-plan[open]")
+                dlg = page.inner_text("#dlg-plan")
+                self.assertIn("Turbo table changes", dlg)
+                self.assertIn("Plain MSR table writes, no mailbox request", dlg)
+                self.assertNotIn("Show unchanged points", dlg)
                 page.keyboard.press("Escape")
                 # F3 / F7 / F9 on Curves
                 page.click("#tab-curves")

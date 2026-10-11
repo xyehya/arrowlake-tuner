@@ -27,7 +27,7 @@ from arltuner.controls import (
 )
 from arltuner.guard import MsrAllowEntry, MsrRequest, default_m1_policy, load_policy
 from arltuner.msr import SimConfig, SimMsrPort
-from arltuner.profiles import ProfileError, load_profile
+from arltuner.profiles import Profile, ProfileError, load_profile
 from arltuner.topology import arl_s_285k
 
 from ..test_cli import POLICY_TOML, TOKEN, CliCase
@@ -363,6 +363,57 @@ class ApplyThroughTheGuard(unittest.TestCase):
         self.assertEqual([r["event"] for r in plain if r["event"] in ("msr_read", "attempt")], ["msr_read", "msr_read", "attempt"])
         self.assertEqual(sum(1 for r in plain if r["event"] == "readback"), 2)
         self.assertTrue(all(r["req_data"].startswith("0x") and len(r["req_data"]) == 18 for r in plain if "req_data" in r))
+
+
+class TurboOnly(unittest.TestCase):
+    """G-117: a profile with only a ``[turbo]`` table (the parser still refuses it; the helper builds it from an intent): plain-MSR steps only."""
+
+    @staticmethod
+    def profile(**tables: list[int]) -> Profile:
+        prof = load_profile(turbo_text(e_core(0, ratio=49), **tables))
+        object.__setattr__(prof, "entries", ())  # as the helper does for a table-only intent: Profile insists on one entry at construction
+        return prof
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def test_the_operation_count_is_the_plain_writes_alone(self) -> None:
+        self.assertEqual(count_operations((), None, 2), 2)
+        self.assertEqual(count_operations((), None, 1), 1)
+        with self.assertRaises(ValueError):
+            count_operations((), None, 0)
+
+    def test_the_reads_are_plain_rdmsr_only_no_0x14(self) -> None:
+        prof = self.profile(p=[57] * 8)
+        steps = read_steps(resolve_targets(prof, TOPO), turbo_policy(), prof, TOPO)
+        self.assertEqual([s.kind for s in steps], [StepKind.READ_MSR] * 2)
+        self.assertEqual([s.msr for s in steps], [0xCE, 0x1AD])
+
+    def test_the_plan_has_the_table_write_and_no_0x15(self) -> None:
+        prof = self.profile(e=[47] * 8)
+        plan = build_plan(prof, TOPO, {}, per_core_enabled=None, policy=turbo_policy(ratio_max={"P": None, "E": 49}), msr_words={0xCE: 0x08040838F1812500, 0x650: E_TABLE})
+        self.assertEqual(kinds(plan), [StepKind.READ_MSR, StepKind.READ_MSR, StepKind.WRITE_MSR])
+        self.assertTrue(plan.allowed)
+        self.assertEqual(plan.required_operations, 1)
+
+    def test_preflight_judges_the_table_against_the_policy(self) -> None:
+        self.assertEqual(preflight(self.profile(e=[47] * 8), TOPO, turbo_policy(ratio_max={"P": None, "E": 49})), ())
+        with self.assertRaises(PlanRefused):
+            preflight(self.profile(e=[50] * 8), TOPO, turbo_policy(ratio_max={"P": None, "E": 49}))
+        with self.assertRaises(PlanRefused):  # no msr_allow write entry: default deny
+            preflight(self.profile(e=[47] * 8), TOPO, policy_with(ratio_max={"P": None, "E": 49}))
+
+    def test_apply_sends_no_mailbox_request_and_reads_back_on_two_cpus(self) -> None:
+        s = make_session(self.tmp, policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        report = s.apply(self.profile(e=[47] * 8))
+        self.assertTrue(report.ok, report.format_report())
+        self.assertEqual([r.step.kind for r in report.steps], [StepKind.READ_MSR, StepKind.READ_MSR, StepKind.WRITE_MSR])
+        self.assertEqual(report.operations, 0)  # no mailbox operation reached the transport
+        self.assertEqual(s.sim.plain_msr(0, 0x650), table(*([47] * 8)))
+        self.assertEqual(report.steps[-1].verify_readback_data, table(*([47] * 8)))
+        self.assertFalse([r for r in s.audit() if r["event"] == "attempt" and "msr" not in r])
 
 
 class CliTurbo(CliCase):

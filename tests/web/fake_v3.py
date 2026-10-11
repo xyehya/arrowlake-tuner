@@ -51,6 +51,19 @@ V3_OPS = frozenset({"mem.read", "vf.measure", "curves.list", "curves.get", "curv
                     "profiles.list", "profiles.save"})
 
 
+class W(str):
+    """A warning with its code (``helper/ops_tune.py`` ``Warn``): sent as ``{code, text}``; a plain str is a NOTE."""
+
+    def __new__(cls, code: str, text: str):
+        obj = super().__new__(cls, text)
+        obj.code = code
+        return obj
+
+
+def warning_objects(items) -> list[dict]:
+    return [{"code": getattr(w, "code", "NOTE"), "text": str(w)} for w in items]
+
+
 def kind_of(unit: str) -> str:
     return "P" if unit.startswith("P") else "E"
 
@@ -408,7 +421,7 @@ class V3Ops:
         if not isinstance(intent, dict):
             return self._err(rid, "BAD_REQUEST", "intent must be an object")
         new = copy.deepcopy(self.tuning)
-        warnings: list[str] = []
+        warnings: list = []
         written: dict[str, set[int]] = {}   # unit -> word indexes the plan writes (0 = OC word)
         turbo_new: dict[str, list[int]] = {}   # kind -> the 8 bucket ratios the plan writes (page assumption: intent.turbo = {P: [8], E: [8]})
         if "reset" in intent:
@@ -430,8 +443,8 @@ class V3Ops:
                 written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
             elif self._apply_rows(rid, new, prof["intent"].get("rows", []), warnings, written):
                 return
-        elif isinstance(intent.get("rows"), list):
-            rows = [r for r in intent["rows"] if isinstance(r, dict) and (r.get("offset") or r.get("v_target_v") is not None or r.get("ratio") is not None)]
+        elif isinstance(intent.get("rows"), list) or (set(intent) == {"turbo"}):   # G-117: {turbo} alone is a plan (plain-MSR table writes only)
+            rows = [r for r in intent.get("rows", []) if isinstance(r, dict) and (r.get("offset") or r.get("v_target_v") is not None or r.get("ratio") is not None)]
             turbo = self._turbo_intent(rid, intent.get("turbo"))
             if turbo is False:
                 return
@@ -466,10 +479,16 @@ class V3Ops:
         top = {"P": self.tables["p"][0], "E": self.tables["e"][0]}
         raised = {k for u in changed_units for k in [kind_of(u)] if (new[u]["oc"]["ratio"] or 0) > top[k]}
         tables_written = sorted(raised | set(turbo_new))
-        steps = [{"kind": "write_percore_enable", "conditional": True}] + steps + [{"kind": "write_msr", "table": k.lower()} for k in tables_written]
-        ops += 3 * len(turbo_new)
+        steps = ([{"kind": "write_percore_enable", "conditional": True}] if changed_units else []) + steps + [{"kind": "write_msr", "table": k.lower()} for k in tables_written]
+        ops += len(turbo_new) if not changed_units else 3 * len(turbo_new)   # a table-only plan: one plain WRMSR per table (T-023), no mailbox word
         warnings.extend(self._cpu_fact_warnings(new, written, before_state=self.tuning))
         vccia = self._vccia(new, turbo_new)
+        for k, ratios in sorted(turbo_new.items()):
+            up = [i for i, (a, b) in enumerate(zip(ratios, self.tables[k.lower()])) if a > b]
+            if up:
+                warnings.append(W("TURBO_RAISE", f"the {k} turbo table is RAISED in bucket(s) {', '.join(str(i) for i in up)} (package-wide)"))
+        if self._baseline() is None:
+            warnings.append(W("NO_BASELINE", "measure a stock baseline for predictions (no curve is flagged baseline)"))
         if any(new[u]["oc"]["ratio"] != self.tuning[u]["oc"]["ratio"] for u in changed_units):
             warnings.append("Raising the OC ratio or target is not validated on this machine; the hardware may ignore a ratio inside the current turbo table.")
         warnings.append("Revert: cold boot, or reapply the accepted profile.")
@@ -477,9 +496,9 @@ class V3Ops:
         nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
         self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "written": written, "created": time.monotonic(),
                                   "version": self.tuning_version, "bad": 0, "raised": sorted(raised), "turbo": turbo_new}
-        result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - 1, "reads": len(changed_units),
+        result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - (1 if changed_units else 0), "reads": len(changed_units),
                   "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3, "expires_s": 600, "units": changed_units, "before": before,
-                  "after": after, "warnings": warnings, "words_assumed": not self.tuning_read}
+                  "after": after, "warnings": warning_objects(warnings), "words_assumed": not self.tuning_read}
         if vccia:
             result["vccia"] = vccia
         if self.plan_steps_truncated:
@@ -516,7 +535,7 @@ class V3Ops:
                 out[k] = list(ratios)
         return out
 
-    def _cpu_fact_warnings(self, new: dict, written: dict, before_state: dict) -> list[str]:
+    def _cpu_fact_warnings(self, new: dict, written: dict, before_state: dict) -> list:
         """F4 / F8 warnings: clamped points, E 40x offset, E target above 1.2 V."""
         out = []
         base = self._baseline()
@@ -524,43 +543,57 @@ class V3Ops:
             if kind_of(u) == "E":
                 for p in new[u]["points"]:
                     if p["ratio"] == 40 and p["point"] in idx and abs(p["offset_mv"]) > 1e-9:
-                        out.append(f"{u} 40x: never offset the 40x point ({p['offset_mv']:+.0f} mV there gave OCCT errors on the reference machine)")
+                        out.append(W("E40_OFFSET", f"{u} 40x: never offset the 40x point ({p['offset_mv']:+.0f} mV there gave OCCT errors on the reference machine)"))
                 vt = new[u]["oc"]["v_target_v"]
                 if 0 in idx and vt is not None and vt > 1.2 + 1e-9:
-                    out.append(f"{u}: an E-core target of {vt:.3f} V is above 1.2 V; E cores report WHEA errors there")
+                    out.append(W("E_TARGET_WHEA", f"{u}: an E-core target of {vt:.3f} V is above 1.2 V; E cores report WHEA errors there"))
             pred = predict_unit(base, u, new[u]["points"])
             by_pt = {p["point"]: p for p in new[u]["points"]}
             for i in sorted(idx):
                 c = pred.get(i, {}).get("clamped_by")
                 if c:
-                    out.append(f"{u} {by_pt[i]['ratio']}x: {by_pt[i]['offset_mv']:+.1f} mV cannot be met; the voltage is clamped up to the {by_pt[c]['ratio']}x point (V(n) never below V(n-1))")
+                    out.append(W("CLAMPED", f"{u} {by_pt[i]['ratio']}x: {by_pt[i]['offset_mv']:+.1f} mV cannot be met; the voltage is clamped up to the {by_pt[c]['ratio']}x point (V(n) never below V(n-1))"))
         return out
 
     def _vccia(self, new: dict, turbo_new: dict) -> dict | None:
-        """F6 on the fake: highest voltage the units may request when every core is loaded (+ ring 1.20 V) plus ~105 mV; None without a baseline curve."""
+        """F6 on the fake, in the shape of the real helper: the highest voltage the units may request with every core loaded (+ ring 1.20 V) plus ~105 mV, the 1-2 core
+        case as ``light_load`` and the state now as ``before_v``; None without a baseline curve."""
         base = self._baseline()
         if base is None:
             return None
-        tabs = {"P": turbo_new.get("P", self.tables["p"]), "E": turbo_new.get("E", self.tables["e"])}
-        cands = [("ring", 40, RING_V)]
-        for u in UNITS:
-            pred = predict_unit(base, u, new[u]["points"])
-            pts = sorted((p["ratio"], pred[p["point"]]["effective_v"]) for p in new[u]["points"] if pred.get(p["point"], {}).get("effective_v") is not None)
-            if not pts:
-                continue
-            r = tabs[kind_of(u)][-1]
-            if r <= pts[0][0]:
-                v = pts[0][1]
-            elif r >= pts[-1][0]:
-                v = pts[-1][1]
-            else:
-                a, b = next((a, b) for a, b in zip(pts, pts[1:]) if a[0] <= r <= b[0])
-                v = a[1] + (b[1] - a[1]) * (r - a[0]) / (b[0] - a[0])
-            cands.append((u, r, v))
-        who = max(cands, key=lambda c: c[2])
-        return {"predicted_v": round(who[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": who[0], "ratio": who[1]}}
 
-    def _apply_rows(self, rid, new: dict, rows: list, warnings: list[str], written: dict) -> bool:
+        def scenario(state: dict, tables: dict, idx: int) -> tuple:
+            cands = [("ring", 40, RING_V)]
+            for u in UNITS:
+                pred = predict_unit(base, u, state[u]["points"])
+                pts = sorted((p["ratio"], pred[p["point"]]["effective_v"]) for p in state[u]["points"] if pred.get(p["point"], {}).get("effective_v") is not None)
+                if not pts:
+                    continue
+                r = tables[kind_of(u)][idx]
+                if r <= pts[0][0]:
+                    v = pts[0][1]
+                elif r >= pts[-1][0]:
+                    v = pts[-1][1]
+                else:
+                    a, b = next((a, b) for a, b in zip(pts, pts[1:]) if a[0] <= r <= b[0])
+                    v = a[1] + (b[1] - a[1]) * (r - a[0]) / (b[0] - a[0])
+                cands.append((u, r, v))
+            return max(cands, key=lambda c: c[2]), cands
+
+        tabs_new = {"P": turbo_new.get("P", self.tables["p"]), "E": turbo_new.get("E", self.tables["e"])}
+        tabs_now = {"P": self.tables["p"], "E": self.tables["e"]}
+        who, cands = scenario(new, tabs_new, 7)
+        light, _ = scenario(new, tabs_new, 0)
+        was, _ = scenario(self.tuning, tabs_now, 7)
+        best = {k: max((c for c in cands if c[0] != "ring" and kind_of(c[0]) == k), key=lambda c: c[2], default=None) for k in ("P", "E")}
+        return {"predicted_v": round(who[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": who[0], "ratio": who[1]}, "label": "prediction", "active_cores": "all",
+                "margin_v": VCCIA_OFFSET_V,
+                "contributors": {**{k: (None if c is None else {"unit": c[0], "ratio": c[1], "v": round(c[2], 4)}) for k, c in best.items()},
+                                 "ring": {"unit": "ring", "ratio": 40, "v": RING_V}},
+                "before_v": round(was[2] + VCCIA_OFFSET_V, 4),
+                "light_load": {"predicted_v": round(light[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": light[0], "ratio": light[1]}, "active_cores": "1-2"}}
+
+    def _apply_rows(self, rid, new: dict, rows: list, warnings: list, written: dict) -> bool:
         """Apply plan rows to ``new``; True (after sending the refusal) if a row is out of policy."""
         for row in rows:
             units = self._targets(row.get("target"))
@@ -586,7 +619,7 @@ class V3Ops:
                                 p["offset_mv"] = float(off["mv"][str(p["ratio"])])
                                 written.setdefault(u, set()).add(p["point"])
                     if any(p["offset_mv"] > 0 for p in new[u]["points"]):
-                        warnings.append(f"positive offset on {u}: raises voltage above the fused curve")
+                        warnings.append(W("POSITIVE_OFFSET", f"positive offset on {u}: raises voltage above the fused curve"))
                 vt = row.get("v_target_v")
                 if vt is not None:
                     if not (V_TARGET_MIN - 1e-9 <= vt <= V_TARGET_MAX[k] + 1e-9):
@@ -649,10 +682,12 @@ class V3Ops:
             top = max(p["new"][u]["oc"]["ratio"] or 0 for u in p["changed"] if kind_of(u) == k)
             self.tables[k.lower()] = [top] + self.tables[k.lower()][1:]
             readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
+        sent += len(p["turbo"])
         self.tuning_version += 1
         self.ops_used_v3 += 3 * n
         self._applying.discard(rid)
-        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])],
+        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])]
+                  + [{"n": len(p["changed"]) + i + 1, "kind": "write_msr", "table": k.lower(), "status": "ok"} for i, k in enumerate(sorted(p["turbo"]))],
                   "readback": readback, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
         if stop_after is not None:
             result["stop"] = {"kind": "refused", "reason": "the guard refused a step: step limit", "tripped": False}

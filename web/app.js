@@ -3146,14 +3146,11 @@
       el("span", "muted", changedUnits.map((d) => d.unit).concat(tbk.map((k) => "turbo " + k)).join(", ")));
     nodes.push(head);
     const vc = isObj(res.vccia) && isNum(res.vccia.predicted_v) ? res.vccia : null;
-    if (vc) {
-      const sb = isObj(vc.set_by) ? vc.set_by : null;
-      nodes.push(el("p", "plan-vccia", "Predicted VccIA \u2248 " + vc.predicted_v.toFixed(2) + " V" + (sb && typeof sb.unit === "string" ? ", set by " + sb.unit + (isNum(sb.ratio) ? " at " + sb.ratio + "\u00d7" : "") : "") +
-        ". Lowering a unit that does not set the maximum does not lower Vcore."));
-    }
+    if (vc) nodes.push(vcciaNode(vc));
     const ops = el("p", "plan-ops");
     ops.append(el("strong", "", "Each request is a WRMSR. "), document.createTextNode("This plan needs " + (isNum(res.ops_needed) ? res.ops_needed : "an unknown number of") + " operations" +
-      (isNum(res.ops_left) ? " of the " + res.ops_left + " left this boot" : "") + ". One mailbox transaction at a time, each read back."));
+      (isNum(res.ops_left) ? " of the " + res.ops_left + " left this boot" : "") +
+      (Array.isArray(res.steps) && res.steps.length && res.steps.every((x) => isObj(x) && x.kind === "write_msr") ? ". Plain MSR table writes, no mailbox request; each is read back on two CPUs." : ". One mailbox transaction at a time, each read back.")));
     nodes.push(ops);
     const facts = [];
     if (isNum(res.writes)) facts.push(res.writes + " write steps");
@@ -3167,16 +3164,24 @@
       for (const x of gates) g.append(pill(String(x.name) + ": " + String(x.status), "s-unknown"));
       nodes.push(g);
     }
-    const warns = Array.isArray(res.warnings) ? res.warnings.filter((x) => typeof x === "string") : [];
+    const warns = planWarnings(res);
     if (warns.length) {
       const ul = el("ul", "plan-warn");
-      for (const x of warns) ul.append(el("li", warnClass(x), x));
+      for (const x of warns) {
+        const li = el("li", x.cls);
+        li.dataset.code = x.code;
+        if (x.label) { const b = el("span", "tn-badge", x.label); b.title = x.code; li.append(b, document.createTextNode(" ")); }
+        li.append(document.createTextNode(x.text));
+        ul.append(li);
+      }
       nodes.push(ul);
     }
-    const tog = el("button", "link", T.showUnchanged ? "Hide unchanged points" : "Show unchanged points");
-    tog.type = "button";
-    tog.addEventListener("click", () => { T.showUnchanged = !T.showUnchanged; renderPlanBody(); });
-    nodes.push(tog);
+    if (P.diff.length) {
+      const tog = el("button", "link", T.showUnchanged ? "Hide unchanged points" : "Show unchanged points");
+      tog.type = "button";
+      tog.addEventListener("click", () => { T.showUnchanged = !T.showUnchanged; renderPlanBody(); });
+      nodes.push(tog);
+    }
     const tbl = el("table", "grid num plan-table");
     tbl.append(el("caption", "sr", "Before and after for each unit and V/F point"));
     const th = el("thead"), thr = el("tr");
@@ -3214,11 +3219,46 @@
     fill($("dlg-plan-body"), nodes);
   }
 
-  // Severity of a warning line by what it is about (F4 / F8): the E 40x point is red, WHEA and positive offsets are amber, the rest is plain.
-  function warnClass(text) {
-    if (/40\s*[x\u00d7]|OCCT/.test(text)) return "bad";
-    if (/WHEA|positive offset|above fused|clamp/i.test(text)) return "warn";
-    return "";
+  // Plan warnings are {code, text} objects (contract 9 addendum, G-114). The code decides the look: the E 40x point is red, the other known codes are amber with
+  // a badge, NOTE (and any code this page does not know) is plain text. A bare string (an older helper) is a NOTE.
+  const WARN_CODES = {
+    CLAMPED: { cls: "warn", label: "clamped" },
+    E40_OFFSET: { cls: "bad", label: "E 40\u00d7 offset" },
+    E_TARGET_WHEA: { cls: "warn", label: "WHEA risk" },
+    POSITIVE_OFFSET: { cls: "warn", label: "positive offset" },
+    NO_BASELINE: { cls: "warn", label: "no baseline" },
+    TURBO_RAISE: { cls: "warn", label: "turbo raise" },
+    NOTE: { cls: "", label: "" },
+  };
+  function planWarnings(res) {
+    const out = [];
+    for (const w of Array.isArray(res.warnings) ? res.warnings : []) {
+      const code = isObj(w) && typeof w.code === "string" ? w.code : "NOTE";
+      const text = isObj(w) ? w.text : w;
+      if (typeof text !== "string" || !text) continue;
+      const k = Object.prototype.hasOwnProperty.call(WARN_CODES, code) ? WARN_CODES[code] : WARN_CODES.NOTE;
+      out.push({ code: code, text: text, cls: k.cls, label: k.label });
+    }
+    return out;
+  }
+
+  // The plan's VccIA prediction: value, label (a prediction), the unit that sets it, the regulator headroom, the 1-2 core case and the change from now.
+  function vcciaNode(vc) {
+    const box = el("div", "plan-vccia");
+    const who = (sb) => (isObj(sb) && typeof sb.unit === "string" ? sb.unit + (isNum(sb.ratio) ? " at " + sb.ratio + "\u00d7" : "") : "");
+    const main = el("p", "", "");
+    main.append(document.createTextNode("Predicted VccIA \u2248 " + vc.predicted_v.toFixed(2) + " V"));
+    if (typeof vc.label === "string" && vc.label) main.append(document.createTextNode(" "), el("span", "tn-badge", vc.label));
+    const bits = [];
+    if (who(vc.set_by)) bits.push("set by " + who(vc.set_by) + (vc.active_cores === "all" ? " with every core loaded" : ""));
+    if (isNum(vc.margin_v)) bits.push("includes " + vc.margin_v.toFixed(3) + " V regulator headroom");
+    if (isNum(vc.before_v)) bits.push("now \u2248 " + vc.before_v.toFixed(2) + " V");
+    if (bits.length) main.append(document.createTextNode(", " + bits.join(", ")));
+    main.append(document.createTextNode(". Lowering a unit that does not set the maximum does not lower Vcore."));
+    box.append(main);
+    const ll = isObj(vc.light_load) && isNum(vc.light_load.predicted_v) ? vc.light_load : null;
+    if (ll) box.append(el("p", "muted", "With only 1\u20132 cores loaded \u2248 " + ll.predicted_v.toFixed(2) + " V" + (who(ll.set_by) ? ", set by " + who(ll.set_by) : "") + "."));
+    return box;
   }
 
   function clampedByText(unit, idx) {
@@ -3534,9 +3574,9 @@
     });
     $("btn-tn-discard").addEventListener("click", () => { T.draft = {}; T.turbo = {}; refreshRows(); });
     $("btn-tn-plan").addEventListener("click", () => {
-      const intent = buildIntent();
+      const intent = unitsChanged().length ? buildIntent() : {};   // a turbo-only edit sends {turbo} alone
       const tb = turboIntent();
-      if (tb) intent.turbo = tb;   // contract 9 addendum does not pin the turbo-bucket intent; reported as an assumption (G-115)
+      if (tb) intent.turbo = tb;   // {turbo: {P?: [8], E?: [8]}} alone is a real plan (G-117): plain-MSR table writes, no mailbox word
       requestPlan(intent, (m) => { const f = $("tn-foot-msg"); f.textContent = "Not reviewed: " + m; f.className = "tn-foot-msg bad"; });
     });
     $("btn-tn-reset").addEventListener("click", () => requestPlan({ reset: "stock" }, (m) => setText("tn-status", "Reset not planned: " + m)));

@@ -54,6 +54,7 @@ POINT_RATIOS_ARL_S: dict[tuple[str, int], int] = {
     **{("P", n): r for n, r in enumerate(_PLATFORM.p_point_ratios, start=1)},  # platforms/arl-s-285k.toml (G-101)
     **{("E", n): r for n, r in enumerate(_PLATFORM.e_point_ratios, start=1)},
 }
+#: G-117: opt-in only (``measured()`` starts every point at offset 0): ``SimConfig.measured(point_offsets=dict(POINT_OFFSETS_ARL_S))``.
 POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15, ("P", 8): -51}
 #: T-026 SIM-ONLY: the point ratios of a NON-favored P-core. Only CPU 0 (favored) was measured; SkatterBencher ``[COMMUNITY]``: 57x is the boost ratio of the
 #: favored P-cores (CPU 0 and 3), the others top out lower and may have another set of points. ``SimConfig.measured()`` uses this for the other six P-cores
@@ -220,7 +221,9 @@ class SimConfig:
             "fixed_reads": dict(m.FIXED_READS),
             "point_counts": dict(POINT_COUNTS_ARL_S),
             "point_ratios": dict(POINT_RATIOS_ARL_S),  # T-026: the real P / E tables with the BIOS offsets
-            "point_offsets": dict(POINT_OFFSETS_ARL_S),
+            # G-117: cold-boot stock has runtime point offsets 0 (as on the machine today); the old BIOS-like offsets are opt-in:
+            # ``SimConfig.measured(point_offsets=dict(POINT_OFFSETS_ARL_S))``.
+            "point_offsets": {},
             "ring_point_ratios": dict(RING_POINT_RATIOS_ARL_S),  # T-028
             "ring_point_offsets": dict(RING_POINT_OFFSETS_ARL_S),
             # G-114 (SPEC-v3 F1): every P-core carries the SAME eight points (8,20,30,48,53,55,56,57x) [MEASURED lnx 2026-10-02, platform-285k.md section 3];

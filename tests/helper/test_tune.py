@@ -81,7 +81,7 @@ class ReadTests(TuneCase):
         self.assertEqual(p0["points"][0], {"point": 0, "point_label": "OC (point 9)", "ratio": 57, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive"})  # CPU 0: 0x39
         self.assertEqual(res["tune"]["P1"]["cpus"][0]["points"][0]["ratio"], None)  # OC word 0x0: unset fields are null
         p5 = next(p for p in p0["points"] if p["point"] == 5)
-        self.assertEqual((p5["ratio"], p5["offset_mv"]), (53, -49.805))  # the BIOS point offset the simulator carries (raw -51)
+        self.assertEqual((p5["ratio"], p5["offset_mv"]), (53, 0.0))  # G-117: the simulator starts at cold-boot stock, point offsets 0
         self.assertEqual(res["units"][0]["id"], "P0")
         words = h.helper.last_words
         self.assertEqual(sorted(words), [*range(8), 8, 12, 16, 20])  # 8 P-cores + the lowest CPU of each E-cluster
@@ -432,7 +432,7 @@ class FailureTests(TuneCase):
         self.assertNotEqual(bad[0]["expected"], bad[0]["actual"])
         self.assertTrue(any(s["status"] == "not_sent" for s in res["steps"]))  # the second core's write was never sent
         self.assertEqual(h.helper.last_words[3][5], self.word(3, 5).to_u32())  # the words in force are what the chip answered
-        self.assertEqual(self.word(3, 5).offset_raw, -51)
+        self.assertEqual(self.word(3, 5).offset_raw, 0)  # the chip kept the stock word
 
     def test_a_refused_guard_check_before_any_write_is_an_error(self) -> None:
         # the plan is valid today; the policy file then loses the point write entry: the pre-flight at apply time refuses and nothing is sent

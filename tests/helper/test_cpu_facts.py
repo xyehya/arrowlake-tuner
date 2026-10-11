@@ -65,9 +65,20 @@ class SimTableTests(FactsCase):
         self.assertEqual([self.sim.favored_word(c) for c in range(8)], [0x3939, 0x3737, 0x3737, 0x3939, 0x3737, 0x3737, 0x3737, 0x3737])
         self.assertEqual(self.sim.favored_word(8), 0x2E30)
 
+    def test_measured_starts_every_point_at_offset_zero_and_the_old_offsets_are_opt_in(self) -> None:
+        """G-117: cold-boot stock has runtime point offsets 0; ``POINT_OFFSETS_ARL_S`` (the old BIOS-like -51/-15/-51) is only an opt-in."""
+        from arltuner.msr.sim import POINT_OFFSETS_ARL_S
+
+        self.assertEqual(SimConfig.measured().point_offsets, {})
+        self.boot(SimConfig.measured(per_point=True))
+        self.assertEqual({self.sim.vf(c, 0, p).offset_raw for c in (0, 3, 8) for p in range(1, 7)}, {0})
+        self.boot(SimConfig.measured(per_point=True, point_offsets=dict(POINT_OFFSETS_ARL_S)))
+        self.assertEqual((self.sim.vf(0, 0, 5).offset_raw, self.sim.vf(0, 0, 6).offset_raw, self.sim.vf(0, 0, 8).offset_raw), (-51, -15, -51))
+
     def test_the_turbo_registers_are_the_measured_ones(self) -> None:
         self.boot(STOCK)
         self.assertEqual(self.sim.rdmsr(0, 0x1AD), 0x3737373737373939)
+        self.assertEqual(self.sim.rdmsr(8, 0x651), 0x100C080604030201)  # the E bucket counts are not part of the edit
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), 0x0807060504030201)
         self.assertEqual(self.sim.rdmsr(0, 0x650), 0x3030303030303030)
         self.assertEqual(self.sim.rdmsr(0, 0x651), 0x100C080604030201)
@@ -249,12 +260,68 @@ class TurboOrderTests(FactsCase):
         r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
 
-    def test_a_valid_turbo_only_intent_is_refused_until_the_planner_supports_it(self) -> None:
-        """Gap (reported): controls/planner.py cannot plan a table write without a core / point write beside it."""
+    def test_a_turbo_only_p_plan_applies_and_reads_back_without_any_mailbox_word(self) -> None:
+        """G-117: ``{turbo: {P}}`` alone is a real plan: plain-MSR writes of 0x1AD, counts (0x1AE) untouched, no 0x14 / 0x15, no mailbox request."""
         h = self.boot_with(baseline=False)
         self.read(h)
-        r = h.call("tonly", "tune.plan", {"intent": {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}}})
-        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "TURBO_ONLY_UNSUPPORTED"))
+        counts = self.sim.rdmsr(0, 0x1AE)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        self.assertEqual((p["steps"], p["writes"], p["reads"], p["ops_needed"]), ([{"n": 1, "kind": "write_msr", "table": "p"}], 1, 0, 1))
+        self.assertEqual((p["before"], p["after"], p["units"]), ({}, {}, []))
+        self.assertTrue(any(w["code"] == "TURBO_RAISE" for w in p["warnings"]), p["warnings"])
+        res = self.apply_ok(h, p)
+        self.assertEqual([(s["kind"], s["table"], s["status"]) for s in res["steps"]], [("write_msr", "p", "ok")])
+        self.assertEqual([(rb["unit"], rb["point"], rb["match"]) for rb in res["readback"]], [("P", "turbo", True)])
+        self.assertEqual(res["writes_sent"], 1)
+        self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
+        self.assertEqual(self.table(8, 0x650), [48] * 8)
+        self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
+        self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)  # no per-core word was written
+
+    def test_a_turbo_only_plan_still_predicts_vccia_from_the_new_table(self) -> None:
+        h = self.boot_with()
+        self.read(h)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        v = p["vccia"]
+        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("prediction", "all", 0.105))
+        self.assertIsNotNone(v["before_v"])
+        self.assertEqual(set(v["light_load"]), {"predicted_v", "set_by", "active_cores"})
+
+    def test_a_turbo_only_e_plan_lowering_applies_and_reads_back(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {"turbo": {"E": [48, 47, 46, 46, 46, 46, 46, 46]}})
+        self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in p["warnings"]))
+        res = self.apply_ok(h, p)
+        self.assertEqual([(rb["unit"], rb["match"]) for rb in res["readback"]], [("E", True)])
+        self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])
+        self.assertEqual(self.sim.rdmsr(0, 0x1AD), 0x3737373737373939)
+
+    def test_a_turbo_only_plan_with_both_tables_writes_both(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55], "E": [48, 47, 46, 46, 46, 46, 46, 46]}})
+        self.assertEqual((p["writes"], p["ops_needed"]), (2, 2))
+        res = self.apply_ok(h, p)
+        self.assertEqual(sorted(rb["unit"] for rb in res["readback"]), ["E", "P"])
+        self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
+        self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])
+
+    def test_a_turbo_only_table_equal_to_the_current_one_plans_no_write(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {"turbo": {"P": self.table()}})
+        res = self.apply_ok(h, p)
+        self.assertEqual((res["steps"], res["readback"], res["writes_sent"]), ([], [], 0))
+
+    def test_a_turbo_only_order_violation_is_refused_before_anything_is_planned(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        before = (self.sim.rdmsr(0, 0x1AD), self.sim.rdmsr(0, 0x650))
+        for table in ("P", "E"):
+            r = h.call(f"bad{table}", "tune.plan", {"intent": {"turbo": {table: [48, 49, 48, 48, 48, 48, 48, 48]}}})
+            self.assertEqual((error_code(r), r["error"]["detail"]["check"], r["error"]["detail"]["table"]), ("REFUSED", "TURBO_ORDER", table))
+        self.assertEqual((self.sim.rdmsr(0, 0x1AD), self.sim.rdmsr(0, 0x650)), before)
 
     def test_a_raise_is_flagged_with_its_code(self) -> None:
         h = self.boot_with(baseline=False)

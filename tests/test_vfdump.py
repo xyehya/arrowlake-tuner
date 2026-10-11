@@ -18,7 +18,7 @@ from arltuner.guard import policy as guard_policy
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort
 from arltuner.msr.port import MsrError
-from arltuner.msr.sim import POINT_RATIOS_P_NONFAVORED_SIM
+from arltuner.msr.sim import POINT_OFFSETS_ARL_S, POINT_RATIOS_P_NONFAVORED_SIM
 from arltuner.topology import arl_s_285k
 
 from .test_cli import POLICY_TOML, TOKEN, CliCase
@@ -57,6 +57,7 @@ def non_favored_tables() -> dict[tuple[int, int], int]:
 
 def dump_sim(**overrides: object) -> SimMsrPort:
     overrides.setdefault("per_point", True)
+    overrides.setdefault("point_offsets", dict(POINT_OFFSETS_ARL_S))  # G-117: measured() starts at stock (0); these tests want the old BIOS-like offsets
     if "point_ratios" not in overrides:  # a caller that defines its own point tables opts out of the SIM-ONLY non-favored P table
         overrides.setdefault("cpu_point_ratios", non_favored_tables())
     overrides.setdefault("cpu_point_ratios", non_favored_tables())
