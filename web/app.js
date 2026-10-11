@@ -1778,7 +1778,7 @@
     let base = "";
     if (isBase) {
       base = "Stock baseline: this curve is the fused V/F table as applied (offsets 0). " + (T.words && T.words.fused
-        ? "Diamonds mark the top-point voltage read from the CPU (cmd 0x09); they should sit on the curve's last measured point."
+        ? "Diamonds mark the top-point voltage read from the CPU (cmd 0x09); they should sit on the curve where it reaches that ratio."
         : "Read tuning words (Tune) to draw the top-point voltage from the CPU (cmd 0x09) and cross-check it.");
     } else if (baselineId() && a) base = "Stock baseline: " + (CV.list.find((c) => c.id === baselineId()) || {}).name + ". Predictions in Tune are made on it.";
     else base = "No curve is marked as the stock baseline yet. Tune predicts the effective voltage on it; set one in the Library.";
@@ -3053,6 +3053,10 @@
         $("btn-tune-read").focus();
         return;
       }
+      if (isObj(intent) && intent.turbo !== undefined && isObj(body.error) && body.error.code === "BAD_REQUEST") {
+        onError("This helper does not accept turbo table edits (intent.turbo). Undo the turbo table change to review the rest. " + errText(body));
+        return;
+      }
       onError(errText(body) + (isObj(body.error) && body.error.code === "REFUSED" && chk === "POLICY_RANGE" ? ". The policy refused this; change the value." : "") +
         (chk === "TURBO_ORDER" ? ". Each bucket must be at or below the one to its left (fewer active cores): lower the higher bucket, or raise the ones before it." : ""));
     }
@@ -3511,9 +3515,9 @@
     T.chart.render(model);
     const clampedUnits = Array.from(new Set((model.pins || []).map((q) => q.unit)));
     const kind = rec && isObj(rec.tuning_state) ? rec.tuning_state.kind : null;
-    setText("tn-preview-note", "Dashed lines are a prediction, not a measurement: the measured voltage plus the change in offset at each ratio. Hollow rings mark the OC target now, filled rings the new one." +
+    setText("tn-preview-note", "Dashed lines are a prediction, not a measurement: the stock baseline's voltage plus the new offsets at each point (the measured voltage plus the change in offset when no baseline is set). Large hollow rings mark the OC target now, filled rings the new one." +
       (kind ? " Measured curve: " + tuningWords(kind).replace(/^Tuning/, "tuning") + "." : "") + " After Apply, measure again." +
-      (clampedUnits.length ? " Where a deeper offset would put a point below the one before it, the hardware raises it: the dashed line steps flat there (" + clampedUnits.join(", ") + ")." : ""));
+      (clampedUnits.length ? " Where a deeper offset would put a point below the one before it, the hardware raises it: the dashed line steps flat there and a small ring with a surface fill marks it (" + clampedUnits.join(", ") + ")." : ""));
   }
 
   function initTune() {

@@ -36,6 +36,12 @@ class TestStatic(unittest.TestCase):
             self.assertIn(reason, JS, reason)
         self.assertIn('chk === "TURBO_ORDER"', JS)
 
+    def test_a_helper_without_intent_turbo_is_named_not_hidden(self):
+        """The real canonical_intent accepts exactly {scope, rows}; a BAD_REQUEST on a plan carrying intent.turbo says so instead of a generic error."""
+        body = body_of("requestPlan")
+        self.assertIn("intent.turbo !== undefined", body)
+        self.assertIn("does not accept turbo table edits (intent.turbo)", body)
+
     def test_grid_uses_the_community_point_names(self):
         self.assertIn('"Point " + (no === null ? "?" : no) + " \\u00b7 " + ratio', JS)   # Point 1 . 8x ... Point 8 . 57x
         self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)                  # Point 9 . OC (P) / Point 7 . OC (E)
