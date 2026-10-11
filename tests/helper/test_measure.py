@@ -113,6 +113,7 @@ class QuickRunTests(MeasureCase):
                 p = points(rec, unit)[ratio]
                 self.assertEqual(p["status"], "ok", (unit, ratio, p))
                 self.assertTrue(5 <= p["kept"] <= p["total"] <= 40, p)
+                self.assertEqual(p["kept"], 5, p)  # the long sampling stops as soon as min_valid samples sit at the target
         self.assertAlmostEqual(points(rec, "P0")[57]["vid_v"], 1.4288, delta=0.004)
         self.assertAlmostEqual(points(rec, "P3")[57]["vid_v"], 1.3964, delta=0.004)
         self.assertEqual(points(rec, "P0")[55]["total"], 10)  # the ordinary points keep 10 samples

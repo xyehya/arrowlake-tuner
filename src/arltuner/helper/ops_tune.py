@@ -21,11 +21,12 @@ import re
 import secrets
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from arltuner import vfmodel
 from arltuner.controls import (
     RAISE_CAVEAT,
     REVERT_NOTE,
@@ -56,6 +57,8 @@ from arltuner.guard import (
     MsrRequest,
     Policy,
     PolicyError,
+    Refusal,
+    Request,
     WriteGuard,
     anchored_wall_clock,
     default_m1_policy,
@@ -63,11 +66,13 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.guard.policy import turbo_bytes
-from arltuner.mailbox import VfWord
+from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
+from arltuner.platform import default_platform
 from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
 from arltuner.profiles.store import NAME_RE, ProfileStore, ProfileStoreError
 from arltuner.topology import Topology, TopologyError, UnknownCore
+from arltuner.vfmodel import CurvePoint, check_turbo_order, complete_baseline, effective_curve, predict_vccia, voltage_at
 
 from .ops import (
     OpContext,
@@ -185,6 +190,8 @@ class TuneState:
     plans: PlanStore
     tables: dict[str, tuple[int, ...]] | None = None  # {"e": 8 buckets, "p": 8 buckets} from the last tune.read (plain rdmsr), or None
     tables_note: str | None = None
+    fused: dict[int, dict[str, Any]] | None = None  # G-114 F7: cpu -> {word, ratio, v} of the last tune.read (cmd 0x09 P1=0x11 P2=0)
+    turbo: dict[str, Any] | None = None  # G-114 F5: {"P": {ratios, counts}, "E": {...}, "favored": {cpu: ratio}} of the last tune.read
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -263,12 +270,16 @@ def _decode_document(doc: dict[str, Any], topology: Topology) -> dict[str, Any]:
         uid = unit_of_cpu(topology, first)
         unit["id"] = uid
         rows = []
+        kind = _kind_of(uid)
+        fused_n, oc_n = len(_POINT_RATIOS[kind]), len(_POINT_RATIOS[kind]) + 1  # P: fused 1..8, OC = point 9; E: fused 1..6, OC = point 7 (community naming)
         for cpu in unit["cpus"]:
             pts = []
             if cpu.get("oc") is not None:
-                pts.append({"point": 0, **_decode(VfWord.from_u32(int(cpu["oc"]["word"], 16)))})
+                pts.append({"point": 0, "point_label": f"OC (point {oc_n})", **_decode(VfWord.from_u32(int(cpu["oc"]["word"], 16)))})
             for p in cpu.get("points", []):
-                pts.append({"point": p["point"], **_decode(VfWord.from_u32(int(p["word"], 16)))})
+                is_oc = p["point"] > fused_n  # a read that returns P2 = 9 (P) / 7 (E): the OC ratio is above the top fused ratio, so this IS the OC point
+                label = f"OC (point {oc_n})" if is_oc else f"point {p['point']}"
+                pts.append({"point": p["point"], "point_label": label, **({"oc_point": True} if is_oc else {}), **_decode(VfWord.from_u32(int(p["word"], 16)))})
             rows.append({"cpu": cpu["cpu"], "points": pts})
         tune[uid] = {"cpus": rows}
     return tune
@@ -412,24 +423,98 @@ def vf_dump_tracked(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     return doc
 
 
-def _read_tables(helper: Helper, ctx: OpContext, policy: Policy, topology: Topology) -> tuple[dict[str, tuple[int, ...]] | None, str | None]:
-    """Best effort: plain ``rdmsr`` of the E (0x650) and P (0x1AD) turbo tables through the guard (not WRMSRs). ``(None, why)`` if the policy does not
-    allow it or anything goes wrong: a ratio intent then carries no table raise and says so."""
+_LABEL = {"fused": "fused points", "favored": "favored ratios", "turbo": "turbo tables"}
+_FUSED_CMD, _FUSED_P1 = 0x09, 0x11  # VoltageFloorRead P1 = 0x11 (domain floors), P2 = 0 (core): the fused V/F point per core, registers.md 0x09 [MEASURED win 2026-10-01]
+
+
+def _fused_entry(word: int) -> dict[str, Any]:
+    """Contract 9 addendum ``{word, ratio, v}``: ratio ``[7:0]``, voltage ``[19:8]`` S2.10 (platform-285k.md section 4)."""
+    return {"word": f"0x{word & 0xFFFFFFFF:08x}", "ratio": word & 0xFF, "v": round(((word >> 8) & 0xFFF) / 1024 + 1e-9, 4)}  # half up: 0x4A0 = 1.15625 V -> 1.1563 as in platform-285k.md
+
+
+def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topology) -> dict[str, Any]:
+    """G-114: the guarded reads that make ``tune.read`` respect SPEC-v3 section 9, in ONE session of exactly ``12 + 8 + 4 = 24`` guard-counted requests (20 of them
+    mailbox reads = WRMSR to 0x150, 4 plain rdmsr), one at a time:
+
+    * ``fused`` (F7): cmd ``0x09 P1=0x11 P2=0`` on every P-core and on the first CPU of every E-cluster (12),
+    * ``favored`` (F5): cmd ``0x1C`` on the 8 P-cores (low byte = the favored ratio; E clusters read ``0x2E30`` and follow ``0x650``) (8),
+    * ``turbo`` (F5): plain ``rdmsr`` ``0x1AD`` / ``0x1AE`` / ``0x650`` / ``0x651`` on CPU 0 (4).
+
+    Each group degrades alone (a refusal leaves that group ``None`` with a note); a guard trip or a cancel ends the session. Returns
+    ``{fused, turbo, tables, notes}``."""
+    p_cpus = sorted(c.cpu for c in topology.cores if c.kind == "P")
+    e_cpus = [topology.cluster_cpus(k)[0] for k in sorted({c.cluster for c in topology.cores if c.cluster is not None})]
+    out: dict[str, Any] = {"fused": None, "turbo": None, "tables": None, "notes": {}}
+    notes: dict[str, str] = out["notes"]
     try:
-        cpus = sorted(c.cpu for c in topology.cores if c.kind == "P")
-        cpu = cpus[0]
-        with _guarded_session(helper, ctx, policy, 3, "the turbo table read") as session:
-            out: dict[str, tuple[int, ...]] = {}
-            for key, msr in (("e", 0x650), ("p", 0x1AD)):
-                res = session.guard.execute(MsrRequest(cpu, msr, 0, f"tune.read: read turbo table {msr:#x} (plain rdmsr)", "read"), session.confirm)
-                out[key] = turbo_bytes(res.value)
-        return out, None
+        with _guarded_session(helper, ctx, policy, len(p_cpus) * 2 + len(e_cpus) + 4, "the fused-point / turbo-table read") as session:
+            def mailbox(cpu: int, cmd: int, p1: int, what: str) -> int:
+                if ctx.cancel.is_set():
+                    raise OpError(CANCELLED, "tune.read was cancelled between transactions")
+                res = session.guard.execute(Request(cpu, cmd, p1, 0, 0, f"tune.read: {what} of cpu {cpu}"), session.confirm)
+                if res.response.rc != 0:
+                    raise OpError(REFUSED, f"cpu {cpu}: mailbox completion code {res.response.rc} ({rc_name(res.response.rc)})")
+                return res.response.data
+
+            def plain(msr: int) -> int:
+                if ctx.cancel.is_set():
+                    raise OpError(CANCELLED, "tune.read was cancelled between transactions")
+                return session.guard.execute(MsrRequest(p_cpus[0], msr, 0, f"tune.read: read {msr:#x} (plain rdmsr)", "read"), session.confirm).value
+
+            def do_fused() -> None:
+                out["fused"] = {cpu: _fused_entry(mailbox(cpu, _FUSED_CMD, _FUSED_P1, "read the fused V/F point (0x09)")) for cpu in p_cpus + e_cpus}
+
+            favored: dict[int, int] = {}
+
+            def do_favored() -> None:
+                for cpu in p_cpus:
+                    favored[cpu] = mailbox(cpu, int(Cmd.FAVORED_CORE_READ), 0, "read the favored ratio (0x1C)") & 0xFF
+
+            def do_turbo() -> None:
+                ratios = {msr: plain(msr) for msr in (0x1AD, 0x650)}
+                out["tables"] = {"e": turbo_bytes(ratios[0x650]), "p": turbo_bytes(ratios[0x1AD])}
+                counts: dict[int, list[int] | None] = {}
+                for msr in (0x1AE, 0x651):  # an installed policy older than 2026-10-11 has no allow entry for the bucket counts: the ratios stand alone then
+                    try:
+                        counts[msr] = list(turbo_bytes(plain(msr)))
+                    except GuardRefused as exc:
+                        if exc.reason is Refusal.TRIPPED:
+                            raise
+                        counts[msr] = None
+                        notes["counts"] = f"bucket counts not read: the guard refused ({exc.reason.value}); the policy has no msr_allow read entry for {msr:#x}"
+                out["turbo"] = {
+                    "P": {"ratios": list(turbo_bytes(ratios[0x1AD])), "counts": counts[0x1AE]},
+                    "E": {"ratios": list(turbo_bytes(ratios[0x650])), "counts": counts[0x651]},
+                    "favored": {},
+                }
+
+            for key, fn in (("fused", do_fused), ("favored", do_favored), ("turbo", do_turbo)):
+                try:
+                    fn()
+                except OpError as exc:
+                    if exc.code == CANCELLED:
+                        raise
+                    notes[key] = f"{_LABEL[key]} not read: {exc.message}"
+                except GuardRefused as exc:
+                    if exc.reason is Refusal.TRIPPED:
+                        raise
+                    notes[key] = f"{_LABEL[key]} not read: the guard refused ({exc.reason.value}); the policy has no allow entry for it"
+            if out["turbo"] is not None:
+                out["turbo"]["favored"] = {cpu: r for cpu, r in favored.items()}
+            elif favored:
+                out["turbo"] = {"P": None, "E": None, "favored": dict(favored)}
     except OpError as exc:
-        return None, f"turbo tables not read: {exc.message}"
+        if exc.code == CANCELLED:
+            raise
+        for key in _LABEL:
+            notes.setdefault(key, f"{_LABEL[key]} not read: {exc.message}")
     except GuardRefused as exc:
-        return None, f"turbo tables not read: the guard refused ({exc.reason.value}); the policy has no msr_allow read entry for them"
-    except Exception as exc:  # best effort: a table read must never fail the tuning-word read that already succeeded
-        return None, f"turbo tables not read: {type(exc).__name__}: {exc}"
+        for key in _LABEL:
+            notes.setdefault(key, f"{_LABEL[key]} not read: the guard refused ({exc.reason.value})")
+    except Exception as exc:  # best effort: these reads must never fail the tuning-word read that already succeeded
+        for key in _LABEL:
+            notes.setdefault(key, f"{_LABEL[key]} not read: {type(exc).__name__}: {exc}")
+    return out
 
 
 def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -441,13 +526,22 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     st = _state(helper)
     try:
         policy = _load_policy(helper)
-        tables, note = _read_tables(helper, ctx, policy, topology)
+        extras = _read_extras(helper, ctx, policy, topology)
     except OpError as exc:
-        tables, note = None, f"turbo tables not read: {exc.message}"
+        if exc.code == CANCELLED:
+            raise
+        extras = {"fused": None, "turbo": None, "tables": None, "notes": {k: f"{_LABEL[k]} not read: {exc.message}" for k in _LABEL}}
+    notes = extras["notes"]
+    tables = extras["tables"]
+    note = notes.get("turbo")
     with st.lock:
         st.tables, st.tables_note = tables, note
+        st.fused, st.turbo = extras["fused"], extras["turbo"]
     result["tables"] = None if tables is None else {k: list(v) for k, v in tables.items()}
-    result["tables_note"] = note
+    result["tables_note"] = None if tables is not None else (note or "turbo tables not read")
+    result["fused"] = extras["fused"]  # contract 9 addendum: {cpu: {word, ratio, v}}
+    result["turbo"] = extras["turbo"]  # contract 9 addendum: {P: {ratios, counts}, E: {...}, favored: {cpu: ratio}}
+    result["extras_notes"] = notes
     return _fit(result)
 
 
@@ -717,7 +811,7 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
                 if not known:
                     raise _no_read(unit, "per-point offsets are addressed by ratio and no words of this unit were read")
                 words = known[next(iter(known))]
-                by_ratio = {VfWord.from_u32(w).ratio: n for n, w in enumerate(words[1:], start=1)}
+                by_ratio = {VfWord.from_u32(w).ratio: n for n, w in enumerate(words[1 : len(_POINT_RATIOS[core.kind]) + 1], start=1)}  # the OC point (P2 9 / 7) is not a fused point
                 missing = [r for r in offset["mv"] if int(r) not in by_ratio]
                 for r, mv in offset["mv"].items():
                     n = by_ratio.get(int(r))
@@ -884,6 +978,219 @@ def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Seque
     return before, after
 
 
+# --------------------------------------------------------------------------------------------------------------
+# SPEC-v3 section 9: predictions (F4 clamp, F6 VccIA, F8 warnings) from the newest baseline curve
+# --------------------------------------------------------------------------------------------------------------
+_PLATFORM = default_platform()
+_POINT_RATIOS = {"P": tuple(_PLATFORM.p_point_ratios), "E": tuple(_PLATFORM.e_point_ratios)}  # F1 [MEASURED lnx 2026-10-02]
+_PLATFORM_TURBO = {  # stock tables [MEASURED lnx 2026-09-29], used only when tune.read could not read the live ones
+    "P": list(turbo_bytes(_PLATFORM.turbo_defaults[0x1AD])),
+    "E": list(turbo_bytes(_PLATFORM.turbo_defaults[0x650])),
+}
+_P_FAVORED_STOCK = 55  # the 0x1C low byte of a non-favored P-core [MEASURED win 2026-10-01] (0x3737); favored cores read 57 (0x3939)
+
+
+def _baseline_record(helper: Helper) -> tuple[dict[str, Any] | None, str | None]:
+    """The newest curve record flagged ``baseline`` of the measurement store, or ``(None, why)``."""
+    from .ops_measure import _wiring  # imported lazily: both modules import .ops, neither imports the other at module level
+
+    try:
+        store = _wiring(helper).store
+        for row in store.summaries():
+            if row.get("baseline"):
+                return store.get(row["id"]), None
+    except OpError as exc:
+        return None, exc.message
+    except Exception as exc:  # StoreError and friends: a prediction is optional
+        return None, f"{type(exc).__name__}: {exc}"
+    return None, None
+
+
+@dataclass
+class _UnitModel:
+    unit: str
+    kind: str
+    cpus: tuple[int, ...]
+    ratios: tuple[int, ...]  # the fused point ratios (index n-1 = point n)
+    cur_offsets: dict[int, float]  # ratio -> mV of the words last read (0 where nothing was read)
+    new_offsets: dict[int, float]  # ... after the plan
+    baseline: dict[int, float | None] | None
+    oc_ratio: int | None = None  # the plan's OC ratio for this unit
+    oc_v: float | None = None  # the plan's OC-point voltage target (V)
+    touched: bool = False
+
+
+def _unit_models(
+    profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]] | None, record: dict[str, Any] | None, fused: Mapping[int, Mapping[str, Any]] | None
+) -> dict[str, _UnitModel]:
+    settings = {unit_of_cpu(topology, s.cpu): s for s in profile.expand(topology)}
+    point_settings: dict[str, dict[int, Any]] = {}
+    for ps in profile.expand_points(topology):
+        point_settings.setdefault(unit_of_cpu(topology, ps.cpu), {})[ps.point] = ps
+    models: dict[str, _UnitModel] = {}
+    for unit in UNITS:
+        kind = _kind_of(unit)
+        cpus = unit_cpus(topology, unit)
+        ref = _unit_reference(last, cpus)
+        known = len(_POINT_RATIOS[kind])
+        if ref is not None:
+            words = [VfWord.from_u32(w) for w in ref[1][1 : known + 1]]  # past the table = the OC point (P2 9 / 7), not a fused point
+            ratios = tuple(w.ratio for w in words)
+            cur = {w.ratio: w.offset_mv for w in words}
+        else:
+            ratios, cur = _POINT_RATIOS[kind], {r: 0.0 for r in _POINT_RATIOS[kind]}
+        new = dict(cur)
+        st = settings.get(unit)
+        explicit = point_settings.get(unit, {})
+        if st is not None and st.offset_mv is not None:  # "whole curve": one offset on every point the plan does not set itself
+            for n, r in enumerate(ratios, start=1):
+                if n not in explicit:
+                    new[r] = float(st.offset_mv)
+        for n, ps in explicit.items():
+            if 1 <= n <= len(ratios):
+                new[ratios[n - 1]] = float(ps.offset_mv)
+        baseline = None
+        if record is not None:
+            pts = ((record.get("units") or {}).get(unit) or {}).get("points") or []
+            measured = {p["ratio"]: p["vid_v"] for p in pts if p.get("status") == "ok" and p.get("vid_v") is not None}
+            fused_v = ((fused or {}).get(cpus[0]) or {}).get("v")
+            if measured:
+                baseline = complete_baseline(ratios, measured, fused_v)
+        m = _UnitModel(unit, kind, cpus, ratios, cur, new, baseline, touched=st is not None or bool(explicit))
+        if st is not None:
+            m.oc_ratio = st.ratio
+            m.oc_v = None if st.oc_voltage_mv is None else st.oc_voltage_mv / 1000
+        models[unit] = m
+    return models
+
+
+def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None, plan: bool) -> tuple[int, int]:
+    """(1-2 active cores, all cores): the highest ratio the unit is allowed at, from the live turbo tables (``0x1AD`` / ``0x650``) and the favored word (``0x1C``);
+    with ``plan`` the plan's OC ratio raises both (a ratio above the table raises the table, ``_turbo_tables``). Stock tables when none were read."""
+    ratios = ((turbo or {}).get(m.kind) or {}).get("ratios") or _PLATFORM_TURBO[m.kind]
+    light, full = ratios[0], ratios[-1]
+    if m.kind == "P":
+        fav = ((turbo or {}).get("favored") or {}).get(m.cpus[0])
+        light = min(light, fav if fav else (57 if m.unit in ("P0", "P3") else _P_FAVORED_STOCK))
+    if plan and m.oc_ratio is not None:
+        light, full = max(light, m.oc_ratio), max(full, m.oc_ratio)
+    return light, full
+
+
+def _point_view(curve: Sequence[CurvePoint]) -> dict[str, Any]:
+    return {
+        str(p.index): {
+            "ratio": p.ratio, "base_v": None if p.base_v is None else round(p.base_v, 4), "offset_mv": round(p.offset_mv, 3),
+            "effective_v": None if p.effective_v is None else round(p.effective_v, 4), "clamped_by": p.clamped_by,
+        }
+        for p in curve
+    }
+
+
+def _predict(
+    helper: Helper, profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]] | None, before: dict[str, Any], after: dict[str, Any], warnings: list[str]
+) -> dict[str, Any]:
+    """Fill ``effective_v`` / ``clamped_by`` into the ``before`` / ``after`` points the plan writes and return ``{predicted, vccia}`` (contract 9 addendum).
+    ``effective_v`` = baseline VID + offset, then the F4 clamp up to V(n-1). Without a baseline curve both are null and one warning says so."""
+    st = _state(helper)
+    with st.lock:
+        fused, turbo = st.fused, st.turbo
+    record, why = _baseline_record(helper)
+    models = _unit_models(profile, topology, last, record, fused)
+    if record is None:
+        warnings.append("measure a stock baseline for predictions" + (f" (the baseline curve could not be loaded: {why})" if why else " (no curve is flagged baseline)"))
+    elif last is None:
+        warnings.append("no tune.read this boot: the current offsets of every point are assumed to be 0 in the predictions")
+    predicted: dict[str, Any] = {}
+    curves_new: dict[str, list[CurvePoint]] = {}
+    curves_cur: dict[str, list[CurvePoint]] = {}
+    for unit, m in models.items():
+        if m.baseline is None:
+            continue
+        curves_cur[unit] = effective_curve(m.ratios, m.baseline, m.cur_offsets)
+        curves_new[unit] = effective_curve(m.ratios, m.baseline, m.new_offsets)
+        if m.touched:
+            predicted[unit] = _point_view(curves_new[unit])
+    # ---- the written points get their numbers ----
+    for side, curves in ((before, curves_cur), (after, curves_new)):
+        for unit, items in side.items():
+            curve = curves.get(unit)
+            for point, entry in items.items():
+                if entry is None:
+                    continue
+                n = int(point)
+                if n == 0:
+                    entry["effective_v"], entry["clamped_by"] = entry.get("v_target_v"), None
+                elif curve is not None and 1 <= n <= len(curve):
+                    ev = curve[n - 1].effective_v
+                    entry["effective_v"], entry["clamped_by"] = (None if ev is None else round(ev, 4)), curve[n - 1].clamped_by
+                else:
+                    entry["effective_v"], entry["clamped_by"] = None, None
+    # ---- warnings F4 / F8 ----
+    for unit, m in models.items():
+        if not m.touched:
+            continue
+        new, cur = curves_new.get(unit), curves_cur.get(unit)
+        if new is not None and cur is not None:
+            for p, c in zip(new, cur):
+                if p.clamped_by is not None and (c.clamped_by is None or p.effective_v != c.effective_v) and p.effective_v is not None and p.base_v is not None:
+                    landed = (p.effective_v - p.base_v) * 1000
+                    warnings.append(
+                        f"{unit} point {p.index} ({p.ratio}x): offset {p.offset_mv:+.1f} mV is clamped up to the voltage of point {p.clamped_by} "
+                        f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V [MEASURED lnx 2026-10-02, F4]"
+                    )
+        if m.kind == "E":
+            at40 = m.new_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0)
+            if at40 != 0.0 and at40 != m.cur_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0):
+                warnings.append(f"{unit}: an offset of {at40:+.1f} mV on the 40x point (point 5): never offset E point 5, -20 mV there caused OCCT errors [MEASURED lnx 2026-10-02, F8]")
+            if m.oc_v is not None and m.oc_v > vfmodel.E_WHEA_V:
+                warnings.append(f"{unit}: E-core voltage target {m.oc_v:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY skatterbencher.com/2025/02/14, F8]")
+            elif new is not None:
+                hi = max((p.effective_v for p in new if p.effective_v is not None), default=None)
+                if hi is not None and hi > vfmodel.E_WHEA_V:
+                    warnings.append(f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY, F8]")
+    # ---- F6: VccIA ----
+    vccia = _predict_vccia(models, curves_new, curves_cur, turbo)
+    if vccia is not None:
+        warnings.append(
+            "VccIA is a prediction (highest allowed VID of any unit or the ring + ~0.105 V; a hypothesis on 3+ points [MEASURED lnx 2026-10-03]): "
+            "lowering a unit that does not set the maximum does not lower Vcore"
+        )
+    return {"predicted": predicted if record is not None else None, "vccia": vccia}
+
+
+def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[CurvePoint]], turbo: Mapping[str, Any] | None, which: int, plan: bool) -> dict[str, Any] | None:
+    rows: list[tuple[str, int, float | None]] = []
+    for unit, m in models.items():
+        curve = curves.get(unit)
+        if curve is None:
+            continue
+        ratio = _allowed_ratios(m, turbo, plan)[which]
+        oc = (m.oc_ratio, m.oc_v) if plan and m.oc_ratio is not None and m.oc_v is not None else None
+        rows.append((unit, ratio, voltage_at(curve, ratio, oc)))
+    out = predict_vccia(rows)
+    if out is None:
+        return None
+    best = {k: max((r for r in rows if r[0].startswith(k) and r[2] is not None), key=lambda r: r[2], default=None) for k in ("P", "E")}  # type: ignore[arg-type,return-value]
+    out["contributors"] = [{"unit": r[0], "ratio": r[1], "v": round(r[2], 4)} for r in best.values() if r is not None] + [{"unit": "ring", "ratio": 40, "v": vfmodel.RING_V}]
+    return out
+
+
+def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[CurvePoint]], cur: Mapping[str, list[CurvePoint]], turbo: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """F6 for the all-core bucket (the one that matters for sustained load: 55x points set VccIA for every multi-core load, 57x only for 1-2 active cores), plus the
+    1-2 core case as ``light_load`` and the current state as ``before_v``."""
+    full = _vccia_scenario(models, new, turbo, 1, True)
+    if full is None:
+        return None
+    light = _vccia_scenario(models, new, turbo, 0, True)
+    was = _vccia_scenario(models, cur, turbo, 1, False)
+    return {
+        "predicted_v": full["predicted_v"], "set_by": full["set_by"], "label": "prediction", "active_cores": "all", "margin_v": full["margin_v"],
+        "contributors": full["contributors"], "before_v": None if was is None else was["predicted_v"],
+        "light_load": None if light is None else {"predicted_v": light["predicted_v"], "set_by": light["set_by"], "active_cores": "1-2"},
+    }
+
+
 def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
     words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``."""
@@ -932,12 +1239,32 @@ def _preflight_error(exc: PreflightError) -> OpError:
     return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PREFLIGHT"})
 
 
+def _check_turbo_order(profile: Profile) -> None:
+    """F5: bucket ratios must not RISE with the active-core count. ``REFUSED TURBO_ORDER`` before the planner (which would refuse the same table later as a
+    generic policy failure). Only a profile can carry a table (the contract 9 row intent has no table field): accepted / saved profiles and ``restore``."""
+    if profile.turbo is None:
+        return
+    for key, label in (("p", "P (MSR 0x1AD)"), ("e", "E (MSR 0x650)")):
+        table = getattr(profile.turbo, key)
+        if table is None:
+            continue
+        bad = check_turbo_order(table)
+        if bad is not None:
+            raise OpError(
+                REFUSED,
+                f"the {label} turbo table is not non-increasing: bucket {bad + 1} ({table[bad]}x) is above bucket {bad} ({table[bad - 1]}x); more active cores must never raise the ratio "
+                f"[MEASURED lnx 2026-10-01, F5]. Nothing was sent.",
+                {"check": "TURBO_ORDER", "table": key.upper(), "bucket": bad, "ratios": list(table)},
+            )
+
+
 def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     intent = args["intent"]
     topology = _topology(helper)
     policy = _load_policy(helper)
     resolved = resolve_intent(helper, intent, policy, topology)
     profile = resolved.profile
+    _check_turbo_order(profile)
     used, budget = helper.budget.snapshot()
     ops_left = None if used is None or budget is None else max(budget - used, 0)
     try:
@@ -961,6 +1288,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
             was = (before.get(unit) or {}).get(point)
             if now["offset_mv"] is not None and now["offset_mv"] > 0 and (was is None or was["offset_mv"] <= 0):
                 warnings.append(f"positive offset {now['offset_mv']:+.1f} mV on {unit} {'OC word' if point == '0' else 'point ' + point}")
+    prediction = _predict(helper, profile, topology, last, before, after, warnings)
     warnings.append(REVERT_NOTE)
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))
     canon = json.dumps(
@@ -981,7 +1309,9 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "expires_s": int(PLAN_EXPIRES_S),
         "units": resolved.units,
         "before": before,
-        "after": after,
+        "after": after,  # per written point also effective_v / clamped_by (contract 9 addendum, SPEC-v3 F4)
+        "predicted": prediction["predicted"],  # G-114 (additive): {unit: {point: {ratio, base_v, offset_mv, effective_v, clamped_by}}} for every point of the touched units
+        "vccia": prediction["vccia"],  # contract 9 addendum (F6): {predicted_v, set_by: {unit, ratio}} + label / contributors / before_v / light_load, null without a baseline
         "warnings": warnings,
         "words_assumed": bool(resolved.refs),
     }

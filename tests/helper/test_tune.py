@@ -72,7 +72,7 @@ class ReadTests(TuneCase):
         p0 = res["tune"]["P0"]["cpus"][0]
         self.assertEqual(p0["cpu"], 0)
         self.assertEqual([p["point"] for p in p0["points"]], list(range(9)))  # point 0 = the OC word, 1..8 the fused points
-        self.assertEqual(p0["points"][0], {"point": 0, "ratio": 57, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive"})  # CPU 0: 0x39
+        self.assertEqual(p0["points"][0], {"point": 0, "point_label": "OC (point 9)", "ratio": 57, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive"})  # CPU 0: 0x39
         self.assertEqual(res["tune"]["P1"]["cpus"][0]["points"][0]["ratio"], None)  # OC word 0x0: unset fields are null
         p5 = next(p for p in p0["points"] if p["point"] == 5)
         self.assertEqual((p5["ratio"], p5["offset_mv"]), (53, -49.805))  # the BIOS point offset the simulator carries (raw -51)
@@ -124,7 +124,7 @@ class PlanTests(TuneCase):
         self.assertEqual(p["expires_s"], 600)
         self.assertEqual(p["units"], ["P1"])
         self.assertEqual(p["after"]["P1"]["0"]["offset_mv"], round(VfWord.mv_to_offset_raw(-20) * 1000 / 1024, 3))
-        self.assertEqual(p["before"]["P1"]["0"], {"ratio": None, "offset_mv": 0.0, "v_target_v": None})
+        self.assertEqual(p["before"]["P1"]["0"], {"ratio": None, "offset_mv": 0.0, "v_target_v": None, "effective_v": None, "clamped_by": None})
         self.assertGreater(p["ops_needed"], 0)
         self.assertIsInstance(p["ops_left"], int)
         self.assertTrue(any("effective offset" in w for w in p["warnings"]))

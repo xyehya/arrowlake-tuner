@@ -668,7 +668,8 @@ def format_dump(units: Sequence[Unit], flags: Sequence[Flag], measured: Mapping[
         for c in cols:
             if len(c.points) > known_points(c.kind):
                 lines.append(
-                    f"  note: cpu {c.cpu} has {len(c.points)} points (known fused count {known_points(c.kind)}): an OC ratio above the top fused ratio adds a point"
+                    f"  note: cpu {c.cpu} has {len(c.points)} points (known fused count {known_points(c.kind)}): P2={len(c.points)} is the OC point "
+                    f"({'OC (point 9)' if c.kind == 'P' else 'OC (point 7)'}), which an OC ratio above the top fused ratio adds; not an error"
                 )
         for ratio, m in sorted(by_ratio.items()):
             if m.note:

@@ -33,7 +33,7 @@ E = 49
 P = 1625
 E = 1355
 
-# --- allowlist (a policy file replaces the whole policy, so it lists every request; identical to the 2026-10-02 policy) ---
+# --- allowlist (a policy file replaces the whole policy, so it lists every request; the 2026-10-02 policy plus, G-114, plain reads of 0x1AE / 0x651) ---
 [[allow]]
 name = "oc_capability_read"
 cmd = 0x01
@@ -167,6 +167,16 @@ kind = "read"
 [[msr_allow]]
 name = "msr_0x1ad_read"
 msr = 0x1AD
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x1ae_read"   # G-114: P bucket core counts (tune.read turbo.P.counts); read-only by policy
+msr = 0x1AE
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x651_read"   # G-114: E bucket core counts (tune.read turbo.E.counts); read-only by policy
+msr = 0x651
 kind = "read"
 
 [[msr_allow]]
