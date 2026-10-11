@@ -87,6 +87,46 @@ class TestBrowser(unittest.TestCase):
         errors = [m for m in logs if m[0] in ("error", "pageerror", "warning") and "favicon" not in m[1] and "404" not in m[1]]
         self.assertEqual(errors, [])
 
+    def test_apply_shows_the_os_frequency_cap_table(self):
+        """G-126: an OC ratio change makes the helper report ``cpufreq``; the read-back dialog shows it (this builds ``cpufreqNode`` for real)."""
+        from tests.web import v3_harness as h
+
+        srv, fake, stop = h.start(measure_delay=0.01, apply_delay=0.01, seed=False)
+        self.addCleanup(fake.close)
+        self.addCleanup(srv.close)
+        self.addCleanup(stop.set)
+        logs: list[tuple[str, str]] = []
+        with sync_playwright() as p:
+            b = p.chromium.launch(executable_path=CHROME, headless=True, args=["--no-sandbox"])
+            try:
+                page = b.new_context(viewport={"width": 1400, "height": 900}).new_page()
+                page.on("console", lambda m: logs.append((m.type, m.text)))
+                page.on("pageerror", lambda e: logs.append(("pageerror", str(e))))
+                h.login(page, srv)
+                page.goto(srv.origin + "/")
+                page.wait_for_selector("#conn-helper.s-ok", timeout=10000)
+                page.click("#tab-tune")
+                page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
+                page.click("#btn-tune-read")
+                page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
+                row = page.locator(".tn-rowwrap").nth(1)  # all E-clusters: OC ratio not set -> 49x (cpuinfo 4.9 -> 5.0 GHz) at 1.165 V
+                row.locator("select.tn-sel").nth(1).select_option("1.165")
+                row.locator("select.tn-sel").nth(2).select_option("49")
+                page.click("#btn-tn-plan")
+                page.wait_for_selector("#dlg-plan[open]")
+                page.wait_for_function("!document.getElementById('plan-go').disabled")
+                page.click("#plan-go")
+                page.wait_for_selector(".plan-result .cpufreq-box .pill.s-ok", timeout=10000)
+                box = page.inner_text(".cpufreq-box")
+                self.assertIn("4.90 GHz", box)
+                self.assertIn("5.00 GHz", box)
+                self.assertIn("raised", box)
+                self.assertEqual(page.locator(".cpufreq-box tbody tr").count(), 16)  # the 16 E-cores
+            finally:
+                b.close()
+        errors = [m for m in logs if m[0] in ("error", "pageerror", "warning") and "favicon" not in m[1] and "404" not in m[1]]
+        self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

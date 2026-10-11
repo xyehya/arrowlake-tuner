@@ -759,7 +759,7 @@ class V3Ops:
     def _apply(self, rid: str, p: dict) -> None:
         n = max(len(p["changed"]), 1)
         stop_after = self.apply_stop_after
-        readback, sent = [], 0
+        readback, sent, cpufreq = [], 0, []
         for i, u in enumerate(p["changed"]):
             if self.apply_delay:
                 time.sleep(self.apply_delay)
@@ -773,6 +773,10 @@ class V3Ops:
                 readback.append({"unit": u, "point": idx, "cpu": UNIT_CPUS[u][0], "expected": exp,
                                  "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
                 sent += 1
+            new_r, old_r = p["new"][u]["oc"]["ratio"], self.tuning[u]["oc"]["ratio"] or (48 if kind_of(u) == "E" else 55)  # unset OC word: the stock table top
+            if new_r and new_r != old_r:  # G-126: an OC ratio change moves cpuinfo_max_freq; the helper moves scaling_max_freq with it (E-cores read one bin more)
+                step = 1 if kind_of(u) == "E" else 0
+                cpufreq += [{"cpu": c, "before_khz": (old_r + step) * 100_000, "after_khz": (new_r + step) * 100_000} for c in UNIT_CPUS[u]]
             self.tuning[u] = copy.deepcopy(p["new"][u])
         for k, ratios in p["turbo"].items():
             self.tables[k.lower()] = list(ratios)
@@ -792,7 +796,7 @@ class V3Ops:
         self._applying.discard(rid)
         result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])]
                   + [{"n": len(p["changed"]) + i + 1, "kind": "write_msr", "table": k.lower(), "status": "ok"} for i, k in enumerate(sorted(p["turbo"]))],
-                  "readback": readback, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
+                  "readback": readback, "cpufreq": cpufreq, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
         if stop_after is not None:
             result["stop"] = {"kind": "refused", "reason": "the guard refused a step: step limit", "tripped": False}
         self._reply(rid, True, result=result)

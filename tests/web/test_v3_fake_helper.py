@@ -356,6 +356,17 @@ class TestTune(V3Base):
         self.assertEqual(res["readback"][-1]["point"], "turbo")  # turbo rows: unit "E" | "P", point "turbo"
         self.assertEqual(len(res["readback"][-1]["expected"]), 18)
 
+    def test_an_oc_ratio_change_reports_the_cpufreq_lift(self):
+        """G-126: ``tune.apply`` carries ``cpufreq: [{cpu, before_khz, after_khz}]`` for the CPUs whose OC ratio changed (empty otherwise)."""
+        self.read()
+        first = self.ok("tune.plan", self.intent(target="EC1", ratio=48, v_target_v=1.1367))
+        self.ok("tune.apply", {"plan_id": first["plan_id"], "typed": "CONFIRM " + first["nonce"]})
+        p = self.ok("tune.plan", self.intent(target="EC1", ratio=49, v_target_v=1.165))
+        res = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})
+        self.assertEqual(res["cpufreq"], [{"cpu": c, "before_khz": 4_900_000, "after_khz": 5_000_000} for c in (12, 13, 14, 15)])
+        q = self.ok("tune.plan", self.intent(target="EC1", offset={"kind": "curve", "mv": -10}))
+        self.assertEqual(self.ok("tune.apply", {"plan_id": q["plan_id"], "typed": "CONFIRM " + q["nonce"]})["cpufreq"], [])
+
     def test_reset_zeroes_offsets_only_and_restore_goes_through_the_same_flow(self):
         self.read()
         reset = self.ok("tune.plan", {"intent": {"reset": "stock"}})
