@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-11 · lnx · G1 read-only exit MET; G-109 (telemetry gaps) + G-110 (dashboard redesign) merged, reinstalled, verified live. vf.dump pending its go. Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-11 · lnx · G1 met; G-109/G-110 live. **v3 pivot (SPEC-v3, D-032 advanced limits, D-033 Measure→Store→Tune):** G-111/G-112/G-113 in flight._ Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -45,18 +45,12 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. **G1 read-only exit met [MEASURED lnx 2026-10-11]:** polkit prompt once → helper `python3 -I /usr/lib/arltuner/arltuner-helper --device`;
-   preflight all 15 pass (polkit agent gnome-shell), heartbeat live, ops 0/600, telemetry live (pkg/core W, per-CPU MHz/busy/ratio/VID, coretemp),
-   audit tail renders; no console errors, **no mailbox traffic**. n/a as expected: Vcore (board), DRAM r/w. Still open: `vf.dump` (~124 ops,
-   own go) to fill Applied-vs-accepted. UX nits for G2: header says "Mode: write / Writes allowed: yes" on a read-only page; temp sensors show
-   raw coretemp ids (Core 0..44), not P/E names; Chrome automation can't open the file:// launcher (own-origin POST /bootstrap works).
-   **No restore has run since the 2026-10-11 09:42 UTC boot** (audit last 10-10): next restore = first run on the D-030 paths; stop the GUI first. `vf.dump` (mailbox, ~124 ops) is a separate go-ahead. Restore after the install uses the new paths.
-   **G-109 + G-110 verified live [MEASURED lnx 2026-10-11]** after reinstall: Vcore 0.848 V idle (nct6686 VIN16), DRAM 1.7/0.6 GB/s (root
-   `/usr/bin/perf` child of the helper, trust-checked), 25 temps named P-/E-Core; new tabbed dark UI (Overview core map, Cores, Sensors, V/F,
-   System, Audit), all tabs render real data. Nits: small-range charts autoscale (1 °C looks like a cliff: add minimum spans); dark theme only.
-   Chrome extension disconnected mid-session: screenshots via headless Chrome + CDP; login = own-origin POST /bootstrap.
-2. Orchestrator rule: workers and reviewers run `model: sonnet`, `effort: high` (operator 2026-10-08).
-3. W: first Windows restore from this repo (check the rename end to end).
+1. **v3 (SPEC-v3, contract 9):** G-111 measure/curves/mem.read/telemetry restart · G-112 D-032 policy + tune.*/profiles.* · G-113 web v3 —
+   Sonnet 5.5 high, parallel worktrees. Merge G-112 → G-111 → G-113 (OPS/builtin_ops registration lines conflict trivially), then
+   `sudo bash install.sh --reseed-config` (advanced policy), Quick **stock-baseline** curve on the machine (cpufreq caps only, authorized by
+   the operator's brief), then ask the operator's go for the **first mailbox write from the new Tune page**.
+2. Operator ran the first GUI `vf.dump` 2026-10-11 16:57 UTC (112 ops, words = ratios, all offsets 0: stock, no restore since boot).
+3. W: first Windows restore from this repo. Orchestrator rule: workers `sonnet`/`high`.
 
 ## How we work
 Operator at the machine; orchestrator answers guard tokens only after a go-ahead. One variable at a time; acceptance gate = 60-min OCCT Linpack 2021

@@ -97,6 +97,7 @@ class _Telemetry:
     sampler: Any
     stop: threading.Event
     thread: threading.Thread
+    interval_s: float = 1.0
 
 
 class Helper:
@@ -118,6 +119,7 @@ class Helper:
         self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
         self.last_words: dict[int, list[int]] | None = None  # G-112: cpu -> [OC word, point 1, point 2, ...] after the last complete tune.read / vf.dump (and the read-backs of tune.apply); None = unknown
+        self.measure_wiring: Any = None  # ops_measure.MeasureWiring (G-111): cpufreq / MSR read / store / journal for vf.measure, curves.*, mem.read; set by main (None: those ops answer INTERNAL)
 
     # ---------------------------------------------------------------- output
     def emit(self, event: dict[str, Any]) -> bool:
@@ -163,6 +165,7 @@ class Helper:
             self._send(error_response(None, REFUSED, f"the helper is already running on this machine: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
+        self._recover_measure_journal()  # a stale journal = a measurement that died with the previous helper: put cpufreq back before anything else runs
         frames: queue.Queue[Frame] = queue.Queue(maxsize=QUEUE_MAX)
         threading.Thread(target=self._reader, args=(stdin, frames), name="helper-stdin", daemon=True).start()
         beat = threading.Thread(target=self._heartbeat, name="helper-heartbeat", daemon=True)
@@ -185,6 +188,17 @@ class Helper:
             self._finish(frames)
             lock.release()
         return 0
+
+    def _recover_measure_journal(self) -> None:
+        wiring = self.measure_wiring
+        if wiring is None:
+            return
+        from .ops_measure import recover_journal  # lazy: ops_measure imports ops
+
+        try:
+            recover_journal(wiring, self.cfg.log)
+        except Exception as exc:  # never keep the helper from starting; the failure is loud in the log and the journal stays for the next start
+            self.cfg.log(f"measure journal recovery FAILED: {type(exc).__name__}: {exc}")
 
     def _finish(self, frames: queue.Queue[Frame]) -> None:
         self._shutdown.set()
@@ -393,9 +407,16 @@ class Helper:
         return {"cancelled": True, "op_id": running.op_id, "state": running.state.value}
 
     def telemetry_start(self, op_id: str, interval_s: float) -> dict[str, Any]:
+        """Start the sampler. Running at the same interval: attach (``already_running``). Running at another one (contract 9): stop it and start again at the new
+        interval (``restarted: true``, under the new ``op_id``, which its events carry)."""
         with self._tele_lock:
-            if self._tele is not None:
-                return {"running": True, "already_running": True, "op_id": self._tele.op_id}
+            old = self._tele
+            if old is not None and old.interval_s == interval_s:
+                return {"running": True, "already_running": True, "restarted": False, "op_id": old.op_id, "interval_s": old.interval_s}
+            self._tele = None
+        if old is not None:
+            self._stop_tele(old)  # outside the lock: telemetry_stop takes it too
+        with self._tele_lock:
             sampler = None
             try:
                 sampler = self.cfg.sampler_factory(interval_s)
@@ -406,24 +427,28 @@ class Helper:
                         sampler.stop()
                     except Exception as stop_exc:
                         self.cfg.log(f"telemetry sampler stop after a failed start: {type(stop_exc).__name__}: {stop_exc}")
-                raise OpError(INTERNAL, f"telemetry could not start: {type(exc).__name__}: {exc}") from None
+                note = " (the previous sampler was stopped)" if old is not None else ""
+                raise OpError(INTERNAL, f"telemetry could not start: {type(exc).__name__}: {exc}{note}") from None
             stop = threading.Event()
             thread = threading.Thread(target=self._telemetry_loop, args=(op_id, sampler, interval_s, stop), name="helper-telemetry", daemon=True)
-            self._tele = _Telemetry(op_id, sampler, stop, thread)
+            self._tele = _Telemetry(op_id, sampler, stop, thread, interval_s)
             thread.start()
-            return {"running": True, "already_running": False, "op_id": op_id, "interval_s": interval_s}
+            return {"running": True, "already_running": False, "restarted": old is not None, "op_id": op_id, "interval_s": interval_s}
 
-    def telemetry_stop(self) -> dict[str, Any]:
-        with self._tele_lock:
-            tele, self._tele = self._tele, None
-        if tele is None:
-            return {"stopped": False}
+    def _stop_tele(self, tele: _Telemetry) -> None:
         tele.stop.set()
         tele.thread.join(timeout=5)
         try:
             tele.sampler.stop()
         except Exception as exc:
             self.cfg.log(f"telemetry sampler stop failed: {type(exc).__name__}: {exc}")
+
+    def telemetry_stop(self) -> dict[str, Any]:
+        with self._tele_lock:
+            tele, self._tele = self._tele, None
+        if tele is None:
+            return {"stopped": False}
+        self._stop_tele(tele)
         return {"stopped": True, "op_id": tele.op_id}
 
     def _telemetry_loop(self, op_id: str, sampler: Any, interval_s: float, stop: threading.Event) -> None:

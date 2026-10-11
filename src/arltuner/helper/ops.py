@@ -703,12 +703,15 @@ def op_cancel(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str,
 
 
 def builtin_ops() -> dict[str, OpSpec]:
+    from .ops_measure import measure_ops  # lazy: ops_measure imports this module (G-111: vf.measure, curves.*, mem.read)
+
     specs = [
         OpSpec("preflight", op_preflight, _no_args, slow=True),
         OpSpec("audit.tail", op_audit_tail, _validate_audit_tail, slow=True),
         OpSpec("telemetry.start", op_telemetry_start, _validate_telemetry_start),
         OpSpec("telemetry.stop", op_telemetry_stop, _no_args),
         OpSpec("cancel", op_cancel, _validate_cancel),
+        *measure_ops(),
     ]
     from .ops_tune import tune_ops  # G-112: vf.dump (now remembering the words in force), tune.*, profiles.*; imported here because ops_tune imports this module
 

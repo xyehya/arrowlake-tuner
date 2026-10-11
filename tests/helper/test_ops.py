@@ -210,8 +210,8 @@ class TelemetryTests(HelperCase):
     def test_second_start_attaches_to_the_running_stream(self) -> None:
         h = self.start()
         h.call("tel", "telemetry.start", {"interval_s": 0.2})
-        again = h.call("tel2", "telemetry.start")
-        self.assertEqual((again["result"]["already_running"], again["result"]["op_id"]), (True, "tel"))
+        again = h.call("tel2", "telemetry.start", {"interval_s": 0.2})  # the same interval: attach (a different one restarts the sampler, contract 9)
+        self.assertEqual((again["result"]["already_running"], again["result"]["restarted"], again["result"]["op_id"]), (True, False, "tel"))
         h.call("s", "telemetry.stop")
 
     def test_stop_without_start_is_harmless(self) -> None:
