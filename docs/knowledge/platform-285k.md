@@ -34,6 +34,10 @@ Power limits: **PL1 250 W** (operator, 2026-10-08, D-024; PL2 250 W per `linuxmo
 | E-cluster | 8, 15, 23, 30, 40, 46 (n = 6) | P2 = 7 -> rc 0x11 | same |
 | Ring | 8, 14, 20, 28, 34, 37, 38, 39 (n = 8) | P2 = 9 (40x) exists ONLY while ring OC ratio = 40x | [MEASURED lnx 2026-10-02] `linuxmon@b01f78a:docs/research/skatterbencher-285k.md` s8 |
 - An OC ratio above the top fused ratio adds a point (ring proven; P 58x untested for point count) [MEASURED lnx 2026-10-02].
+- **Community naming agrees** [COMMUNITY SkatterBencher 285K guide, "Advanced Voltage Offset" slides 39/40, operator-supplied 2026-10-11]: P V/F points 1–8 =
+  8/20/30/48/53/55/56/57×, E points 1–6 = 8/15/23/30/40/46×, all factory-fused, offset only, no ratio control; **P point 9 / E point 7 = OC point**
+  (user-adjustable base voltage, offset & direct, ratio control); points 10–15 unused. Ours: at stock P2 = 9 / 7 answer rc 0x11; the OC point's ratio
+  and adaptive target are written through the `P2 = 0` word. Whether a P/E OC point is then *readable* as P2 = 9 / 7 is [UNVERIFIED] (ring: yes).
 - Word: ratio [7:0], V target [19:8] /1024 V, mode [20] (0 adaptive), signed offset [31:21] /1024 V (raw -51 = -49.8 mV). Per-point offset write = `point_ratio | offset<<21`, V target 0 [MEASURED lnx 2026-10-02].
 - Monotonic rule: hardware enforces V(n) >= V(n-1); a deeper offset is silently clamped up (P0 BIOS 57x -49.8 mV landed at -42.5 mV, clamped to 56x) [MEASURED lnx 2026-10-02].
 - Between OC ratio and next fused point voltage interpolates linearly (E 45x: -7.4 of -10 mV) [MEASURED].
