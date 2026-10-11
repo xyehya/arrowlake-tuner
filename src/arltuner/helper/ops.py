@@ -475,9 +475,10 @@ def _hex(word: int | None) -> str | None:
 
 
 def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> bool:
-    """G-120/G-124: an OC word (P2 = 0) of a core with **no OC point** is *neutral* when it is 0 (cold E word) or carries offset 0, adaptive mode, a
-    ratio at or below the top fused ratio and a V target of 0 or the fused ``0x09`` voltage (cold P0 ``0x39``, XTU shape ``0x5B439``, E after an
-    offset-0 write ``0x2E``) ``[MEASURED lnx 2026-10-11/12]``. Two neutral words mean the same state (no OC point, no whole-curve offset)."""
+    """G-120/G-124: an OC word (P2 = 0) of a core with **no OC point** is *neutral* when it carries offset 0, adaptive mode, a ratio at or below the
+    top fused ratio and a V target of 0 or the fused ``0x09`` voltage ``[MEASURED lnx 2026-10-11/12]``. Equivalent: two neutral words of the same
+    ratio (cold P0 ``0x39`` vs XTU shape ``0x5B439``), or an accepted cold word 0 vs a neutral live word at the top fused ratio with no target
+    (E after an offset-0 whole-curve write: ``0x2E``). A live 0 against a non-zero accepted word is not."""
     if expected is None or actual is None or expected == actual:
         return False
     fused_word = default_platform().fused_point.get(cpu)
@@ -486,12 +487,17 @@ def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> 
     fused_raw, top_ratio = (fused_word >> 8) & 0xFFF, fused_word & 0xFF
 
     def neutral(word: int) -> bool:
-        if word == 0:
-            return True
         w = VfWord.from_u32(word)
         return not w.static and w.offset_raw == 0 and 0 < w.ratio <= top_ratio and w.v_target_raw in (0, fused_raw)
 
-    return fused_raw != 0 and top_ratio != 0 and neutral(expected) and neutral(actual)
+    if fused_raw == 0 or top_ratio == 0:
+        return False
+    if expected == 0:  # cold accepted word 0 (E clusters, P1-P7): the live word may be the top fused ratio with offset 0 and no target
+        w = VfWord.from_u32(actual)
+        return neutral(actual) and w.ratio == top_ratio and w.v_target_raw == 0
+    if actual == 0:
+        return False
+    return neutral(expected) and neutral(actual) and VfWord.from_u32(expected).ratio == VfWord.from_u32(actual).ratio
 
 
 def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:

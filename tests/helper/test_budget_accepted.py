@@ -520,7 +520,9 @@ class NeutralOcWordTests(unittest.TestCase):
         from arltuner.helper.ops import _equivalent_oc_words as eq
         self.assertTrue(eq(16, 0x0, 0x2E))          # E cold word vs E after an offset-0 whole-curve write
         self.assertTrue(eq(0, 0x39, 0x5B439))       # P0 cold vs XTU shape
-        self.assertTrue(eq(1, 0x0, 0x39))           # P1 cold vs bare ratio
+        self.assertTrue(eq(1, 0x0, 0x39))           # P1 cold vs bare top ratio, offset 0
+        self.assertFalse(eq(0, 0x39, 0x0))          # P0 accepted 0x39 vs a zero word: not shown equivalent
+        self.assertFalse(eq(0, 0x38, 0x5B439))      # another ratio
         self.assertFalse(eq(16, 0x0, 0xFEC0002E))   # whole-curve offset -10 mV
         self.assertFalse(eq(12, 0x0, 0x48C30))      # an OC point at 48x (above the fused 46x)
         self.assertFalse(eq(0, 0x39, 0xFEC00039))   # offset on P0
