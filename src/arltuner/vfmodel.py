@@ -1,0 +1,139 @@
+"""Pure V/F model of the 285K (SPEC-v3 section 9, F4/F5/F6): monotonic clamp, interpolation, VccIA prediction, turbo-order check.
+
+No I/O, no hardware. Every function takes plain numbers; ``helper/ops_tune.py`` feeds it the measured baseline curve (a ``vf.measure`` record flagged
+``baseline``), the words of the last ``tune.read`` and the turbo tables. The results are PREDICTIONS (they carry no more certainty than their inputs).
+
+Facts (``docs/knowledge/platform-285k.md`` sections 3 and 5):
+  * F4 monotonic rule: hardware enforces V(n) >= V(n-1); a deeper offset is silently clamped up (P0 BIOS 57x -49.8 mV landed at -42.5 mV, i.e. clamped to
+    the 56x voltage) ``[MEASURED lnx 2026-10-02]``. Between two points the VID interpolates linearly (54x = midpoint of 53x/55x, +-2 mV
+    ``[MEASURED lnx 2026-10-03]``; E 45x -7.4 of -10 mV ``[MEASURED lnx 2026-10-02]``). Above the top point the bins follow the top point (E 47-48x run on
+    point 6) ``[MEASURED lnx 2026-10-02]``.
+  * F6 VccIA ~ highest VID ALLOWED for the active-core count + ~100-110 mV; ring (40x ~1.201 V) is a floor ``[MEASURED lnx 2026-10-03]`` (hypothesis on 3+
+    points there: callers label the result a prediction).
+  * F5 turbo tables: bucket ratios non-increasing with the active-core count ``[MEASURED lnx 2026-10-01]`` (the guard's ``turbo_ratio_bounded`` demands it).
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+__all__ = [
+    "E_NO_OFFSET_RATIO",
+    "E_WHEA_V",
+    "RING_V",
+    "VCCIA_MARGIN_V",
+    "CurvePoint",
+    "check_turbo_order",
+    "complete_baseline",
+    "effective_curve",
+    "interpolate",
+    "predict_vccia",
+    "voltage_at",
+]
+
+#: ``[MEASURED lnx 2026-10-02]`` E point 5 (40x) -20 mV caused OCCT errors (tuning-results.md section 4): never offset it (F8).
+E_NO_OFFSET_RATIO = 40
+#: ``[COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/]`` E-core WHEA reports above ~1.2 V (F8). A warning threshold only.
+E_WHEA_V = 1.2
+#: ``[MEASURED lnx 2026-10-03]`` ring at 40x requests ~1.201 V (UncVID); the floor under VccIA (platform-285k.md section 5).
+RING_V = 1.201
+#: ``[MEASURED lnx 2026-10-03]`` VccIA sits ~100-110 mV above the highest allowed VID (hypothesis on 3+ points); 105 mV is the mid.
+VCCIA_MARGIN_V = 0.105
+
+
+@dataclass(frozen=True)
+class CurvePoint:
+    """One fused point after applying offsets. ``base_v`` None = no baseline voltage for this point (``effective_v`` is None too).
+    ``clamped_by`` = 1-based index (P2) of the point whose voltage held this one up (F4), else None."""
+
+    index: int
+    ratio: int
+    base_v: float | None
+    offset_mv: float
+    effective_v: float | None
+    clamped_by: int | None
+
+
+def interpolate(known: Mapping[int, float | None], ratio: float) -> float | None:
+    """Linear interpolation of ``ratio`` between the known ``{ratio: volts}`` entries; flat outside the known range (below the first, above the last).
+    ``None`` if nothing is known."""
+    pts = sorted((r, v) for r, v in known.items() if v is not None)
+    if not pts:
+        return None
+    if ratio <= pts[0][0]:
+        return pts[0][1]
+    if ratio >= pts[-1][0]:
+        return pts[-1][1]
+    for (r0, v0), (r1, v1) in zip(pts, pts[1:]):
+        if r0 <= ratio <= r1:
+            return v0 + (v1 - v0) * (ratio - r0) / (r1 - r0)
+    return None  # unreachable
+
+
+def complete_baseline(
+    point_ratios: Sequence[int], measured: Mapping[int, float | None], fused_top_v: float | None = None
+) -> dict[int, float | None]:
+    """The stock voltage of every fused point: the measured one where there is one; the top point from the fused ``0x09`` voltage when it was not measured
+    (F7: favored 57x often "mismatch"); the rest interpolated between measured neighbours. Points with nothing on either side stay None."""
+    known: dict[int, float | None] = {r: measured.get(r) for r in point_ratios}
+    top = max(point_ratios)
+    if known[top] is None and fused_top_v is not None:
+        known[top] = fused_top_v
+    have = {r: v for r, v in known.items() if v is not None}
+    return {r: (v if v is not None else interpolate(have, r)) for r, v in known.items()}
+
+
+def effective_curve(point_ratios: Sequence[int], baseline: Mapping[int, float | None], offsets_mv: Mapping[int, float]) -> list[CurvePoint]:
+    """Baseline voltage + offset per point, then the F4 clamp: V_eff(n) = max(V_eff(n-1), base(n) + offset(n)) (a point without a known baseline is left
+    out of the chain and stays None). ``offsets_mv`` is keyed by ratio. ``clamped_by`` names the point whose (effective) voltage was used."""
+    out: list[CurvePoint] = []
+    prev_v: float | None = None
+    prev_idx: int | None = None
+    for n, ratio in enumerate(point_ratios, start=1):
+        base = baseline.get(ratio)
+        off = float(offsets_mv.get(ratio, 0.0))
+        if base is None:
+            out.append(CurvePoint(n, ratio, None, off, None, None))
+            continue
+        want = base + off / 1000.0
+        if prev_v is not None and want < prev_v - 1e-9:
+            out.append(CurvePoint(n, ratio, base, off, prev_v, prev_idx))
+            continue  # prev stays the reference: the clamped value equals it
+        out.append(CurvePoint(n, ratio, base, off, want, None))
+        prev_v, prev_idx = want, n
+    return out
+
+
+def voltage_at(curve: Sequence[CurvePoint], ratio: float, oc: tuple[int, float] | None = None) -> float | None:
+    """The effective voltage at any ratio: interpolated between the clamped points, flat above the top point unless an OC point ``(ratio, v_target)`` is
+    given (then linear from the top point to it, "between the OC ratio and the next fused point voltage interpolates linearly")."""
+    known = {p.ratio: p.effective_v for p in curve if p.effective_v is not None}
+    if not known:
+        return None
+    top_r = max(known)
+    if oc is not None and oc[0] > top_r and ratio > top_r:
+        return interpolate({top_r: known[top_r], oc[0]: oc[1]}, min(ratio, oc[0]))
+    return interpolate(known, ratio)
+
+
+def predict_vccia(
+    contributors: Sequence[tuple[str, int, float | None]], ring_v: float = RING_V, margin_v: float = VCCIA_MARGIN_V
+) -> dict[str, object] | None:
+    """F6: ``max(highest allowed VID of every unit, ring)`` + margin. ``contributors`` = ``(unit, allowed_ratio, volts)``; a unit without a voltage is
+    skipped. The ring is always a contributor (``("ring", 40, ring_v)``). Returns ``{"predicted_v", "set_by": {"unit", "ratio"}, "margin_v"}`` or None if
+    no unit has a voltage (then not even the ring floor says anything about the tuned units)."""
+    rows = [(u, r, v) for u, r, v in contributors if v is not None]
+    if not rows:
+        return None
+    rows.append(("ring", 40, ring_v))
+    unit, ratio, volts = max(rows, key=lambda row: row[2])
+    return {"predicted_v": round(volts + margin_v, 4), "set_by": {"unit": unit, "ratio": ratio}, "margin_v": margin_v}
+
+
+def check_turbo_order(buckets: Sequence[int]) -> int | None:
+    """F5: index (0-based bucket) of the first bucket whose ratio is HIGHER than the bucket before it (more active cores must never raise the ratio), or
+    None if the table is non-increasing."""
+    for k in range(1, len(buckets)):
+        if buckets[k] > buckets[k - 1]:
+            return k
+    return None

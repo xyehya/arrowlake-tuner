@@ -15,8 +15,10 @@
 | G-111 | helper: V/F curve measurement (cpufreq caps + VID), curve store, mem.read (MCHBAR), telemetry restart | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
 | G-112 | D-032 advanced policy + tune ops (read/plan/apply/reset/restore) + profiles store | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
 | G-113 | web v3: Dashboard+memory+slider, Curves, Tune, Profiles | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
-| G-114 | backend CPU facts (SPEC-v3 §9): sim tables, fused/turbo in tune.read, clamp/VccIA/turbo order in plan, measure reasons, mem fix | lnx | T0 | ready 2026-10-11 | v3 |
-| G-115 | UI CPU facts: real point grid + OC point, clamp badges, turbo editor, VccIA panel, fused markers, warnings | lnx | T0 | ready 2026-10-11 | v3 |
+| G-114 | backend CPU facts (SPEC-v3 §9): sim tables, fused/turbo in tune.read, clamp/VccIA/turbo order in plan, measure reasons, mem fix | lnx | T0 | **merged** 2026-10-11 | v3 |
+| G-115 | UI CPU facts: real point grid + OC point, clamp badges, turbo editor, VccIA panel, fused markers, warnings | lnx | T0 | **merged** 2026-10-11 | v3 |
 | G-116 | helper stress/validation ops (stress-ng cpu, stressapptest memory, ratio cap, health bracket, results) | lnx | T0 | ready 2026-10-11 | v3 |
+| G-117 | turbo-only plans (planner), UI on warning codes, sim offsets at stock | lnx | T0 | ready 2026-10-11 | G-114/G-115 |
+| G-118 | measure fixes: max ratio from turbo tables, retry pass, baseline/stock tagging, fused_point labels | lnx | T0 | ready 2026-10-11 | G-114 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

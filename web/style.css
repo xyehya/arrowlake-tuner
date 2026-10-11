@@ -681,3 +681,66 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
   .dimm-temp { grid-column: 2; }
   .cv-pick select, .cv-tools select { max-width: 100%; }
 }
+
+/* ---- CPU facts (G-115, SPEC-v3 section 9): point cells, clamp/reach marks, OC point, VccIA, turbo tables ---- */
+.tn-pt { min-width: 118px; }
+.tn-pt-tag { font-size: 11px; line-height: 1.2; }
+.tn-pt-eff { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--text); min-height: 1.2em; }
+.tn-pt.unreach { background: transparent; border-style: dashed; }
+.tn-pt.unreach > .tn-pt-ratio, .tn-pt.unreach > .tn-pt-eff, .tn-pt.unreach > .tn-pt-tag { opacity: 0.55; }
+.tn-pt-reach { font-size: 11.5px; color: var(--text-2); max-width: 160px; }
+.tn-pt.danger { border-color: var(--bad-fg); box-shadow: 0 0 0 1px var(--bad-fg); }
+.tn-badge { display: inline-block; align-self: flex-start; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--warn-bg); color: var(--warn-fg); border: 1px solid color-mix(in srgb, var(--warn-fg) 45%, transparent); }
+.tn-oc { border-style: dashed; justify-content: flex-start; gap: 3px; min-width: 190px; }
+.tn-oc.unset .tn-oc-line { color: var(--text-2); }
+.tn-oc.changed { border-color: var(--signal); border-style: solid; }
+.tn-oc-line { font-size: 13px; font-variant-numeric: tabular-nums; }
+.tn-oc-fused { font-size: 11.5px; }
+.tn-points-note { flex-basis: 100%; margin: 0; font-size: 12.5px; }
+.tn-warn { list-style: none; margin: 0 14px 6px; padding: 0; display: grid; gap: 4px; }
+.tn-warn li { padding: 5px 10px; border-radius: var(--radius-s); font-size: 13px; background: var(--warn-bg); color: var(--warn-fg); }
+.tn-warn li.bad { background: var(--bad-bg); color: var(--bad-fg); border: 1px solid color-mix(in srgb, var(--bad-fg) 50%, transparent); font-weight: 600; }
+.plan-warn li.bad { color: var(--bad-fg); font-weight: 600; }
+.plan-vccia { margin: 6px 0; padding: 8px 12px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--raised) 70%, transparent); border: 1px solid var(--line-soft); }
+.plan-turbo { margin-top: 10px; }
+
+.vccia-line { margin: 4px 0 8px; font-size: 17px; font-weight: 300; }
+.vccia-line strong { font-weight: 600; font-size: 22px; }
+.vccia-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-width: 640px; }
+.vccia-list li { display: grid; grid-template-columns: 180px 90px minmax(0, 1fr); gap: 10px; padding: 4px 10px; border-radius: 6px; align-items: baseline; }
+.vccia-list li.top { background: color-mix(in srgb, var(--signal) 12%, transparent); box-shadow: inset 3px 0 0 var(--signal); }
+.vccia-list li.plus { border-top: 1px solid var(--line-soft); border-radius: 0; margin-top: 4px; }
+.vc-val { text-align: right; }
+#tn-vccia-note { max-width: 100ch; font-size: 13px; }
+
+.turbo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px 24px; }
+.turbo-kind { padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; display: grid; gap: 8px; align-content: start; }
+.turbo-kind.changed { border-color: var(--signal); }
+.turbo-head { display: flex; align-items: center; gap: 8px; }
+.turbo-chart { max-width: 460px; }
+.turbo-svg { width: 100%; height: auto; display: block; border-radius: var(--radius-s); background: color-mix(in srgb, var(--die) 55%, transparent); }
+.turbo-sels { display: flex; flex-wrap: wrap; gap: 6px; }
+.turbo-sels .tn-pt { min-width: 84px; }
+.turbo-note { margin: 0; font-size: 12.5px; }
+.tb-grid { stroke: var(--line-soft); stroke-width: 1; }
+.tb-tick { font: 11px var(--sans); fill: var(--text-2); }
+.tb-line { fill: none; stroke-width: 2.4; stroke-linejoin: round; }
+.tb-line.k-P { stroke: var(--p-core); }
+.tb-line.k-E { stroke: var(--e-core); }
+.tb-line.tb-cur { stroke: var(--text-2); stroke-width: 1.6; stroke-dasharray: 5 4; opacity: 0.8; }
+.tb-dot { stroke: var(--surface); stroke-width: 1.5; }
+.tb-dot.k-P { fill: var(--p-core); }
+.tb-dot.k-E { fill: var(--e-core); }
+.tb-dot.changed { stroke: var(--text); stroke-width: 2; }
+
+.vc-pin.reach circle { fill: transparent; stroke: var(--u); stroke-width: 2; stroke-dasharray: 3 2.5; cursor: help; }
+.vc-pin.fused path { fill: var(--u); fill-opacity: 0.25; stroke: var(--text); stroke-width: 1.5; cursor: help; }
+.vc-pin.clamp circle { fill: var(--surface); stroke: var(--u); stroke-width: 2.5; cursor: help; }
+.cv-note { max-width: 110ch; font-size: 13px; margin: 6px 0 0; }
+.cv-note:empty { display: none; }
+
+@media (max-width: 860px) {
+  .turbo-grid { grid-template-columns: minmax(0, 1fr); }
+  .vccia-list li { grid-template-columns: minmax(0, 1fr) 80px; }
+  .vccia-list .vc-at { grid-column: 1 / -1; }
+}

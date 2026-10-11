@@ -62,7 +62,7 @@ class Fake:
         for inst in mem.INSTANCE_BASES.values():
             self.put_instance(inst, instance_words())
         self.put(mem.QCLK_REG, 108 | (0 << 8), 4)  # ratio 108 x 33.333 = 3600 MHz
-        self.put(mem.CROSS_REG, 36 << 12, 4)  # 36 x 2 x 100 = 7200 MT/s
+        self.put(mem.CROSS_REG, 18 << 12, 4)  # component 18 x factor 2 x BCLK 100 = 3600 MHz (memory-mchbar.md; "ratio 36" = 18 x 2)
         self.put(mem.BCLK_REG, (100000 << 32) | 100004, 8)
         self.put(mem.BW_REG, 115200 << 9, 4)
 
@@ -147,8 +147,17 @@ class MemTests(unittest.TestCase):
         self.assertEqual(set(r), {"available", "reason"})
         self.assertFalse(r["available"])
 
+    def test_cross_check_is_component_times_factor_times_bclk_without_halving(self) -> None:
+        # G-114 / memory-mchbar.md: MHz = [19:12] x (4 if bit 24 else 2) x BCLK. 18 x 2 x 100 = 3600 = 9 x 4 x 100; the old code halved and read 7200 for 36 << 12.
+        for word in (18 << 12, (9 << 12) | (1 << 24)):
+            self.f.put(mem.CROSS_REG, word, 4)
+            self.assertEqual(self.f.read()["cross_check"], {"agree": True, "mhz_a": 3600.0, "mhz_b": 3600.0})
+        self.f.put(mem.CROSS_REG, 36 << 12, 4)  # 7200 "MHz" is not the QCLK
+        cc = self.f.read()["cross_check"]
+        self.assertEqual((cc["agree"], cc["mhz_b"]), (False, 7200.0))
+
     def test_cross_check_disagree_and_invalid(self) -> None:
-        self.f.put(mem.CROSS_REG, 40 << 12, 4)
+        self.f.put(mem.CROSS_REG, 20 << 12, 4)  # 20 x 2 x 100 = 4000 MHz != 3600
         self.assertEqual(self.f.read()["cross_check"]["agree"], False)
         self.f.put(mem.CROSS_REG, 0xFFFFFFFF, 4)
         cc = self.f.read()["cross_check"]

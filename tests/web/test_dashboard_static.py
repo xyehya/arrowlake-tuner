@@ -195,7 +195,7 @@ class TestScript(unittest.TestCase):
         self.assertIn("Reset offsets to 0", HTML)                       # reset zeroes offsets only: the button says so
         self.assertNotIn("Reset to stock", HTML + JS)
         for check in ("NO_CPUFREQ", "LOAD_GENERATOR", "MEASURE_UNAVAILABLE", "JOURNAL_UNAVAILABLE", "CURVE_LIMIT", "EXISTS", "NO_SUCH_CURVE", "NO_READ",
-                      "NOTHING_TO_DO", "NO_ACCEPTED_STATE", "STEP_LIMIT", "SESSION_LIMIT", "BOOT_LIMIT", "POLICY_RANGE"):
+                      "NOTHING_TO_DO", "NO_ACCEPTED_STATE", "STEP_LIMIT", "SESSION_LIMIT", "BOOT_LIMIT", "POLICY_RANGE", "TURBO_ORDER"):
             self.assertRegex(JS, rf"\b{check}: \"", check)             # every detail.check has a sentence
         self.assertIn('chk === "NO_READ"', func_body("requestPlan"))     # NO_READ sends the operator to "Read tuning words"
         self.assertIn("omitted_units", JS)                               # records come in pieces; curves.get {id, units} merges them

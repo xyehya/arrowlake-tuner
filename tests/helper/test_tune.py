@@ -21,6 +21,12 @@ ADVANCED = REPO / "policies" / "advanced-2026-10-11.toml"
 ALL_P_53 = SimConfig.measured(per_point=True, reject_zero_fields=True, point_ratios=dict(POINT_RATIOS_ARL_S))  # every P-core has the favored cores' table
 
 
+def texts(plan: dict[str, Any]) -> list[str]:
+    """The ``text`` of every ``{code, text}`` warning of a tune.plan result."""
+    assert all(set(w) == {"code", "text"} for w in plan["warnings"]), plan["warnings"]
+    return [w["text"] for w in plan["warnings"]]
+
+
 def rows(*row: dict[str, Any], scope: str = "unit") -> dict[str, Any]:
     return {"scope": scope, "rows": list(row)}
 
@@ -72,7 +78,7 @@ class ReadTests(TuneCase):
         p0 = res["tune"]["P0"]["cpus"][0]
         self.assertEqual(p0["cpu"], 0)
         self.assertEqual([p["point"] for p in p0["points"]], list(range(9)))  # point 0 = the OC word, 1..8 the fused points
-        self.assertEqual(p0["points"][0], {"point": 0, "ratio": 57, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive"})  # CPU 0: 0x39
+        self.assertEqual(p0["points"][0], {"point": 0, "point_label": "OC (point 9)", "ratio": 57, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive"})  # CPU 0: 0x39
         self.assertEqual(res["tune"]["P1"]["cpus"][0]["points"][0]["ratio"], None)  # OC word 0x0: unset fields are null
         p5 = next(p for p in p0["points"] if p["point"] == 5)
         self.assertEqual((p5["ratio"], p5["offset_mv"]), (53, -49.805))  # the BIOS point offset the simulator carries (raw -51)
@@ -124,10 +130,10 @@ class PlanTests(TuneCase):
         self.assertEqual(p["expires_s"], 600)
         self.assertEqual(p["units"], ["P1"])
         self.assertEqual(p["after"]["P1"]["0"]["offset_mv"], round(VfWord.mv_to_offset_raw(-20) * 1000 / 1024, 3))
-        self.assertEqual(p["before"]["P1"]["0"], {"ratio": None, "offset_mv": 0.0, "v_target_v": None})
+        self.assertEqual(p["before"]["P1"]["0"], {"ratio": None, "offset_mv": 0.0, "v_target_v": None, "effective_v": None, "clamped_by": None})
         self.assertGreater(p["ops_needed"], 0)
         self.assertIsInstance(p["ops_left"], int)
-        self.assertTrue(any("effective offset" in w for w in p["warnings"]))
+        self.assertTrue(any("effective offset" in w for w in texts(p)))
 
     def test_points_by_ratio_need_a_read(self) -> None:
         h = self.boot()
@@ -138,11 +144,11 @@ class PlanTests(TuneCase):
     def test_a_ratio_the_unit_does_not_have_is_an_error_per_unit_and_a_skip_in_simple_scope(self) -> None:
         h = self.boot()
         self.read(h)
-        r = h.call("p1", "tune.plan", {"intent": rows(row("P1", points={"57": -10}))})  # the simulator's P1 table stops at 55
+        r = h.call("p1", "tune.plan", {"intent": rows(row("P1", points={"58": -10}))})  # F1: every P-core's table stops at 57
         self.assertEqual(error_code(r), "BAD_REQUEST")
-        self.assertIn("no V/F point at ratio 57", r["error"]["message"])
-        p = self.plan(h, rows(row("P", points={"57": -10, "53": -10}), scope="simple"))
-        self.assertTrue(any("P1 has no V/F point at ratio 57" in w for w in p["warnings"]))
+        self.assertIn("no V/F point at ratio 58", r["error"]["message"])
+        p = self.plan(h, rows(row("P", points={"58": -10, "53": -10}), scope="simple"))
+        self.assertTrue(any("P1 has no V/F point at ratio 58" in w for w in texts(p)))
 
     def test_policy_range_plus_minus_200_accepted_205_refused(self) -> None:
         h = self.boot()
@@ -285,7 +291,7 @@ class ApplyWordTests(TuneCase):
         self.read(h)
         plan = self.plan(h, rows(row("EC0", ratio=49)))
         self.assertFalse(any(s["kind"] == "write_msr" for s in plan["steps"]))
-        self.assertTrue(any("turbo table" in w and "not read" in w for w in plan["warnings"]))
+        self.assertTrue(any("turbo table" in w and "not read" in w for w in texts(plan)))
 
     def test_whole_apply_is_one_guarded_transaction_at_a_time(self) -> None:
         h = self.boot(ALL_P_53)
@@ -458,7 +464,7 @@ class ResetRestoreTests(TuneCase):
         self.read(h)
         plan = self.plan(h, {"reset": "stock"})
         self.assertIn("P4", plan["units"])
-        self.assertTrue(any("not changed" in w for w in plan["warnings"]))
+        self.assertTrue(any("not changed" in w for w in texts(plan)))
         self.apply_ok(h, plan)
         for cpu in range(8):
             self.assertEqual(self.word(cpu).offset_raw, 0, cpu)
@@ -491,7 +497,7 @@ class ResetRestoreTests(TuneCase):
         )
         h = self.boot(accepted_dir=acc)
         plan = self.plan(h, {"restore": "accepted"})  # no tune.read needed: the points carry expect_ratio
-        self.assertTrue(any("no tune.read" in w for w in plan["warnings"]))
+        self.assertTrue(any("no tune.read" in w for w in texts(plan)))
         self.assertEqual(sorted(plan["units"]), ["EC0", "P0"])
         self.apply_ok(h, plan)
         self.assertEqual(self.word(0, 6).offset_raw, VfWord.mv_to_offset_raw(-28))
@@ -518,7 +524,7 @@ class ResetRestoreTests(TuneCase):
         plan = self.plan(h, {"restore": "accepted"})
         self.assertEqual(set(plan["after"]), {*(f"P{i}" for i in range(8)), *(f"EC{i}" for i in range(4))})
         self.assertEqual(plan["after"]["P0"]["5"]["offset_mv"], round(VfWord.mv_to_offset_raw(-50) * 1000 / 1024, 3))  # p-step7: 53x -50 on all P
-        self.assertTrue(any("e-p6-split3, p-boot-ramp, p-step7" in w for w in plan["warnings"]))
+        self.assertTrue(any("e-p6-split3, p-boot-ramp, p-step7" in w for w in texts(plan)))
 
     def test_restore_without_accepted_state_is_a_named_refusal(self) -> None:
         h = self.boot()
@@ -538,7 +544,7 @@ class ProfilesTests(TuneCase):
         listed = h.call("l", "profiles.list", {})["result"]["profiles"]
         self.assertIn({"name": "my-p3", "source": "saved", "created": r["result"]["created"]}, listed)
         plan = self.plan(h, {"profile": "my-p3"})
-        self.assertTrue(any("saved profile my-p3" in w for w in plan["warnings"]))
+        self.assertTrue(any("saved profile my-p3" in w for w in texts(plan)))
         self.apply_ok(h, plan)
         self.assertEqual(self.word(3, 5).offset_raw, VfWord.mv_to_offset_raw(-61))
 

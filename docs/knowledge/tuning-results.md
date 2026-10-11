@@ -85,3 +85,10 @@ ratio (non-favored P-cores top out at 55×), `misma` = never settled at the targ
 | P7 | 0.690 | 0.719 | 0.811 | 1.041 | 1.271 | 1.376 | — | — |
 E clusters (8× 15× 23× 30× 40× 46×): EC0 0.775 0.775 mismatch 0.775 0.970 1.157 · EC1 0.775 0.775 mismatch 0.775 0.970 1.137 · EC2/EC3 0.775 0.775
 mismatch 0.775 0.963 1.137 (0.775 V = E-cluster VID floor up to 30×). Open: 57× never settles on P0/P3 under this method; E 23× never settles.
+
+### Re-measure with G-114 sampling + `tune.read` [MEASURED lnx 2026-10-11 19:06 UTC, curve `20261011T190606Z-d53n`]
+- P0 57× = **1.429 V** (5/11 at target) vs fused 0x09 1.4258 V; P3 56× 1.359 V (5/15), 57× missed (active cores); P5 55× and P7 55× (7/10) noisy.
+- E 47× and 48× VID == 46× VID on every cluster (EC0 1.157, EC1–3 1.137 V): 47–48× run on point 6 (F2 confirmed). E cpuinfo_max_freq 4.9 GHz
+  but 0x650 = 48×8 and 0x1C E = 48: 49× is not real (intel_pstate N→N−1 mapping).
+- `tune.read` (112 mailbox reads + 0x09/turbo): fused 0x09 per unit = platform-285k §4 exactly; 0x1AD 57,57,55×6 (counts 1..8); 0x650 48×8
+  (counts 1,2,3,4,6,8,12,16); favored 0x1C: P0/P3 57, others 55; P0 OC word 57× ("OC (point 9)"), all offsets 0.

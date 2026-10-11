@@ -131,9 +131,14 @@ class SimIoTests(unittest.TestCase):
         self.assertEqual(m.settled("P0", 5_700_000), 57)
         self.assertEqual(m.settled("P1", 5_700_000), 55)  # 56x / 57x unreachable except P0 / P3
         self.assertEqual(m.settled("EC0", 2_300_000), 22)  # the E quirk: cap = ratio gives one bin low ...
-        self.assertEqual(m.settled("EC0", 2_400_000), 23)  # ... cap = ratio + 1 gives the ratio
+        self.assertEqual(m.settled("EC0", 2_400_000), 24)  # F9: ... but for 23x the +1 cap lands on 24: 23x is not pinnable
+        self.assertEqual(m.settled("EC0", 2_500_000), 24)  # (cap 25 -> 24, the quirk)
+        self.assertEqual(m.settled("P4", 5_200_000), 51)  # F9: P 52x is not pinnable either
+        self.assertEqual(m.settled("P4", 5_300_000), 53)
         self.assertEqual(m.settled("EC0", 3_000_000), 30)
         self.assertEqual(m.settled("EC0", 4_600_000), 46)
+        self.assertEqual(m.settled("EC0", 4_800_000), 48)  # the E turbo table (0x650: 48x)
+        self.assertEqual((m.max_khz(0), m.max_khz(1), m.max_khz(8)), (5_700_000, 5_500_000, 4_800_000))
 
     def test_the_sim_wiring_lives_under_the_state_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

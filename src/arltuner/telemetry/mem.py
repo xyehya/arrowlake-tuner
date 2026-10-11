@@ -90,9 +90,10 @@ def _decode_clocks(qclk: int, cross: int, bclk: int, bw: int) -> dict[str, Any]:
     cross_mhz: float | None = None
     agree: bool | None = None
     if cross != 0xFFFFFFFF and bclk_mhz:
-        # 0x13D98 (empirical, memory-mchbar.md): ratio[19:12] x (4 if bit 24 else 2) x BCLK is the data rate in MT/s; QCLK = MT/s / 2. [UNVERIFIED reading of
-        # the doc's "MHz": on the fixture ratio 36 x 2 x 100 = 7200 MT/s = 2 x 3600 MHz, which is how it "agrees"]
-        cross_mhz = _bits(cross, 19, 12) * (4 if _bits(cross, 24, 24) else 2) * bclk_mhz / 2
+        # 0x13D98 (memory-mchbar.md, G-114): MHz = component[19:12] x factor x BCLK, factor 4 if bit 24 else 2, compared with the trained QCLK MHz as is
+        # (no halving). Fixture ratio on the reference machine: component x factor = 36 (= 18 x 2) -> 36 x 100 = 3600 MHz = QCLK. [MEASURED lnx 2026-10-11]
+        # for the 3600 MHz result; the raw [19:12] value on the machine is not captured (the unit test encodes 18).
+        cross_mhz = _bits(cross, 19, 12) * (4 if _bits(cross, 24, 24) else 2) * bclk_mhz
         agree = abs(cross_mhz - qclk_mhz) <= 1.0
     return {
         "mts": round(2 * qclk_mhz), "qclk_mhz": round(qclk_mhz, 3), "bclk_mhz": round(bclk_mhz, 3) if bclk_mhz is not None else None,
