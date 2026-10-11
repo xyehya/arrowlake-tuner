@@ -129,3 +129,11 @@ for an OC target below the top fused point; `stock` tagging ignores OC words; ac
 ### Page-driven write (headless Chrome, the GUI's own controls) [MEASURED lnx 2026-10-12 21:44 UTC]
 Tune (pre-populated from `tune.last`) → Per unit → P7 Per point → 55× −90.8 → −94.7 mV → Review → Apply: wrote `0xF3E00037`, read back equal;
 Restore accepted from the same page: 57 words read back as written (P7 `0xF4600037`). Audit operator `gui:uid1000`; no MCE.
+
+### Turbo-table writes and E OC 49× [MEASURED lnx 2026-10-12 ~23:10 UTC; no MCE throughout]
+- Turbo-only plans (plain MSR, read back equal): P `0x1AD` → `0x3637373737373939` (8-core bucket 54), E `0x650` → `0x2F30303030303030` (16-core
+  bucket 47) ⇒ 30 s all-core stress ran **P 54× / E 47×**; restored (`0x3737373737373939` / `0x3030303030303030`) ⇒ 55× / 48×.
+- EC1 OC ratio 49× @ 1.165 V: `0x0004A931` on CPUs 12–15, E table raised to `0x3131313131313131`, `0x1D` = 49 (read back equal). Measured (capped):
+  49× **1.1675 V**, 48× 1.1475, 47× 1.130 (linear between point 6 = 1.1125 with −25 mV and the OC point). HWP highest on CPU 12: 0x44 → 0x45,
+  `cpuinfo_max_freq` 4.9 → **5.0 GHz**, but **`scaling_max_freq` stays 4.9 GHz ⇒ uncapped load runs 48×** (intel_pstate N→N−1). After raising
+  `scaling_max_freq` to 5.0 GHz on CPUs 12–15: stress ran **49× (4901 MHz), 0 errors, 43 °C**. Reverted (48× @ 1.137, table 48×8, 4.9 GHz).

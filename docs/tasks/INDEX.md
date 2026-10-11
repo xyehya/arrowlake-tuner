@@ -27,5 +27,6 @@
 | G-123 | UX continuity: last read per boot (tune.last), profiles.get + compare/load, indicator budget, defaults | lnx | T0 | **merged** 2026-10-11 | G-121 |
 | G-124 | no-OC-point OC words always target 0; plan steps = sent ops | lnx | T0 | **merged** 2026-10-12 | G-122 |
 | G-125 | final polish: OC point in Simple grid, current caveat texts, no false 'not read' warning, unit cell | lnx | T0 | **merged** 2026-10-12 | G-124 |
+| G-126 | OC ratio raise lifts scaling_max_freq (and lowers on revert), respecting user caps and journals | lnx | T0 | ready 2026-10-12 | G-125 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
