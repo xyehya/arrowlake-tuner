@@ -2,7 +2,7 @@
 
 Skipped unless ``ARLTUNER_BROWSER_TESTS=1`` and Playwright (python) plus a Chrome/Chromium binary (``ARLTUNER_CHROME`` or ``/usr/bin/google-chrome``) exist.
 Asserts what static checks cannot: no console errors / CSP violations, every tab renders, the Curves chart fills while measuring, Tune can read, plan,
-confirm and apply in the fake, and the apply button stays disabled until the code is typed. No hardware, no real helper."""
+confirm and apply in the fake, and the Apply button is one click (no typed code). No hardware, no real helper."""
 from __future__ import annotations
 
 import os
@@ -61,10 +61,7 @@ class TestBrowser(unittest.TestCase):
                 page.locator(".tn-rowwrap").nth(0).locator("select.tn-sel").first.select_option("-45")
                 page.click("#btn-tn-plan")
                 page.wait_for_selector("#dlg-plan[open]")
-                self.assertTrue(page.locator("#plan-go").is_disabled())  # nothing typed yet
-                page.fill("#plan-typed", "CONFIRM WRONG1")
-                self.assertTrue(page.locator("#plan-go").is_disabled())
-                page.fill("#plan-typed", page.locator(".confirm-code").inner_text())
+                self.assertEqual(page.locator("#dlg-plan input").count(), 0)  # D-033 d: nothing to type
                 page.wait_for_function("!document.getElementById('plan-go').disabled")
                 page.click("#plan-go")
                 page.wait_for_selector(".plan-result .pill.s-ok", timeout=10000)

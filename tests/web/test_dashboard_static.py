@@ -165,17 +165,21 @@ class TestScript(unittest.TestCase):
         self.assertIn("const COST_HIGH = 124;", JS)
 
     def test_apply_is_only_sent_from_the_review_dialog_with_the_nonce(self):
-        """Exactly one call site; it sits in the confirm handler; it sends the plan id and CONFIRM + the nonce of that plan; and it is gated."""
+        """Exactly one call site; it sits in the Apply handler; it sends the plan id and CONFIRM + the nonce of that plan itself (D-033 d: one click, no
+        typing); and it is gated."""
         self.assertEqual(len(re.findall(r"\bapi\(\s*\"tune\.apply\"", JS)), 1)
         body = func_body("commitPlan")
         self.assertIn('api("tune.apply", { plan_id: P.res.plan_id, typed: "CONFIRM " + P.res.nonce })', body)
         self.assertIn('getElementById("plan-go").disabled', body)  # re-checks the dialog gate
         self.assertIn('P.state !== "review"', body)     # a plan is applied once, from its own dialog
         gate = func_body("updateModalGate")
-        for needle in ('P.typed !== "CONFIRM " + P.res.nonce', "planExpired()", "applyGate(P.res.ops_needed)"):
+        for needle in ("planExpired()", "applyGate(P.res.ops_needed)", 'P.state === "running"', "!changed"):
             self.assertIn(needle, gate)
-        self.assertEqual(len(re.findall(r"\bcommitPlan\b", JS)), 3)  # the definition, the Enter key in the code field, the Apply button
-        self.assertNotIn('typed: "CONFIRM " + P.typed', JS)
+        self.assertEqual(len(re.findall(r"\bcommitPlan\b", JS)), 2)  # the definition and the Apply button: no Enter-key shortcut, no typed code
+        self.assertNotIn("P.typed", JS)
+        self.assertNotIn("plan-typed", JS + HTML)
+        self.assertNotIn('addEventListener("keydown"', func_body("renderPlanFoot"))
+        self.assertIn('getElementById("plan-cancel")', func_body("openPlanDialog"))  # the dialog opens on the safe button
         # the mailbox gate for apply has the same needles as the read gate
         ag = func_body("applyGate")
         for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < ops"):
@@ -226,8 +230,8 @@ class TestScript(unittest.TestCase):
         self.assertNotRegex(HTML, r'type="number"')
         for sel in ("offSel", "vtSel", "rSel"):  # the three row controls are <select>s
             self.assertRegex(JS, rf'const {sel} = el\("select"')
-        # the only text inputs: names (curve, profile) and the typed confirmation
-        self.assertEqual(sorted(re.findall(r'el\("input", "([\w-]+)"\)', JS)), ["confirm-input", "inline-edit"])
+        # the only text inputs made by the script: the curve rename (the confirmation is one click now)
+        self.assertEqual(sorted(re.findall(r'el\("input", "([\w-]+)"\)', JS)), ["inline-edit"])
         self.assertNotRegex(JS, r'type = "number"|type = "range"')
 
     def test_sse_events_handled_are_contract_events(self):

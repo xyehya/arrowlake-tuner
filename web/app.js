@@ -1,7 +1,7 @@
 "use strict";
 // arrowlake-tuner web UI (G-105, redesigned in G-110, SPEC-v3 pages in G-113): Dashboard, Curves, Tune, Profiles, System, Audit.
-// The only writes this page can start are in Tune: tune.plan opens a review dialog, and tune.apply is sent from that dialog's confirm button, carrying the
-// plan id and the typed "CONFIRM <nonce>". Everything else is a read, a cpufreq-only measurement, or curve/profile bookkeeping.
+// The only writes this page can start are in Tune: tune.plan opens a review dialog, and tune.apply is sent from that dialog's Apply button (D-033 d: one
+// click, no typing), carrying the plan id and "CONFIRM <nonce>" of that plan. Everything else is a read, a cpufreq-only measurement, or curve/profile bookkeeping.
 // All data is written with textContent; no HTML strings are ever parsed and there is no inline style: geometry and colour go through SVG attributes
 // and classes only (CSP style-src 'self'). Contracts 8 and 9: docs/ARCHITECTURE.md.
 (function () {
@@ -671,11 +671,18 @@
     return ch;
   }
 
-  function niceRange(lo, hi, zero) {
+  // Minimum y-spans (G-119): 1 degree or 1 W of noise must not draw as a cliff. A narrower range is widened around its middle to the span.
+  const MIN_SPAN = { temp: 10, power: 20, mhz: 500, volt: 0.05, gbs: 2 };
+  function niceRange(lo, hi, zero, minSpan) {
     if (zero) lo = Math.min(lo, 0);
     if (hi - lo < 1e-9) { const d = Math.abs(hi) > 1 ? Math.abs(hi) * 0.05 : 0.05; lo -= d; hi += d; }
     const pad = (hi - lo) * 0.08;
-    return [zero && lo >= 0 ? lo : lo - pad, hi + pad];
+    let a = zero && lo >= 0 ? lo : lo - pad, b = hi + pad;
+    if (isNum(minSpan) && b - a < minSpan) {
+      if (zero && a >= 0) b = a + minSpan;
+      else { const m = (a + b) / 2; a = m - minSpan / 2; b = m + minSpan / 2; }
+    }
+    return [a, b];
   }
 
   function fmtVal(v, digits) { return v.toFixed(digits); }
@@ -708,7 +715,7 @@
       ch.read.title = cfg.reason();
       return;
     }
-    const r = cfg.range ? [Math.min(cfg.range[0], lo), Math.max(cfg.range[1], hi)] : niceRange(lo, hi, cfg.zero === true);
+    const r = cfg.range ? [Math.min(cfg.range[0], lo), Math.max(cfg.range[1], hi)] : niceRange(lo, hi, cfg.zero === true, cfg.minSpan);
     ch.lo = r[0]; ch.hi = r[1];
     ch.yHi.textContent = fmtVal(ch.hi, cfg.digits);
     ch.yLo.textContent = fmtVal(ch.lo, cfg.digits);
@@ -748,14 +755,14 @@
     ch.read.title = "";
   }
 
-  function sparkline(svgId, getter, digits) {
+  function sparkline(svgId, getter, digits, minSpan) {
     const svg = $(svgId);
     const now = Date.now(), t0 = now - SPARK_MS;
     const pts = V.hist.filter((s) => s.t >= t0);
     let lo = Infinity, hi = -Infinity;
     for (const s of pts) { const v = getter(s); if (isNum(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
     if (!(lo <= hi)) { svg.replaceChildren(); return; }
-    const r = niceRange(lo, hi, false);
+    const r = niceRange(lo, hi, false, minSpan);
     let d = "", prevT = null;
     for (const s of pts) {
       const v = getter(s);
@@ -779,24 +786,24 @@
   }
 
   function initCharts() {
-    makeChart("ch-ov-power", { title: "Package power", unit: "W", digits: 1,
+    makeChart("ch-ov-power", { title: "Package power", unit: "W", digits: 1, minSpan: MIN_SPAN.power,
       series: [{ label: "Package", get: (s) => s.pkg, cls: "s1" }], reason: rsn(lastPower("package")) });
-    makeChart("ch-ov-temp", { title: "Hottest temperature", unit: "°C", digits: 0,
+    makeChart("ch-ov-temp", { title: "Hottest temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp,
       series: [{ label: "Hottest", get: (s) => s.hot, cls: "s2" }], reason: hotReason });
-    makeChart("ch-power", { title: "Power", unit: "W", digits: 1,
+    makeChart("ch-power", { title: "Power", unit: "W", digits: 1, minSpan: MIN_SPAN.power,
       series: [{ label: "Package", get: (s) => s.pkg, cls: "s1" }, { label: "Core", get: (s) => s.corew, cls: "s2" }], reason: rsn(lastPower("package")) });
-    makeChart("ch-hot", { title: "Hottest temperature", unit: "°C", digits: 0,
+    makeChart("ch-hot", { title: "Hottest temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp,
       series: [{ label: "Hottest", get: (s) => s.hot, cls: "s2" }], reason: hotReason });
-    makeChart("ch-vcore", { title: "Vcore (board sensor)", unit: "V", digits: 3,
+    makeChart("ch-vcore", { title: "Vcore (board sensor)", unit: "V", digits: 3, minSpan: MIN_SPAN.volt,
       series: [{ label: "Vcore", get: (s) => s.vcore, cls: "s1" }], reason: rsn(() => V.last.vcore) });
-    makeChart("ch-dram", { title: "DRAM bandwidth", unit: "GB/s", digits: 1,
+    makeChart("ch-dram", { title: "DRAM bandwidth", unit: "GB/s", digits: 1, minSpan: MIN_SPAN.gbs,
       series: [{ label: "Read", get: (s) => s.dr, cls: "s1" }, { label: "Write", get: (s) => s.dw, cls: "s2" }], reason: rsn(lastDram("read")) });
     const cd = (k) => (s) => (V.selected !== null && isObj(s.cores[V.selected]) ? s.cores[V.selected][k] : null);
     const cdr = (k) => () => coreReading(V.selected, k);
-    makeChart("ch-cd-mhz", { title: "Clock", unit: "MHz", digits: 0, series: [{ label: "Clock", get: cd("mhz"), cls: "s1" }], reason: rsn(cdr("mhz")) });
+    makeChart("ch-cd-mhz", { title: "Clock", unit: "MHz", digits: 0, minSpan: MIN_SPAN.mhz, series: [{ label: "Clock", get: cd("mhz"), cls: "s1" }], reason: rsn(cdr("mhz")) });
     makeChart("ch-cd-busy", { title: "Busy", unit: "%", digits: 1, range: [0, 100], series: [{ label: "Busy", get: cd("busy"), cls: "s1" }], reason: rsn(cdr("busy")) });
-    makeChart("ch-cd-vid", { title: "VID", unit: "V", digits: 3, series: [{ label: "VID", get: cd("vid"), cls: "s1" }], reason: rsn(cdr("vid")) });
-    makeChart("ch-cd-temp", { title: "Temperature", unit: "°C", digits: 0, series: [{ label: "Temp", get: cd("temp"), cls: "s2" }], reason: rsn(cdr("temp")) });
+    makeChart("ch-cd-vid", { title: "VID", unit: "V", digits: 3, minSpan: MIN_SPAN.volt, series: [{ label: "VID", get: cd("vid"), cls: "s1" }], reason: rsn(cdr("vid")) });
+    makeChart("ch-cd-temp", { title: "Temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp, series: [{ label: "Temp", get: cd("temp"), cls: "s2" }], reason: rsn(cdr("temp")) });
   }
 
   // ---- Cores tab -------------------------------------------------------------------------------------------------------------------
@@ -910,7 +917,7 @@
       setCell(ref.vid, coreReading(c.cpu, "vid"), 3);
       setCell(ref.temp, coreReading(c.cpu, "temp"), 0);
       if (!ref.spark.id) ref.spark.id = "sp-core-" + c.cpu;
-      if (!ref.cells.spark.hidden) sparkline(ref.spark.id, (s) => (isObj(s.cores[c.cpu]) ? s.cores[c.cpu].mhz : null), 0);
+      if (!ref.cells.spark.hidden) sparkline(ref.spark.id, (s) => (isObj(s.cores[c.cpu]) ? s.cores[c.cpu].mhz : null), 0, MIN_SPAN.mhz);
       ref.tr.setAttribute("aria-selected", V.selected === c.cpu ? "true" : "false");
     }
     // sorting: missing readings always go last; the header carries aria-sort
@@ -990,7 +997,7 @@
       if (!x.ok) li.append(el("span", "temp-why", x.title));
       return li;
     }));
-    keys.forEach((k, i) => sparkline("sp-temp-" + i, (s) => (s.temps[k] === undefined ? null : s.temps[k]), 0));
+    keys.forEach((k, i) => sparkline("sp-temp-" + i, (s) => (s.temps[k] === undefined ? null : s.temps[k]), 0, MIN_SPAN.temp));
   }
 
   // ---- render scheduling: only the visible view draws ------------------------------------------------------------------------------
@@ -1000,12 +1007,12 @@
         renderDie();
         renderChart(charts["ch-ov-power"]);
         renderChart(charts["ch-ov-temp"]);
-        sparkline("sp-pkgw", (s) => s.pkg, 1);
-        sparkline("sp-corew", (s) => s.corew, 1);
-        sparkline("sp-vcore", (s) => s.vcore, 3);
-        sparkline("sp-temp", (s) => s.hot, 0);
-        sparkline("sp-mhz", (s) => s.top, 0);
-        sparkline("sp-dram", (s) => (isNum(s.dr) && isNum(s.dw) ? s.dr + s.dw : null), 1);
+        sparkline("sp-pkgw", (s) => s.pkg, 1, MIN_SPAN.power);
+        sparkline("sp-corew", (s) => s.corew, 1, MIN_SPAN.power);
+        sparkline("sp-vcore", (s) => s.vcore, 3, MIN_SPAN.volt);
+        sparkline("sp-temp", (s) => s.hot, 0, MIN_SPAN.temp);
+        sparkline("sp-mhz", (s) => s.top, 0, MIN_SPAN.mhz);
+        sparkline("sp-dram", (s) => (isNum(s.dr) && isNum(s.dw) ? s.dr + s.dw : null), 1, MIN_SPAN.gbs);
       } else if (V.sub === "cores") {
         renderCoreRows();
         renderCoreSelection();
@@ -1437,7 +1444,7 @@
       let ylo = Math.min(...ys), yhi = Math.max(...ys);
       if (model.band) for (const b of model.band) { ylo = Math.min(ylo, b.lo); yhi = Math.max(yhi, b.hi); }
       if (model.ymode === "mv") { ylo = Math.min(ylo, 0); yhi = Math.max(yhi, 0); }
-      if (yhi - ylo < (model.ymode === "mv" ? 4 : 0.02)) { const m = (yhi + ylo) / 2, d = model.ymode === "mv" ? 2 : 0.01; ylo = m - d; yhi = m + d; }
+      if (yhi - ylo < (model.ymode === "mv" ? 4 : MIN_SPAN.volt)) { const m = (yhi + ylo) / 2, d = model.ymode === "mv" ? 2 : MIN_SPAN.volt / 2; ylo = m - d; yhi = m + d; }
       const step = niceStep(yhi - ylo, 6);
       ch.yDom = [Math.floor(ylo / step) * step, Math.ceil(yhi / step) * step];
       if (ch.yDom[1] - ch.yDom[0] < step) ch.yDom[1] += step;
@@ -1477,7 +1484,15 @@
         const p = sv("path", { d: s.pts.map((q, i) => (i ? "L" : "M") + ch.sx(q.mhz).toFixed(1) + " " + ch.sy(q.v).toFixed(1)).join("") }, cls);
         lines.append(p);
         ch.lineEls[s.key] = p;
-        if (s.pts.length <= 24 && !s.dash) for (const q of s.pts) lines.append(sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: 3 }, "vc-dot u-" + s.unit));
+        if (s.pts.length <= 24 && !s.dash) {
+          const marked = s.pts.some((q) => isFusedPoint(q.fused));   // fused points filled and larger, in-between ratios small and quiet
+          for (const q of s.pts) {
+            const fused = isFusedPoint(q.fused);
+            const dot = sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: !marked ? 3 : fused ? 4.5 : 2 }, "vc-dot u-" + s.unit + (marked ? (fused ? " fused" : " between") : ""));
+            if (marked && fused) { const t = sv("title"); t.textContent = s.unit + " " + q.mhz / 100 + "x: " + fusedLabel(q.fused); dot.append(t); }
+            lines.append(dot);
+          }
+        }
         if (s.live) {
           const last = s.pts[s.pts.length - 1];
           lines.append(sv("circle", { cx: ch.sx(last.mhz).toFixed(1), cy: ch.sy(last.v).toFixed(1), r: 7 }, "vc-head u-" + s.unit));
@@ -1643,12 +1658,18 @@
   }
   function curveTitle(c) { return (c.name || c.id) + " · " + fmtDate(c.created) + " · " + (c.mode || "?"); }
 
+  // G-118: a measured point carries fused_point (1-based int, or "oc") when its ratio is one of the unit's fused V/F points; the key is absent for the
+  // ratios in between. A record without the key anywhere (an older curve) draws every dot the same way, as before.
+  function isFusedPoint(x) { return x === "oc" || (isNum(x) && x >= 1); }
+  function fusedLabel(x) { return x === "oc" ? "OC point" : "fused point " + x; }
+
   // measured points of one unit: [{ratio, mhz, v, vmin, vmax, kept, total, status}] sorted by frequency; unmeasured / unreachable ones are left out
   function recPoints(rec, unit) {
     const u = isObj(rec) && isObj(rec.units) ? rec.units[unit] : null;
     const pts = isObj(u) && Array.isArray(u.points) ? u.points : [];
     return pts.filter((p) => isObj(p) && p.status !== "mismatch" && p.status !== "unreachable" && isNum(p.vid_v) && isNum(p.ratio))
-      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status }))
+      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status,
+        fused: isFusedPoint(p.fused_point) ? p.fused_point : null }))
       .sort((a, b) => a.mhz - b.mhz);
   }
   function recAllPoints(rec, unit) {
@@ -1728,7 +1749,7 @@
         const pts = pa.map((p) => { const at = interpAt(pb, p.mhz); return at ? { mhz: p.mhz, v: (p.v - at.v) * 1000 } : null; }).filter(Boolean);
         if (pts.length) model.series.push({ key: u, unit: u, label: label, pts: pts });
       } else {
-        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v })), live: CV.live !== null && CV.liveHead === u });
+        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v, fused: p.fused })), live: CV.live !== null && CV.liveHead === u });
         if (b) {
           const pb = recPoints(b, u);
           if (pb.length) model.series.push({ key: u + ":cmp", unit: u, label: u + " (compare)", pts: pb.map((p) => ({ mhz: p.mhz, v: p.v })), dash: true });
@@ -1783,6 +1804,10 @@
     } else if (baselineId() && a) base = "Stock baseline: " + (CV.list.find((c) => c.id === baselineId()) || {}).name + ". Predictions in Tune are made on it.";
     else base = "No curve is marked as the stock baseline yet. Tune predicts the effective voltage on it; set one in the Library.";
     setText("cv-base-note", base);
+    const stockPill = $("cv-stock");
+    const isStock = !!a && CV.live === null && tuningKind(a) === "stock";
+    stockPill.hidden = !isStock;
+    if (isStock) { stockPill.textContent = "stock = fused table as applied"; stockPill.title = "Measured with every offset at 0: the voltages are the CPU's fused V/F table as the CPU applies it."; }
     const un = [];
     if (a) for (const u of UNIT_IDS) {
       if (!CV.drawn.has(u)) continue;
@@ -2121,6 +2146,7 @@
     if (!CV.live) CV.live = { id: "live", name: "Measuring", mode: "?", units: {}, live: true };
     if (typeof ev.unit !== "string" || UNIT_IDS.indexOf(ev.unit) < 0 || !isNum(ev.ratio)) return;
     const u = CV.live.units[ev.unit] || (CV.live.units[ev.unit] = { cpus: unitCpus(ev.unit), points: [] });
+    if (ev.retry === true) { const i = u.points.findIndex((q) => q.ratio === ev.ratio); if (i >= 0) u.points.splice(i, 1); }   // G-118: a retry replaces the first attempt
     u.points.push({ ratio: ev.ratio, mhz: isNum(ev.mhz) ? ev.mhz : ev.ratio * 100, vid_v: isNum(ev.vid_v) ? ev.vid_v : null, status: typeof ev.status === "string" ? ev.status : "ok" });
     CV.liveHead = ev.status === "ok" ? ev.unit : CV.liveHead;
     paintCurves();
@@ -2169,7 +2195,7 @@
 
   // The tuning state recorded with a curve: "words" (read this boot) or "unknown" (no read this boot, so offsets are not known).
   function tuningWords(kind) {
-    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock" : "Tuning state unknown (no 'Read tuning words' this boot)";
+    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock = fused table as applied (every offset 0)" : "Tuning state unknown (no 'Read tuning words' this boot)";
   }
 
   function initCurves() {
@@ -3117,15 +3143,15 @@
   }
 
   function openPlanDialog(res, intent) {
-    const P = { res: res, intent: intent, title: describeIntent(intent), state: "review", typed: "", issued: Date.now(), diff: planDiff(res), readback: null };
+    const P = { res: res, intent: intent, title: describeIntent(intent), state: "review", issued: Date.now(), diff: planDiff(res), readback: null };
     T.plan = P;
     setText("dlg-plan-title", P.title);
     renderPlanBody();
     renderPlanFoot();
     openDialog($("dlg-plan"));
     updateModalGate();
-    const inp = document.getElementById("plan-typed");
-    if (inp) inp.focus();
+    const first = document.getElementById("plan-cancel");  // focus the safe button: Enter must never be one keystroke from a write
+    if (first) first.focus();
   }
 
   function stepKinds(steps) {
@@ -3364,17 +3390,8 @@
       fill(foot, nodes);
       return;
     }
-    const code = "CONFIRM " + res.nonce;
     const box = el("div", "confirm-box");
-    const lab = el("label", "confirm-label");
-    lab.htmlFor = "plan-typed";
-    lab.append(document.createTextNode("To write this to the CPU, type "), el("code", "confirm-code", code));
-    const inp = el("input", "confirm-input");
-    inp.type = "text"; inp.id = "plan-typed"; inp.autocomplete = "off"; inp.spellcheck = false; inp.maxLength = 32; inp.value = P.typed;
-    inp.setAttribute("aria-describedby", "plan-why");
-    inp.addEventListener("input", () => { P.typed = inp.value; updateModalGate(); });
-    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commitPlan(); } });
-    box.append(lab, inp);
+    box.append(el("p", "confirm-label", "Apply sends this plan once. Its confirmation code is single-use and expires; the helper checks it."));
     const why = el("p", "muted confirm-why");
     why.id = "plan-why";
     why.setAttribute("aria-live", "polite");
@@ -3403,7 +3420,6 @@
     if (P.state === "running") msg = "Applying. This window closes when it is done.";
     else if (!changed) msg = "Nothing would change.";
     else if (planExpired()) msg = "This plan expired. Close this window and review again.";
-    else if (P.typed !== "CONFIRM " + P.res.nonce) msg = "Type the confirmation code exactly as shown.";
     else msg = applyGate(P.res.ops_needed);
     go.disabled = msg !== "";
     why.textContent = msg === "" ? "Ready. This sends " + (isNum(P.res.ops_needed) ? P.res.ops_needed : "the planned") + " WRMSR requests." : msg;

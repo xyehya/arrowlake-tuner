@@ -21,7 +21,7 @@
       <rect x="13" y="13" width="5" height="5" rx="1" class="bm-p"/>
     </svg>
     <span class="wordmark">arrowlake<b>tuner</b></span>
-    <span class="ro-tag" id="mode-tag" title="Writes happen only from the review dialog in Tune, after you type the confirmation code.">reading preflight</span>
+    <span class="ro-tag" id="mode-tag" title="Writes happen only from the review dialog in Tune, after you press Apply in the review window.">reading preflight</span>
   </div>
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button type="button" role="tab" id="tab-dashboard" aria-controls="panel-dashboard" aria-selected="true">Dashboard</button>
@@ -221,7 +221,7 @@
         </div>
         <div class="legend-chips" id="cv-legend" role="group" aria-label="Units drawn. Press to toggle; hold Shift to show only one."></div>
         <div class="vfchart-host" id="cv-chart"></div>
-        <p class="muted cv-note" id="cv-base-note"></p>
+        <p class="muted cv-note"><span class="pill s-ok" id="cv-stock" hidden></span> <span id="cv-base-note"></span></p>
         <p class="muted cv-note" id="cv-unreach"></p>
       </div>
       <div id="cv-table-wrap" hidden>
@@ -258,7 +258,7 @@
       <ol class="tn-steps" id="tn-steps">
         <li><strong>Read</strong> the tuning words the CPU holds now.</li>
         <li><strong>Choose</strong> a voltage offset, an OC target voltage or an OC ratio, per unit or for all.</li>
-        <li><strong>Review</strong> the before and after, type the confirmation code, then apply. Each word is read back.</li>
+        <li><strong>Review</strong> the before and after, then press Apply. Each word is read back.</li>
       </ol>
       <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. About 112 to 124 operations of the <span id="tn-left">n/a</span> left this boot.</p>
       <p id="tn-reason" class="muted"></p>

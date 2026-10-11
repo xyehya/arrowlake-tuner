@@ -500,6 +500,8 @@ th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color:
 .has-hot .vc-line:not(.hot) { opacity: 0.22; }
 .vc-line.hot { stroke-width: 3.8; opacity: 1; filter: drop-shadow(0 0 5px var(--u)); }
 .vc-dot { fill: var(--u); stroke: var(--surface); stroke-width: 1.5; }
+.vc-dot.between { stroke-width: 0.8; fill-opacity: 0.55; }
+.vc-dot.fused { stroke: var(--text); stroke-width: 1.2; }
 .vc-head { fill: var(--u); fill-opacity: 0.25; stroke: var(--u); stroke-width: 2; }
 .vc-marker circle { fill: var(--u); stroke: var(--surface); stroke-width: 2; }
 .vc-marker.hollow circle { fill: transparent; stroke: var(--u); stroke-width: 2.5; }
@@ -639,8 +641,6 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .tbl-turbo th[scope="row"], .tbl-turbo tbody th { font-weight: 500; color: var(--text); white-space: nowrap; }
 .confirm-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; flex: 1 1 320px; }
 .confirm-label { color: var(--text-2); }
-.confirm-code { font-family: var(--mono); font-size: 16px; color: var(--warn-fg); background: var(--warn-bg); padding: 2px 8px; border-radius: 6px; letter-spacing: 0.06em; }
-.confirm-input { font-family: var(--mono); letter-spacing: 0.06em; width: 17ch; }
 .confirm-why { flex: 1 1 100%; margin: 0; order: 3; }
 
 /* ---- wide windows: let the chart breathe ---- */
