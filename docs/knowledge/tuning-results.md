@@ -112,3 +112,9 @@ mismatch 0.775 0.963 1.137 (0.775 V = E-cluster VID floor up to 30×). Open: 57�
 | Restore accepted (profiles/CURRENT, 172 ops, 57 read-back rows) | all match | accepted_match true on 10/12; CPU 0 = `0x5B439` vs accepted `0x39` (XTU-shaped, same V), CPU 12 = EC1 OC point (cannot write 0; clears on reboot) |
 Planner issues found (G-120): write offset-only OC words when no OC point exists; spurious CLAMPED on untouched 57× points; no CLAMPED warning
 for an OC target below the top fused point; `stock` tagging ignores OC words; accepted compare should treat `0x5B439`≡`0x39`-class XTU words.
+
+## Stress screens on hardware (v3 Stress tab backend) [MEASURED lnx 2026-10-11 ~20:30 UTC, accepted tuning applied]
+- First CPU run failed instantly: stress-ng as the user with cwd `/` ⇒ "temp-path '.' must be readable and writeable" (fixed G-121: `--temp-path
+  /run/user/<uid>`). Memory: `stressapptest -s 30 -M 1024 -W` as `yk`, 30 s, 0 errors, 59 °C, 143 W.
+- CPU integer, all 24 CPUs, 60 s: 0 errors, P0–P7 55× (5494–5499 MHz), E 48× (4801 MHz), max 67 °C, 170 W, MCE 0, health clean.
+- CPU vector-math, P0–P3 capped at 50×, 30 s: all at 50× (4993–5000 MHz), `cap_valid` true, 70 °C, 85 W; caps/EPP restored (5.7 GHz, balance_performance).
