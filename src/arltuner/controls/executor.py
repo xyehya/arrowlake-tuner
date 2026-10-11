@@ -266,7 +266,8 @@ def apply_profile(
     except _Stop as stop:
         return _report(profile, guard, results, None, warnings, stop, policy)
 
-    assert misc_word is not None
+    mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14
+    assert misc_word is not None or not mailbox
     baseline = {
         cpu: CoreReadings(
             vf=VfWord.from_u32(w[StepKind.READ_VF]),
@@ -281,7 +282,7 @@ def apply_profile(
         profile,
         topology,
         baseline,
-        per_core_enabled=bool(misc_word & PERCORE_ENABLE_BIT),
+        per_core_enabled=None if misc_word is None else bool(misc_word & PERCORE_ENABLE_BIT),
         policy=policy,
         misc_word=misc_word,
         msr_words=msr_words,

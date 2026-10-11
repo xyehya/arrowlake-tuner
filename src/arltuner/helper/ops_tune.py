@@ -1265,9 +1265,9 @@ def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[Curv
 def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
     words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``."""
-    steps: list[dict[str, Any]] = [{"kind": StepKind.WRITE_PERCORE_ENABLE.value, "conditional": True}]
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
+    steps: list[dict[str, Any]] = [{"kind": StepKind.WRITE_PERCORE_ENABLE.value, "conditional": True}] if (targets or pts) else []  # G-117: none for a table-only plan
     for p in pts:
         steps.append({"kind": StepKind.WRITE_VF_POINT.value, "unit": unit_of_cpu(topology, p.cpu), "cpu": p.cpu, "point": p.point, "offset_mv": p.offset_mv})
     for t in targets:
@@ -1278,7 +1278,7 @@ def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[st
         for key in ("e", "p"):
             if getattr(profile.turbo, key) is not None:
                 steps.append({"kind": StepKind.WRITE_MSR.value, "table": key})
-    reads = 1 + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)
+    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)
     total = len(steps)
     listed = [{"n": i, **s} for i, s in enumerate(steps[:_MAX_STEPS_LISTED], start=1)]
     return listed, total, reads
@@ -1336,15 +1336,6 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     resolved = resolve_intent(helper, intent, policy, topology)
     profile = resolved.profile
     _check_turbo_order(profile)
-    if not profile.entries and not profile.points:
-        # G-114 gap: the controls planner (controls/planner.py, "the profile has no targets") cannot plan or apply a table write without a core / point
-        # write beside it, and controls/ is not part of this task. The table was range- and order-checked above; refuse instead of failing at apply.
-        raise OpError(
-            REFUSED,
-            "a turbo-table-only plan is not supported yet: the controls planner needs at least one core or point write in the same plan. Add a row (it may "
-            "change nothing the operator cares about) or wait for the planner change. Nothing was sent.",
-            {"check": "TURBO_ONLY_UNSUPPORTED"},
-        )
     used, budget = helper.budget.snapshot()
     ops_left = None if used is None or budget is None else max(budget - used, 0)
     try:
@@ -1355,7 +1346,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    ops_needed = count_operations(targets, None, tables, len(points)) if (targets or points) else 0
+    ops_needed = count_operations(targets, None, tables, len(points)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last)
     steps, writes, reads = _predicted_steps(profile, topology)

@@ -193,7 +193,7 @@ def resolve_targets(profile: Profile, topology: Topology) -> tuple[Target, ...]:
                     offset_mv=setting.offset_mv,
                 )
             )
-    if not targets and not profile.points:
+    if not targets and not profile.points and profile.turbo is None:  # G-117: a [turbo]-only plan has no mailbox target
         raise PlanError("the profile has no targets")
     return tuple(targets)
 
@@ -238,7 +238,16 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
     ``n_points`` (T-025): CPU x point offset targets of the profile; each is one ``0x10 P2`` read, one ``0x11 P2`` write and its read-back (3 WRMSRs). With
     ``n_points > 0`` the core ``targets`` may be empty (a point-only profile).
 
+    G-117: with no targets, no points and ``msr_writes > 0`` (a turbo-table-only plan) nothing touches the mailbox: no ``0x14`` read, no ``0x15`` write; the
+    count is the plain-MSR writes alone.
+
     ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves."""
+    if isinstance(msr_writes, int) and not isinstance(msr_writes, bool) and msr_writes > 0 and n_points == 0 and not isinstance(targets, int):
+        try:
+            if not tuple(targets):
+                return msr_writes
+        except TypeError:
+            pass
     if isinstance(n_points, bool) or not isinstance(n_points, int) or n_points < 0:
         raise ValueError(f"n_points must be an int >= 0, got {n_points!r}")
     if isinstance(targets, int) and not isinstance(targets, bool):
@@ -398,6 +407,8 @@ def read_steps(
                     len(steps) + 1, StepKind.READ_MSR, write_cpu, 0, 0, 0, 0, mreq.purpose, what, verdict=predict_msr(policy, mreq, None), msr=msr
                 )
             )
+    if not points and not targets:  # G-117: a turbo-table-only plan reads the plain MSRs only; no mailbox request, no 0x14
+        return tuple(steps)
     number = len(steps) + 1
     first_cpu = points[0].cpu if points else targets[0].cpu  # 0x14 is package-wide: read it on the first CPU the plan touches
     req = Request(first_cpu, int(Cmd.MISC_GLOBAL_CONFIG_READ), 0, 0, 0, "apply: read PerCore Voltage Enable state (0x14) before any write")
@@ -644,8 +655,9 @@ def build_plan(
             raise PlanError(f"no baseline reading of MSR {msr:#x} for the profile's turbo table")
     steps = list(read_steps(targets, policy, profile, topology))
     number = len(steps)
-    first_cpu = point_targets[0].cpu if point_targets else targets[0].cpu
-    if per_core_enabled is not True:
+    mailbox = bool(targets or point_targets)  # G-117: False for a turbo-table-only plan (no 0x14, no 0x15, no mailbox word)
+    first_cpu = point_targets[0].cpu if point_targets else (targets[0].cpu if targets else 0)
+    if mailbox and per_core_enabled is not True:
         number += 1
         old_word = 0 if misc_word is None else misc_word
         # percore_enable_only is satisfied by construction (new data == baseline | 0x8); evaluate it against the known word, else 0.
@@ -902,7 +914,8 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
     for step in read_steps(targets, policy, profile, topology):
         if not step.verdict.allowed:
             refusals.append(PredictedRefusal(step.number, step.cpu, step.cmd, step.verdict.reason, step.verdict.detail, step.msr))
-    number = 2 + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy))  # reads are 1..N; the worst case puts the 0x15 write right after
+    mailbox = bool(targets or point_targets)  # G-117: a turbo-table-only plan has no 0x14 read and no 0x15 write
+    number = (2 if mailbox else 0) + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy))  # reads are 1..N; the worst case puts the 0x15 write right after
     for pt in point_targets:  # T-025: the point writes come first; the address checks and the offset window are decidable before the words are read
         number += 1
         _, verdict = _address_verdict(policy, Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, 0, "preflight"))
