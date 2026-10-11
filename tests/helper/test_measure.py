@@ -30,7 +30,7 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(rec["units"]["EC2"]["cpus"], [16, 17, 18, 19])
         self.assertEqual([p["ratio"] for p in rec["units"]["P1"]["points"]], [8, 20, 30, 48, 53, 55, 56, 57])
         self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], [8, 15, 23, 30, 40, 46, 47, 48])  # F9: + the max turbo bins
-        self.assertEqual(set(rec["units"]["P0"]["points"][0]), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status"})  # no reason on an ok point
+        self.assertEqual(set(rec["units"]["P0"]["points"][0]), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status", "fused_point"})  # no reason on an ok point; fused point 1 = 8x
         # 56x / 57x: reachable on the favored P0 and P3 only
         for unit in ("P0", "P3"):
             self.assertEqual({r: points(rec, unit)[r]["status"] for r in (55, 56, 57)}, {55: "ok", 56: "ok", 57: "ok"})
@@ -80,6 +80,8 @@ class QuickRunTests(MeasureCase):
         self.assertEqual([p["ratio"] for p in rec["units"]["P0"]["points"]], list(range(8, 58)))
         self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], list(range(8, 49)))
         self.assertEqual({points(rec, "P0")[r]["status"] for r in range(8, 58) if r != 52}, {"ok"})
+        self.assertEqual(self.io.read_max_khz(8), 4_900_000)  # cpuinfo_max_freq of an E-core says 49x ...
+        self.assertEqual(max(points(rec, "EC0")), 48)  # ... G-118: the 0x650 table says 48, so 49x is never offered
         self.assertEqual(max(points(rec, "P1")), 55)  # dense stops at the unit maximum (cpuinfo_max_freq 5.5 GHz): nothing above is tried
         self.assertEqual(points(rec, "P1")[52]["reason"], "cpufreq_granularity")  # F9: P 52x is not pinnable
 
@@ -126,6 +128,104 @@ class QuickRunTests(MeasureCase):
             self.assertEqual((p["status"], p["reason"], p["vid_v"], p["total"]), ("unreachable", "active_cores", None, 40), p)
         self.assertEqual(points(rec, "P0")[55]["status"], "ok")
 
+    def test_max_ratio_comes_from_the_turbo_tables_not_cpuinfo(self) -> None:
+        # a lowered 0x650 table caps the E units; a failed table read falls back to cpuinfo_max_freq (49x) with a note
+        self.io.read_msr = lambda cpu, msr: 0x2E2E2E2E2E2E2E2E if msr == 0x650 else 0x3737373737373737  # type: ignore[method-assign]
+        h = self.start_measure()
+        rec = h.call("m", "vf.measure", {"mode": "dense", "units": ["P1", "EC0"]}, timeout=60)["result"]["record"]
+        self.assertEqual((max(points(rec, "EC0")), max(points(rec, "P1"))), (46, 55))
+
+        def broken(cpu: int, msr: int) -> int:
+            raise OSError(5, "no msr")
+
+        self.io.read_msr = broken  # type: ignore[method-assign]
+        reply = h.call("m2", "vf.measure", {"mode": "dense", "units": ["EC0"]}, timeout=60)["result"]
+        self.assertEqual(max(points(reply["record"], "EC0")), 49)
+        self.assertTrue(any("turbo tables" in p for p in reply["problems"]), reply["problems"])
+
+    def test_p_max_is_the_favored_ratio_of_the_last_tune_read(self) -> None:
+        from types import SimpleNamespace
+
+        h = self.start_measure()
+        h.helper._tune_state = SimpleNamespace(lock=threading.Lock(), turbo={"favored": {1: 53}}, tables=None)
+        rec = h.call("m", "vf.measure", {"mode": "dense", "units": ["P1", "P0"]}, timeout=60)["result"]["record"]
+        self.assertEqual((max(points(rec, "P1")), max(points(rec, "P0"))), (53, 57))  # P0 has no entry: cpuinfo_max_freq 5.7 GHz
+
+    def test_a_point_that_missed_is_measured_once_more_and_the_better_attempt_is_kept(self) -> None:
+        from unittest import mock
+
+        calls: list[int] = []
+        real = vfdump.measure_group
+
+        def spy(*args, **kwargs):  # first call = the whole unit, later calls = the retry pass; the desktop session goes quiet before the retry
+            calls.append(len(args[1].ratios))
+            if len(calls) == 2:
+                self.model.background_busy = 0
+            return real(*args, **kwargs)
+
+        self.model.background_busy = 2
+        h = self.start_measure()
+        with mock.patch.object(vfdump, "measure_group", spy):
+            reply = h.call("m", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        rec = reply["result"]["record"]
+        self.assertEqual(calls, [8, 1, 1])  # 56x and 57x retried singly
+        for ratio in (56, 57):
+            p = points(rec, "P0")[ratio]
+            self.assertEqual((p["status"], p["retried"]), ("ok", True), p)
+            self.assertTrue(5 <= p["kept"] <= p["total"], p)  # kept / total are the retry's own
+        self.assertNotIn("retried", points(rec, "P0")[55])
+        self.assertEqual([(e["ratio"], e["status"]) for e in h.events("vf.point") if e.get("retry")], [(56, "ok"), (57, "ok")])
+        last = [e for e in h.events("progress") if e["op_id"] == "m"][-1]
+        self.assertEqual((last["step"], last["of"]), (10, 10))
+
+    def test_a_retry_that_misses_again_leaves_the_first_result(self) -> None:
+        self.model.background_busy = 2
+        h = self.start_measure()
+        rec = h.call("m", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        for ratio in (56, 57):
+            p = points(rec, "P0")[ratio]
+            self.assertEqual((p["status"], p["reason"], p["retried"]), ("unreachable", "active_cores", True))
+        self.assertEqual([e for e in h.events("vf.point") if e.get("retry")], [])
+
+    def test_baseline_flag_marks_a_complete_record_and_moves(self) -> None:
+        h = self.start_measure()
+        first = h.call("a", "vf.measure", {"mode": "quick", "units": ["EC0"], "baseline": True}, timeout=60)["result"]["record"]
+        self.assertTrue(first["baseline"])
+        plain = h.call("b", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        self.assertFalse(plain["baseline"])
+        self.assertTrue(self.store.get(first["id"])["baseline"])  # an ordinary run leaves the baseline alone
+        second = h.call("c", "vf.measure", {"mode": "quick", "units": ["EC0"], "baseline": True}, timeout=60)["result"]["record"]
+        self.assertTrue(second["baseline"])
+        self.assertFalse(self.store.get(first["id"])["baseline"])
+        self.assertEqual([c["id"] for c in self.store.summaries() if c["baseline"]], [second["id"]])
+        self.assertEqual(error_code(h.call("d", "vf.measure", {"baseline": "yes"})), "BAD_REQUEST")
+
+    def test_stock_tuning_state_needs_a_complete_read_with_all_offsets_zero(self) -> None:
+        zero = {cpu: [0x39, 0x08, 0x14, 0x1E] for cpu in range(24)}  # ratios only: every offset field 0
+        h = self.start_measure(last_words=zero)
+        rec = h.call("s", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        self.assertEqual(rec["tuning_state"], {"kind": "stock"})
+        h.helper.last_words = {**zero, 9: [0x39, 0x08 | (0x7F0 << 21)]}  # a raw offset on one point of a non-first E CPU
+        rec = h.call("t","vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        self.assertEqual(rec["tuning_state"]["kind"], "words")
+        h.helper.last_words = {cpu: ws for cpu, ws in zero.items() if cpu < 8}  # P-cores only: not a complete read
+        rec = h.call("u","vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        self.assertEqual(rec["tuning_state"]["kind"], "words")
+
+    def test_fused_point_labels(self) -> None:
+        rec = self.start_measure(last_words={0: [0x39]}).call("f", "vf.measure", {"mode": "dense", "units": ["P0", "P1", "EC0"]}, timeout=60)["result"]["record"]
+        p0, p1, ec0 = points(rec, "P0"), points(rec, "P1"), points(rec, "EC0")
+        self.assertEqual([p0[r]["fused_point"] for r in (8, 20, 30, 48, 53, 55, 56, 57)], [1, 2, 3, 4, 5, 6, 7, 8])  # P0's OC ratio 57 is also point 8: the index wins
+        self.assertNotIn("fused_point", p0[54])  # an in-between ratio carries no label
+        self.assertEqual([ec0[r]["fused_point"] for r in (8, 15, 30, 40, 46)], [1, 2, 4, 5, 6])
+        self.assertNotIn("fused_point", ec0[47])
+        self.assertEqual(ec0[48]["fused_point"], "oc")  # E max 48 is above the top fused point 46: the OC ratio
+        self.assertNotIn("fused_point", p1[54])
+        from arltuner.helper.ops_measure import _fused_point
+
+        self.assertEqual((_fused_point("P1", 58, 58), _fused_point("P1", 58, None), _fused_point("EC3", 23, None)), ("oc", None, 3))
+
     def test_other_units_stay_idle_while_one_is_measured(self) -> None:
         seen: list[set[int]] = []
         self.perf_hook = lambda cpu: seen.append(set(self.io.loaded))
@@ -160,7 +260,7 @@ class QuickRunTests(MeasureCase):
     def test_arguments_are_validated(self) -> None:
         h = self.start_measure()
         for n, args in enumerate((
-            {"mode": "slow"}, {"units": []}, {"units": ["P0", "P0"]}, {"units": ["P9"]}, {"units": "P0"}, {"name": ""}, {"name": "x" * 65}, {"name": "a\nb"}, {"x": 1},
+            {"mode": "slow"}, {"units": []}, {"units": ["P0", "P0"]}, {"units": ["P9"]}, {"units": "P0"}, {"name": ""}, {"name": "x" * 65}, {"name": "a\nb"}, {"x": 1}, {"baseline": 1},
         )):
             self.assertEqual(error_code(h.call(f"b{n}", "vf.measure", args)), "BAD_REQUEST", args)
         self.assertEqual(h.helper.machine.state.value, "idle")

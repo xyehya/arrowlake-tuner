@@ -32,6 +32,24 @@ class Isolation(unittest.TestCase):
 
     def test_allowlist_excludes_mailbox(self):
         self.assertNotIn(msrio.MAILBOX_MSR, msrio.TELEMETRY_MSRS)
+        self.assertNotIn(msrio.MAILBOX_MSR, msrio.TURBO_TABLE_MSRS)
+
+    def test_turbo_tables_are_readable_only_through_the_measurement_allowlist(self):
+        """G-118: ``vf.measure`` reads 0x1AD / 0x650 (rdmsr); the sampler's default allowlist still refuses them."""
+        from arltuner.msr.port import MsrError
+
+        class Port:
+            def rdmsr(self, cpu, msr):
+                return 0x3030303030303030
+
+        self.assertNotIn(0x650, msrio.TELEMETRY_MSRS)
+        with self.assertRaises(MsrError):
+            msrio.TelemetryMsr(Port()).rdmsr(0, 0x650)
+        wide = msrio.TelemetryMsr(Port(), msrio.TURBO_TABLE_MSRS)
+        self.assertEqual((wide.rdmsr(0, 0x650), wide.rdmsr(0, 0x1AD)), (0x3030303030303030,) * 2)
+        with self.assertRaises(MsrError):
+            wide.rdmsr(0, msrio.MAILBOX_MSR)
+        self.assertFalse(hasattr(wide, "wrmsr"))
 
 
 if __name__ == "__main__":

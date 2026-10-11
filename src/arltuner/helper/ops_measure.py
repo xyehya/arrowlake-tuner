@@ -29,6 +29,7 @@ from arltuner import vfdump
 from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
 from arltuner.curves.record import QUICK_RATIOS, RECORD_BUDGET
 from arltuner.platform import default_platform
+from arltuner.mailbox.vf import VfWord
 from arltuner.vfmodel import complete_baseline, effective_curve, voltage_at
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only
@@ -223,13 +224,14 @@ class SimModel:
     """A 285K for the simulator: ``vid(unit, ratio)`` = the measured stock curve (:data:`STOCK_VID`) through the F4 clamp / interpolation of
     :mod:`arltuner.vfmodel` (``offsets_mv[unit] = {point ratio: mV}`` moves it), what ratio a cap settles at, jitter. Deterministic (seeded per unit / ratio / sample).
 
-    Reach (F3): favored P-cores 57x, other P-cores 55x (``cpuinfo_max_freq`` 5.5 GHz, ``[MEASURED lnx 2026-10-11]``), E-clusters 48x (turbo table ``0x650``; their
-    ``cpuinfo_max_freq`` is [UNVERIFIED], the simulator says 4.8 GHz). **A favored core only holds 56/57x while at most one other CPU is busy** (measured: a pinned
+    Reach (F3): favored P-cores 57x, other P-cores 55x (``cpuinfo_max_freq`` 5.5 GHz, ``[MEASURED lnx 2026-10-11]``), E-clusters 48x (turbo table ``0x650``) while
+    their ``cpuinfo_max_freq`` says 4.9 GHz (intel_pstate N -> N-1 mapping, ``[MEASURED lnx 2026-10-11 19:06 UTC]``): the 49x it implies is not real (G-118). **A favored core only holds 56/57x while at most one other CPU is busy** (measured: a pinned
     spinner on CPU 0 spent 31 of 40 samples at 57x, the rest at 55/51/56x as soon as a 3rd core woke): about 70 % of the samples at 57x when quiet, none when
     ``busy_others >= 2``. cpufreq granularity (F9): E 23x and P 52x are not pinnable (the caps land on the neighbours). E-cores also settle one bin low when the cap is in
     16..29 (the intel_pstate quirk of T-027, so the cap search retries ``ratio + 1``)."""
 
     P_REACH_FAVORED, P_REACH, E_REACH = 57, 55, 48
+    E_CPUINFO = 49  # cpuinfo_max_freq / 100 MHz of an E-core [MEASURED lnx 2026-10-11 19:06 UTC]
     E_QUIRK = range(16, 30)
     QUIET_SHARE = 0.7  # share of samples a favored core spends at 56/57x when no other core is busy (measured 31/40 at 57x on CPU 0)
 
@@ -247,7 +249,7 @@ class SimModel:
 
     def max_khz(self, cpu: int) -> int:
         if cpu >= 8:
-            return self.E_REACH * 100_000
+            return self.E_CPUINFO * 100_000
         return (self.P_REACH_FAVORED if cpu in (0, 3) else self.P_REACH) * 100_000
 
     def reach(self, unit: str) -> int:
@@ -340,6 +342,12 @@ class SimMeasureIO:
         ratio = self.model.settled(unit, self.read_cap(cpu)) if cpu in self.loaded else 8
         return self.model.temp_c(unit, ratio)
 
+    def read_msr(self, cpu: int, msr: int) -> int:
+        """Plain ``rdmsr`` of the turbo ratio tables (``0x1AD`` P, ``0x650`` E): the stock values of the platform file ``[MEASURED lnx 2026-09-29]``."""
+        if msr not in (0x1AD, 0x650):
+            raise OSError(5, f"MSR {msr:#x} is not simulated")
+        return default_platform().turbo_defaults[msr]
+
     def read_perf(self, cpu: int) -> int:
         unit_cpus_ = set(unit_cpus(self.model.unit_of(cpu)))
         with self.lock:
@@ -360,6 +368,8 @@ class RunEnv:
     read_perf: Callable[[int], int]
     sleep: Callable[[float], object] = time.sleep
     close: Callable[[], None] = lambda: None
+    #: plain ``rdmsr(cpu, msr)`` of the turbo tables ``0x1AD`` / ``0x650`` (G-118); ``None`` = ``io.read_msr`` when it has one, else the tables are not read.
+    rdmsr: Callable[[int, int], int] | None = None
 
 
 @dataclass
@@ -420,15 +430,15 @@ def device_wiring(*, lstat_fn: Callable[[str], Any] = os.lstat) -> MeasureWiring
     from arltuner.msr import DevCpuMsrPort
     from arltuner.telemetry import TelemetryMsr
     from arltuner.telemetry.mem import read_memory
-    from arltuner.telemetry.msrio import MSR_PERF_STATUS
+    from arltuner.telemetry.msrio import MSR_PERF_STATUS, TURBO_TABLE_MSRS
 
     def trust_check(path: str) -> None:
         check_trusted_path(path, want="file", lstat_fn=lstat_fn)
 
     def make_run() -> RunEnv:
         port = DevCpuMsrPort(writable=False)
-        reader = TelemetryMsr(port)
-        return RunEnv(HelperMeasureIO(trust_check=trust_check), lambda cpu: reader.rdmsr(cpu, MSR_PERF_STATUS), time.sleep, port.close)
+        reader = TelemetryMsr(port, TURBO_TABLE_MSRS)  # read-only; the turbo tables 0x1AD / 0x650 on top of the telemetry set (D-026 rule: rdmsr only, never a write)
+        return RunEnv(HelperMeasureIO(trust_check=trust_check), lambda cpu: reader.rdmsr(cpu, MSR_PERF_STATUS), time.sleep, port.close, reader.rdmsr)
 
     return MeasureWiring(
         cpufreq=CpufreqFiles(),
@@ -549,7 +559,7 @@ class _Cancelled(Exception):
 
 
 def _validate_vf_measure(args: dict[str, Any]) -> dict[str, Any]:
-    _only(args, {"mode", "units", "name"})
+    _only(args, {"mode", "units", "name", "baseline"})
     mode = args.get("mode", "quick")
     if mode not in ("quick", "dense"):
         raise OpError(BAD_REQUEST, "'mode' must be \"quick\" or \"dense\"")
@@ -564,7 +574,10 @@ def _validate_vf_measure(args: dict[str, Any]) -> dict[str, Any]:
             name = validate_name(name)
         except ValueError as exc:
             raise OpError(BAD_REQUEST, str(exc)) from None
-    return {"mode": mode, "units": [u for u in _NAME_UNITS if u in units], "name": name}
+    baseline = args.get("baseline", False)
+    if not isinstance(baseline, bool):
+        raise OpError(BAD_REQUEST, "'baseline' must be a boolean")
+    return {"mode": mode, "units": [u for u in _NAME_UNITS if u in units], "name": name, "baseline": baseline}
 
 
 def _wiring(helper: Any) -> MeasureWiring:
@@ -579,16 +592,61 @@ def _store_error(exc: StoreError) -> OpError:
 
 
 def _max_ratio(io: Any, unit: str) -> int:
-    """The unit's max turbo ratio from cpufreq ``cpuinfo_max_freq`` (the lowest of its CPUs), in ratio bins of 100 MHz."""
+    """The unit's ``cpuinfo_max_freq`` (the lowest of its CPUs) in 100 MHz bins. **Last resort only**: an E-core reports 4.9 GHz while its table stops at 48x
+    (intel_pstate N -> N-1 mapping), see :func:`_unit_maxima`."""
     return min(io.read_max_khz(cpu) for cpu in unit_cpus(unit)) // 100_000
 
 
-def _plan_ratios(io: Any, unit: str, mode: str) -> tuple[int, ...]:
-    """Quick = the fused point ratios (F1) plus every ratio above the top point up to the unit's max turbo (F9: E 47, 48x); dense = every ratio 8..max turbo."""
-    kind = unit_kind(unit)
-    top = max(_max_ratio(io, unit), 8)
+def _turbo_tables(helper: Any, run: RunEnv, problems: list[str]) -> tuple[dict[str, list[int]] | None, dict[int, int]]:
+    """``({"P": [8 ratios], "E": [8 ratios]} | None, {cpu: favored ratio})``. The tables come from a live plain ``rdmsr`` of ``0x1AD`` / ``0x650`` on CPU 0 (read-only,
+    no mailbox), else from the last ``tune.read`` of this helper session; the favored ratios (``0x1C``, a mailbox read the measurement never does) only from that
+    ``tune.read`` (``helper._tune_state``)."""
+    from arltuner.guard.policy import turbo_bytes
+
+    favored: dict[int, int] = {}
+    cached: dict[str, list[int]] | None = None
+    st = getattr(helper, "_tune_state", None)
+    if st is not None:
+        with st.lock:
+            turbo, tables = st.turbo, st.tables
+        if isinstance(turbo, dict) and isinstance(turbo.get("favored"), dict):
+            favored = {int(c): int(r) for c, r in turbo["favored"].items() if isinstance(r, int) and r > 0}
+        if isinstance(tables, dict) and tables.get("p") and tables.get("e"):
+            cached = {"P": [int(r) for r in tables["p"]], "E": [int(r) for r in tables["e"]]}
+    rdmsr = run.rdmsr or getattr(run.io, "read_msr", None)
+    live: dict[str, list[int]] | None = None
+    if rdmsr is not None:
+        try:
+            live = {"P": list(turbo_bytes(rdmsr(0, 0x1AD))), "E": list(turbo_bytes(rdmsr(0, 0x650)))}
+        except Exception as exc:
+            problems.append(f"the turbo tables (0x1AD / 0x650) could not be read ({type(exc).__name__}: {exc})")
+    tables_out = live or cached
+    if tables_out is None or not all(tables_out.values()) or min(max(tables_out["P"]), max(tables_out["E"])) <= 0:
+        problems.append("turbo tables not available: the maximum ratio of each unit comes from cpuinfo_max_freq (an E-cluster may be offered one ratio too many, 49x)")
+        return None, favored
+    return tables_out, favored
+
+
+def _unit_maxima(io: Any, units: Sequence[str], tables: dict[str, list[int]] | None, favored: dict[int, int]) -> dict[str, int]:
+    """Max ratio per unit. **E** = the highest bucket of ``0x650`` (48 on the 285K; ``cpuinfo_max_freq`` says 4.9 GHz, ``[MEASURED lnx 2026-10-11 19:06 UTC]``).
+    **P** = the core's favored ratio from ``tune.read`` (``0x1C`` low byte: 57 for P0/P3, 55 for the others), else ``cpuinfo_max_freq`` (5.7 / 5.5 GHz, correct for
+    P-cores); never above the top bucket of ``0x1AD``. Without tables: ``cpuinfo_max_freq``."""
+    out: dict[str, int] = {}
+    for unit in units:
+        cpuinfo = _max_ratio(io, unit)
+        if unit_kind(unit) == "E":
+            out[unit] = max(tables["E"]) if tables else cpuinfo
+            continue
+        top = favored.get(unit_cpus(unit)[0]) or cpuinfo
+        out[unit] = min(top, max(tables["P"])) if tables else top
+    return out
+
+
+def _plan_ratios(top: int, unit: str, mode: str) -> tuple[int, ...]:
+    """Quick = the fused point ratios (F1) plus every ratio above the top point up to the unit's max turbo ``top`` (F9: E 47, 48x); dense = every ratio 8..``top``."""
+    top = max(top, 8)
     if mode == "quick":
-        points = QUICK_RATIOS[kind]
+        points = QUICK_RATIOS[unit_kind(unit)]
         return points + tuple(range(points[-1] + 1, top + 1))
     return tuple(range(8, top + 1))
 
@@ -608,6 +666,29 @@ def _classify(m: vfdump.RatioMeasurement, max_ratio: int, intermittent: Sequence
     return "mismatch", None
 
 
+def _fused_point(unit: str, ratio: int, oc_ratio: int | None) -> int | str | None:
+    """1-based index of ``ratio`` in the unit's fused point table (the Quick ratios), else ``"oc"`` for the OC ratio, else ``None`` (an in-between ratio). Where the OC
+    ratio is also a fused point (P0: 57x is point 8 and the OC word's ratio) the fused index wins."""
+    fused = QUICK_RATIOS[unit_kind(unit)]
+    if ratio in fused:
+        return fused.index(ratio) + 1
+    return "oc" if oc_ratio is not None and ratio == oc_ratio else None
+
+
+def _oc_ratio(helper: Any, unit: str, top: int) -> int | None:
+    """The unit's OC ratio: the ratio of the OC word of its first CPU in ``helper.last_words`` when non-zero, else its max ratio when that is above the top fused point."""
+    words = getattr(helper, "last_words", None)
+    ws = words.get(unit_cpus(unit)[0]) if isinstance(words, dict) else None
+    if ws:
+        try:
+            ratio = int(ws[0]) & 0xFF
+        except (TypeError, ValueError):
+            ratio = 0
+        if ratio:
+            return ratio
+    return top if top > QUICK_RATIOS[unit_kind(unit)][-1] else None
+
+
 def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequence[int] = ()) -> dict[str, Any]:
     status, reason = _classify(m, max_ratio, intermittent)
     ok = status == "ok"
@@ -624,17 +705,36 @@ def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequ
 
 
 def _tuning_state(helper: Any) -> dict[str, Any]:
-    """From the words G-112's ``tune.read`` / ``vf.dump`` read this helper session (``helper.last_words``: cpu -> list of u32 words), else ``unknown``. ``stock`` is
-    never claimed from here: the helper cannot tell fused words from tuned ones."""
+    """From the words G-112's ``tune.read`` / ``vf.dump`` read this helper session (``helper.last_words``: cpu -> list of u32 words), else ``unknown``. ``kind`` is
+    ``stock`` (G-118, contract 9) when the words cover the first CPU of all 12 units (a complete read) and **every** word (OC word included) has offset 0, else ``words``.
+    The words travel with ``words`` only."""
     words = getattr(helper, "last_words", None)
     if not isinstance(words, dict) or not words:
         return {"kind": "unknown"}
-    return {"kind": "words", "words": {str(cpu): [f"0x{int(w) & 0xFFFFFFFF:08x}" for w in ws] for cpu, ws in sorted(words.items())}}
+    state: dict[str, Any] = {"kind": "words", "words": {str(cpu): [f"0x{int(w) & 0xFFFFFFFF:08x}" for w in ws] for cpu, ws in sorted(words.items())}}
+    try:
+        complete = all(words.get(unit_cpus(u)[0]) for u in UNITS)
+        if complete and all(VfWord.from_u32(int(w) & 0xFFFFFFFF).offset_raw == 0 for ws in words.values() for w in ws):
+            state = {"kind": "stock"}  # contract 9: ``words`` only accompany kind "words"
+    except (TypeError, ValueError):
+        pass
+    return state
+
+
+def _retryable(point: dict[str, Any]) -> bool:
+    return point["status"] == "mismatch" or (point["status"] == "unreachable" and point.get("reason") == "active_cores")
+
+
+def _better(new: dict[str, Any], old: dict[str, Any]) -> bool:
+    """The retry replaces the first attempt when it is ``ok`` and the first was not, or neither is ``ok`` and it kept more samples at the target."""
+    if (new["status"] == "ok") != (old["status"] == "ok"):
+        return new["status"] == "ok"
+    return new["status"] != "ok" and new["kept"] > old["kept"]
 
 
 def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     w = _wiring(helper)
-    mode, units, name = args["mode"], args["units"], args["name"]
+    mode, units, name, want_baseline = args["mode"], args["units"], args["name"], args["baseline"]
     cancel = ctx.cancel
     try:
         w.prepare()
@@ -654,12 +754,14 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         if cancel.is_set():
             raise _Cancelled()
         cpus = [cpu for u in units for cpu in unit_cpus(u)]
+        tables, favored = _turbo_tables(helper, run, problems)
         try:
-            plan = {u: _plan_ratios(run.io, u, mode) for u in units}
-        except (OSError, ValueError) as exc:  # dense reads cpuinfo_max_freq before anything else
+            top_of = _unit_maxima(run.io, units, tables, favored)  # reads cpuinfo_max_freq (also when the tables are known) before anything else
+        except (OSError, ValueError) as exc:
             raise OpError(REFUSED, f"cpufreq is not available for the selected CPUs: {exc}", {"check": "NO_CPUFREQ"}) from None
+        plan = {u: _plan_ratios(top_of[u], u, mode) for u in units}
+        oc_of = {u: _oc_ratio(helper, u, top_of[u]) for u in units}
         total = sum(len(r) for r in plan.values())
-        top_of = {u: _max_ratio(run.io, u) for u in units}
         try:
             boot = helper.cfg.boot_id_fn()
         except Exception:
@@ -709,6 +811,9 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             def on_result(m: vfdump.RatioMeasurement, unit: str = unit, entry: dict[str, Any] = entry) -> None:
                 nonlocal done
                 point = _point(m, top_of[unit], intermittent_ratios(unit, plan[unit]))
+                label = _fused_point(unit, m.ratio, oc_of[unit])
+                if label is not None:  # omitted when null: a dense run of 12 units must still fit one response line
+                    point["fused_point"] = label
                 entry["points"].append(point)
                 done += 1
                 seen = [t for t in (m.temp_min_c, m.temp_max_c, record["temps"]["min_c"], record["temps"]["max_c"]) if t is not None]
@@ -721,7 +826,34 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             vfdump.measure_group(
                 run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=on_result,
             )
+        # Retry pass (G-118): a point that ended mismatch / unreachable (active_cores) gets one more attempt with the long sampling window, one unit at a time,
+        # every other unit idle; the better result is the one reported (its kept / total).
+        retry = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if _retryable(p)]
+        total += len(retry)
+        for unit, ratio in retry:
+            cpus_u = unit_cpus(unit)
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
+            second: list[vfdump.RatioMeasurement] = []
+            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], (ratio,), (ratio,))  # intermittent: the long window (40 x 50 ms, early stop)
+            vfdump.measure_group(run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=second.append)
+            done += 1
+            pts = record["units"][unit]["points"]
+            at = next(i for i, p in enumerate(pts) if p["ratio"] == ratio)
+            old = pts[at]
+            old["retried"] = True
+            if second:
+                new = _point(second[0], top_of[unit], intermittent_ratios(unit, plan[unit]))
+                label = _fused_point(unit, ratio, oc_of[unit])
+                if label is not None:
+                    new["fused_point"] = label
+                new["retried"] = True
+                if _better(new, old):
+                    pts[at] = new
+                    ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": new["mhz"], "vid_v": new["vid_v"], "status": new["status"], "retry": True,
+                              **({"reason": new["reason"]} if "reason" in new else {})})
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
         record["complete"] = True
+        record["baseline"] = want_baseline  # only a complete record becomes the baseline (store.save unsets the old one)
     except _Cancelled:
         cancelled = True
     except BaseException as exc:  # incl. OpError: the finally restores, then it is re-raised below
