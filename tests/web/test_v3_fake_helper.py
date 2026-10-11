@@ -102,7 +102,7 @@ class TestCurves(V3Base):
         e0 = rec["units"]["EC0"]["points"]
         self.assertAlmostEqual(e0[0]["vid_v"], 0.65, delta=0.04)
         self.assertAlmostEqual(e0[-1]["vid_v"], 1.15, delta=0.04)
-        self.assertEqual((len(rec["units"]["P0"]["points"]), len(rec["units"]["P1"]["points"])), (50, 48))  # 8..57 and 8..55
+        self.assertEqual((len(rec["units"]["P0"]["points"]), len(rec["units"]["P1"]["points"])), (50, 50))  # 8..57 on every P-core (F1); 56/57 are unreachable on the non-favored ones
 
 
 class TestMeasure(V3Base):
@@ -110,10 +110,10 @@ class TestMeasure(V3Base):
         res = self.ok("vf.measure", {"mode": "quick", "name": "t1"})
         pts = self.events("vf.point")
         prog = self.events("progress")
-        self.assertEqual(len(pts), 8 * 8 + 4 * 6)
+        self.assertEqual(len(pts), 8 * 8 + 4 * 8)   # E: 6 points + the turbo ratios 47, 48 (F9)
         self.assertEqual(len(prog), len(pts))
         self.assertEqual(set(prog[-1]), {"event", "op_id", "step", "of", "unit", "ratio", "eta_s"})
-        self.assertEqual((prog[-1]["step"], prog[-1]["of"]), (88, 88))
+        self.assertEqual((prog[-1]["step"], prog[-1]["of"]), (96, 96))
         self.assertEqual({e["op_id"] for e in pts}, {e["op_id"] for e in prog})
         self.assertEqual(set(pts[0]), {"event", "op_id", "unit", "ratio", "mhz", "vid_v", "status"})
         rec = res["record"]
@@ -122,7 +122,7 @@ class TestMeasure(V3Base):
         self.assertEqual(rec["tuning_state"], {"kind": "unknown"})  # tune.read has not happened this boot
         # non-favored P-cores cannot reach 56 / 57: unreachable, not an error, no voltage
         p1 = {p["ratio"]: p for p in rec["units"]["P1"]["points"]}
-        self.assertEqual((p1[56]["status"], p1[56]["vid_v"]), ("unreachable", None))
+        self.assertEqual((p1[56]["status"], p1[56]["vid_v"], p1[56]["reason"]), ("unreachable", None, "max_turbo"))
         self.assertEqual(p1[55]["status"], "ok")
         p0 = {p["ratio"]: p for p in rec["units"]["P0"]["points"]}
         self.assertEqual(p0[57]["status"], "ok")
@@ -209,12 +209,12 @@ class TestTune(V3Base):
         pts = r["tune"]["P0"]["cpus"][0]["points"]
         self.assertEqual([p["point"] for p in pts], list(range(9)))                       # point 0 is the OC word
         self.assertEqual(set(pts[1]), {"point", "ratio", "offset_mv", "v_target_v", "mode"})
-        self.assertEqual([p["ratio"] for p in pts[1:]], v3.P_POINTS_FAVORED)
+        self.assertEqual([p["ratio"] for p in pts[1:]], v3.P_POINTS)
         self.assertEqual(pts[0]["ratio"], 57)
         self.assertIsNotNone(pts[0]["v_target_v"])
         oc_e = r["tune"]["EC0"]["cpus"][0]["points"][0]
         self.assertEqual((oc_e["ratio"], oc_e["v_target_v"]), (None, None))                # unset: the word reads 0
-        self.assertEqual([p["ratio"] for p in r["tune"]["P1"]["cpus"][0]["points"][1:]], v3.P_POINTS_OTHER)  # per-core tables
+        self.assertEqual([p["ratio"] for p in r["tune"]["P1"]["cpus"][0]["points"][1:]], v3.P_POINTS)  # F1: one table for every P-core
         self.assertEqual(r["tables"], {"p": [57, 57, 55, 55, 55, 55, 55, 55], "e": [48, 48, 47, 46, 46, 46, 46, 46]})
         self.assertIsNone(r["tables_note"])
         self.assertTrue(all(m["match"] for m in r["accepted_match"]))
@@ -236,7 +236,7 @@ class TestTune(V3Base):
         self.assertTrue(any("Revert" in w for w in p["warnings"]))
         pts = self.ok("tune.plan", self.intent(target="EC1", offset={"kind": "points", "mv": {"23": -80}}))
         self.assertEqual(list(pts["after"]["EC1"]), ["3"])           # point 3 is 23x
-        self.assertEqual(pts["after"]["EC1"]["3"], {"ratio": 23, "offset_mv": -80.0, "v_target_v": None})
+        self.assertEqual(pts["after"]["EC1"]["3"], {"ratio": 23, "offset_mv": -80.0, "v_target_v": None, "effective_v": None, "clamped_by": None})  # no baseline curve: no prediction
         w = self.ok("tune.plan", self.intent(target="P3", offset={"kind": "curve", "mv": 10}, v_target_v=1.5))
         self.assertTrue(any("positive offset on P3" in x for x in w["warnings"]))
         self.assertTrue(any("target above fused on P3" in x for x in w["warnings"]))
@@ -362,6 +362,72 @@ class TestProfilesAndSampler(V3Base):
         self.ok("cancel", {"op_id": rid})
         time.sleep(0.3)
         self.assertEqual(self.fake.busy_state(), ("idle", None))
+
+
+class TestCpuFacts(V3Base):
+    def read(self) -> dict:
+        return self.ok("tune.read")
+
+    """The contract 9 addendum (SPEC-v3 section 9, F1-F9) as the fake speaks it: the shapes the page binds to."""
+
+    def test_reachability_reasons_f3_f9(self):
+        rec = self.fake.seed_curve("dense", mode="dense", baseline=True, offset_mv=0.0)   # (a dense record exceeds one 64 KiB line, so it is not fetched)
+        p1 = {p["ratio"]: p for p in rec["units"]["P1"]["points"]}
+        p0 = {p["ratio"]: p for p in rec["units"]["P0"]["points"]}
+        self.assertEqual((p1[57]["status"], p1[57]["reason"]), ("unreachable", "max_turbo"))
+        self.assertEqual(p1[52]["reason"], "cpufreq_granularity")
+        self.assertEqual((p0[57]["status"], p0[52]["status"]), ("ok", "unreachable"))   # the favored cores reach 57x; 52x cannot be pinned anywhere
+        e = {p["ratio"]: p for p in rec["units"]["EC0"]["points"]}
+        self.assertEqual((e[23]["status"], e[23]["reason"]), ("unreachable", "cpufreq_granularity"))
+        self.assertEqual((e[47]["status"], e[48]["status"], max(e)), ("ok", "ok", 48))   # F9: E max turbo is measured; never above it
+
+    def test_read_has_fused_and_turbo(self):
+        r = self.ok("tune.read")
+        self.assertEqual(set(r["fused"]), {"0", "1", "2", "3", "4", "5", "6", "7", "8", "12", "16", "20"})
+        f = r["fused"]["0"]
+        self.assertEqual(set(f), {"word", "ratio", "v"})
+        self.assertEqual(f["ratio"], 57)
+        self.assertEqual(int(f["word"], 16) & 0xFF, 57)
+        self.assertAlmostEqual(int(f["word"], 16) >> 8 & 0xFFF, f["v"] * 1024, delta=0.5)
+        self.assertEqual(r["fused"]["8"]["ratio"], 46)
+        t = r["turbo"]
+        self.assertEqual(t["P"]["ratios"], [57, 57, 55, 55, 55, 55, 55, 55])
+        self.assertEqual(t["P"]["counts"], list(range(1, 9)))
+        self.assertEqual(t["E"]["counts"], [1, 2, 3, 4, 6, 8, 12, 16])
+        self.assertEqual({k: v for k, v in t["favored"].items() if v == 57}.keys(), {"0", "3"})
+        self.assertEqual(len(t["favored"]), 8)
+
+    def test_plan_predicts_effective_v_and_clamp_on_the_baseline(self):
+        self.fake.seed_curve("Stock baseline", baseline=True, offset_mv=0.0)
+        self.read()
+        pts = {str(r): -100.0 if r == 57 else 0.0 for r in v3.P_POINTS}
+        pl = self.ok("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "P0", "offset": {"kind": "points", "mv": pts}, "v_target_v": None, "ratio": None}]}})
+        a = pl["after"]["P0"]
+        self.assertEqual(a["8"]["clamped_by"], 7)                       # 57x (point 8) cannot go below 56x (point 7)
+        self.assertEqual(a["8"]["effective_v"], a["7"]["effective_v"])
+        self.assertIsNone(a["7"]["clamped_by"])
+        self.assertAlmostEqual(a["7"]["effective_v"], v3.stock_vid("P0", 56), places=3)
+        self.assertTrue(any("57x" in w and "clamped" in w for w in pl["warnings"]))
+        self.assertEqual(set(pl["vccia"]), {"predicted_v", "set_by"})
+        self.assertEqual(set(pl["vccia"]["set_by"]), {"unit", "ratio"})
+
+    def test_f8_warnings(self):
+        self.fake.seed_curve("Stock baseline", baseline=True, offset_mv=0.0)
+        self.read()
+        pl = self.ok("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "EC1", "offset": {"kind": "points", "mv": {"40": -20}}, "v_target_v": 1.25, "ratio": None}]}})
+        self.assertTrue(any("EC1 40x" in w and "OCCT" in w for w in pl["warnings"]))
+        self.assertTrue(any("WHEA" in w for w in pl["warnings"]))
+
+    def test_turbo_intent_and_order(self):
+        self.read()
+        ok = self.ok("tune.plan", {"intent": {"scope": "unit", "rows": [], "turbo": {"P": [57, 56, 55, 54, 54, 53, 53, 52]}}})
+        self.assertEqual((ok["units"], ok["writes"]), ([], 1))
+        e = self.err("tune.plan", {"intent": {"scope": "unit", "rows": [], "turbo": {"P": [55, 57, 55, 55, 55, 55, 55, 55]}}}, "REFUSED")
+        self.assertEqual(e["detail"]["check"], "TURBO_ORDER")
+        self.assertEqual(self.err("tune.plan", {"intent": {"scope": "unit", "rows": [], "turbo": {"E": [60] + [50] * 7}}}, "REFUSED")["detail"]["check"], "POLICY_RANGE")
+        applied = self.ok("tune.apply", {"plan_id": ok["plan_id"], "typed": "CONFIRM " + ok["nonce"]})
+        self.assertTrue(any(r["point"] == "turbo" and r["match"] for r in applied["readback"]))
+        self.assertEqual(self.read()["turbo"]["P"]["ratios"], [57, 56, 55, 54, 54, 53, 53, 52])
 
 
 if __name__ == "__main__":

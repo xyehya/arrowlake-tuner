@@ -83,6 +83,7 @@
   function pill(text, cls) { return el("span", "pill " + cls, text); }
   function setPill(id, text, cls) { const p = $(id); p.textContent = text; p.className = "pill " + cls; }
   function isNum(v) { return typeof v === "number" && Number.isFinite(v); }
+  function isStr(v) { return typeof v === "string" && v !== ""; }
   function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
   function clamp(x, a, b) { return Math.min(Math.max(x, a), b); }
 
@@ -143,6 +144,7 @@
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
     SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
     BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
+    TURBO_ORDER: "turbo ratios may only fall as more cores are active: a bucket cannot be higher than the one to its left (fewer active cores)",
   };
 
   function errText(body) {
@@ -1416,6 +1418,7 @@
       const all = [];
       for (const s of model.series) for (const p of s.pts) all.push(p);
       for (const m of model.markers || []) all.push(m);
+      for (const m of model.pins || []) all.push(m);
       const svg = sv("svg", { viewBox: "0 0 " + ch.W + " " + ch.H, role: "img", tabindex: 0, focusable: "true",
         "aria-label": ch.tipLabel + ". Use the left and right arrow keys to read values." }, "vfsvg");
       ch.svg = svg;
@@ -1495,6 +1498,18 @@
       ch.tip = sv("g", { transform: "translate(-999 -999)" }, "vc-tip");
       const hit = sv("rect", { x: VC.L, y: VC.T, width: ch.W - VC.L - VC.R, height: ch.H - VC.T - VC.B }, "vc-hit");
       nodes.push(ch.cross, hit, ch.tip);
+      // pins sit above the hit area so the browser shows their <title> on hover: hollow ring = a point that exists but was not reached (F3/F9),
+      // diamond = the fused top-point value read from the CPU (F7)
+      for (const m of model.pins || []) {
+        const g = sv("g", null, "vc-pin u-" + m.unit + " " + m.kind);
+        const cx = ch.sx(m.mhz), cy = ch.sy(m.v);
+        if (m.kind === "fused") g.append(sv("path", { d: "M" + cx.toFixed(1) + " " + (cy - 7).toFixed(1) + "L" + (cx + 7).toFixed(1) + " " + cy.toFixed(1) + "L" + cx.toFixed(1) + " " + (cy + 7).toFixed(1) + "L" + (cx - 7).toFixed(1) + " " + cy.toFixed(1) + "Z" }));
+        else g.append(sv("circle", { cx: cx.toFixed(1), cy: cy.toFixed(1), r: 5.5 }));
+        const t = sv("title");
+        t.textContent = m.title;
+        g.append(t);
+        nodes.push(g);
+      }
       fill(svg, nodes);
       fill(host, [svg]);
       ch.plot = { hit: hit };
@@ -1575,6 +1590,14 @@
     return ch;
   }
 
+  // Why a V/F point could not be measured (contract 9 addendum: reason = max_turbo | cpufreq_granularity | active_cores; F3/F9).
+  function reasonText(reason) {
+    if (reason === "max_turbo") return "the point exists but this core's max turbo ratio is lower, so it never runs here";
+    if (reason === "cpufreq_granularity") return "cpufreq caps cannot pin this ratio (the cap lands on a neighbour)";
+    if (reason === "active_cores") return "reachable only with few active cores, and the measurement loads the whole unit";
+    return "not reachable on this core";
+  }
+
   // ---- Curves: measure, keep and compare V/F curves ----------------------------------------------------------------------------------
   const CV = {
     list: [],            // curves.list rows, newest first
@@ -1651,7 +1674,7 @@
     renderCurves();
     await Promise.all([CV.primary, CV.compare, baselineId(), TN_CURVE_WANT()].filter(Boolean).map(ensureRecord));
     renderCurves();
-    renderTunePreview();
+    if (T.words) refreshRows(); else renderTunePreview();
   }
 
   function baselineId() { const b = CV.list.find((c) => c.baseline === true); return b ? b.id : null; }
@@ -1723,7 +1746,50 @@
       model.band = band.length > 1 ? band : null;
     }
     if (!model.series.length) model.empty = CV.drawn.size ? "No measured points for the units drawn." : "No units drawn. Press a unit below, or pick a preset.";
+    else if (!CV.delta) model.pins = curvePins(a);
     return model;
+  }
+
+  // Unreachable points as hollow rings (on the unit's last measured voltage: nothing was measured there), and on the baseline the fused top point (0x09).
+  function curvePins(rec) {
+    const pins = [];
+    for (const u of UNIT_IDS) {
+      if (!CV.drawn.has(u)) continue;
+      const meas = recPoints(rec, u);
+      for (const p of recAllPoints(rec, u)) {
+        if (p.status !== "unreachable" || !isNum(p.ratio)) continue;
+        const left = meas.filter((q) => q.ratio < p.ratio);
+        if (!left.length) continue;
+        pins.push({ unit: u, kind: "reach", mhz: p.ratio * 100, v: left[left.length - 1].v, title: u + " " + p.ratio + "×: " + reasonText(p.reason) + (isStr(p.reason) ? " (" + p.reason + ")" : "") + ". Drawn at the last measured voltage." });
+      }
+      const f = fusedOf(u);
+      if (f && rec.id === baselineId() && meas.length) {
+        const top = meas.find((q) => q.ratio === f.ratio);
+        pins.push({ unit: u, kind: "fused", mhz: f.ratio * 100, v: f.v, title: u + " fused top point (cmd 0x09): " + f.v.toFixed(4) + " V at " + f.ratio + "×" +
+          (top ? "; measured " + top.v.toFixed(4) + " V (" + fmtMv((top.v - f.v) * 1000, 1) + ")." : "; not measured on this curve.") });
+      }
+    }
+    return pins;
+  }
+
+  function curveNotes() {
+    const a = primaryRec();
+    const isBase = a && a.id === baselineId() && CV.live === null;
+    let base = "";
+    if (isBase) {
+      base = "Stock baseline: this curve is the fused V/F table as applied (offsets 0). " + (T.words && T.words.fused
+        ? "Diamonds mark the top-point voltage read from the CPU (cmd 0x09); they should sit on the curve where it reaches that ratio."
+        : "Read tuning words (Tune) to draw the top-point voltage from the CPU (cmd 0x09) and cross-check it.");
+    } else if (baselineId() && a) base = "Stock baseline: " + (CV.list.find((c) => c.id === baselineId()) || {}).name + ". Predictions in Tune are made on it.";
+    else base = "No curve is marked as the stock baseline yet. Tune predicts the effective voltage on it; set one in the Library.";
+    setText("cv-base-note", base);
+    const un = [];
+    if (a) for (const u of UNIT_IDS) {
+      if (!CV.drawn.has(u)) continue;
+      const bad = recAllPoints(a, u).filter((p) => p.status === "unreachable" && isNum(p.ratio));
+      if (bad.length) un.push(u + " " + bad.map((p) => p.ratio + "× (" + (isStr(p.reason) ? p.reason : "no reason given") + ")").join(", "));
+    }
+    setText("cv-unreach", un.length ? "Hollow rings are points that exist but were not reached: " + un.join("; ") + ". Hover a ring for the reason." : "");
   }
 
   function paintCurves() {
@@ -1741,7 +1807,7 @@
     $("cv-table-wrap").hidden = CV.view !== "table";
     $("cv-lib-wrap").hidden = CV.view !== "library";
     updateOptButtons();
-    if (CV.view === "chart") CV.chart.render(curvesModel());
+    if (CV.view === "chart") { CV.chart.render(curvesModel()); curveNotes(); }
     else if (CV.view === "table") renderCurveTable();
     else renderLibrary();
     updateCurvesGate();
@@ -1839,7 +1905,7 @@
         const x = val(u, p);
         if (!x) {
           const why = p.status === "unreachable" ? "unreachable" : p.status === "mismatch" ? "mismatch" : CV.tableDelta ? "no baseline value" : "n/a";
-          tr.append(td(p.status === "ok" ? "n/a" : "—", "n vt-na", u + " at " + r + "×: " + why + (p.status === "unreachable" ? ": the core did not reach this ratio under the cap" : "")));
+          tr.append(td(p.status === "ok" ? "n/a" : "—", "n vt-na", u + " at " + r + "×: " + why + (p.status === "unreachable" ? ": " + reasonText(p.reason) + (isStr(p.reason) ? " (" + p.reason + ")" : "") : "")));
           continue;
         }
         let cls, text;
@@ -2148,6 +2214,10 @@
     refs: {},             // row id -> {controls...}
     showUnchanged: false,
     chart: null,
+    turbo: {},            // kind ("P" | "E") -> the 8 bucket ratios being edited (only kinds that differ from the read); F5
+    turboRefs: {},
+    pc: {},               // unit -> prediction memo for the current paint (see predictUnit)
+    basePending: false,
   };
   V.tn = T;
   const MV_TOL = 0.05, V_TOL = 0.0004;
@@ -2180,7 +2250,94 @@
   const vtOf = (units, eff) => agg(units.map((u) => (eff ? effVt(u) : curVt(u))), V_TOL);
   const ratioOf = (units, eff) => agg(units.map((u) => (eff ? effRatio(u) : curRatio(u))), 0.5);
 
-  // ---- editing --------------------------------------------------------------------------------------------------------------------------
+  // ---- CPU facts (SPEC-v3 section 9) ---------------------------------------------------------------------------------------------------
+  // F1 point numbering as overclockers know it (SkatterBencher / XTU): points 1..n are fused (offset only), the OC point follows (P 9, E 7).
+  function ocPointNo(units) { return Math.max(0, ...units.map((u) => curPts(u).length)) + 1; }
+  function ocHeadText(units) { return "Point " + ocPointNo(units) + " \u00b7 OC"; }
+  const OC_TIP = "ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)";
+  const PRED_NOTE_E = "47\u201348\u00d7 run on point 6 (turbo table); an E OC ratio adds an OC point";
+
+  function fusedOf(u) { return T.words && T.words.fused ? T.words.fused[u] || null : null; }
+  function baselineRec() {
+    const id = baselineId();
+    if (!id) return null;
+    if (CV.cache[id]) return CV.cache[id];
+    if (!T.basePending && T.baseTried !== id) { T.baseTried = id; T.basePending = true; ensureRecord(id).then(() => { T.basePending = false; if (T.words) refreshRows(); }); }
+    return null;
+  }
+  // The measured VID of the stock baseline at a point ratio; the fused top point (0x09) stands in where the baseline has no usable measurement there.
+  function baseVid(u, ratio) {
+    const rec = baselineRec();
+    if (!rec) return null;
+    const p = recAllPoints(rec, u).find((q) => q.ratio === ratio && q.status === "ok" && isNum(q.vid_v));
+    if (p) return { v: p.vid_v, src: "baseline" };
+    const f = fusedOf(u);
+    return f && f.ratio === ratio ? { v: f.v, src: "fused" } : null;
+  }
+  // F4: effective V(n) = max(baseline VID(n) + offset(n), V(n-1)). byRatio[ratio] = {v, want, by, src} or null (no measured VID).
+  function predictUnit(u) {
+    if (T.pc[u]) return T.pc[u];
+    const out = { byRatio: {}, any: false };
+    let prev = null;
+    for (const p of curPts(u).slice().sort((a, b) => a.ratio - b.ratio)) {
+      const b = baseVid(u, p.ratio);
+      if (!b) { out.byRatio[p.ratio] = null; continue; }
+      const want = b.v + effPointMv(u, p) / 1000;
+      let v = want, by = null;
+      if (prev && want < prev.v - 1e-9) { v = prev.v; by = prev; }
+      out.byRatio[p.ratio] = { v: v, want: want, by: by ? by.ratio : null, byPoint: by ? by.point : null, src: b.src, point: p.point };
+      out.any = true;
+      prev = { v: v, ratio: p.ratio, point: p.point };
+    }
+    T.pc[u] = out;
+    return out;
+  }
+  // Effective voltage at any ratio: straight between the points, flat above the top one (E 47-48x follow point 6) and below the first.
+  function predAt(u, ratio) {
+    const pts = Object.keys(predictUnit(u).byRatio).map(Number).filter((r) => predictUnit(u).byRatio[r]).sort((a, b) => a - b).map((r) => ({ r: r, v: predictUnit(u).byRatio[r].v }));
+    if (!pts.length) return null;
+    if (ratio <= pts[0].r) return pts[0].v;
+    if (ratio >= pts[pts.length - 1].r) return pts[pts.length - 1].v;
+    const i = pts.findIndex((q) => q.r >= ratio);
+    const a = pts[i - 1], b = pts[i];
+    return a.v + ((b.v - a.v) * (ratio - a.r)) / (b.r - a.r);
+  }
+  // F3: the highest ratio a unit can hold (turbo.favored for P-cores, the E table top); null when unknown.
+  function reachOf(u) {
+    const w = T.words;
+    if (unitKind(u) === "P") {
+      if (w && w.turbo && w.turbo.favored && isNum(w.turbo.favored[u])) return w.turbo.favored[u];
+      const rec = CV.cache[baselineId()] || null;
+      if (rec) {
+        const pts = recAllPoints(rec, u), ok = pts.filter((p) => p.status === "ok" && isNum(p.ratio)).map((p) => p.ratio);
+        if (ok.length && pts.some((p) => p.status === "unreachable" && p.reason === "max_turbo")) return Math.max(...ok);
+      }
+      return null;
+    }
+    const t = w && w.turbo && w.turbo.E ? w.turbo.E.ratios : null;
+    return t && t.length ? Math.max(...t) : null;
+  }
+
+  // F5: turbo bucket tables, read (T.words.turbo) and edited (T.turbo).
+  function turboCur(k) { return T.words && T.words.turbo && T.words.turbo[k] ? T.words.turbo[k].ratios : null; }
+  function turboEff(k) { return T.turbo[k] || turboCur(k); }
+  function turboKinds() { return ["P", "E"].filter((k) => T.turbo[k] && turboCur(k) && T.turbo[k].some((x, i) => x !== turboCur(k)[i])); }
+  function turboIntent() {
+    const ks = turboKinds();
+    if (!ks.length) return null;
+    const o = {};
+    for (const k of ks) o[k] = T.turbo[k].slice();
+    return o;
+  }
+  // Setting bucket i keeps the table non-increasing: the buckets to its right come down with it (a higher one than its left neighbour is never offered).
+  function setBucket(k, i, v) {
+    const t = (turboEff(k) || []).slice();
+    t[i] = v;
+    for (let j = i + 1; j < t.length; j++) t[j] = Math.min(t[j], v);
+    if (turboCur(k) && t.every((x, j) => x === turboCur(k)[j])) delete T.turbo[k]; else T.turbo[k] = t;
+  }
+
+  // ---- editing ----------------------------------------------------------------------------------------------------------------------------
   function ensureDraft(u) { return T.draft[u] || (T.draft[u] = { pts: {} }); }
   function tidy(u) {
     const d = T.draft[u];
@@ -2281,7 +2438,11 @@
     if (!T.words) { fill($("tn-rows"), []); return; }
     const defs = rowDefs();
     const head = el("div", "tn-row tn-head");
-    for (const t of ["Unit", "Voltage offset", "Adaptive target voltage (OC point)", "OC ratio", ""]) head.append(el("span", "tn-col", t));
+    for (const t of ["Unit", "Voltage offset", "OC point: adaptive target voltage", "OC point: ratio", ""]) {
+      const c = el("span", "tn-col", t);
+      if (t.indexOf("OC point") === 0) c.title = OC_TIP;
+      head.append(c);
+    }
     const nodes = [head];
     for (const def of defs) {
       const row = el("div", "tn-rowwrap");
@@ -2310,6 +2471,7 @@
       vtSel.addEventListener("change", () => { setVt(def.units, Number(vtSel.value)); refreshRows(); });
       const vtHint = el("span", "tn-hint muted");
       vtCell.append(vtSel, vtHint);
+      vtCell.title = OC_TIP;
       // ratio
       const rCell = el("div", "tn-cell");
       const rSel = el("select", "tn-sel");
@@ -2317,16 +2479,19 @@
       rSel.addEventListener("change", () => { setRatio(def.units, Number(rSel.value)); refreshRows(); });
       const rHint = el("span", "tn-hint muted");
       rCell.append(rSel, rHint);
+      rCell.title = OC_TIP;
       const undo = el("button", "small", "Undo");
       undo.type = "button";
       undo.title = "Put this row back to what was read";
       undo.addEventListener("click", () => { for (const u of def.units) delete T.draft[u]; refreshRows(); });
       line.append(name, offCell, vtCell, rCell, undo);
+      const warn = el("ul", "tn-warn");
+      warn.hidden = true;
       const panel = el("div", "tn-points");
       panel.id = "tn-pts-" + def.id;
-      row.append(line, panel);
+      row.append(line, warn, panel);
       nodes.push(row);
-      T.refs[def.id] = { def: def, row: row, line: line, now: now, mode: mode, offSel: offSel, offHint: offHint, vtSel: vtSel, vtHint: vtHint, rSel: rSel, rHint: rHint, undo: undo, panel: panel,
+      T.refs[def.id] = { def: def, row: row, line: line, now: now, mode: mode, offSel: offSel, offHint: offHint, vtSel: vtSel, vtHint: vtHint, rSel: rSel, rHint: rHint, undo: undo, panel: panel, warn: warn, oc: null,
         offCell: offCell, vtCell: vtCell, rCell: rCell, ptsKey: "", ptSels: {} };
     }
     fill($("tn-rows"), nodes);
@@ -2352,26 +2517,117 @@
     return Array.from(new Set(units.flatMap((u) => curPts(u).map((p) => p.ratio)))).sort((a, b) => a - b);
   }
 
+  function pointNo(units, ratio) {
+    for (const u of units) { const p = curPts(u).find((q) => q.ratio === ratio); if (p && isNum(p.point)) return p.point; }
+    return null;
+  }
+
   function buildPointPanel(r) {
     const ratios = pointRatios(r.def.units);
-    const key = ratios.join(",");
+    const key = ratios.join(",") + "|" + r.def.kind;
     if (r.ptsKey === key) return;
     r.ptsKey = key;
     r.ptSels = {};
     const cells = ratios.map((ratio) => {
       const lab = el("label", "tn-pt");
-      lab.append(el("span", "tn-pt-ratio", ratio + "×"));
+      const no = pointNo(r.def.units, ratio);
+      lab.append(el("span", "tn-pt-ratio", "Point " + (no === null ? "?" : no) + " \u00b7 " + ratio + "\u00d7"), el("span", "tn-pt-tag muted", "fused \u00b7 offset only"));
       const sel = el("select", "tn-sel tn-sel-s");
-      sel.setAttribute("aria-label", r.def.label + ": offset at " + ratio + "x");
+      sel.setAttribute("aria-label", r.def.label + ": offset at point " + (no === null ? "?" : no) + ", " + ratio + "x");
       const cur = pointOf(r.def.units, ratio, false);
       fillSelect(sel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
       sel.addEventListener("change", () => { setPoint(r.def.units, ratio, Number(sel.value)); refreshRows(); });
-      lab.append(sel);
-      r.ptSels[ratio] = { sel: sel, lab: lab };
+      const eff = el("span", "tn-pt-eff", "");
+      const badge = el("span", "tn-badge", "clamped to Vn\u22121");
+      badge.hidden = true;
+      const reach = el("span", "tn-pt-reach", "");
+      reach.hidden = true;
+      lab.append(sel, eff, badge, reach);
+      r.ptSels[ratio] = { sel: sel, lab: lab, eff: eff, badge: badge, reach: reach };
       return lab;
     });
     if (!cells.length) cells.push(el("p", "na", "n/a: the read returned no V/F points for this unit."));
+    // the OC point column: ratio + adaptive target, edited with the two controls above; beside it the fused top point
+    const box = el("div", "tn-pt tn-oc");
+    box.title = OC_TIP;
+    const head = el("span", "tn-pt-ratio", ocHeadText(r.def.units));
+    const tag = el("span", "tn-pt-tag muted", "ratio + voltage");
+    const rText = el("span", "tn-oc-line", ""), vText = el("span", "tn-oc-line", ""), fText = el("span", "tn-oc-fused muted", "");
+    box.append(head, tag, rText, vText, fText);
+    r.oc = { box: box, ratio: rText, vt: vText, fused: fText };
+    cells.push(box);
+    if (r.def.kind === "E") { const n = el("p", "tn-points-note muted", PRED_NOTE_E); cells.push(n); }
     fill(r.panel, cells);
+  }
+
+  function fmtVRange(vs, digits) {
+    const lo = Math.min(...vs), hi = Math.max(...vs);
+    return hi - lo < 0.0005 ? lo.toFixed(digits) + " V" : lo.toFixed(digits) + "\u2013" + hi.toFixed(digits) + " V";
+  }
+
+  // Predicted effective voltage, clamp badge and reach caption under each point dropdown (F3 / F4).
+  function refreshPointFacts(r, ratio) {
+    const def = r.def, c = r.ptSels[ratio];
+    const base = CV.cache[baselineId()] || null;
+    const infos = def.units.map((u) => ({ u: u, pr: predictUnit(u).byRatio[ratio] || null })).filter((x) => x.pr);
+    if (!baselineId()) { c.eff.textContent = "needs a baseline curve"; c.eff.title = "Mark a stock curve as the baseline in Curves; the effective voltage is predicted on it."; }
+    else if (!base) { c.eff.textContent = "loading the baseline"; c.eff.title = ""; }
+    else if (!infos.length) {
+      const bp = recAllPoints(base, def.units[0]).find((q) => q.ratio === ratio);
+      const why = bp && bp.status === "unreachable" ? bp.reason : null;
+      c.eff.textContent = why === "cpufreq_granularity" ? "cannot be pinned" : why === "max_turbo" ? "not measured" : "no measured voltage";
+      c.eff.title = "The baseline curve has no usable measurement at this ratio" + (why ? ": " + reasonText(why) : "") + ".";
+    }
+    else {
+      const src = infos.every((x) => x.pr.src === "fused") ? " (fused)" : "";
+      c.eff.textContent = "\u2192 " + fmtVRange(infos.map((x) => x.pr.v), 3) + src;
+      c.eff.title = "Predicted effective voltage: baseline VID + offset" + (src ? "; the fused top point stands in for the baseline here" : "") + ".";
+    }
+    const cl = infos.filter((x) => x.pr.by !== null);
+    c.badge.hidden = cl.length === 0;
+    if (cl.length) {
+      c.badge.textContent = "clamped to Vn\u22121" + (def.units.length > 1 ? " (" + cl.map((x) => x.u).join(", ") + ")" : "");
+      const x = cl[0];
+      c.badge.title = x.u + " " + ratio + "\u00d7 would be " + fmtV(x.pr.want, 3) + ", below the " + x.pr.by + "\u00d7 point; the hardware holds every point at or above the one before it, so it lands on " + fmtV(x.pr.v, 3) + ".";
+    }
+    const un = def.units.filter((u) => { const rc = reachOf(u); return isNum(rc) && ratio > rc; });
+    c.lab.classList.toggle("unreach", un.length === def.units.length && un.length > 0);
+    c.reach.hidden = un.length === 0;
+    if (un.length) {
+      const rc = reachOf(un[0]);
+      c.reach.textContent = un.length === def.units.length ? (def.units.length === 1 ? "not reachable on this core" : "not reachable on these cores") : "not reachable on " + un.join(", ");
+      c.reach.title = "The point still shapes the table and can be edited, but " + (un.length === 1 ? un[0] : "these cores") + " top" + (un.length === 1 ? "s" : "") + " out at " + rc + "\u00d7.";
+    }
+    const bad40 = def.kind === "E" && ratio === 40 && def.units.some((u) => curPts(u).some((p) => p.ratio === 40 && Math.abs(effPointMv(u, p)) > 0.049));
+    c.lab.classList.toggle("danger", bad40);
+  }
+
+  function refreshOcCell(r) {
+    if (!r.oc) return;
+    const units = r.def.units;
+    const rt = ratioOf(units, true), vt = vtOf(units, true), chR = !same(ratioOf(units, false), rt, 0.5) && isNum(rt), chV = isNum(vt) && !same(vtOf(units, false), vt, V_TOL);
+    const fused = units.map(fusedOf);
+    const bios = isNum(rt) && !chR && fused.every((f) => f && f.ratio === rt);
+    r.oc.ratio.textContent = "ratio " + (isNum(rt) ? rt + "\u00d7" + (bios ? " (BIOS)" : "") : rt === MIXED ? "mixed" : "not set");
+    r.oc.vt.textContent = "target " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "mixed" : "not set");
+    r.oc.box.classList.toggle("changed", chR || chV);
+    r.oc.box.classList.toggle("unset", !isNum(rt) && !isNum(vt));
+    const known = fused.filter(Boolean);
+    r.oc.fused.textContent = known.length ? "fused top point (0x09): " + known[0].ratio + "\u00d7, " + fmtVRange(known.map((f) => f.v), 4) : "fused top point: not read";
+  }
+
+  // F8 warnings from the values as they will be written.
+  function refreshRowWarn(r) {
+    const def = r.def, msgs = [];
+    const list = (us) => us.join(", ");
+    const at40 = def.units.filter((u) => unitKind(u) === "E" && curPts(u).some((p) => p.ratio === 40 && Math.abs(effPointMv(u, p)) > 0.049));
+    if (at40.length) msgs.push(["bad", list(at40) + ": the 40\u00d7 point carries an offset. A \u221220 mV offset there gave OCCT errors on this machine; keep point 5 at 0 mV."]);
+    const hot = def.units.filter((u) => unitKind(u) === "E" && isNum(effVt(u)) && effVt(u) > 1.2 + 1e-9);
+    if (hot.length) msgs.push(["warn", list(hot) + ": an E-core target above 1.2 V can trigger WHEA error reports."]);
+    const pos = def.units.filter((u) => curPts(u).some((p) => effPointMv(u, p) > 0.049));
+    if (pos.length) msgs.push(["warn", list(pos) + ": a positive offset raises the voltage above the fused curve."]);
+    fill(r.warn, msgs.map((m) => el("li", m[0], m[1])));
+    r.warn.hidden = msgs.length === 0;
   }
 
   function setSel(sel, value, tol) {
@@ -2389,10 +2645,13 @@
     const lows = def.units.flatMap((u) => curPts(u).map((p) => p.offset_mv));
     const off = isNum(c) ? fmtMv(c) : lows.length ? fmtMv(Math.min(...lows)) + " to " + fmtMv(Math.max(...lows)) : "n/a";
     const vt = vtOf(def.units, false), rt = ratioOf(def.units, false);
-    return "now " + off + " · " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "target mixed" : "target n/a") + " · " + (isNum(rt) ? rt + "×" : rt === MIXED ? "ratio mixed" : "ratio n/a");
+    const f = def.units.length === 1 ? fusedOf(def.units[0]) : null;
+    return "now " + off + " · " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "target mixed" : "target n/a") + " · " + (isNum(rt) ? rt + "×" : rt === MIXED ? "ratio mixed" : "ratio n/a") +
+      (f ? " · fused top " + f.ratio + "× " + f.v.toFixed(4) + " V" : "");
   }
 
   function refreshRows() {
+    T.pc = {};
     for (const id of Object.keys(T.refs)) {
       const r = T.refs[id], def = r.def;
       const changed = def.units.some((u) => T.draft[u]);
@@ -2421,6 +2680,9 @@
         if (ch) nPtChanged++;
       }
       if (open) r.offCell.classList.toggle("changed", nPtChanged > 0);
+      if (open) for (const ratio of Object.keys(r.ptSels)) refreshPointFacts(r, Number(ratio));
+      if (open) refreshOcCell(r);
+      refreshRowWarn(r);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
       setSel(r.vtSel, effVtv, V_TOL);
       const vtCh = !(effVtv === curVtv || (isNum(effVtv) && isNum(curVtv) && same(effVtv, curVtv, V_TOL)));
@@ -2433,6 +2695,8 @@
       r.rHint.textContent = rCh && isNum(effR) ? ratioHint(def.kind, effR) : (!rCh && curR === null ? "OC ratio reads 0 (not set)" : "");
     }
     updateTuneFoot();
+    renderVccia();
+    renderTurbo();
     renderTunePreview();
   }
 
@@ -2444,12 +2708,172 @@
   }
 
   function updateTuneFoot() {
-    const n = unitsChanged();
+    const n = unitsChanged(), tk = turboKinds();
     const msg = $("tn-foot-msg");
-    msg.textContent = n.length ? n.length + (n.length === 1 ? " unit" : " units") + " changed: " + n.join(", ") + ". Nothing is written until you review and confirm." : "No changes yet. Pick a value to start.";
-    msg.className = "tn-foot-msg" + (n.length ? " dirty" : "");
-    $("btn-tn-discard").disabled = n.length === 0;
+    const bits = [];
+    if (n.length) bits.push(n.length + (n.length === 1 ? " unit" : " units") + " changed: " + n.join(", "));
+    if (tk.length) bits.push("turbo table " + tk.join(" and ") + " changed");
+    msg.textContent = bits.length ? bits.join("; ") + ". Nothing is written until you review and confirm." : "No changes yet. Pick a value to start.";
+    msg.className = "tn-foot-msg" + (bits.length ? " dirty" : "");
+    $("btn-tn-discard").disabled = bits.length === 0;
     updateTuneGate();
+  }
+
+  // ---- F6: predicted VccIA ---------------------------------------------------------------------------------------------------------------------
+  const VCCIA = { ring: 1.20, margin: 0.105 };   // ring ~1.20 V at 40x; VccIA ~ highest allowed VID + 100-110 mV [MEASURED lnx 2026-10-03, hypothesis on 3+ points]
+
+  // The highest voltage the units may request when `which` buckets are the ones in force: "all" = every core loaded (last bucket), "few" = 1-2 cores (first bucket).
+  function vcciaFor(which) {
+    const tp = turboEff("P"), te = turboEff("E");
+    if (!tp || !te) return null;
+    const idx = which === "all" ? 7 : 0;
+    const best = { P: null, E: null };
+    for (const u of UNIT_IDS) {
+      const k = unitKind(u), want = (k === "P" ? tp : te)[idx], rc = reachOf(u);
+      const ratio = isNum(rc) ? Math.min(want, rc) : want;
+      const v = predAt(u, ratio);
+      if (v !== null && (best[k] === null || v > best[k].v)) best[k] = { unit: u, ratio: ratio, v: v };
+    }
+    const parts = [best.P, best.E, { unit: "ring", ratio: 40, v: VCCIA.ring }].filter(Boolean);
+    const top = parts.reduce((a, b) => (b.v > a.v ? b : a));
+    return { top: top, parts: best, total: top.v + VCCIA.margin };
+  }
+
+  function renderVccia() {
+    const card = $("tn-vccia-card");
+    card.hidden = !T.words;
+    if (!T.words) return;
+    const line = $("tn-vccia-line"), list = $("tn-vccia-list");
+    if (!baselineId()) {
+      line.textContent = "Needs a stock baseline curve.";
+      fill(list, []);
+      setText("tn-vccia-basis", "");
+      setText("tn-vccia-note", "Mark one stored curve as the stock baseline in Curves (Library, Set baseline). The prediction is made on it.");
+      return;
+    }
+    const all = vcciaFor("all"), few = vcciaFor("few");
+    if (!all) { line.textContent = "Turbo tables not read, so VccIA cannot be predicted."; fill(list, []); return; }
+    const rec = CV.cache[baselineId()];
+    setText("tn-vccia-basis", rec ? "estimate on " + (rec.name || rec.id) : "loading the baseline");
+    const lead = all.top.unit === "ring" ? "the ring at " + all.top.ratio + "\u00d7" : all.top.unit + " at " + all.top.ratio + "\u00d7";
+    fill(line, [document.createTextNode("Predicted VccIA \u2248 "), el("strong", "", all.total.toFixed(2) + " V"), document.createTextNode(", set by " + lead + " with every core loaded")]);
+    const rows = [];
+    const add = (label, part, top) => {
+      const li = el("li", top ? "top" : "");
+      li.append(el("span", "vc-who", label), el("span", "vc-val mono", part ? fmtV(part.v, 3) : "n/a"), el("span", "vc-at muted", part ? (part.unit === "ring" ? "fixed floor at " : part.unit + " at ") + part.ratio + "\u00d7" : ""));
+      return li;
+    };
+    rows.push(add("P-cores, highest", all.parts.P, all.top === all.parts.P), add("E-clusters, highest", all.parts.E, all.top === all.parts.E), add("Ring", { unit: "ring", ratio: 40, v: VCCIA.ring }, all.top.unit === "ring"));
+    const margin = el("li", "plus");
+    margin.append(el("span", "vc-who", "Regulator headroom"), el("span", "vc-val mono", "+" + VCCIA.margin.toFixed(3) + " V"), el("span", "vc-at muted", "100\u2013110 mV above the highest allowed VID"));
+    rows.push(margin);
+    fill(list, rows);
+    const fewTxt = few && few.top.unit !== "ring" ? " With only 1\u20132 cores loaded " + few.top.unit + " may run " + few.top.ratio + "\u00d7 and VccIA would be \u2248 " + few.total.toFixed(2) + " V." : "";
+    setText("tn-vccia-note", "Lowering a unit that does not set the maximum does not lower Vcore: only the unit named above moves VccIA. Hypothesis from three measured points." + fewTxt);
+  }
+
+  // ---- F5: turbo ratio tables -------------------------------------------------------------------------------------------------------------------
+  function turboLabel(k, i) {
+    const w = T.words && T.words.turbo ? T.words.turbo[k] : null;
+    const n = w && w.counts && isNum(w.counts[i]) ? w.counts[i] : null;
+    return n === null ? "bucket " + i : n + (n === 1 ? " core" : " cores");
+  }
+
+  function turboStepChart(k) {
+    const W = 380, H = 128, L = 30, R = 10, Tm = 10, B = 22;
+    const cur = turboCur(k), eff = turboEff(k);
+    const all = cur.concat(eff);
+    const lo = Math.min(...all) - 1, hi = Math.max(...all) + 1;
+    const x = (i) => L + (i * (W - L - R)) / 7, y = (v) => Tm + ((hi - v) * (H - Tm - B)) / (hi - lo);
+    const svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": (k === "P" ? "P-core" : "E-core") + " turbo ratio by active-core bucket: " + eff.map((v, i) => turboLabel(k, i) + " " + v + "x").join(", ") }, "turbo-svg");
+    const step = (arr) => arr.map((v, i) => (i ? "L" + x(i).toFixed(1) + " " + y(arr[i - 1]).toFixed(1) + "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join("");
+    const nodes = [];
+    for (const v of [Math.ceil(lo), Math.floor(hi)]) {
+      nodes.push(sv("line", { x1: L, x2: W - R, y1: y(v).toFixed(1), y2: y(v).toFixed(1) }, "tb-grid"));
+      const t = sv("text", { x: L - 5, y: (y(v) + 4).toFixed(1), "text-anchor": "end" }, "tb-tick");
+      t.textContent = v + "\u00d7";
+      nodes.push(t);
+    }
+    for (let i = 0; i < 8; i++) {
+      const t = sv("text", { x: x(i).toFixed(1), y: H - 6, "text-anchor": "middle" }, "tb-tick");
+      t.textContent = String(T.words.turbo[k].counts && isNum(T.words.turbo[k].counts[i]) ? T.words.turbo[k].counts[i] : i);
+      nodes.push(t);
+    }
+    if (cur.some((v, i) => v !== eff[i])) nodes.push(sv("path", { d: step(cur) }, "tb-line tb-cur"));
+    nodes.push(sv("path", { d: step(eff) }, "tb-line k-" + k));
+    eff.forEach((v, i) => nodes.push(sv("circle", { cx: x(i).toFixed(1), cy: y(v).toFixed(1), r: 3.5 }, "tb-dot k-" + k + (v !== cur[i] ? " changed" : ""))));
+    fill(svg, nodes);
+    return svg;
+  }
+
+  function renderTurbo() {
+    const card = $("tn-turbo-card");
+    card.hidden = !T.words;
+    if (!T.words) return;
+    const host = $("tn-turbo");
+    const tb = T.words.turbo;
+    if (!tb) {
+      T.turboRefs = {};
+      fill(host, [el("p", "muted", "Turbo ratio tables not read" + (T.words.tablesNote ? ": " + T.words.tablesNote : ".") + " They cannot be edited without a read.")]);
+      setText("tn-turbo-help", "");
+      return;
+    }
+    if (!T.turboRefs.P) buildTurbo();
+    for (const k of ["P", "E"]) {
+      const r = T.turboRefs[k], eff = turboEff(k), cur = turboCur(k);
+      const dirty = turboKinds().indexOf(k) >= 0;
+      r.undo.disabled = !dirty;
+      r.box.classList.toggle("changed", dirty);
+      for (let i = 0; i < 8; i++) {
+        const sel = r.sels[i], hi = i === 0 ? POLICY.ratioMax[k] : eff[i - 1];
+        const opts = [];
+        for (let v = 8; v <= hi; v++) opts.push(Object.assign(el("option", "", v + "\u00d7" + (v === cur[i] ? "  \u00b7 now" : "")), { value: String(v) }));
+        fill(sel, opts);
+        sel.value = String(eff[i]);
+        r.cells[i].classList.toggle("changed", eff[i] !== cur[i]);
+      }
+      fill(r.chart, [turboStepChart(k)]);
+      const fav = T.words.turbo.favored || {};
+      const favIds = Object.keys(fav).sort();
+      r.note.textContent = k === "P"
+        ? (favIds.length ? "Favored ratio per core (0x1C) sits on top of the table: " + favIds.map((u) => u + " " + fav[u] + "\u00d7").join(", ") + "." : "Favored ratios per core were not read.")
+        : "E-clusters have no favored core. 47\u201348\u00d7 come from this table, on point 6's voltage.";
+    }
+    setText("tn-turbo-note", "bucket = number of active cores, fewest first");
+    setText("tn-turbo-help", "Ratios may only fall as more cores are active. A value higher than the bucket to its left is not offered, and lowering a bucket brings the ones on its right down with it. A plan that breaks the order is refused with TURBO_ORDER. Counts are read-only.");
+  }
+
+  function buildTurbo() {
+    const blocks = [];
+    T.turboRefs = {};
+    for (const k of ["P", "E"]) {
+      const box = el("div", "turbo-kind k-" + k);
+      const head = el("div", "turbo-head");
+      head.append(el("span", "kind-dot k-" + k), el("h3", "", k === "P" ? "P-cores" : "E-clusters"), el("span", "muted", k === "P" ? "0x1AD, counts 0x1AE" : "0x650, counts 0x651"));
+      const undo = el("button", "small", "Undo");
+      undo.type = "button";
+      undo.addEventListener("click", () => { delete T.turbo[k]; refreshRows(); });
+      head.append(el("span", "grow"), undo);
+      const chart = el("div", "turbo-chart");
+      const sels = [], cells = [];
+      const row = el("div", "turbo-sels");
+      for (let i = 0; i < 8; i++) {
+        const lab = el("label", "tn-pt");
+        lab.append(el("span", "tn-pt-ratio", turboLabel(k, i)));
+        const sel = el("select", "tn-sel tn-sel-s");
+        sel.setAttribute("aria-label", (k === "P" ? "P-core" : "E-cluster") + " turbo ratio with " + turboLabel(k, i) + " active");
+        sel.addEventListener("change", () => { setBucket(k, i, Number(sel.value)); refreshRows(); });
+        lab.append(sel);
+        sels.push(sel);
+        cells.push(lab);
+        row.append(lab);
+      }
+      const note = el("p", "muted turbo-note", "");
+      box.append(head, chart, row, note);
+      blocks.push(box);
+      T.turboRefs[k] = { box: box, undo: undo, chart: chart, sels: sels, cells: cells, note: note };
+    }
+    fill($("tn-turbo"), blocks);
   }
 
   // ---- tune.read result ----------------------------------------------------------------------------------------------------------------------
@@ -2487,7 +2911,20 @@
       units[id] = { id: id, cpu: cpu, oc: pts.find((p) => p.point === 0) || null, points: pts.filter((p) => p.point !== 0) };
     }
     const tables = isObj(r.tables) && Array.isArray(r.tables.p) && Array.isArray(r.tables.e) ? { p: r.tables.p.filter(isNum), e: r.tables.e.filter(isNum) } : null;
-    return { units: units, raw: r, accepted: r.accepted_match, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
+    // contract 9 addendum (2026-10-11): fused {cpu: {word, ratio, v}} (cmd 0x09) and turbo {P: {ratios[8], counts[8]}, E: {...}, favored: {cpu: ratio}}
+    const unitOfCpu = (c) => { const n = Number(c); return !Number.isInteger(n) || n < 0 ? null : n < 8 ? "P" + n : n < 24 ? "EC" + Math.floor((n - 8) / 4) : null; };
+    const fused = {};
+    if (isObj(r.fused)) for (const k of Object.keys(r.fused)) {
+      const id = unitOfCpu(k), f = r.fused[k];
+      if (id && !fused[id] && isObj(f) && isNum(f.v) && isNum(f.ratio)) fused[id] = { word: typeof f.word === "string" ? f.word : null, ratio: f.ratio, v: f.v };
+    }
+    const tb = (o) => (isObj(o) && Array.isArray(o.ratios) && o.ratios.length === 8 && o.ratios.every(isNum) ? { ratios: o.ratios.slice(), counts: Array.isArray(o.counts) ? o.counts.filter(isNum) : null } : null);
+    let turbo = null;
+    if (isObj(r.turbo) && tb(r.turbo.P) && tb(r.turbo.E)) {
+      turbo = { P: tb(r.turbo.P), E: tb(r.turbo.E), favored: {} };
+      if (isObj(r.turbo.favored)) for (const k of Object.keys(r.turbo.favored)) { const id = unitOfCpu(k); if (id && id.charAt(0) === "P" && isNum(r.turbo.favored[k])) turbo.favored[id] = r.turbo.favored[k]; }
+    } else if (tables && tables.p.length === 8 && tables.e.length === 8) turbo = { P: { ratios: tables.p.slice(), counts: null }, E: { ratios: tables.e.slice(), counts: null }, favored: {} };
+    return { units: units, raw: r, accepted: r.accepted_match, fused: fused, turbo: turbo, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
       tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true };
   }
 
@@ -2505,6 +2942,8 @@
     if (!Object.keys(w.units).length) { setText("tn-status", "The read returned no V/F units for the 12 tuning units. Nothing to edit."); return; }
     T.words = w;
     T.draft = {};
+    T.turbo = {};
+    T.turboRefs = {};
     T.uiMode = {};
     T.expanded = new Set();
     const a = appliedFromWords(w);
@@ -2590,7 +3029,7 @@
     $("btn-tune-cancel").disabled = !reading || S.cancelling || S.sessionLost;
     setText("tn-left", opsLeft() === null ? "n/a" : opsLeft());
     const idle = idleGate() === "";
-    $("btn-tn-plan").disabled = !idle || unitsChanged().length === 0;
+    $("btn-tn-plan").disabled = !idle || (unitsChanged().length === 0 && turboKinds().length === 0);
     $("btn-tn-reset").disabled = !idle || !T.words;
     $("btn-tn-restore").disabled = !idle || !T.words;
     $("btn-pr-save").disabled = unitsChanged().length === 0 || !PROFILE_RE.test($("pr-name").value);
@@ -2614,7 +3053,12 @@
         $("btn-tune-read").focus();
         return;
       }
-      onError(errText(body) + (isObj(body.error) && body.error.code === "REFUSED" && chk === "POLICY_RANGE" ? ". The policy refused this; change the value." : ""));
+      if (isObj(intent) && intent.turbo !== undefined && isObj(body.error) && body.error.code === "BAD_REQUEST") {
+        onError("This helper does not accept turbo table edits (intent.turbo). Undo the turbo table change to review the rest. " + errText(body));
+        return;
+      }
+      onError(errText(body) + (isObj(body.error) && body.error.code === "REFUSED" && chk === "POLICY_RANGE" ? ". The policy refused this; change the value." : "") +
+        (chk === "TURBO_ORDER" ? ". Each bucket must be at or below the one to its left (fewer active cores): lower the higher bucket, or raise the ones before it." : ""));
     }
   }
 
@@ -2633,7 +3077,8 @@
       if (e === null) { (out[u] || (out[u] = {}))[i] = { unread: true, point: i, ratio: null, offset_mv: null, v_target_v: null }; return; }
       if (!isObj(e)) return;
       const pt = e.oc === true ? 0 : isNum(e.point) ? e.point : i;
-      (out[u] || (out[u] = {}))[pt] = { point: pt, ratio: isNum(e.ratio) ? e.ratio : null, offset_mv: isNum(e.offset_mv) ? e.offset_mv : null, v_target_v: isNum(e.v_target_v) ? e.v_target_v : null };
+      (out[u] || (out[u] = {}))[pt] = { point: pt, ratio: isNum(e.ratio) ? e.ratio : null, offset_mv: isNum(e.offset_mv) ? e.offset_mv : null, v_target_v: isNum(e.v_target_v) ? e.v_target_v : null,
+        effective_v: isNum(e.effective_v) ? e.effective_v : null, clamped_by: isNum(e.clamped_by) ? e.clamped_by : null };
     };
     if (Array.isArray(x)) x.forEach((e, i) => { if (isObj(e)) put(e.unit, e, i); });
     else if (isObj(x)) {
@@ -2695,10 +3140,17 @@
     const P = T.plan, res = P.res;
     const nodes = [];
     const changedUnits = P.diff.filter((d) => d.changes > 0);
+    const tbk = isObj(P.intent) && isObj(P.intent.turbo) ? Object.keys(P.intent.turbo) : [];
     const head = el("div", "plan-head");
-    head.append(el("span", "plan-big", changedUnits.length ? changedUnits.length + (changedUnits.length === 1 ? " unit changes" : " units change") : "Nothing changes"),
-      el("span", "muted", changedUnits.map((d) => d.unit).join(", ")));
+    head.append(el("span", "plan-big", changedUnits.length ? changedUnits.length + (changedUnits.length === 1 ? " unit changes" : " units change") : tbk.length ? "Turbo table changes" : "Nothing changes"),
+      el("span", "muted", changedUnits.map((d) => d.unit).concat(tbk.map((k) => "turbo " + k)).join(", ")));
     nodes.push(head);
+    const vc = isObj(res.vccia) && isNum(res.vccia.predicted_v) ? res.vccia : null;
+    if (vc) {
+      const sb = isObj(vc.set_by) ? vc.set_by : null;
+      nodes.push(el("p", "plan-vccia", "Predicted VccIA \u2248 " + vc.predicted_v.toFixed(2) + " V" + (sb && typeof sb.unit === "string" ? ", set by " + sb.unit + (isNum(sb.ratio) ? " at " + sb.ratio + "\u00d7" : "") : "") +
+        ". Lowering a unit that does not set the maximum does not lower Vcore."));
+    }
     const ops = el("p", "plan-ops");
     ops.append(el("strong", "", "Each request is a WRMSR. "), document.createTextNode("This plan needs " + (isNum(res.ops_needed) ? res.ops_needed : "an unknown number of") + " operations" +
       (isNum(res.ops_left) ? " of the " + res.ops_left + " left this boot" : "") + ". One mailbox transaction at a time, each read back."));
@@ -2718,7 +3170,7 @@
     const warns = Array.isArray(res.warnings) ? res.warnings.filter((x) => typeof x === "string") : [];
     if (warns.length) {
       const ul = el("ul", "plan-warn");
-      for (const x of warns) ul.append(el("li", "", x));
+      for (const x of warns) ul.append(el("li", warnClass(x), x));
       nodes.push(ul);
     }
     const tog = el("button", "link", T.showUnchanged ? "Hide unchanged points" : "Show unchanged points");
@@ -2728,7 +3180,8 @@
     const tbl = el("table", "grid num plan-table");
     tbl.append(el("caption", "sr", "Before and after for each unit and V/F point"));
     const th = el("thead"), thr = el("tr");
-    for (const [t, c] of [["Unit", ""], ["Point", ""], ["Ratio", "n"], ["Offset", "n"], ["Target voltage", "n"]]) { const h = el("th", c, t); h.scope = "col"; thr.append(h); }
+    const showEff = P.diff.some((d) => d.rows.some((r) => r.a && isNum(r.a.effective_v)));
+    for (const [t, c] of [["Unit", ""], ["Point", ""], ["Ratio", "n"], ["Offset", "n"], ["Target voltage", "n"]].concat(showEff ? [["Effective voltage", "n"]] : [])) { const h = el("th", c, t); h.scope = "col"; thr.append(h); }
     th.append(thr);
     const tb = el("tbody");
     for (const d of P.diff) {
@@ -2741,15 +3194,58 @@
           td(arrow(r.b && r.b.ratio, r.a && r.a.ratio, (v) => (v === null ? "n/a" : v + "×"), r.b && r.b.unread), "n"),
           td(r.pt === 0 && !isNum(x.offset_mv) ? "n/a" : arrow(r.b && r.b.offset_mv, r.a && r.a.offset_mv, (v) => fmtMv(v, v !== null && Math.abs(v - Math.round(v)) < 0.05 ? 0 : 1), r.b && r.b.unread), "n"),
           td(r.pt === 0 ? arrow(r.b && r.b.v_target_v, r.a && r.a.v_target_v, (v) => (v === null ? "n/a" : v.toFixed(3) + " V"), r.b && r.b.unread) : "", "n"));
+        if (showEff) {
+          const cell = td(r.a && isNum(r.a.effective_v) ? r.a.effective_v.toFixed(3) + " V" : "", "n");
+          if (r.a && r.a.clamped_by !== null && r.a.clamped_by !== undefined) {
+            const b = el("span", "tn-badge", "clamped to Vn\u22121");
+            b.title = "Raised to the voltage of " + clampedByText(d.unit, r.a.clamped_by) + ": the hardware keeps every point at or above the one before it.";
+            cell.append(document.createTextNode(" "), b);
+          }
+          tr.append(cell);
+        }
         tb.append(tr);
       });
     }
     tbl.append(th, tb);
-    nodes.push(el("div", "scroll plan-scroll"));
-    nodes[nodes.length - 1].append(tbl);
+    if (P.diff.some((d) => d.changes > 0 || T.showUnchanged)) { nodes.push(el("div", "scroll plan-scroll")); nodes[nodes.length - 1].append(tbl); }
+    if (tbk.length) nodes.push(turboDiffNode(P.intent.turbo));
     nodes.push(el("p", "muted plan-revert", "Revert: cold boot the machine, or reapply a profile. The CPU forgets these words on every cold boot."));
     if (P.state === "running" || P.state === "done" || P.state === "error") nodes.push(planResultNode());
     fill($("dlg-plan-body"), nodes);
+  }
+
+  // Severity of a warning line by what it is about (F4 / F8): the E 40x point is red, WHEA and positive offsets are amber, the rest is plain.
+  function warnClass(text) {
+    if (/40\s*[x\u00d7]|OCCT/.test(text)) return "bad";
+    if (/WHEA|positive offset|above fused|clamp/i.test(text)) return "warn";
+    return "";
+  }
+
+  function clampedByText(unit, idx) {
+    const u = T.words && T.words.units[unit], pt = u ? u.points.find((p) => p.point === idx) : null;
+    return pt && isNum(pt.ratio) ? "the " + pt.ratio + "\u00d7 point (point " + idx + ")" : "point " + idx;
+  }
+
+  function turboDiffNode(intent) {
+    const box = el("div", "plan-turbo");
+    box.append(el("h3", "dlg-sub", "Turbo ratio tables"));
+    const t = el("table", "grid num tbl-turbo");
+    t.append(el("caption", "sr", "Turbo ratios before and after, by active-core bucket"));
+    const hr = el("tr");
+    hr.append(Object.assign(el("th", "", "Table"), { scope: "col" }));
+    for (let i = 0; i < 8; i++) hr.append(Object.assign(el("th", "n", "bucket " + i), { scope: "col" }));
+    const head = el("thead"), body = el("tbody");
+    head.append(hr);
+    for (const k of Object.keys(intent)) {
+      const cur = turboCur(k) || [];
+      const tr = el("tr");
+      tr.append(el("th", "", (k === "P" ? "P-cores" : "E-clusters")));
+      intent[k].forEach((v, i) => tr.append(td(isNum(cur[i]) && cur[i] !== v ? cur[i] + "\u00d7 \u2192 " + v + "\u00d7" : v + "\u00d7", "n mono")));
+      body.append(tr);
+    }
+    t.append(head, body);
+    box.append(t);
+    return box;
   }
 
   function planResultNode() {
@@ -2993,8 +3489,20 @@
         if (pa.length) model.series.push({ key: u, unit: u, label: u, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v })) });
         const d = T.draft[u];
         if (d && pa.length && (d.curveMv !== undefined || Object.keys(d.pts).length)) {
-          model.series.push({ key: u + ":pred", unit: u, label: u + " (prediction)", dash: true,
-            pts: pa.map((p) => ({ mhz: p.mhz, v: p.v + (effOffsetAt(u, p.ratio, true) - effOffsetAt(u, p.ratio, false)) / 1000 })) });
+          // F4: with a stock baseline the prediction is its VID + the new offsets at the unit's points, clamped so no point sits below the one before it;
+          // without one it is the measured curve plus the change in offset, clamped the same way.
+          const pr = predictUnit(u);
+          const known = Object.keys(pr.byRatio).map(Number).filter((r) => pr.byRatio[r]).sort((a, b) => a - b);
+          let pts, clamped = [];
+          if (known.length > 1) {
+            pts = known.map((r) => ({ mhz: r * 100, v: pr.byRatio[r].v }));
+            clamped = known.filter((r) => pr.byRatio[r].by !== null).map((r) => ({ mhz: r * 100, v: pr.byRatio[r].v, by: pr.byRatio[r].by, r: r }));
+          } else {
+            pts = pa.map((p) => ({ mhz: p.mhz, v: p.v + (effOffsetAt(u, p.ratio, true) - effOffsetAt(u, p.ratio, false)) / 1000 }));
+            for (let i = 1; i < pts.length; i++) if (pts[i].v < pts[i - 1].v) { pts[i] = { mhz: pts[i].mhz, v: pts[i - 1].v }; clamped.push({ mhz: pts[i].mhz, v: pts[i].v, by: pts[i - 1].mhz / 100, r: pts[i].mhz / 100 }); }
+          }
+          model.series.push({ key: u + ":pred", unit: u, label: u + " (prediction)", dash: true, pts: pts });
+          for (const c of clamped) (model.pins || (model.pins = [])).push({ unit: u, kind: "clamp", mhz: c.mhz, v: c.v, title: u + " " + c.r + "\u00d7: clamped up to the " + c.by + "\u00d7 point's voltage (V(n) never below V(n\u22121))." });
         }
         if (d && (d.vt !== undefined || d.ratio !== undefined)) {
           const cr = curRatio(u), cv = curVt(u), er = effRatio(u), ev = effVt(u);
@@ -3005,9 +3513,11 @@
       if (!model.series.length) model.empty = T.drawn.size ? "The selected curve has no points for these units." : "No units drawn. Press a unit below.";
     }
     T.chart.render(model);
+    const clampedUnits = Array.from(new Set((model.pins || []).map((q) => q.unit)));
     const kind = rec && isObj(rec.tuning_state) ? rec.tuning_state.kind : null;
-    setText("tn-preview-note", "Dashed lines are a prediction, not a measurement: the measured voltage plus the change in offset at each ratio. Hollow rings mark the OC target now, filled rings the new one." +
-      (kind ? " Measured curve: " + tuningWords(kind).replace(/^Tuning/, "tuning") + "." : "") + " After Apply, measure again.");
+    setText("tn-preview-note", "Dashed lines are a prediction, not a measurement: the stock baseline's voltage plus the new offsets at each point (the measured voltage plus the change in offset when no baseline is set). Large hollow rings mark the OC target now, filled rings the new one." +
+      (kind ? " Measured curve: " + tuningWords(kind).replace(/^Tuning/, "tuning") + "." : "") + " After Apply, measure again." +
+      (clampedUnits.length ? " Where a deeper offset would put a point below the one before it, the hardware raises it: the dashed line steps flat there and a small ring with a surface fill marks it (" + clampedUnits.join(", ") + ")." : ""));
   }
 
   function initTune() {
@@ -3022,9 +3532,11 @@
       renderWordsTable();
       refreshRows();
     });
-    $("btn-tn-discard").addEventListener("click", () => { T.draft = {}; refreshRows(); });
+    $("btn-tn-discard").addEventListener("click", () => { T.draft = {}; T.turbo = {}; refreshRows(); });
     $("btn-tn-plan").addEventListener("click", () => {
       const intent = buildIntent();
+      const tb = turboIntent();
+      if (tb) intent.turbo = tb;   // contract 9 addendum does not pin the turbo-bucket intent; reported as an assumption (G-115)
       requestPlan(intent, (m) => { const f = $("tn-foot-msg"); f.textContent = "Not reviewed: " + m; f.className = "tn-foot-msg bad"; });
     });
     $("btn-tn-reset").addEventListener("click", () => requestPlan({ reset: "stock" }, (m) => setText("tn-status", "Reset not planned: " + m)));

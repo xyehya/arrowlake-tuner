@@ -221,6 +221,8 @@
         </div>
         <div class="legend-chips" id="cv-legend" role="group" aria-label="Units drawn. Press to toggle; hold Shift to show only one."></div>
         <div class="vfchart-host" id="cv-chart"></div>
+        <p class="muted cv-note" id="cv-base-note"></p>
+        <p class="muted cv-note" id="cv-unreach"></p>
       </div>
       <div id="cv-table-wrap" hidden>
         <div class="toolbar">
@@ -285,6 +287,19 @@
           <button type="button" id="btn-tn-plan" class="primary" disabled>Review changes</button>
         </div>
       </div>
+    </article>
+
+    <article class="card" id="tn-vccia-card" hidden>
+      <div class="card-head"><h2>Predicted VccIA</h2><span class="muted" id="tn-vccia-basis"></span></div>
+      <p class="vccia-line" id="tn-vccia-line"></p>
+      <ul class="vccia-list" id="tn-vccia-list"></ul>
+      <p class="muted" id="tn-vccia-note"></p>
+    </article>
+
+    <article class="card" id="tn-turbo-card" hidden>
+      <div class="card-head"><h2>Turbo ratio tables</h2><span class="muted" id="tn-turbo-note"></span></div>
+      <div class="turbo-grid" id="tn-turbo"></div>
+      <p class="muted" id="tn-turbo-help"></p>
     </article>
 
     <article class="card" id="tn-preview-card" hidden>
