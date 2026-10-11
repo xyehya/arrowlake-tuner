@@ -10,5 +10,6 @@
 | G-106 | install layout: `install.sh`/`uninstall.sh`, polkit action, root-owned paths; CLI audit/lock path move | lnx | T0 build / T1 install | **merged** 2026-10-08 | G-102 |
 | G-107 | helper: budget in heartbeat, `accepted_match` in `vf.dump` (contract 8 addendum) | lnx | T0 | **merged** 2026-10-08 | G-102 |
 | G-108 | uninstall keeps lock dir while `/etc/arltuner` stays; CLI refuses on missing lock dir | lnx | T0 | **merged** 2026-10-08 | G-106 |
+| G-109 | telemetry gaps from the first real GUI run: Vcore (nct6686 VIN16), DRAM perf wiring, temp names, mode header | lnx | T0 | ready 2026-10-11 | G-104/105/107 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
