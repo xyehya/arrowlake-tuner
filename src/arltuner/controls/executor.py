@@ -85,12 +85,15 @@ def _run_step(
     step: PlanStep,
     pacer: _Pacer,
     progress: Callable[[str], None] | None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[StepResult, int]:
     """Send one step through the guard. Returns ``(result, response word)``; raises ``_Stop`` if the run must end here."""
     req = step.guard_request()
     is_msr_read = step.kind is StepKind.READ_MSR  # a plain read is not a WRMSR: no dwell before it, none started by it
+    _check_cancel(cancelled, step)
     if not is_msr_read:
         pacer.wait(progress)
+        _check_cancel(cancelled, step)  # a cancel that cut the dwell wait short must not send the next request before the dwell has passed
     if progress is not None:
         what = f"msr {step.msr:#x}" if step.msr is not None else f"cmd {step.cmd:#04x}"
         progress(f"step {step.number}: cpu {step.cpu} {what} {step.purpose}")
@@ -249,8 +252,7 @@ def apply_profile(
 
     try:
         for step in read_steps(targets, policy, profile, topology):
-            _check_cancel(cancelled, step)
-            result, word = _run_step(guard, confirm, step, pacer, progress)
+            result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
             results.append(result)
             if step.kind is StepKind.READ_MSR:
                 assert step.msr is not None
@@ -297,8 +299,7 @@ def apply_profile(
         for step in plan.steps:
             if not step.kind.is_write:
                 continue
-            _check_cancel(cancelled, step)
-            result, _ = _run_step(guard, confirm, step, pacer, progress)
+            result, _ = _run_step(guard, confirm, step, pacer, progress, cancelled)
             results.append(result)
     except _Stop as stop:
         return _report(profile, guard, results, plan, warnings, stop, policy)

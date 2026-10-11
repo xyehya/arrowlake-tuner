@@ -82,6 +82,22 @@ class Cancel(HookCase):
         self.assertEqual(report.operations, len([r for r in report.steps if r.status is not StepStatus.CANCELLED]))  # the cancelled step is not counted
         self.assertTrue(report.revert_plan)  # the revert plan of what was written is still reported
 
+    def test_a_cancel_that_cut_the_dwell_short_sends_nothing_more(self) -> None:
+        # dwell 60 s (policy_with default): the flag is raised while the executor waits for it; the request after the wait must not be sent
+        seen = {"sent": None}
+
+        def cancelled() -> bool:
+            if self.s.fake.sleeps:
+                if seen["sent"] is None:
+                    seen["sent"] = len(self.s.requests())
+                return True
+            return False
+
+        report = self.s.apply(self.profile, cancelled=cancelled)
+        self.assertEqual(report.stop_kind, StopKind.CANCELLED)
+        self.assertEqual(len(self.s.requests()), seen["sent"])  # nothing left after the dwell wait in which the flag was seen
+        self.assertEqual(self.writes(), [])
+
     def test_a_flag_that_never_sets_changes_nothing(self) -> None:
         report = self.s.apply(self.profile, cancelled=lambda: False)
         self.assertTrue(report.ok)
