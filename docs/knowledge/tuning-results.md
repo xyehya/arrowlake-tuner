@@ -68,3 +68,20 @@ Linpack time-to-error is noisy (same offsets: 50 min at LLC 7, ~2 min at LLC 6):
 5. Voltages are targets, not offsets, at the top points (p-step7); monotonic clamp can silently absorb an offset (check read-back voltage, not just the word).
 6. Per-boot budget: STATE.md rule: restore (~400 ops incl. the post-apply vf-dump) plus one complete P profile (78) fits in 600; restore plus two more profiles does not (reboot, never raise the cap). Counts differ by source: ~400 (STATE.md), ~480 (win-first-apply.md), 167 = apply-only (65+51+51); reads count toward the cap, read-backs do not.
 7. Operator still parked: 58x P0 test outcome, newer Linpack build (Intel oneMKL Benchmarks Suite 2026.0 vs Linpack Xtreme 1.1.8) `linuxmon@b01f78a:docs/research/linpack-binaries.md`, E 48x/46x split via OC-point V target (idea only, never applied).
+
+## Stock V/F curve, measured (first v3 `vf.measure` Quick) [MEASURED lnx 2026-10-11 18:17 UTC]
+Cold boot, runtime offsets 0 (the 16:57 UTC word read showed bare ratios), BIOS LLC 6 / VccIA −100 mV unchanged; curve id `20261011T181718Z-y4c7`
+(baseline, `/var/lib/arltuner/curves/`). Requested VID (V) at ratio under single-unit load; temps 28–80 °C. `unrea` = cap search could not reach the
+ratio (non-favored P-cores top out at 55×), `misma` = never settled at the target.
+| Unit | 8× | 20× | 30× | 48× | 53× | 55× | 56× | 57× |
+|---|---|---|---|---|---|---|---|---|
+| P0 ★ | 0.693 | 0.721 | 0.811 | 1.041 | 1.216 | 1.299 | 1.386 | mismatch |
+| P1 | 0.691 | 0.723 | 0.806 | 1.041 | 1.221 | 1.306 | — | — |
+| P2 | 0.691 | 0.721 | 0.821 | 1.073 | 1.271 | 1.366 | — | — |
+| P3 ★ | 0.691 | 0.721 | 0.821 | 1.061 | 1.221 | 1.299 | 1.359 | mismatch |
+| P4 | 0.688 | 0.713 | 0.804 | 1.033 | 1.226 | 1.319 | — | — |
+| P5 | 0.690 | 0.721 | 0.811 | 1.054 | 1.261 | 1.359 | — | — |
+| P6 | 0.691 | 0.721 | 0.805 | 1.033 | 1.249 | 1.346 | — | — |
+| P7 | 0.690 | 0.719 | 0.811 | 1.041 | 1.271 | 1.376 | — | — |
+E clusters (8× 15× 23× 30× 40× 46×): EC0 0.775 0.775 mismatch 0.775 0.970 1.157 · EC1 0.775 0.775 mismatch 0.775 0.970 1.137 · EC2/EC3 0.775 0.775
+mismatch 0.775 0.963 1.137 (0.775 V = E-cluster VID floor up to 30×). Open: 57× never settles on P0/P3 under this method; E 23× never settles.
