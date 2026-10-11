@@ -308,7 +308,7 @@ class Apply(CliCase):
         code, out, _ = self.run_cli(*args, stdin=self.confirmed())
         self.assertEqual(code, 0, out)
         self.assertIn(XTU_SHAPE_CAVEAT, out)
-        self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", out)
+        self.assertIn("a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio", out)
         self.assertEqual(self.sim.vf(4).ratio, 50)
         self.assertEqual(self.sim.favored_word(4) & 0xFF, 50)  # 0x1D carried the ratio
 
@@ -490,7 +490,7 @@ class Measured(CliCase):
         self.assertEqual((code, err), (0, ""), out)
         self.assertIn("Result: OK", out)
         self.assertIn("0xff600039", out)  # G-120: P0 ratio 57 = top fused ratio, no OC point, target 0
-        self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", out)
+        self.assertIn("a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio", out)
         self.assertIn("(restores the word in effect before the write", out)
 
     def test_read_vf_of_a_measured_zero_word(self) -> None:

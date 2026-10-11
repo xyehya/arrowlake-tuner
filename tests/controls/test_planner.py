@@ -598,8 +598,8 @@ class Warnings(unittest.TestCase):
 
     def test_revert_note_text(self) -> None:
         self.assertIn("a reboot restores the BIOS-programmed state", REVERT_NOTE)
-        self.assertIn("baseline of 0x0 cannot be restored by a write", REVERT_NOTE)
-        self.assertIn("never a word with a zero field", REVERT_NOTE)
+        self.assertIn("a write cannot clear an OC ratio above the top fused ratio", REVERT_NOTE)
+        self.assertIn("never one with a zero field", REVERT_NOTE)
         self.assertIn("after a raise the ratio first, then the voltage", REVERT_NOTE)  # frequency-first (D-016)
         self.assertTrue(REVERT_NOTE.isascii())
 

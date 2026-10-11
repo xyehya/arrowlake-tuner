@@ -484,6 +484,10 @@ class V3Ops:
                           "cpus": cpus, "measured": None})
             tune[u] = {"cpus": [{"cpu": UNIT_CPUS[u][0], "points": [oc_t] + [{"point": p["point"], "ratio": p["ratio"], "offset_mv": p["offset_mv"],
                                                                                 "v_target_v": None, "mode": "adaptive"} for p in t["points"]]}]}
+            if u in getattr(self, "oc_point_units", ()):  # G-125: the real helper reads the OC point back as P2 = fused count + 1, flagged oc_point
+                n = len(t["points"]) + 1
+                tune[u]["cpus"][0]["points"].append({"point": n, "ratio": oc_t["ratio"] or 48, "offset_mv": 0.0, "v_target_v": None, "mode": "adaptive", "oc_point": True,
+                                                     "point_label": f"OC (point {n})"})
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
         fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}
