@@ -196,7 +196,7 @@
     const i = Math.min(Math.floor(x), ramp.length - 2), u = x - i;
     const a = hexRgb(ramp[i]), b = hexRgb(ramp[i + 1]);
     const c = a.map((v, k) => Math.round(v + (b[k] - v) * u));
-    return { hex: "#" + c.map((v) => v.toString(16).padStart(2, "0")).join(""), light: (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255 > 0.55 };
+    return { hex: "#" + c.map((v) => v.toString(16).padStart(2, "0")).join(""), light: (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255 > 0.5 };
   }
 
   // ---- core identity ---------------------------------------------------------------------------------------------------------------

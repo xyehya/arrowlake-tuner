@@ -174,10 +174,12 @@ main { max-width: 1680px; margin: 0 auto; padding: 20px clamp(16px, 3vw, 40px) 4
 .tile-E .tile-face { stroke: color-mix(in srgb, var(--e-core) 45%, #2c3a70); }
 .tile:hover .tile-face { stroke: #ffffff; stroke-width: 2; }
 .tile-name { font: 600 12px var(--sans); fill: #c9d1f2; }
-.tile-val { font: 300 20px var(--sans); fill: #ffffff; }
+.tile-val { font: 400 20px var(--sans); fill: #ffffff; }
+/* light ink on mid-ramp fills gets a dark halo so the numbers stay legible (contrast) at every ramp position */
+.tile:not(.ink-dark) .tile-name, .tile:not(.ink-dark) .tile-val { paint-order: stroke; stroke: #0a1028; stroke-width: 2px; stroke-linejoin: round; }
 .tile-val-E { font-size: 13px; font-weight: 500; }
 .tile-na .tile-val { fill: #8d97bf; font-size: 12px; font-weight: 500; }
-.ink-dark .tile-name, .ink-dark .tile-val { fill: #0c1330; }
+.ink-dark .tile-name, .ink-dark .tile-val { fill: #0a1028; font-weight: 500; }
 .die-empty { font: 14px var(--sans); fill: #a9b3da; }
 .die-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px; }
 .ramp-legend { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
