@@ -12,7 +12,7 @@ from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort
 
 from ._support import Harness
-from .test_tune import ADVANCED, TuneCase, error_code, row, rows
+from .test_tune import ADVANCED, TuneCase, error_code, row, rows, texts
 
 P_TABLE = [8, 20, 30, 48, 53, 55, 56, 57]
 E_TABLE = [8, 15, 23, 30, 40, 46]
@@ -138,7 +138,8 @@ class PlanFactsTests(FactsCase):
         self.assertAlmostEqual(a["effective_v"], 1.386, places=4)  # not 1.4288 - 0.05 = 1.379
         self.assertEqual(p["before"]["P0"]["8"]["clamped_by"], None)
         self.assertAlmostEqual(p["before"]["P0"]["8"]["effective_v"], 1.4288, places=4)
-        self.assertTrue(any("P0 point 8 (57x)" in w and "clamped up" in w and "point 7" in w for w in p["warnings"]), p["warnings"])
+        self.assertTrue(any("P0 point 8 (57x)" in w and "clamped up" in w and "point 7" in w for w in texts(p)), p["warnings"])
+        self.assertIn("CLAMPED", [w["code"] for w in p["warnings"]])
         view = p["predicted"]["P0"]
         self.assertEqual(sorted(view, key=int), [str(n) for n in range(1, 9)])  # every point of a touched unit
         self.assertEqual((view["8"]["clamped_by"], view["7"]["clamped_by"]), (7, None))
@@ -152,7 +153,7 @@ class PlanFactsTests(FactsCase):
         self.assertEqual(p["after"]["P2"]["5"]["clamped_by"], None)
         view = p["predicted"]["P2"]
         self.assertEqual((view["6"]["clamped_by"], view["7"]["clamped_by"], view["8"]["clamped_by"]), (5, 5, 5))
-        self.assertTrue(any("P2 point 6 (55x)" in w and "point 5" in w for w in p["warnings"]), p["warnings"])
+        self.assertTrue(any("P2 point 6 (55x)" in w and "point 5" in w for w in texts(p)), p["warnings"])
 
     def test_effective_v_adds_the_offset_to_the_measured_stock_vid(self) -> None:
         h = self.boot_with()
@@ -170,7 +171,8 @@ class PlanFactsTests(FactsCase):
         self.assertEqual((p["after"]["P0"]["8"]["effective_v"], p["after"]["P0"]["8"]["clamped_by"]), (None, None))
         self.assertIsNone(p["vccia"])
         self.assertIsNone(p["predicted"])
-        self.assertEqual(len([w for w in p["warnings"] if w.startswith("measure a stock baseline for predictions")]), 1)
+        self.assertEqual([w["code"] for w in p["warnings"] if w["code"] == "NO_BASELINE"], ["NO_BASELINE"])
+        self.assertTrue(texts(p)[[w["code"] for w in p["warnings"]].index("NO_BASELINE")].startswith("measure a stock baseline for predictions"))
 
     def test_vccia_is_set_by_the_unit_with_the_highest_allowed_vid(self) -> None:
         """F6: stock, all-core: P7 at 55x (1.376 V) + 0.105 V. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
@@ -187,24 +189,25 @@ class PlanFactsTests(FactsCase):
         self.assertEqual(p2["vccia"]["set_by"], {"unit": "P2", "ratio": 55})
         self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366 + 0.105, places=3)
         self.assertAlmostEqual(p2["vccia"]["before_v"], 1.481, places=3)
-        self.assertTrue(any("VccIA is a prediction" in w for w in p["warnings"]))
-        names = {c["unit"] for c in p2["vccia"]["contributors"]}
-        self.assertEqual(names, {"P2", "EC0", "ring"})
+        self.assertTrue(any("VccIA is a prediction" in w for w in texts(p)))
+        c = p2["vccia"]["contributors"]
+        self.assertEqual(set(c), {"P", "E", "ring"})
+        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]["v"]), ("P2", 55, "EC0", 48, 1.201))
 
     def test_e_40x_offset_and_e_target_above_1_2_v_are_warned_about(self) -> None:
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("EC1", points={"40": -20}), row("EC2", v=1.25)))
-        self.assertTrue(any("EC1" in w and "40x" in w and "never offset E point 5" in w for w in p["warnings"]), p["warnings"])
-        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w for w in p["warnings"]), p["warnings"])
+        self.assertTrue(any("EC1" in w and "40x" in w and "never offset E point 5" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w for w in texts(p)), p["warnings"])
         quiet = self.plan(h, rows(row("EC1", points={"46": -25})))
-        self.assertFalse(any("point 5" in w or "WHEA" in w for w in quiet["warnings"]), quiet["warnings"])
+        self.assertFalse(any("point 5" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
 
     def test_positive_offsets_still_warn(self) -> None:
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("P6", points={"53": 15})))
-        self.assertTrue(any("positive offset" in w and "P6" in w for w in p["warnings"]), p["warnings"])
+        self.assertTrue(any("positive offset" in w and "P6" in w for w in texts(p)), p["warnings"])
 
 
 class TurboOrderTests(FactsCase):
@@ -228,3 +231,44 @@ class TurboOrderTests(FactsCase):
         h = self.boot_with(baseline=False, accepted_dir=self.accepted([57, 57, 56, 55, 55, 55, 55, 55]))
         r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
         self.assertTrue(r["ok"], r)
+
+    def table(self, cpu: int = 0, msr: int = 0x1AD) -> list[int]:
+        return [(self.sim.rdmsr(cpu, msr) >> (8 * k)) & 0xFF for k in range(8)]
+
+    def test_an_intent_turbo_table_that_rises_is_refused_with_turbo_order(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        for intent in ({"turbo": {"E": [48, 48, 49, 48, 48, 48, 48, 48]}}, {**rows(row("P1", curve=-10)), "turbo": {"P": [55, 57, 55, 55, 55, 55, 55, 55]}}):
+            r = h.call(f"t{len(h.messages)}", "tune.plan", {"intent": intent})
+            self.assertEqual(error_code(r), "REFUSED", r)
+            self.assertEqual(r["error"]["detail"]["check"], "TURBO_ORDER")
+        self.assertEqual(r["error"]["detail"]["table"], "P")
+
+    def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
+        h = self.boot_with(baseline=False)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
+
+    def test_a_valid_turbo_only_intent_is_refused_until_the_planner_supports_it(self) -> None:
+        """Gap (reported): controls/planner.py cannot plan a table write without a core / point write beside it."""
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        r = h.call("tonly", "tune.plan", {"intent": {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}}})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "TURBO_ONLY_UNSUPPORTED"))
+
+    def test_a_raise_is_flagged_with_its_code(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {**rows(row("P1", curve=-10)), "turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        self.assertTrue(any(w["code"] == "TURBO_RAISE" and "bucket(s) 3" in w["text"] for w in p["warnings"]), p["warnings"])
+        self.apply_ok(h, p)
+        self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
+        self.assertEqual(self.table(8, 0x650), [48] * 8)  # untouched
+
+    def test_turbo_rides_with_rows(self) -> None:
+        h = self.boot_with(baseline=False)
+        self.read(h)
+        p = self.plan(h, {**rows(row("P1", curve=-10)), "turbo": {"E": [48, 47, 46, 46, 46, 46, 46, 46]}})
+        self.apply_ok(h, p)
+        self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])
+        self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in p["warnings"]))

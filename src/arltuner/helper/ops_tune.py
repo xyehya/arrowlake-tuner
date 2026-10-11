@@ -114,6 +114,21 @@ _MAX_STEPS_LISTED = 300
 # --------------------------------------------------------------------------------------------------------------
 # Units (contract 9): P0..P7 = CPU n, EC0..EC3 = the four CPUs of an E-cluster
 # --------------------------------------------------------------------------------------------------------------
+class Warn(str):
+    """A plan warning with a machine-readable ``code`` (contract 9 addendum: the result carries ``{code, text}``). Everything untagged is ``NOTE``."""
+
+    code: str
+
+    def __new__(cls, code: str, text: str) -> "Warn":
+        obj = super().__new__(cls, text)
+        obj.code = code
+        return obj
+
+
+def warning_objects(items: Sequence[str]) -> list[dict[str, str]]:
+    return [{"code": getattr(w, "code", "NOTE"), "text": str(w)} for w in items]
+
+
 def unit_cpus(topology: Topology, unit: str) -> tuple[int, ...]:
     if unit.startswith("EC"):
         return topology.cluster_cpus(int(unit[2:]))
@@ -539,8 +554,9 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         st.fused, st.turbo = extras["fused"], extras["turbo"]
     result["tables"] = None if tables is None else {k: list(v) for k, v in tables.items()}
     result["tables_note"] = None if tables is not None else (note or "turbo tables not read")
-    result["fused"] = extras["fused"]  # contract 9 addendum: {cpu: {word, ratio, v}}
-    result["turbo"] = extras["turbo"]  # contract 9 addendum: {P: {ratios, counts}, E: {...}, favored: {cpu: ratio}}
+    fused, turbo = extras["fused"], extras["turbo"]
+    result["fused"] = None if fused is None else {str(c): v for c, v in fused.items()}  # contract 9 addendum: {first cpu of the unit (string): {word, ratio, v}}
+    result["turbo"] = None if turbo is None else {**turbo, "favored": {str(c): r for c, r in turbo["favored"].items()}}  # {P: {ratios, counts}, E: {...}, favored: {cpu (string): ratio}}
     result["extras_notes"] = notes
     return _fit(result)
 
@@ -601,6 +617,18 @@ def _canonical_row(raw: object, scope: str) -> dict[str, Any] | None:
     return {"target": target, "offset": canon_offset, "v_target_v": None if v is None else float(v), "ratio": ratio}
 
 
+def _canonical_turbo(raw: object) -> dict[str, list[int]]:
+    """``{P: [8 ints], E: [8 ints]}`` (either key may be absent, not both): the bucket ratios of ``0x1AD`` / ``0x650``, bucket 0 = 1 active core."""
+    if not isinstance(raw, dict) or not raw or not set(raw) <= {"P", "E"}:
+        raise _bad("turbo must be {P: [8 ratios], E: [8 ratios]} (either key may be absent)")
+    out: dict[str, list[int]] = {}
+    for key, table in raw.items():
+        if not isinstance(table, list) or len(table) != 8 or not all(_is_int(r) and _RATIO_RANGE[0] <= r <= _RATIO_RANGE[1] for r in table):
+            raise _bad(f"turbo.{key} must be a list of 8 integer ratios {_RATIO_RANGE[0]}..{_RATIO_RANGE[1]}")
+        out[key] = list(table)
+    return out
+
+
 def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
     """The intent in its canonical form, or ``BAD_REQUEST``. ``rows_only`` (profiles.save): a ``{scope, rows}`` intent is the only savable shape."""
     if not isinstance(raw, dict):
@@ -611,19 +639,28 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
     except (TypeError, ValueError):
         raise _bad("intent is not JSON") from None
     keys = set(raw)
-    if keys == {"scope", "rows"}:
-        scope, rows = raw["scope"], raw["rows"]
-        if scope not in ("simple", "unit"):
-            raise _bad("scope must be 'simple' or 'unit'")
-        if not isinstance(rows, list) or len(rows) > 32:
-            raise _bad("rows must be a list of at most 32 rows")
-        canon_rows = [r for r in (_canonical_row(row, scope) for row in rows) if r is not None]
-        targets = [r["target"] for r in canon_rows]
-        if len(set(targets)) != len(targets):
-            raise _bad("a target appears in two rows")
-        if not canon_rows:
-            raise OpError(BAD_REQUEST, "the intent changes nothing (every row is empty)", {"check": "NOTHING_TO_DO"})
-        return {"scope": scope, "rows": canon_rows}
+    if keys and keys <= {"scope", "rows", "turbo"} and keys & {"rows", "turbo"} and ("rows" in keys) == ("scope" in keys):
+        if rows_only and "turbo" in keys:
+            raise _bad("only a {scope, rows} intent can be saved as a profile")
+        out: dict[str, Any] = {}
+        turbo = _canonical_turbo(raw["turbo"]) if "turbo" in keys else None
+        if "rows" in keys:
+            scope, rows = raw["scope"], raw["rows"]
+            if scope not in ("simple", "unit"):
+                raise _bad("scope must be 'simple' or 'unit'")
+            if not isinstance(rows, list) or len(rows) > 32:
+                raise _bad("rows must be a list of at most 32 rows")
+            canon_rows = [r for r in (_canonical_row(row, scope) for row in rows) if r is not None]
+            targets = [r["target"] for r in canon_rows]
+            if len(set(targets)) != len(targets):
+                raise _bad("a target appears in two rows")
+            if not canon_rows and turbo is None:
+                raise OpError(BAD_REQUEST, "the intent changes nothing (every row is empty)", {"check": "NOTHING_TO_DO"})
+            if canon_rows:
+                out = {"scope": scope, "rows": canon_rows}
+        if turbo is not None:
+            out["turbo"] = turbo
+        return out
     if rows_only:
         raise _bad("only a {scope, rows} intent can be saved as a profile")
     if keys == {"profile"}:
@@ -639,7 +676,7 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
         if raw["restore"] != "accepted":
             raise _bad("restore must be 'accepted'")
         return {"restore": "accepted"}
-    raise _bad("intent must be {scope, rows}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
+    raise _bad("intent must be {scope, rows[, turbo]}, {turbo}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -788,7 +825,7 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
     refs: dict[tuple[int, int], int] = {}
     units: list[str] = []
     asked_ratio: dict[str, int] = {}
-    for row in intent["rows"]:
+    for row in intent.get("rows", ()):
         targets = GROUPS[row["target"]] if row["target"] in GROUPS else (row["target"],)
         for unit in targets:
             cpus = unit_cpus(topology, unit)
@@ -831,8 +868,16 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
             if touched and unit not in units:
                 units.append(unit)
     turbo = _turbo_tables(helper, asked_ratio, warnings)
+    if "turbo" in intent:
+        turbo = _explicit_turbo(helper, intent["turbo"], turbo, policy, warnings)
     try:
-        profile = Profile(name, tuple(CoreSetting(k, i, **v) for (k, i), v in cores.items()), turbo, tuple(points.values()))  # type: ignore[arg-type]
+        entries = tuple(CoreSetting(k, i, **v) for (k, i), v in cores.items())  # type: ignore[arg-type]
+        if not entries and not points and turbo is not None:
+            # A turbo-only plan: Profile insists on one [[core]] / [[point]]; the placeholder is removed again, so the plan carries the tables alone.
+            profile = Profile(name, (CoreSetting("P", 0, offset_mv=0),), turbo)
+            object.__setattr__(profile, "entries", ())
+        else:
+            profile = Profile(name, entries, turbo, tuple(points.values()))
     except ProfileError as exc:
         raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
     return Resolved(profile, refs, warnings, units)
@@ -855,8 +900,30 @@ def _turbo_tables(helper: Helper, asked: Mapping[str, int], warnings: list[str])
         table = tables[key]
         if ratio > max(table):
             new[key] = tuple(max(b, ratio) for b in table)
-            warnings.append(f"the {kind} turbo table is raised to {ratio} in every bucket below it (package-wide, MSR {'0x650' if kind == 'E' else '0x1AD'})")
+            warnings.append(Warn("TURBO_RAISE", f"the {kind} turbo table is raised to {ratio} in every bucket below it (package-wide, MSR {'0x650' if kind == 'E' else '0x1AD'})"))
     return TurboTables(e=new.get("e"), p=new.get("p")) if new else None
+
+
+def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], derived: TurboTables | None, policy: Policy, warnings: list[str]) -> TurboTables:
+    """The tables the intent names (``turbo: {P, E}``), replacing what a row's OC ratio would have derived for that kind. Range-checked against the policy
+    (``REFUSED POLICY_RANGE``); the order rule F5 is checked by :func:`_check_turbo_order` on the finished profile."""
+    st = _state(helper)
+    with st.lock:
+        tables = st.tables
+    out = {"e": None if derived is None else derived.e, "p": None if derived is None else derived.p}
+    for kind, ratios in asked.items():
+        cap = policy.ratio_max[kind]
+        if cap is not None and max(ratios) > cap:
+            raise OpError(REFUSED, f"turbo.{kind}: ratio {max(ratios)} is above the policy ratio_max[{kind}] = {cap}. Nothing was sent.", {"check": "POLICY_RANGE"})
+        msr = "0x650" if kind == "E" else "0x1AD"
+        current = None if tables is None else tables.get(kind.lower())
+        out[kind.lower()] = tuple(ratios)
+        if current is None:
+            warnings.append(f"the {kind} turbo table (MSR {msr}) was not read this boot: run 'Read tuning words' so the apply can compare it")
+        elif any(n > o for n, o in zip(ratios, current)):
+            raised = ", ".join(str(k + 1) for k, (n, o) in enumerate(zip(ratios, current)) if n > o)
+            warnings.append(Warn("TURBO_RAISE", f"the {kind} turbo table ({msr}) is RAISED in bucket(s) {raised} (package-wide)"))
+    return TurboTables(e=out["e"], p=out["p"])
 
 
 def _reset_profile(helper: Helper, topology: Topology) -> Resolved:
@@ -914,7 +981,7 @@ def _profile_resolved(helper: Helper, profile: Profile, topology: Topology, warn
 
 
 def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topology: Topology) -> Resolved:
-    if "rows" in intent:
+    if "rows" in intent or "turbo" in intent:
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True).encode()).hexdigest()[:8]
         return _rows_to_profile(helper, intent, policy, topology, f"tune-{digest}")
     if "reset" in intent:
@@ -1098,7 +1165,7 @@ def _predict(
     record, why = _baseline_record(helper)
     models = _unit_models(profile, topology, last, record, fused)
     if record is None:
-        warnings.append("measure a stock baseline for predictions" + (f" (the baseline curve could not be loaded: {why})" if why else " (no curve is flagged baseline)"))
+        warnings.append(Warn("NO_BASELINE", "measure a stock baseline for predictions" + (f" (the baseline curve could not be loaded: {why})" if why else " (no curve is flagged baseline)")))
     elif last is None:
         warnings.append("no tune.read this boot: the current offsets of every point are assumed to be 0 in the predictions")
     predicted: dict[str, Any] = {}
@@ -1135,20 +1202,21 @@ def _predict(
             for p, c in zip(new, cur):
                 if p.clamped_by is not None and (c.clamped_by is None or p.effective_v != c.effective_v) and p.effective_v is not None and p.base_v is not None:
                     landed = (p.effective_v - p.base_v) * 1000
-                    warnings.append(
+                    warnings.append(Warn(
+                        "CLAMPED",
                         f"{unit} point {p.index} ({p.ratio}x): offset {p.offset_mv:+.1f} mV is clamped up to the voltage of point {p.clamped_by} "
-                        f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V [MEASURED lnx 2026-10-02, F4]"
-                    )
+                        f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V [MEASURED lnx 2026-10-02, F4]",
+                    ))
         if m.kind == "E":
             at40 = m.new_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0)
             if at40 != 0.0 and at40 != m.cur_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0):
-                warnings.append(f"{unit}: an offset of {at40:+.1f} mV on the 40x point (point 5): never offset E point 5, -20 mV there caused OCCT errors [MEASURED lnx 2026-10-02, F8]")
+                warnings.append(Warn("E40_OFFSET", f"{unit}: an offset of {at40:+.1f} mV on the 40x point (point 5): never offset E point 5, -20 mV there caused OCCT errors [MEASURED lnx 2026-10-02, F8]"))
             if m.oc_v is not None and m.oc_v > vfmodel.E_WHEA_V:
-                warnings.append(f"{unit}: E-core voltage target {m.oc_v:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY skatterbencher.com/2025/02/14, F8]")
+                warnings.append(Warn("E_TARGET_WHEA", f"{unit}: E-core voltage target {m.oc_v:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY skatterbencher.com/2025/02/14, F8]"))
             elif new is not None:
                 hi = max((p.effective_v for p in new if p.effective_v is not None), default=None)
                 if hi is not None and hi > vfmodel.E_WHEA_V:
-                    warnings.append(f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY, F8]")
+                    warnings.append(Warn("E_TARGET_WHEA", f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY, F8]"))
     # ---- F6: VccIA ----
     vccia = _predict_vccia(models, curves_new, curves_cur, turbo)
     if vccia is not None:
@@ -1172,7 +1240,10 @@ def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[
     if out is None:
         return None
     best = {k: max((r for r in rows if r[0].startswith(k) and r[2] is not None), key=lambda r: r[2], default=None) for k in ("P", "E")}  # type: ignore[arg-type,return-value]
-    out["contributors"] = [{"unit": r[0], "ratio": r[1], "v": round(r[2], 4)} for r in best.values() if r is not None] + [{"unit": "ring", "ratio": 40, "v": vfmodel.RING_V}]
+    out["contributors"] = {  # the unit of each group with the highest allowed VID, and the ring floor
+        **{k: (None if r is None else {"unit": r[0], "ratio": r[1], "v": round(r[2], 4)}) for k, r in best.items()},
+        "ring": {"unit": "ring", "ratio": 40, "v": vfmodel.RING_V},
+    }
     return out
 
 
@@ -1265,6 +1336,15 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     resolved = resolve_intent(helper, intent, policy, topology)
     profile = resolved.profile
     _check_turbo_order(profile)
+    if not profile.entries and not profile.points:
+        # G-114 gap: the controls planner (controls/planner.py, "the profile has no targets") cannot plan or apply a table write without a core / point
+        # write beside it, and controls/ is not part of this task. The table was range- and order-checked above; refuse instead of failing at apply.
+        raise OpError(
+            REFUSED,
+            "a turbo-table-only plan is not supported yet: the controls planner needs at least one core or point write in the same plan. Add a row (it may "
+            "change nothing the operator cares about) or wait for the planner change. Nothing was sent.",
+            {"check": "TURBO_ONLY_UNSUPPORTED"},
+        )
     used, budget = helper.budget.snapshot()
     ops_left = None if used is None or budget is None else max(budget - used, 0)
     try:
@@ -1287,7 +1367,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         for point, now in items.items():
             was = (before.get(unit) or {}).get(point)
             if now["offset_mv"] is not None and now["offset_mv"] > 0 and (was is None or was["offset_mv"] <= 0):
-                warnings.append(f"positive offset {now['offset_mv']:+.1f} mV on {unit} {'OC word' if point == '0' else 'point ' + point}")
+                warnings.append(Warn("POSITIVE_OFFSET", f"positive offset {now['offset_mv']:+.1f} mV on {unit} {'OC word' if point == '0' else 'point ' + point}"))
     prediction = _predict(helper, profile, topology, last, before, after, warnings)
     warnings.append(REVERT_NOTE)
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))
@@ -1312,7 +1392,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "after": after,  # per written point also effective_v / clamped_by (contract 9 addendum, SPEC-v3 F4)
         "predicted": prediction["predicted"],  # G-114 (additive): {unit: {point: {ratio, base_v, offset_mv, effective_v, clamped_by}}} for every point of the touched units
         "vccia": prediction["vccia"],  # contract 9 addendum (F6): {predicted_v, set_by: {unit, ratio}} + label / contributors / before_v / light_load, null without a baseline
-        "warnings": warnings,
+        "warnings": warning_objects(warnings),  # [{code, text}]: CLAMPED E40_OFFSET E_TARGET_WHEA POSITIVE_OFFSET NO_BASELINE TURBO_RAISE, everything else NOTE
         "words_assumed": bool(resolved.refs),
     }
     while len(json.dumps(result, separators=(",", ":"))) > MAX_LINE - _RESPONSE_SLACK and result["steps"]:
