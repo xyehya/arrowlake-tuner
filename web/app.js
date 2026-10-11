@@ -137,6 +137,12 @@
     EXISTS: "that name is already taken",
     NO_SUCH_CURVE: "there is no stored curve with that id",
     POLICY_RANGE: "a value is outside the policy range",
+    NO_READ: "this helper session has not read the tuning words yet: use Read tuning words first",
+    NOTHING_TO_DO: "nothing would change",
+    NO_ACCEPTED_STATE: "no accepted state is installed on this machine",
+    STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
+    SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
+    BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
   };
 
   function errText(body) {
@@ -150,6 +156,7 @@
         if (d.check !== undefined) bits.push("check " + d.check);
         if (bits.length) t += " (" + bits.join(", ") + ")";
         if (typeof d.check === "string" && CHECK_TEXT[d.check]) t += ". In words: " + CHECK_TEXT[d.check] + ".";
+        else if (typeof d.check === "string" && d.check.indexOf("PROFILE_") === 0) t += ". In words: the profile store refused this (" + d.check.slice(8).toLowerCase().replace(/_/g, " ") + ").";
       }
       return t;
     }
@@ -1056,6 +1063,7 @@
   // Dump unit -> tuning unit. P: the cpu is the core; E: the first cluster cpu (8, 12, 16, 20) is the cluster.
   function unitIdOf(u) {
     if (!isObj(u)) return null;
+    if (typeof u.id === "string" && UNIT_IDS.indexOf(u.id) >= 0) return u.id;   // tune.read (G-112) names the unit
     if (typeof u.unit === "string" && UNIT_IDS.indexOf(u.unit) >= 0) return u.unit;
     const first = Array.isArray(u.cluster_cpus) && isNum(u.cluster_cpus[0]) ? u.cluster_cpus[0] : (Array.isArray(u.cpus) && isObj(u.cpus[0]) ? u.cpus[0].cpu : null);
     if (u.kind === "P" && isNum(first) && first >= 0 && first < 8) return "P" + first;
@@ -2143,7 +2151,8 @@
   };
   V.tn = T;
   const MV_TOL = 0.05, V_TOL = 0.0004;
-  const same = (a, b, tol) => isNum(a) && isNum(b) && Math.abs(a - b) <= tol;
+  // Offsets are equal when they are the same 1/1024 V raw word (the hardware cannot tell -49.8 from -50 mV); other values compare within a tolerance.
+  const same = (a, b, tol) => isNum(a) && isNum(b) && (tol === MV_TOL ? Math.round(a * 1.024) === Math.round(b * 1.024) : Math.abs(a - b) <= tol);
 
   function TN_CURVE_WANT() { return T.curveId; }
   function wUnit(u) { return T.words ? T.words.units[u] || null : null; }
@@ -2221,19 +2230,16 @@
       }
       rows[u] = row;
     }
-    const out = [];
-    const used = new Set();
-    if (T.scope === "simple") {
-      for (const [g, units] of [["P", UNIT_IDS.slice(0, 8)], ["E", UNIT_IDS.slice(8)]]) {
-        const first = JSON.stringify(rows[units[0]] || null);
-        if (rows[units[0]] && units.every((u) => rows[u] && JSON.stringify(rows[u]) === first)) {
-          out.push(Object.assign({ target: g }, rows[units[0]]));
-          for (const u of units) used.add(u);
-        }
-      }
+    const perUnit = UNIT_IDS.filter((u) => rows[u]).map((u) => Object.assign({ target: u }, rows[u]));
+    const merged = [];
+    for (const [g, units] of [["P", UNIT_IDS.slice(0, 8)], ["E", UNIT_IDS.slice(8)]]) {
+      const present = units.filter((u) => rows[u]);
+      if (!present.length) continue;
+      const first = JSON.stringify(rows[units[0]] || null);
+      if (present.length === units.length && units.every((u) => JSON.stringify(rows[u]) === first)) merged.push(Object.assign({ target: g }, rows[units[0]]));
+      else return { scope: "unit", rows: perUnit };   // the helper takes P / E targets only in the simple scope and unit targets only in the unit scope
     }
-    for (const u of UNIT_IDS) if (rows[u] && !used.has(u)) out.push(Object.assign({ target: u }, rows[u]));
-    return { scope: out.every((r) => r.target === "P" || r.target === "E") ? "simple" : "unit", rows: out };
+    return T.scope === "simple" && merged.length ? { scope: "simple", rows: merged } : { scope: "unit", rows: perUnit };
   }
 
   // ---- policy ranges (D-032) -> dropdown options -------------------------------------------------------------------------------------------
@@ -2251,10 +2257,15 @@
     if (isNum(cur) && !out.some((x) => same(x, cur, V_TOL))) { out.push(Math.round(cur * 10000) / 10000); out.sort((a, b) => a - b); }
     return out;
   }
-  function fillSelect(sel, values, current, fmt, placeholder) {
+  function fillSelect(sel, values, current, fmt, placeholder, tol) {
     const opts = [];
-    if (placeholder) { const o = el("option", "", placeholder); o.value = "__mixed"; o.disabled = true; o.hidden = true; opts.push(o); }
-    for (const v of values) { const o = el("option", "", fmt(v) + (current !== null && Math.abs(v - current) < 1e-6 ? "  · now" : "")); o.value = String(v); opts.push(o); }
+    if (placeholder) {
+      const o = el("option", "", placeholder), n = el("option", "", "not set");  // "mixed" (units differ) and "not set" (the word reads 0) are shown, never chosen
+      o.value = "__mixed"; n.value = "__none";
+      o.disabled = n.disabled = true; o.hidden = n.hidden = true;
+      opts.push(o, n);
+    }
+    for (const v of values) { const o = el("option", "", fmt(v) + (current !== null && same(v, current, tol) ? "  · now" : "")); o.value = String(v); opts.push(o); }
     fill(sel, opts);
   }
 
@@ -2323,15 +2334,16 @@
     for (const id of Object.keys(T.refs)) {
       const r = T.refs[id], def = r.def, kind = def.kind;
       const cur = curveOf(def.units, false);
-      fillSelect(r.offSel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed");
+      fillSelect(r.offSel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
       const vt = vtOf(def.units, false);
-      fillSelect(r.vtSel, vtValues(kind, isNum(vt) ? vt : null), isNum(vt) ? vt : null, (v) => v.toFixed(Math.abs(v * 1000 - Math.round(v * 1000)) < 1e-6 ? 3 : 4) + " V", "mixed");
+      fillSelect(r.vtSel, vtValues(kind, isNum(vt) ? vt : null), isNum(vt) ? vt : null, (v) => v.toFixed(Math.abs(v * 1000 - Math.round(v * 1000)) < 1e-6 ? 3 : 4) + " V", "mixed", V_TOL);
       const rt = ratioOf(def.units, false);
+      const topPt = (u) => { const p = curPts(u); return p.length ? Math.max(...p.map((q) => q.ratio)) : POLICY.ratioMax[kind]; };
       const maxCur = Math.max(POLICY.ratioMax[kind], ...def.units.map((u) => (isNum(curRatio(u)) ? curRatio(u) : 0)));
-      const minCur = Math.min(...def.units.map((u) => curRatio(u) || POLICY.ratioMax[kind]));
+      const minCur = Math.min(...def.units.map((u) => (isNum(curRatio(u)) ? curRatio(u) : topPt(u))));
       const rv = [];
       for (let q = minCur; q <= maxCur; q++) rv.push(q);
-      fillSelect(r.rSel, rv, isNum(rt) ? rt : null, (v) => v + "×", "mixed");
+      fillSelect(r.rSel, rv, isNum(rt) ? rt : null, (v) => v + "×", "mixed", 0.5);
     }
     refreshRows();
   }
@@ -2352,7 +2364,7 @@
       const sel = el("select", "tn-sel tn-sel-s");
       sel.setAttribute("aria-label", r.def.label + ": offset at " + ratio + "x");
       const cur = pointOf(r.def.units, ratio, false);
-      fillSelect(sel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed");
+      fillSelect(sel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
       sel.addEventListener("change", () => { setPoint(r.def.units, ratio, Number(sel.value)); refreshRows(); });
       lab.append(sel);
       r.ptSels[ratio] = { sel: sel, lab: lab };
@@ -2362,12 +2374,12 @@
     fill(r.panel, cells);
   }
 
-  function setSel(sel, value) {
+  function setSel(sel, value, tol) {
     if (value === MIXED) sel.value = "__mixed";
-    else if (value === null) sel.value = "";
+    else if (value === null) sel.value = "__none";
     else sel.value = String(value);
     if (value !== MIXED && value !== null && sel.value !== String(value)) {  // a value between grid steps (never picked, only "now")
-      const o = Array.from(sel.options).find((x) => x.value !== "__mixed" && same(Number(x.value), value, 1e-6 + (Math.abs(value) > 50 ? MV_TOL : V_TOL)));
+      const o = Array.from(sel.options).find((x) => x.value !== "__mixed" && x.value !== "__none" && same(Number(x.value), value, tol));
       if (o) sel.value = o.value;
     }
   }
@@ -2396,32 +2408,39 @@
       r.offHint.hidden = open;
       if (open) buildPointPanel(r);
       const effCurve = curveOf(def.units, true), curCurve = curveOf(def.units, false);
-      setSel(r.offSel, effCurve);
+      setSel(r.offSel, effCurve, MV_TOL);
       r.offCell.classList.toggle("changed", !open && !(effCurve === curCurve || (isNum(effCurve) && isNum(curCurve) && same(effCurve, curCurve, MV_TOL))));
       r.offHint.textContent = isNum(effCurve) && !same(effCurve, curCurve, MV_TOL) ? "writes " + fmtMv(snapMv(effCurve), 2) : "";
       let nPtChanged = 0;
       for (const ratio of Object.keys(r.ptSels)) {
         const p = r.ptSels[ratio];
         const e = pointOf(def.units, Number(ratio), true), c = pointOf(def.units, Number(ratio), false);
-        setSel(p.sel, e);
+        setSel(p.sel, e, MV_TOL);
         const ch = !(e === c || (isNum(e) && isNum(c) && same(e, c, MV_TOL)));
         p.lab.classList.toggle("changed", ch);
         if (ch) nPtChanged++;
       }
       if (open) r.offCell.classList.toggle("changed", nPtChanged > 0);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
-      setSel(r.vtSel, effVtv);
+      setSel(r.vtSel, effVtv, V_TOL);
       const vtCh = !(effVtv === curVtv || (isNum(effVtv) && isNum(curVtv) && same(effVtv, curVtv, V_TOL)));
       r.vtCell.classList.toggle("changed", vtCh);
       r.vtHint.textContent = vtCh && isNum(effVtv) ? "writes " + snapV(effVtv).toFixed(4) + " V" : "";
       const effR = ratioOf(def.units, true), curR = ratioOf(def.units, false);
-      setSel(r.rSel, effR);
+      setSel(r.rSel, effR, 0.5);
       const rCh = !(effR === curR || (isNum(effR) && isNum(curR) && effR === curR));
       r.rCell.classList.toggle("changed", rCh);
-      r.rHint.textContent = rCh ? "the plan adds the turbo table writes" : "";
+      r.rHint.textContent = rCh && isNum(effR) ? ratioHint(def.kind, effR) : (!rCh && curR === null ? "OC ratio reads 0 (not set)" : "");
     }
     updateTuneFoot();
     renderTunePreview();
+  }
+
+  // The turbo ratio tables (0x1AD P, 0x650 E; bucket 0 = fewest active cores) from tune.read: a ratio at or below bucket 0 does not raise any table.
+  function ratioHint(kind, r) {
+    const t = T.words && T.words.tables ? T.words.tables[kind === "P" ? "p" : "e"] : null;
+    if (!t || !t.length) return "turbo tables not read" + (T.words && T.words.tablesNote ? ": " + T.words.tablesNote : "");
+    return r > t[0] ? "above the top turbo bucket (" + t[0] + "\u00d7): the plan raises the table" : "inside the turbo table (top bucket " + t[0] + "\u00d7): no table write";
   }
 
   function updateTuneFoot() {
@@ -2440,15 +2459,36 @@
       v_target_v: isNum(p.v_target_v) ? p.v_target_v : null, word: typeof p.word === "string" ? p.word : null, mode: typeof p.mode === "string" ? p.mode : null };
   }
 
+  // tune.read (G-112): units[].id, `tune` = {unit: {cpus: [{cpu, points: [{point 0 = OC word, 1..n, ratio, offset_mv, v_target_v, mode}]}]}} (the decoded
+  // copy; null if the line was too large), `tables` = {p: [8 bytes], e: [8 bytes]} (0x1AD / 0x650, bucket 0 first) or null, with `tables_note`. An OC word
+  // that reads 0 has ratio and v_target_v null (unset). Without `tune` the raw units[].cpus[].oc / points are decoded the same way.
   function normWords(r) {
     const units = {};
+    const tune = isObj(r.tune) ? r.tune : null;
     for (const u of Array.isArray(r.units) ? r.units : []) {
       const id = unitIdOf(u);
-      const c = isObj(u) && Array.isArray(u.cpus) && isObj(u.cpus[0]) ? u.cpus[0] : null;
-      if (!id || !c) continue;
-      units[id] = { id: id, cpu: c.cpu, oc: normPoint(c.oc, 0), points: (Array.isArray(c.points) ? c.points : []).map((p, i) => normPoint(p, i + 1)).filter(Boolean) };
+      if (!id) continue;
+      let pts = null, cpu = null;
+      const dec = tune && isObj(tune[id]) && Array.isArray(tune[id].cpus) && isObj(tune[id].cpus[0]) ? tune[id].cpus[0] : null;
+      if (dec && Array.isArray(dec.points)) { cpu = dec.cpu; pts = dec.points.map((p) => normPoint(p, isNum(p.point) ? p.point : 0)).filter(Boolean); }
+      else {
+        const c = isObj(u) && Array.isArray(u.cpus) && isObj(u.cpus[0]) ? u.cpus[0] : null;
+        if (!c) continue;
+        cpu = c.cpu;
+        pts = (isObj(c.oc) ? [normPoint(c.oc, 0)] : []).concat((Array.isArray(c.points) ? c.points : []).map((p, i) => normPoint(p, isNum(p.point) ? p.point : i + 1))).filter(Boolean);
+      }
+      const raw = isObj(u) && Array.isArray(u.cpus) && isObj(u.cpus[0]) ? u.cpus[0] : null;   // raw words, for the hex view
+      for (const p of pts) {
+        if (p.word === null && raw) {
+          const src = p.point === 0 ? raw.oc : (Array.isArray(raw.points) ? raw.points.find((q) => isObj(q) && q.point === p.point) : null);
+          if (isObj(src) && typeof src.word === "string") p.word = src.word;
+        }
+      }
+      units[id] = { id: id, cpu: cpu, oc: pts.find((p) => p.point === 0) || null, points: pts.filter((p) => p.point !== 0) };
     }
-    return { units: units, raw: r, accepted: r.accepted_match, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false };
+    const tables = isObj(r.tables) && Array.isArray(r.tables.p) && Array.isArray(r.tables.e) ? { p: r.tables.p.filter(isNum), e: r.tables.e.filter(isNum) } : null;
+    return { units: units, raw: r, accepted: r.accepted_match, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
+      tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true };
   }
 
   function appliedFromWords(w) {
@@ -2488,23 +2528,45 @@
     const w = T.words;
     if (!w) return;
     const rows = [];
-    const raw = isObj(w.raw) ? w.raw : {};
-    for (const u of Array.isArray(raw.units) ? raw.units : []) {
-      for (const c of Array.isArray(u && u.cpus) ? u.cpus : []) {
-        const row = el("tr");
-        const name = typeof c.name === "string" ? c.name : (isObj(u) ? u.name : "");
-        const one = (p) => {
-          if (!isObj(p)) return "n/a";
-          if (T.hex) return (isNum(p.ratio) ? p.ratio + "x " : "") + (typeof p.word === "string" ? p.word : "no raw word");
-          return (isNum(p.ratio) ? p.ratio + "x " : "n/a ") + fmtMv(p.offset_mv, 1) + (isNum(p.v_target_v) ? " @ " + p.v_target_v.toFixed(3) + " V" : "");
-        };
-        row.append(td(c.cpu, "n"), td(name), td(isObj(c.oc) ? one(c.oc) : "n/a", isObj(c.oc) ? "mono" : "na"), td(Array.isArray(c.points) ? c.points.map(one).join(", ") : "n/a", "mono"));
-        rows.push(row);
-      }
+    for (const id of UNIT_IDS) {
+      const u = w.units[id];
+      if (!u) continue;
+      const one = (p) => {
+        if (T.hex) return (isNum(p.ratio) ? p.ratio + "x " : "") + (typeof p.word === "string" ? p.word : "no raw word");
+        return (isNum(p.ratio) ? p.ratio + "x " : "") + fmtMv(p.offset_mv, 1) + (p.point === 0 ? (isNum(p.v_target_v) ? " @ " + p.v_target_v.toFixed(3) + " V" : ", target not set") : "");
+      };
+      const row = el("tr");
+      const oc = u.oc;
+      row.append(td(isNum(u.cpu) ? u.cpu : "n/a", "n"), td(unitLabel(id)), td(oc ? (isNum(oc.ratio) || T.hex ? one(oc) : "ratio not set, " + one(oc)) : "n/a", oc ? "mono" : "na"),
+        td(u.points.length ? u.points.map(one).join(", ") : "n/a", "mono"));
+      rows.push(row);
     }
     fill($("vf-body"), rows);
-    setText("tn-words-note", (w.simulator ? "simulator data · " : "") + (w.complete ? "complete read" : "incomplete read") + (T.hex ? " · raw words" : " · decoded to mV"));
+    renderTables(w);
+    setText("tn-words-note", (w.simulator ? "simulator data · " : "") + (w.complete ? "complete read" : "incomplete read") + (w.truncated ? " · E-cluster copies trimmed to fit" : "") +
+      (T.hex ? " · raw words" : " · decoded to mV; E clusters show their first CPU"));
     renderAccepted(w);
+  }
+
+  // Turbo ratio tables (tune.read via rdmsr): the effective limits an OC ratio is judged against. Bucket 0 = the fewest active cores.
+  function renderTables(w) {
+    const host = $("tn-tables");
+    if (!w.tables) { fill(host, [el("p", "muted", "Turbo ratio tables not read" + (w.tablesNote ? ": " + w.tablesNote : ".") + " Asking for an OC ratio is then judged without them.")]); return; }
+    const t = el("table", "grid num tbl-turbo");
+    t.append(el("caption", "sr", "Turbo ratio limit tables by active-core bucket"));
+    const hr = el("tr");
+    hr.append(Object.assign(el("th", "", "Turbo table"), { scope: "col" }));
+    for (let i = 0; i < 8; i++) hr.append(Object.assign(el("th", "n", "bucket " + i), { scope: "col" }));
+    const head = el("thead"), body = el("tbody");
+    head.append(hr);
+    for (const [k, label] of [["p", "P-cores (0x1AD)"], ["e", "E-cores (0x650)"]]) {
+      const tr = el("tr");
+      tr.append(el("th", "", label));
+      for (let i = 0; i < 8; i++) tr.append(td(isNum(w.tables[k][i]) ? w.tables[k][i] + "×" : "n/a", "n mono"));
+      body.append(tr);
+    }
+    t.append(head, body);
+    fill(host, [el("h3", "dlg-sub", "Turbo ratio tables"), t, el("p", "muted", "An OC ratio at or below bucket 0 raises no table, so asking 57× on a P-core whose table already reads 57× changes nothing there. Only a ratio above bucket 0 makes the plan write a table." + (w.tablesNote ? " " + w.tablesNote : ""))]);
   }
 
   function renderAccepted(w) {
@@ -2545,12 +2607,19 @@
     if (status === 200 && body.ok && isObj(body.result) && typeof body.result.plan_id === "string") {
       openPlanDialog(body.result, intent);
     } else {
-      onError(errText(body) + (isObj(body.error) && body.error.code === "REFUSED" ? ". The policy refused this; change the value." : ""));
+      const chk = isObj(body.error) && isObj(body.error.detail) ? body.error.detail.check : null;
+      if (chk === "NO_READ") {
+        onError("This helper session has not read the tuning words, and this plan needs them. Read tuning words first (about " + COST_LOW + " operations, each request is a WRMSR).");
+        selectTab("tune", false);
+        $("btn-tune-read").focus();
+        return;
+      }
+      onError(errText(body) + (isObj(body.error) && body.error.code === "REFUSED" && chk === "POLICY_RANGE" ? ". The policy refused this; change the value." : ""));
     }
   }
 
   function describeIntent(intent) {
-    if (isObj(intent) && intent.reset !== undefined) return "Reset to stock";
+    if (isObj(intent) && intent.reset !== undefined) return "Reset offsets to 0";
     if (isObj(intent) && intent.restore !== undefined) return "Restore the accepted state";
     if (isObj(intent) && typeof intent.profile === "string") return "Apply profile " + intent.profile;
     return "Review changes";
@@ -2560,7 +2629,9 @@
   function normState(x) {
     const out = {};
     const put = (u, e, i) => {
-      if (UNIT_IDS.indexOf(u) < 0 || !isObj(e)) return;
+      if (UNIT_IDS.indexOf(u) < 0) return;
+      if (e === null) { (out[u] || (out[u] = {}))[i] = { unread: true, point: i, ratio: null, offset_mv: null, v_target_v: null }; return; }
+      if (!isObj(e)) return;
       const pt = e.oc === true ? 0 : isNum(e.point) ? e.point : i;
       (out[u] || (out[u] = {}))[pt] = { point: pt, ratio: isNum(e.ratio) ? e.ratio : null, offset_mv: isNum(e.offset_mv) ? e.offset_mv : null, v_target_v: isNum(e.v_target_v) ? e.v_target_v : null };
     };
@@ -2569,6 +2640,7 @@
       for (const u of Object.keys(x)) {
         const v = x[u];
         if (Array.isArray(v)) v.forEach((e, i) => put(u, e, i));
+        else if (isObj(v) && Object.keys(v).length && Object.keys(v).every((k) => /^\d+$/.test(k))) { for (const k of Object.keys(v)) put(u, v[k], Number(k)); }
         else if (isObj(v)) { if (isObj(v.oc)) put(u, Object.assign({}, v.oc, { point: 0 }), 0); (Array.isArray(v.points) ? v.points : []).forEach((e, i) => put(u, e, i + 1)); }
       }
     }
@@ -2583,7 +2655,7 @@
       const pts = Array.from(new Set(Object.keys(a[u] || {}).concat(Object.keys(b[u] || {})).map(Number))).sort((x, y) => x - y);
       const rows = pts.map((pt) => {
         const bb = (b[u] || {})[pt] || null, aa = (a[u] || {})[pt] || null;
-        const ch = !bb || !aa || bb.ratio !== aa.ratio || !(same(bb.offset_mv, aa.offset_mv, MV_TOL) || (bb.offset_mv === null && aa.offset_mv === null)) ||
+        const ch = !bb || !aa || bb.unread === true || bb.ratio !== aa.ratio || !(same(bb.offset_mv, aa.offset_mv, MV_TOL) || (bb.offset_mv === null && aa.offset_mv === null)) ||
           !(same(bb.v_target_v, aa.v_target_v, V_TOL) || (bb.v_target_v === null && aa.v_target_v === null));
         return { pt: pt, b: bb, a: aa, changed: ch };
       });
@@ -2592,8 +2664,9 @@
     return units;
   }
 
-  function arrow(bv, av, fmt) {
+  function arrow(bv, av, fmt, unread) {
     if (bv === null && av === null) return "n/a";
+    if (bv === null && unread) return "unread → " + fmt(av);
     if (bv === null || av === null) return fmt(bv === null ? av : bv);
     return fmt(bv) === fmt(av) ? fmt(av) : fmt(bv) + " → " + fmt(av);
   }
@@ -2610,6 +2683,12 @@
     if (inp) inp.focus();
   }
 
+  function stepKinds(steps) {
+    const n = {};
+    for (const x of steps) { const k = isObj(x) && typeof x.kind === "string" ? x.kind.replace(/^write_/, "").replace(/_/g, " ") : "step"; n[k] = (n[k] === undefined ? 0 : n[k]) + 1; }
+    return Object.keys(n).map((k) => n[k] + " " + k).join(", ");
+  }
+
   function planExpired() { return T.plan && isNum(T.plan.res.expires_s) && Date.now() - T.plan.issued > T.plan.res.expires_s * 1000; }
 
   function renderPlanBody() {
@@ -2624,6 +2703,12 @@
     ops.append(el("strong", "", "Each request is a WRMSR. "), document.createTextNode("This plan needs " + (isNum(res.ops_needed) ? res.ops_needed : "an unknown number of") + " operations" +
       (isNum(res.ops_left) ? " of the " + res.ops_left + " left this boot" : "") + ". One mailbox transaction at a time, each read back."));
     nodes.push(ops);
+    const facts = [];
+    if (isNum(res.writes)) facts.push(res.writes + " write steps");
+    if (isNum(res.reads)) facts.push(res.reads + " read-only requests");
+    if (Array.isArray(res.steps)) facts.push("steps: " + stepKinds(res.steps));
+    if (facts.length) nodes.push(el("p", "muted plan-facts", facts.join(" · ") + (res.steps_truncated === true ? " (the step list is shortened to fit one message)" : "")));
+    if (res.words_assumed === true) nodes.push(el("p", "plan-warn-line", "Some words were not read in this helper session, so the plan assumed their current values. Read the tuning words first for a plan based on what the CPU holds."));
     const gates = Array.isArray(res.gates) ? res.gates.filter(isObj) : [];
     if (gates.length) {
       const g = el("div", "plan-gates");
@@ -2653,9 +2738,9 @@
         const tr = el("tr", r.changed ? "is-changed" : "is-same");
         const x = r.a || r.b;
         tr.append(td(i === 0 ? d.unit : "", "plan-unit"), td(r.pt === 0 ? "OC point" : "pt " + r.pt),
-          td(arrow(r.b && r.b.ratio, r.a && r.a.ratio, (v) => (v === null ? "n/a" : v + "×")), "n"),
-          td(r.pt === 0 && !isNum(x.offset_mv) ? "n/a" : arrow(r.b && r.b.offset_mv, r.a && r.a.offset_mv, (v) => fmtMv(v, v !== null && Math.abs(v - Math.round(v)) < 0.05 ? 0 : 1)), "n"),
-          td(r.pt === 0 ? arrow(r.b && r.b.v_target_v, r.a && r.a.v_target_v, (v) => (v === null ? "n/a" : v.toFixed(3) + " V")) : "", "n"));
+          td(arrow(r.b && r.b.ratio, r.a && r.a.ratio, (v) => (v === null ? "n/a" : v + "×"), r.b && r.b.unread), "n"),
+          td(r.pt === 0 && !isNum(x.offset_mv) ? "n/a" : arrow(r.b && r.b.offset_mv, r.a && r.a.offset_mv, (v) => fmtMv(v, v !== null && Math.abs(v - Math.round(v)) < 0.05 ? 0 : 1), r.b && r.b.unread), "n"),
+          td(r.pt === 0 ? arrow(r.b && r.b.v_target_v, r.a && r.a.v_target_v, (v) => (v === null ? "n/a" : v.toFixed(3) + " V"), r.b && r.b.unread) : "", "n"));
         tb.append(tr);
       });
     }
@@ -2679,6 +2764,14 @@
     } else if (P.state === "done") {
       const rb = P.readback || [];
       const bad = rb.filter((x) => x.match !== true);
+      if (P.partial) {
+        const warn = el("div", "partial-box");
+        warn.setAttribute("role", "alert");
+        warn.append(el("strong", "", "Partial apply: it stopped after " + (isNum(P.writesSent) ? P.writesSent + " of the planned writes" : "some of the planned writes") + "."),
+          el("p", "", (typeof P.partial.reason === "string" ? P.partial.reason : "The helper gave no reason.") + (P.partial.tripped === true ? " The guard tripped." : "")),
+          el("p", "", "The CPU holds a mix of old and new words. Do not rely on it: use Restore accepted, or cold boot to get back to the fused state. The table below says which words did land."));
+        box.append(warn);
+      }
       box.append(el("h3", "dlg-sub", "Read-back"));
       const head = el("p", "");
       head.append(pill(bad.length ? bad.length + " of " + rb.length + " words differ" : "all " + rb.length + " words read back as written", bad.length ? "s-bad" : "s-ok"));
@@ -2686,14 +2779,15 @@
       box.append(head);
       const t = el("table", "grid num plan-table");
       const thr = el("tr");
-      for (const x of ["Unit", "Point", "Expected", "Actual", "Result"]) { const h = el("th", "", x); h.scope = "col"; thr.append(h); }
+      for (const x of ["Unit", "Point", "CPU", "Expected", "Actual", "Result"]) { const h = el("th", "", x); h.scope = "col"; thr.append(h); }
       t.append(Object.assign(el("thead"), {}), el("tbody"));
       t.tHead.append(thr);
       for (const x of rb) {
         const tr = el("tr", x.match === true ? "" : "is-changed");
         const rc = el("td");
         rc.append(pill(x.match === true ? "match" : "mismatch", x.match === true ? "s-ok" : "s-bad"));
-        tr.append(td(x.unit), td(x.point === 0 ? "OC point" : "pt " + x.point), td(x.expected, "mono"), td(x.actual, "mono"), rc);
+        tr.append(td(x.point === "turbo" ? "turbo table " + x.unit : x.unit), td(x.point === 0 ? "OC point" : x.point === "turbo" ? "ratios" : "pt " + x.point),
+          td(isNum(x.cpu) ? x.cpu : "", "n"), td(x.expected === null || x.expected === undefined ? "n/a" : x.expected, "mono"), td(x.actual === null || x.actual === undefined ? "not read back" : x.actual, "mono"), rc);
         t.tBodies[0].append(tr);
       }
       const sc = el("div", "scroll plan-scroll");
@@ -2709,6 +2803,13 @@
     const foot = $("dlg-plan-foot");
     if (P.state === "done" || P.state === "error") {
       const nodes = [];
+      if (P.state === "error" && P.stale) {
+        const again = el("button", "primary", "Plan again");
+        again.type = "button";
+        again.title = "Make a fresh plan for the same request";
+        again.addEventListener("click", () => { closeDialog($("dlg-plan")); requestPlan(P.intent, (m) => setText("tn-status", "Not planned: " + m)); });
+        nodes.push(again);
+      }
       if (P.state === "done" && P.changedUnits && P.changedUnits.length) {
         const again = el("button", "primary", "Measure again");
         again.type = "button";
@@ -2788,7 +2889,9 @@
     if (!launched("commit", status, body)) {
       P.state = "error";
       const code = isObj(body.error) ? body.error.code : "";
-      P.error = (code === "PLAN_STALE" ? "The plan expired or changed. Review again. " : code === "CONFIRM_MISMATCH" ? "The helper did not accept the confirmation (used already, or wrong). Review again. " : "") + errText(body);
+      P.stale = code === "PLAN_STALE";
+      P.error = (code === "PLAN_STALE" ? "A word changed since this plan was made, or the plan is gone (plans do not survive a helper restart). Nothing was written. Plan again. "
+        : code === "CONFIRM_MISMATCH" ? "The helper did not accept the confirmation (used already, or wrong; three wrong codes drop the plan). Nothing was written. " : "") + errText(body);
       renderPlanBody();
       renderPlanFoot();
     }
@@ -2816,10 +2919,13 @@
       const rb = (Array.isArray(ev.result.readback) ? ev.result.readback : []).filter(isObj);
       P.state = "done";
       P.readback = rb;
+      P.partial = ev.result.complete === false ? (isObj(ev.result.stop) ? ev.result.stop : {}) : null;
+      P.writesSent = isNum(ev.result.writes_sent) ? ev.result.writes_sent : null;
       P.ops = isNum(ev.result.ops_used) ? ev.result.ops_used : null;
       P.changedUnits = P.diff.filter((d) => d.changes > 0).map((d) => d.unit);
       // fold what was written into the words model, for units whose words all read back as written
       const bad = new Set(rb.filter((x) => x.match !== true).map((x) => x.unit));
+      if (P.partial) for (const u of P.changedUnits) bad.add(u);  // a partial apply: no unit is known to hold the planned words
       const after = normState(P.res.after);
       if (T.words) {
         for (const u of P.changedUnits) {
@@ -2834,10 +2940,12 @@
         T.words.fromPlan = true;
         T.draft = {};
         const a = appliedFromWords(T.words);
-        setAppliedChip(bad.size ? "unknown" : a.kind, bad.size ? "unverified" : a.text + ", written this session", bad.size ? "Some words did not read back as written." : "Written from the review dialog and read back. Read the tuning words again for a fresh check.");
+        setAppliedChip(bad.size ? "unknown" : a.kind, P.partial ? "partial apply, read again" : bad.size ? "unverified" : a.text + ", written this session",
+          P.partial ? "The apply stopped part way: read the tuning words to see what the CPU holds." : bad.size ? "Some words did not read back as written." : "Written from the review dialog and read back. Read the tuning words again for a fresh check.");
         buildRows();
       }
-      setText("tn-status", "Applied from the review dialog. " + (rb.some((x) => x.match !== true) ? "Some words did not match; see the read-back." : "Every word read back as written."));
+      setText("tn-status", P.partial ? "Partial apply: it stopped after " + (isNum(P.writesSent) ? P.writesSent : "some") + " writes. Read the tuning words to see what the CPU holds."
+        : "Applied from the review dialog. " + (rb.some((x) => x.match !== true) ? "Some words did not match; see the read-back." : "Every word read back as written."));
     } else {
       P.state = "error";
       const code = isObj(ev.error) ? ev.error.code : "";
@@ -2899,7 +3007,7 @@
     T.chart.render(model);
     const kind = rec && isObj(rec.tuning_state) ? rec.tuning_state.kind : null;
     setText("tn-preview-note", "Dashed lines are a prediction, not a measurement: the measured voltage plus the change in offset at each ratio. Hollow rings mark the OC target now, filled rings the new one." +
-      (kind ? " " + tuningWords(kind) + "." : "") + " After Apply, measure again.");
+      (kind ? " Measured curve: " + tuningWords(kind).replace(/^Tuning/, "tuning") + "." : "") + " After Apply, measure again.");
   }
 
   function initTune() {
@@ -2936,7 +3044,11 @@
   async function loadProfiles() {
     const { status, body } = await api("profiles.list", {});
     PR.loaded = true;
-    if (status === 200 && body.ok && isObj(body.result) && Array.isArray(body.result.profiles)) PR.list = body.result.profiles.filter((p) => isObj(p) && typeof p.name === "string");
+    PR.note = "";
+    if (status === 200 && body.ok && isObj(body.result) && Array.isArray(body.result.profiles)) {
+      PR.list = body.result.profiles.filter((p) => isObj(p) && typeof p.name === "string");
+      PR.note = typeof body.result.note === "string" ? body.result.note : "";   // e.g. "no accepted state directory is configured"
+    }
     else { PR.list = []; setText("pr-empty", "Profiles unavailable: " + errText(body)); }
     renderProfiles();
   }
@@ -2962,7 +3074,7 @@
 
   function renderProfiles() {
     $("pr-empty").hidden = PR.list.length > 0;
-    if (!PR.list.length && PR.loaded) setText("pr-empty", "No profiles yet. Change something in Tune and save it here.");
+    if (!PR.list.length && PR.loaded) setText("pr-empty", "No profiles yet. Change something in Tune and save it here." + (PR.note ? " Helper note: " + PR.note : ""));
     fill($("pr-list"), PR.list.map((p) => {
       const li = el("li", "pr-item");
       const main = el("div", "pr-main");

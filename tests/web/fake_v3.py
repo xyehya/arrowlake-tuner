@@ -113,8 +113,10 @@ def initial_tuning() -> dict:
     for u in UNITS:
         off = -25.0 if kind_of(u) == "P" else -50.0
         ratios = unit_ratios(u)
+        # the OC word of 23 of 24 cores reads 0 in ratio and V target (unset): None; only P0 carries them (G-112, tune.read)
         out[u] = {"points": [{"point": i + 1, "ratio": r, "offset_mv": off} for i, r in enumerate(ratios)],
-                  "oc": {"point": 0, "ratio": ratios[-1], "offset_mv": off, "v_target_v": round(stock_vid(u, ratios[-1]) + 0.01, 4)}}
+                  "oc": {"point": 0, "ratio": ratios[-1] if u == "P0" else None, "offset_mv": off,
+                         "v_target_v": round(stock_vid(u, ratios[-1]) + 0.01, 4) if u == "P0" else None}}
     return out
 
 
@@ -135,7 +137,13 @@ class V3Ops:
         self.curves: dict[str, dict] = {}
         self.tuning = initial_tuning()
         self.accepted = copy.deepcopy(self.tuning)
-        self.fused_vt = {u: self.tuning[u]["oc"]["v_target_v"] for u in UNITS}
+        self.fused_vt = {u: round(stock_vid(u, unit_ratios(u)[-1]) + 0.01, 4) for u in UNITS}
+        self.tables = {"p": [57, 57, 55, 55, 55, 55, 55, 55], "e": [48, 48, 47, 46, 46, 46, 46, 46]}  # 0x1AD / 0x650 bucket bytes, bucket 0 first
+        self.tables_note: str | None = None
+        self.replay: dict[str, dict] = {}
+        self.tuning_version = 0           # bumped by every apply; a plan made before it is PLAN_STALE
+        self.plan_steps_truncated = False
+        self.apply_stop_after: int | None = None   # stop the apply after this many units: complete False + stop (G-112)
         self.profiles: dict[str, dict] = {"accepted": {"name": "accepted", "source": "accepted", "created": "2026-10-06T21:14:02Z", "intent": None}}
         self.profiles_include_intent = True
         self.tuning_read = False          # tune.read happened this boot (decides a record's tuning_state)
@@ -208,6 +216,8 @@ class V3Ops:
 
     # ---- dispatcher ----
     def handle_v3(self, rid: str, op: str, args: dict) -> None:
+        if op in self.replay:   # dev aid: answer with a result captured from the real simulator helper (shape checks without re-implementing it)
+            return self._reply(rid, True, result=self.replay[op])
         try:
             getattr(self, "_op_" + op.replace(".", "_"))(rid, args)
         except Exception as e:  # a fake: surface programming errors as INTERNAL instead of killing the serve loop
@@ -295,24 +305,33 @@ class V3Ops:
             self._measuring.discard(rid)
             self._cancelled.discard(rid)
 
-    # ---- tuning words ----
+    # ---- tuning words (G-112 shapes: docs/ARCHITECTURE.md contract 9 as built) ----
+    def _oc_view(self, u: str) -> dict:
+        """The OC word as ``tune.read`` decodes it: ratio / V target are ``None`` (unset, the word reads 0) on most cores."""
+        oc = self.tuning[u]["oc"]
+        return {"point": 0, "ratio": oc["ratio"], "offset_mv": oc["offset_mv"], "v_target_v": oc["v_target_v"], "mode": "adaptive"}
+
     def _op_tune_read(self, rid, args):
         self.tuning_read = True
-        units = []
+        units, tune = [], {}
         for u in UNITS:
             t = self.tuning[u]
-            oc = {**_entry(u, t["oc"]), "word": _word(u, t["oc"]), "mode": "adaptive", "static": False}
+            oc_t = self._oc_view(u)
+            oc = {**oc_t, "word": _word(u, t["oc"]), "ratio": oc_t["ratio"] or 0, "v_target_v": oc_t["v_target_v"] or 0.0, "static": False}
             points = [{**_entry(u, p), "v_target_v": None, "word": _word(u, p), "mode": "adaptive", "static": False} for p in t["points"]]
             cpus = [{"cpu": UNIT_CPUS[u][0], "name": (f"P-Core {UNIT_CPUS[u][0]}" if kind_of(u) == "P" else f"E-Core {UNIT_CPUS[u][0]}"),
                      "oc": oc, "points": points, "end": None}]
             name = f"P-Core {u[1:]}" if kind_of(u) == "P" else f"E-cluster {u[2:]} (CPUs {UNIT_CPUS[u][0]}-{UNIT_CPUS[u][-1]})"
-            units.append({"name": name, "kind": kind_of(u), "cluster": None if kind_of(u) == "P" else int(u[2:]), "cluster_cpus": UNIT_CPUS[u],
+            units.append({"id": u, "name": name, "kind": kind_of(u), "cluster": None if kind_of(u) == "P" else int(u[2:]), "cluster_cpus": UNIT_CPUS[u],
                           "cpus": cpus, "measured": None})
+            tune[u] = {"cpus": [{"cpu": UNIT_CPUS[u][0], "points": [oc_t] + [{"point": p["point"], "ratio": p["ratio"], "offset_mv": p["offset_mv"],
+                                                                                "v_target_v": None, "mode": "adaptive"} for p in t["points"]]}]}
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
         self.ops_used_v3 += 112
         self._reply(rid, True, result={"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
-                                       "ops_done": 112, "accepted_match": match})
+                                       "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
+                                       "tables_note": self.tables_note})
 
     # ---- plan ----
     def _refuse_range(self, rid, field: str, limit: str):
@@ -329,53 +348,75 @@ class V3Ops:
         intent = args.get("intent")
         if not isinstance(intent, dict):
             return self._err(rid, "BAD_REQUEST", "intent must be an object")
-        cur = copy.deepcopy(self.tuning)
         new = copy.deepcopy(self.tuning)
         warnings: list[str] = []
+        written: dict[str, set[int]] = {}   # unit -> word indexes the plan writes (0 = OC word)
         if "reset" in intent:
-            for u in UNITS:
+            if not self.tuning_read:
+                return self._err(rid, "REFUSED", "reset needs the words last read; run 'Read tuning words' (tune.read) first. Nothing was sent.", check="NO_READ")
+            for u in UNITS:   # offsets only: ratio, V target and the turbo tables stay
                 for p in new[u]["points"] + [new[u]["oc"]]:
                     p["offset_mv"] = 0.0
-                new[u]["oc"]["v_target_v"] = self.fused_vt[u]
-                new[u]["oc"]["ratio"] = unit_max_ratio(u)
+                written[u] = {0}
         elif "restore" in intent:
             new = copy.deepcopy(self.accepted)
+            written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
         elif "profile" in intent:
             prof = self.profiles.get(intent["profile"])
             if prof is None:
-                return self._err(rid, "BAD_REQUEST", "no such profile", check="NO_SUCH_CURVE")
+                return self._err(rid, "REFUSED", "no such profile", check="PROFILE_NOT_FOUND")
             if prof["source"] == "accepted":
                 new = copy.deepcopy(self.accepted)
-            else:
-                err = self._apply_rows(rid, new, prof["intent"].get("rows", []), warnings)
-                if err:
-                    return
+                written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
+            elif self._apply_rows(rid, new, prof["intent"].get("rows", []), warnings, written):
+                return
         elif isinstance(intent.get("rows"), list):
-            if self._apply_rows(rid, new, intent["rows"], warnings):
+            rows = [r for r in intent["rows"] if isinstance(r, dict) and (r.get("offset") or r.get("v_target_v") is not None or r.get("ratio") is not None)]
+            if not rows:
+                return self._err(rid, "BAD_REQUEST", "the intent changes nothing (every row is empty)", check="NOTHING_TO_DO")
+            scope = intent.get("scope")
+            for r in rows:
+                if r.get("target") not in (("P", "E") if scope == "simple" else tuple(UNITS)):
+                    return self._err(rid, "BAD_REQUEST", f"row target {r.get('target')!r} is not valid for scope {scope!r}")
+                if isinstance(r.get("offset"), dict) and r["offset"].get("kind") == "points" and not self.tuning_read:
+                    return self._err(rid, "REFUSED", f"{r['target']}: per-point offsets are addressed by ratio and need the words last read; run 'Read tuning words' "
+                                     "(tune.read) first. Nothing was sent.", check="NO_READ")
+            if self._apply_rows(rid, new, rows, warnings, written):
                 return
         else:
-            return self._err(rid, "BAD_REQUEST", "intent needs rows, profile, reset or restore")
-        before, after, ops = {}, {}, 0
-        changed_units = []
+            return self._err(rid, "BAD_REQUEST", "intent must be {scope, rows}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
+        before, after, ops, changed_units, steps = {}, {}, 0, [], []
         for u in UNITS:
-            b = [_entry(u, cur[u]["oc"])] + [_entry(u, p) for p in cur[u]["points"]]
-            a = [_entry(u, new[u]["oc"])] + [_entry(u, p) for p in new[u]["points"]]
-            before[u], after[u] = b, a
-            diff = [x for x, y in zip(b, a) if x != y]
-            if diff:
-                changed_units.append(u)
-                ops += 3 * len(diff) + 1
-        if not changed_units:
-            warnings.append("nothing changes: the plan equals the state last read")
+            idx = sorted(written.get(u, ()))
+            if not idx:
+                continue
+            changed_units.append(u)
+            word = lambda state, i: _entry(u, state[u]["oc"] if i == 0 else next(p for p in state[u]["points"] if p["point"] == i))  # noqa: E731
+            show = lambda e: {"ratio": e["ratio"], "offset_mv": e["offset_mv"], "v_target_v": e["v_target_v"]}  # noqa: E731
+            before[u] = {str(i): (show(word(self.tuning, i)) if self.tuning_read else None) for i in idx}
+            after[u] = {str(i): show(word(new, i)) for i in idx}
+            ops += 3 * len(idx) + 1
+            for i in idx:
+                steps.append({"kind": "write_vf" if i == 0 else "write_vf_point", "unit": u, "cpu": UNIT_CPUS[u][0], "point": i})
+        top = {"P": self.tables["p"][0], "E": self.tables["e"][0]}
+        raised = {k for u in changed_units for k in [kind_of(u)] if (new[u]["oc"]["ratio"] or 0) > top[k]}
+        steps = [{"kind": "write_percore_enable", "conditional": True}] + steps + [{"kind": "write_msr", "table": k.lower()} for k in sorted(raised)]
+        if any(new[u]["oc"]["ratio"] != self.tuning[u]["oc"]["ratio"] for u in changed_units):
+            warnings.append("Raising the OC ratio or target is not validated on this machine; the hardware may ignore a ratio inside the current turbo table.")
+        warnings.append("Revert: cold boot, or reapply the accepted profile.")
         plan_id = hashlib.sha256(json.dumps([after, rid], sort_keys=True).encode()).hexdigest()
         nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
-        steps = [{"step": i + 1, "what": f"write {u} ({len(UNIT_CPUS[u])} cpu)"} for i, u in enumerate(changed_units)]
-        self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "created": time.monotonic()}
-        self._reply(rid, True, result={"plan_id": plan_id, "nonce": nonce, "steps": steps, "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3,
-                                       "expires_s": 600, "before": before, "after": after, "warnings": warnings,
-                                       "gates": [{"name": "first write from the new UI", "status": "not yet validated on this machine"}]})
+        self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "written": written, "created": time.monotonic(),
+                                  "version": self.tuning_version, "bad": 0, "raised": sorted(raised)}
+        result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - 1, "reads": len(changed_units),
+                  "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3, "expires_s": 600, "units": changed_units, "before": before,
+                  "after": after, "warnings": warnings, "words_assumed": not self.tuning_read}
+        if self.plan_steps_truncated:
+            result["steps"] = steps[: len(steps) // 2]
+            result["steps_truncated"] = True
+        self._reply(rid, True, result=result)
 
-    def _apply_rows(self, rid, new: dict, rows: list, warnings: list[str]) -> bool:
+    def _apply_rows(self, rid, new: dict, rows: list, warnings: list[str], written: dict) -> bool:
         """Apply plan rows to ``new``; True (after sending the refusal) if a row is out of policy."""
         for row in rows:
             units = self._targets(row.get("target"))
@@ -394,10 +435,12 @@ class V3Ops:
                     if off.get("kind") == "curve":
                         for p in new[u]["points"] + [new[u]["oc"]]:
                             p["offset_mv"] = float(off["mv"])
+                        written.setdefault(u, set()).add(0)
                     else:
                         for p in new[u]["points"]:
                             if str(p["ratio"]) in off["mv"]:
                                 p["offset_mv"] = float(off["mv"][str(p["ratio"])])
+                                written.setdefault(u, set()).add(p["point"])
                     if any(p["offset_mv"] > 0 for p in new[u]["points"]):
                         warnings.append(f"positive offset on {u}: raises voltage above the fused curve")
                 vt = row.get("v_target_v")
@@ -406,6 +449,7 @@ class V3Ops:
                         self._refuse_range(rid, "v_target_v", f"{V_TARGET_MIN:.3f}..{V_TARGET_MAX[k]:.3f} V for {k}")
                         return True
                     new[u]["oc"]["v_target_v"] = float(vt)
+                    written.setdefault(u, set()).add(0)
                     if vt > self.fused_vt[u] + 1e-9:
                         warnings.append(f"target above fused on {u}: {vt:.3f} V > {self.fused_vt[u]:.3f} V")
                 ratio = row.get("ratio")
@@ -414,37 +458,55 @@ class V3Ops:
                         self._refuse_range(rid, "ratio", f"at most {RATIO_MAX[k]} for {k}")
                         return True
                     new[u]["oc"]["ratio"] = ratio
+                    written.setdefault(u, set()).add(0)
         return False
 
     # ---- apply (long) ----
     def _op_tune_apply(self, rid, args):
         p = self.plans_v3.get(args.get("plan_id"))
         if p is None:
-            return self._err(rid, "PLAN_STALE", "unknown plan")
+            return self._err(rid, "PLAN_STALE", "unknown plan (plans do not survive a helper restart)")
         if p["used"] or args.get("typed") != "CONFIRM " + p["nonce"]:
+            p["bad"] += 1
+            if p["bad"] >= 3:
+                del self.plans_v3[args["plan_id"]]
             return self._err(rid, "CONFIRM_MISMATCH", "typed text does not match")
+        if p["version"] != self.tuning_version:
+            return self._err(rid, "PLAN_STALE", "a word changed since this plan was made; plan again")
         p["used"] = True
         self._applying.add(rid)
         threading.Thread(target=self._apply, args=(rid, p), daemon=True).start()
 
     def _apply(self, rid: str, p: dict) -> None:
         n = max(len(p["changed"]), 1)
-        for i in range(n):
+        stop_after = self.apply_stop_after
+        readback, sent = [], 0
+        for i, u in enumerate(p["changed"]):
             if self.apply_delay:
                 time.sleep(self.apply_delay)
             self.emit({"event": "progress", "op_id": rid, "step": i + 1, "of": n, "ops_used": self.ops_used_v3 + 3 * (i + 1), "ops_budget": self.ops_budget})
-        readback = []
-        for u in p["changed"]:
-            for q in [p["new"][u]["oc"]] + p["new"][u]["points"]:
+            if stop_after is not None and i >= stop_after:
+                break
+            for idx in sorted(p["written"][u]):
+                q = p["new"][u]["oc"] if idx == 0 else next(x for x in p["new"][u]["points"] if x["point"] == idx)
                 exp = _word(u, q)
-                bad = (u, q["point"]) in self.apply_mismatch
-                readback.append({"unit": u, "point": q["point"], "expected": exp, "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
-        for u in p["changed"]:
+                bad = (u, idx) in self.apply_mismatch
+                readback.append({"unit": u, "point": idx, "cpu": UNIT_CPUS[u][0], "expected": exp,
+                                 "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
+                sent += 1
             self.tuning[u] = copy.deepcopy(p["new"][u])
+        for k in p["raised"]:
+            top = max(p["new"][u]["oc"]["ratio"] or 0 for u in p["changed"] if kind_of(u) == k)
+            self.tables[k.lower()] = [top] + self.tables[k.lower()][1:]
+            readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
+        self.tuning_version += 1
         self.ops_used_v3 += 3 * n
         self._applying.discard(rid)
-        self._reply(rid, True, result={"steps": [{"step": i + 1, "what": f"write {u}"} for i, u in enumerate(p["changed"])], "readback": readback,
-                                       "ops_used": 3 * n})
+        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])],
+                  "readback": readback, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
+        if stop_after is not None:
+            result["stop"] = {"kind": "refused", "reason": "the guard refused a step: step limit", "tripped": False}
+        self._reply(rid, True, result=result)
 
     # ---- profiles ----
     def _op_profiles_list(self, rid, args):

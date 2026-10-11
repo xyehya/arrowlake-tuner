@@ -1,6 +1,6 @@
 """Dev harness for the v3 web UI (G-113): the real ``WebServer`` over the contract-9 ``FakeHelper`` with a telemetry + heartbeat feeder.
-No hardware and no helper code. ``server.OPS`` is extended here, at import time of this module only, with permissive contract-9 validators, because the
-real allowlist (``src/arltuner/web/server.py``) belongs to G-111 / G-112; remove this shim when they land.
+No hardware and no helper code. The server's ``OPS`` allowlist is the real one (G-111 / G-112 merged), so every request the page sends is
+schema-checked exactly as it will be against the real helper.
 
     python3 -m tests.web.v3_harness            # serves on 127.0.0.1, prints the one-time launcher token; Ctrl-C to stop (never starts a helper)
 """
@@ -14,32 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-from arltuner.web import server as srvmod  # noqa: E402
 from arltuner.web.server import Config, WebServer  # noqa: E402
 from tests.web.fake_helper import FakeHelper, preflight_report  # noqa: E402
-
-_V3_OPS = {
-    "mem.read": (lambda a: a == {}, False),
-    "vf.measure": (lambda a: set(a) <= {"mode", "units", "name"}, True),
-    "curves.list": (lambda a: a == {}, False),
-    "curves.get": (lambda a: "id" in a and set(a) <= {"id", "units"}, False),
-    "curves.update": (lambda a: "id" in a and set(a) <= {"id", "name", "baseline"}, False),
-    "curves.delete": (lambda a: set(a) == {"id"}, False),
-    "tune.read": (lambda a: a == {}, True),
-    "tune.plan": (lambda a: set(a) == {"intent"} and isinstance(a["intent"], dict), False),
-    "tune.apply": (srvmod._apply, True),
-    "profiles.list": (lambda a: a == {}, False),
-    "profiles.save": (lambda a: set(a) == {"name", "intent"}, False),
-}
-
-
-def install_ops() -> None:
-    srvmod.OPS.update(_V3_OPS)
-
-
-def uninstall_ops() -> None:
-    for k in _V3_OPS:
-        srvmod.OPS.pop(k, None)
 
 
 def tele_values(t: float) -> dict:
@@ -64,7 +40,6 @@ def tele_values(t: float) -> dict:
 
 
 def start(measure_delay: float = 0.0, apply_delay: float = 0.0, seed: bool = True, stop: threading.Event | None = None):
-    install_ops()
     fake = FakeHelper()
     fake.preflight_result = preflight_report("write")
     fake.measure_delay = measure_delay
@@ -110,4 +85,3 @@ if __name__ == "__main__":
         _stop.set()
         _srv.close()
         _fake.close()
-        uninstall_ops()

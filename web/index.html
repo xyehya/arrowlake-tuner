@@ -281,7 +281,7 @@
         <div class="row-tight">
           <button type="button" id="btn-tn-discard" disabled>Discard changes</button>
           <button type="button" id="btn-tn-restore">Restore accepted</button>
-          <button type="button" id="btn-tn-reset">Reset to stock</button>
+          <button type="button" id="btn-tn-reset" title="Sets every offset to 0 mV. The OC ratio, the OC target voltage and the turbo tables are left alone.">Reset offsets to 0</button>
           <button type="button" id="btn-tn-plan" class="primary" disabled>Review changes</button>
         </div>
       </div>
@@ -308,6 +308,7 @@
         <tbody id="vf-body"></tbody>
       </table></div>
       <p id="acc-summary" class="muted"></p>
+      <div id="tn-tables"></div>
     </article>
   </section>
 

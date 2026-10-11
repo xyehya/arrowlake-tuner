@@ -26,7 +26,6 @@ class TestBrowser(unittest.TestCase):
 
         srv, fake, stop = h.start(measure_delay=0.01, apply_delay=0.05, seed=False)
         fake.record_budget_units = 4  # G-111: records come in pieces (omitted_units); the page must merge them
-        self.addCleanup(h.uninstall_ops)
         self.addCleanup(fake.close)
         self.addCleanup(srv.close)
         self.addCleanup(stop.set)

@@ -632,6 +632,11 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .plan-revert { font-size: 13px; }
 .plan-result { margin-top: 10px; }
 .bad-text { color: var(--bad-fg); }
+.plan-warn-line { margin: 8px 0; padding: 8px 12px; border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn-fg); }
+.plan-facts { margin: 2px 0 6px; font-size: 13px; }
+.partial-box { margin: 8px 0 4px; padding: 10px 14px; border-radius: var(--radius-s); background: var(--bad-bg); color: var(--bad-fg); border: 1px solid color-mix(in srgb, var(--bad-fg) 50%, transparent); }
+.partial-box p { margin: 4px 0 0; }
+.tbl-turbo th[scope="row"], .tbl-turbo tbody th { font-weight: 500; color: var(--text); white-space: nowrap; }
 .confirm-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; flex: 1 1 320px; }
 .confirm-label { color: var(--text-2); }
 .confirm-code { font-family: var(--mono); font-size: 16px; color: var(--warn-fg); background: var(--warn-bg); padding: 2px 8px; border-radius: 6px; letter-spacing: 0.06em; }

@@ -190,6 +190,29 @@ class TestScript(unittest.TestCase):
         self.assertIn("requestPlan({ profile: p.name }", JS)
         self.assertIn("requestPlan(intent,", JS)
 
+    def test_g112_g111_bindings(self):
+        """The shapes the real helpers return (orchestrator note, G-111 / G-112 as merged)."""
+        self.assertIn("Reset offsets to 0", HTML)                       # reset zeroes offsets only: the button says so
+        self.assertNotIn("Reset to stock", HTML + JS)
+        for check in ("NO_CPUFREQ", "LOAD_GENERATOR", "MEASURE_UNAVAILABLE", "JOURNAL_UNAVAILABLE", "CURVE_LIMIT", "EXISTS", "NO_SUCH_CURVE", "NO_READ",
+                      "NOTHING_TO_DO", "NO_ACCEPTED_STATE", "STEP_LIMIT", "SESSION_LIMIT", "BOOT_LIMIT", "POLICY_RANGE"):
+            self.assertRegex(JS, rf"\b{check}: \"", check)             # every detail.check has a sentence
+        self.assertIn('chk === "NO_READ"', func_body("requestPlan"))     # NO_READ sends the operator to "Read tuning words"
+        self.assertIn("omitted_units", JS)                               # records come in pieces; curves.get {id, units} merges them
+        self.assertIn('api("curves.get", { id: rec.id, units: want })', JS)
+        self.assertIn("P.partial", JS)                                   # complete:false + stop is shown as a partial apply
+        self.assertIn('point === "turbo"', JS)                           # turbo read-back rows
+        self.assertIn("detail.curve_id", JS)                             # the partial curve of a cancelled measure
+        self.assertIn("body.result.note", JS)                            # profiles.list note
+        self.assertIn('typeof u.id === "string"', JS)                    # tune.read names the unit
+        self.assertIn("r.tune", JS)
+
+    def test_the_intent_scope_matches_what_the_helper_accepts(self):
+        """P / E targets exist only in the simple scope and unit targets only in the unit scope: mixed changes fall back to one row per unit."""
+        body = func_body("buildIntent")
+        self.assertIn('return { scope: "unit", rows: perUnit }', body)
+        self.assertIn('{ scope: "simple", rows: merged }', body)
+
     def test_mailbox_actions_state_the_wrmsr_cost(self):
         self.assertIn("Each request is a WRMSR. ", JS)  # in the review dialog
         self.assertIn("each request is a WRMSR", HTML)  # next to the read button

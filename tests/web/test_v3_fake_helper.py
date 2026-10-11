@@ -191,100 +191,144 @@ class TestG111Deviations(V3Base):
 
 
 class TestTune(V3Base):
+    """The G-112 shapes: tune.read adds units[].id, tune (decoded), tables; before / after are {unit: {"0": OC word, "<n>": point n}} of the words written."""
+
     def read(self) -> dict:
         return self.ok("tune.read")
 
-    def test_read_keeps_the_vf_dump_shape_and_decodes_every_point(self):
+    def intent(self, **row) -> dict:
+        return {"intent": {"scope": "simple" if row["target"] in ("P", "E") else "unit", "rows": [{"offset": None, "v_target_v": None, "ratio": None, **row}]}}
+
+    def test_read_adds_ids_decoded_words_and_turbo_tables(self):
         r = self.read()
         self.assertTrue(r["complete"] and r["simulator"])
-        self.assertEqual(len(r["units"]), 12)
+        self.assertEqual([u["id"] for u in r["units"]], v3.UNITS)
         u0, e0 = r["units"][0], r["units"][8]
         self.assertEqual((u0["kind"], u0["cluster"], u0["cluster_cpus"]), ("P", None, [0]))
         self.assertEqual((e0["kind"], e0["cluster"], e0["cluster_cpus"]), ("E", 0, [8, 9, 10, 11]))
-        c = u0["cpus"][0]
-        self.assertEqual([p["ratio"] for p in c["points"]], v3.P_POINTS_FAVORED)
-        self.assertEqual(set(c["points"][0]), {"point", "ratio", "offset_mv", "v_target_v", "word", "mode", "static"})
-        self.assertEqual(c["oc"]["point"], 0)
-        self.assertEqual(c["oc"]["ratio"], 57)
-        self.assertIsNotNone(c["oc"]["v_target_v"])
-        self.assertEqual([p["ratio"] for p in r["units"][1]["cpus"][0]["points"]], v3.P_POINTS_OTHER)  # per-core tables
-        self.assertEqual(len(r["accepted_match"]), 12)
+        pts = r["tune"]["P0"]["cpus"][0]["points"]
+        self.assertEqual([p["point"] for p in pts], list(range(9)))                       # point 0 is the OC word
+        self.assertEqual(set(pts[1]), {"point", "ratio", "offset_mv", "v_target_v", "mode"})
+        self.assertEqual([p["ratio"] for p in pts[1:]], v3.P_POINTS_FAVORED)
+        self.assertEqual(pts[0]["ratio"], 57)
+        self.assertIsNotNone(pts[0]["v_target_v"])
+        oc_e = r["tune"]["EC0"]["cpus"][0]["points"][0]
+        self.assertEqual((oc_e["ratio"], oc_e["v_target_v"]), (None, None))                # unset: the word reads 0
+        self.assertEqual([p["ratio"] for p in r["tune"]["P1"]["cpus"][0]["points"][1:]], v3.P_POINTS_OTHER)  # per-core tables
+        self.assertEqual(r["tables"], {"p": [57, 57, 55, 55, 55, 55, 55, 55], "e": [48, 48, 47, 46, 46, 46, 46, 46]})
+        self.assertIsNone(r["tables_note"])
         self.assertTrue(all(m["match"] for m in r["accepted_match"]))
 
-    def intent(self, **row) -> dict:
-        return {"intent": {"scope": "simple", "rows": [row]}}
-
-    def test_plan_before_after_ops_nonce_gates_and_warnings(self):
+    def test_plan_lists_only_the_words_it_writes(self):
         self.read()
-        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -40}, v_target_v=None, ratio=None))
+        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -40}))
         self.assertTrue(re.fullmatch(r"[0-9a-f]{64}", p["plan_id"]))
         self.assertTrue(re.fullmatch(r"[A-Z2-9]{6}", p["nonce"]))
+        self.assertEqual(p["units"], v3.UNITS[:8])
+        self.assertEqual(list(p["before"]["P0"]), ["0"])
+        self.assertEqual(p["before"]["P0"]["0"]["offset_mv"], -25.0)
+        self.assertEqual(p["after"]["P0"]["0"]["offset_mv"], -40.0)
+        self.assertNotIn("EC0", p["after"])                         # only the units it changes
+        self.assertEqual((p["writes"], p["reads"]), (len(p["steps"]) - 1, 8))
+        self.assertEqual(p["steps"][0], {"kind": "write_percore_enable", "conditional": True})
+        self.assertFalse(p["words_assumed"])
         self.assertGreater(p["ops_needed"], 0)
-        self.assertEqual(p["before"]["P0"][1], {"point": 1, "ratio": 8, "offset_mv": -25.0, "v_target_v": None})
-        self.assertEqual(p["after"]["P0"][1]["offset_mv"], -40.0)
-        self.assertEqual(p["after"]["EC0"], p["before"]["EC0"])  # only the P units move
-        self.assertEqual(p["before"]["P0"][0]["point"], 0)       # point 0 is the OC word
-        self.assertEqual(p["warnings"], [])
-        self.assertEqual(p["gates"][0]["status"], "not yet validated on this machine")
-        w = self.ok("tune.plan", self.intent(target="P3", offset={"kind": "curve", "mv": 10}, v_target_v=1.5, ratio=None))
+        self.assertTrue(any("Revert" in w for w in p["warnings"]))
+        pts = self.ok("tune.plan", self.intent(target="EC1", offset={"kind": "points", "mv": {"23": -80}}))
+        self.assertEqual(list(pts["after"]["EC1"]), ["3"])           # point 3 is 23x
+        self.assertEqual(pts["after"]["EC1"]["3"], {"ratio": 23, "offset_mv": -80.0, "v_target_v": None})
+        w = self.ok("tune.plan", self.intent(target="P3", offset={"kind": "curve", "mv": 10}, v_target_v=1.5))
         self.assertTrue(any("positive offset on P3" in x for x in w["warnings"]))
         self.assertTrue(any("target above fused on P3" in x for x in w["warnings"]))
-        pts = self.ok("tune.plan", self.intent(target="EC1", offset={"kind": "points", "mv": {"23": -80}}, v_target_v=None, ratio=None))
-        self.assertEqual([x["offset_mv"] for x in pts["after"]["EC1"][1:]], [-50, -50, -80, -50, -50, -50])
 
-    def test_plan_refuses_out_of_policy_values_naming_the_field(self):
+    def test_plan_refusals_names_and_checks(self):
         self.read()
-        for row, field in (({"offset": {"kind": "curve", "mv": 201}}, "offset.mv"), ({"offset": {"kind": "curve", "mv": -200.5}}, "offset.mv"),
-                           ({"v_target_v": 1.7}, "v_target_v"), ({"v_target_v": 0.8}, "v_target_v"), ({"ratio": 58}, "ratio")):
-            e = self.err("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "P2", **row}]}}, "REFUSED")
+        for row, field in (({"offset": {"kind": "curve", "mv": 201}}, "offset.mv"), ({"v_target_v": 1.7}, "v_target_v"), ({"v_target_v": 0.8}, "v_target_v"),
+                           ({"ratio": 58}, "ratio")):
+            e = self.err("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "P2", "offset": None, "v_target_v": None, "ratio": None, **row}]}}, "REFUSED")
             self.assertEqual(e["detail"]["check"], "POLICY_RANGE")
             self.assertIn(field, e["message"])
-        e = self.err("tune.plan", self.intent(target="EC0", v_target_v=1.4, offset=None, ratio=None), "REFUSED")  # E ceiling is 1.355 V
-        self.assertIn("1.355", e["message"])
-        self.err("tune.plan", self.intent(target="E", ratio=50, offset=None, v_target_v=None), "REFUSED")
+        self.assertIn("1.355", self.err("tune.plan", self.intent(target="E", v_target_v=1.4), "REFUSED")["message"])
+        self.assertEqual(self.err("tune.plan", self.intent(target="P"), "BAD_REQUEST")["detail"]["check"], "NOTHING_TO_DO")
         self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -200}, v_target_v=1.625, ratio=57))  # the limits themselves are fine
+        # a group target is only valid in the simple scope
+        self.err("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "P", "offset": {"kind": "curve", "mv": -5}, "v_target_v": None, "ratio": None}]}}, "BAD_REQUEST")
 
-    def test_apply_needs_the_exact_nonce_once_and_reads_back(self):
+    def test_per_point_offsets_and_reset_need_a_read_first(self):
+        for intent in ({"scope": "unit", "rows": [{"target": "P1", "offset": {"kind": "points", "mv": {"20": -30}}, "v_target_v": None, "ratio": None}]},
+                       {"reset": "stock"}):
+            self.assertEqual(self.err("tune.plan", {"intent": intent}, "REFUSED")["detail"]["check"], "NO_READ")
+        # a whole-curve offset needs no read; the word was not read, so its "before" is null and the plan says the words were assumed
+        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -30}))
+        self.assertIsNone(p["before"]["P0"]["0"])
+        self.assertTrue(p["words_assumed"])
+
+    def test_apply_needs_the_exact_nonce_once_reads_back_with_cpus_and_goes_stale(self):
         self.read()
-        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -40}, v_target_v=None, ratio=None))
+        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -40}))
+        other = self.ok("tune.plan", self.intent(target="E", offset={"kind": "curve", "mv": -60}))
         self.err("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM AAAAAA"}, "CONFIRM_MISMATCH")
         self.err("tune.apply", {"plan_id": "0" * 64, "typed": "CONFIRM " + p["nonce"]}, "PLAN_STALE")
         res = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})
-        self.assertEqual(len(res["readback"]), 8 * 9)  # 8 P units x (OC word + 8 points)
+        self.assertTrue(res["complete"])
+        self.assertEqual(len(res["readback"]), 8)                       # the 8 OC words (a whole-curve offset is the OC word)
         self.assertTrue(all(x["match"] and x["expected"] == x["actual"] for x in res["readback"]))
-        self.assertEqual(set(res["readback"][0]), {"unit", "point", "expected", "actual", "match"})
-        self.assertGreater(res["ops_used"], 0)
+        self.assertEqual(set(res["readback"][0]), {"unit", "point", "cpu", "expected", "actual", "match"})
+        self.assertEqual((res["writes_sent"], res["readback"][0]["cpu"]), (8, 0))
         self.err("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]}, "CONFIRM_MISMATCH")  # a nonce is single-use
+        self.err("tune.apply", {"plan_id": other["plan_id"], "typed": "CONFIRM " + other["nonce"]}, "PLAN_STALE")  # a word changed since it was planned
         again = self.read()
-        self.assertEqual(again["units"][0]["cpus"][0]["points"][0]["offset_mv"], -40.0)
-        self.assertFalse(again["accepted_match"][0]["match"])  # no longer the accepted state
-        self.assertTrue(again["accepted_match"][8]["match"])   # the E clusters were not touched
-        prog = self.events("progress")
-        self.assertTrue(prog and all(e["of"] >= e["step"] for e in prog))
+        self.assertEqual(again["tune"]["P0"]["cpus"][0]["points"][1]["offset_mv"], -40.0)
+        self.assertFalse(again["accepted_match"][0]["match"])
+        self.assertTrue(again["accepted_match"][8]["match"])
+        self.assertTrue(self.events("progress"))
 
-    def test_a_readback_mismatch_can_be_injected(self):
+    def test_three_wrong_nonces_drop_the_plan(self):
         self.read()
-        self.fake.apply_mismatch = {("P0", 3)}
-        p = self.ok("tune.plan", self.intent(target="P0", offset={"kind": "curve", "mv": -30}, v_target_v=None, ratio=None))
-        rb = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})["readback"]
-        self.assertEqual([(x["unit"], x["point"]) for x in rb if not x["match"]], [("P0", 3)])
+        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -40}))
+        for _ in range(3):
+            self.err("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM AAAAAA"}, "CONFIRM_MISMATCH")
+        self.err("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]}, "PLAN_STALE")
 
-    def test_reset_and_restore_go_through_the_same_plan_flow(self):
+    def test_a_partial_apply_is_a_result_with_a_stop(self):
+        self.read()
+        self.fake.apply_stop_after = 2
+        p = self.ok("tune.plan", self.intent(target="P", offset={"kind": "curve", "mv": -30}))
+        res = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})
+        self.assertFalse(res["complete"])
+        self.assertEqual(set(res["stop"]), {"kind", "reason", "tripped"})
+        self.assertEqual((res["writes_sent"], len(res["readback"])), (2, 2))
+
+    def test_a_readback_mismatch_and_a_raised_turbo_table(self):
+        self.read()
+        self.fake.apply_mismatch = {("P0", 0)}
+        p = self.ok("tune.plan", self.intent(target="P0", ratio=57, v_target_v=1.4))
+        rb = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})["readback"]
+        self.assertEqual([(x["unit"], x["point"]) for x in rb if not x["match"]], [("P0", 0)])
+        self.fake.tables["p"][0] = 55          # a machine whose P table tops out below the request
+        raised = self.ok("tune.plan", self.intent(target="P1", ratio=57))
+        self.assertEqual(raised["steps"][-1], {"kind": "write_msr", "table": "p"})
+        res = self.ok("tune.apply", {"plan_id": raised["plan_id"], "typed": "CONFIRM " + raised["nonce"]})
+        self.assertEqual(res["readback"][-1]["unit"], "P")
+        self.assertEqual(res["readback"][-1]["point"], "turbo")  # turbo rows: unit "E" | "P", point "turbo"
+        self.assertEqual(len(res["readback"][-1]["expected"]), 18)
+
+    def test_reset_zeroes_offsets_only_and_restore_goes_through_the_same_flow(self):
         self.read()
         reset = self.ok("tune.plan", {"intent": {"reset": "stock"}})
-        self.assertTrue(all(pt["offset_mv"] == 0 for u in reset["after"].values() for pt in u))
+        self.assertEqual(sorted(reset["after"]), sorted(v3.UNITS))
+        self.assertTrue(all(w["offset_mv"] == 0 for u in reset["after"].values() for w in u.values()))
+        self.assertEqual(reset["after"]["P0"]["0"]["ratio"], 57)         # ratio and V target stay
         self.ok("tune.apply", {"plan_id": reset["plan_id"], "typed": "CONFIRM " + reset["nonce"]})
         restore = self.ok("tune.plan", {"intent": {"restore": "accepted"}})
-        self.assertEqual(restore["after"]["P0"][1]["offset_mv"], -25.0)
-        self.assertEqual(restore["before"]["P0"][1]["offset_mv"], 0.0)
-        self.err("tune.plan", {"intent": {"profile": "nope"}})
+        self.assertEqual(restore["after"]["P0"]["1"]["offset_mv"], -25.0)
+        self.assertEqual(restore["before"]["P0"]["1"]["offset_mv"], 0.0)
+        self.assertEqual(self.err("tune.plan", {"intent": {"profile": "nope"}}, "REFUSED")["detail"]["check"], "PROFILE_NOT_FOUND")
 
     def test_the_measured_record_knows_the_tuning_state(self):
         self.read()
         self.assertEqual(self.ok("vf.measure", {"mode": "quick", "units": ["P0"]})["record"]["tuning_state"]["kind"], "words")
-        reset = self.ok("tune.plan", {"intent": {"reset": "stock"}})
-        self.ok("tune.apply", {"plan_id": reset["plan_id"], "typed": "CONFIRM " + reset["nonce"]})
-        self.assertEqual(self.ok("vf.measure", {"mode": "quick", "units": ["P0"]})["record"]["tuning_state"]["kind"], "words")  # never "stock" (G-111)
+        self.assertEqual(self.ok("curves.list")["curves"][0]["tuning_state"], {"kind": "words"})
 
 
 class TestProfilesAndSampler(V3Base):
@@ -299,7 +343,7 @@ class TestProfilesAndSampler(V3Base):
         self.assertEqual(e["detail"]["check"], "EXISTS")
         self.err("profiles.save", {"name": "Bad Name", "intent": intent}, "BAD_REQUEST")
         plan = self.ok("tune.plan", {"intent": {"profile": "e-minus-60"}})
-        self.assertEqual(plan["after"]["EC3"][1]["offset_mv"], -60.0)
+        self.assertEqual(plan["after"]["EC3"]["0"]["offset_mv"], -60.0)
 
     def test_telemetry_start_restarts_on_a_new_interval(self):
         a = self.ok("telemetry.start", {"interval_s": 1})
