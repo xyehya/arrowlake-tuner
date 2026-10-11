@@ -32,7 +32,8 @@ The first installed GUI run (2026-10-11, STATE) showed four gaps. Close them so 
 
 ## Owns
 `src/arltuner/telemetry/`, `src/arltuner/platform/schema.py`, `platforms/arl-s-285k.toml` ([sensors] only), `src/arltuner/helper/main.py`
-(sampler factory only), `web/app.js`, `web/index.html`, `web/style.css`, `tests/telemetry/`, `tests/platform/`, `tests/helper/`, `tests/web/`.
+(sampler factory only), `tests/telemetry/`, `tests/platform/`, `tests/helper/`. **Not `web/`** (2026-10-11: G-110 owns it; gap 3 = additive
+`name`/`cpu` fields per temps entry on the helper side; gap 4 moved to G-110).
 
 ## Acceptance
 - Fake-sysfs tests: `nct6686` + `in0_label=VIN16` ⇒ Vcore V; no such chip / label ⇒ unavailable; `VIN0` present but not `VIN16` ⇒ unavailable.
