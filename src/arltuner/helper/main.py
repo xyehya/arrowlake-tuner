@@ -36,7 +36,7 @@ from .protocol import REFUSED, Writer, error_response
 from .trust import TrustError, check_code_tree, check_trusted_path, open_checked
 
 __all__ = [
-    "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "load_taint_bits",
+    "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "device_imc", "load_taint_bits",
     "main", "process_main", "root_argv_refusal",
 ]
 
@@ -112,6 +112,22 @@ def load_taint_bits(path: Path | str = INSTALLED_HELPER_TOML, *, lstat_fn: Calla
     return frozenset(bits)
 
 
+def device_imc(interval: float, lstat_fn: Callable[[str], Any] = os.lstat, *, popen: Callable[..., Any] | None = None) -> Any:
+    """The DRAM-bandwidth source of the device sampler: one ``perf stat`` (``/usr/bin/perf``, fixed env, see :mod:`arltuner.telemetry.imc`) started and stopped
+    with the sampler. Before each spawn perf and its parents must be root-owned, not group/world-writable and not a symlink (SPEC 4.4); otherwise the DRAM
+    readings are unavailable with the reason and telemetry continues."""
+    from arltuner.telemetry import imc
+
+    def trust_check(path: str) -> None:
+        try:
+            check_trusted_path(path, want="file", lstat_fn=lstat_fn)
+        except TrustError as exc:
+            raise imc.PerfRefused(f"{exc} (perf is not trusted; DRAM bandwidth off)") from None
+
+    kwargs: dict[str, Any] = {} if popen is None else {"popen": popen}
+    return imc.ImcStat(max(100, round(interval * 1000)), perf=imc.PERF_PATH, trust_check=trust_check, **kwargs)
+
+
 class PortOwningSampler:
     """A telemetry sampler that owns the MSR port it reads through and closes it when it stops *or fails to start* (no descriptor outlives a
     start/stop cycle)."""
@@ -164,7 +180,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
             port_factory=sim_port,
             topology_fn=arl_s_285k,
             preflight_fn=lambda: preflight(Path("/")),
-            sampler_factory=lambda interval: Sampler(None, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", interval_s=interval),
+            sampler_factory=lambda interval: Sampler(None, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval),
             simulator=True,
             enforce_trust=False,
             log=log,
@@ -177,7 +193,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
     def sampler_factory(interval: float) -> PortOwningSampler:
         port = DevCpuMsrPort(writable=False)
         try:
-            return PortOwningSampler(port, Sampler(TelemetryMsr(port), interval_s=interval))
+            return PortOwningSampler(port, Sampler(TelemetryMsr(port), imc=device_imc(interval, lstat_fn), interval_s=interval))
         except BaseException:
             port.close()
             raise

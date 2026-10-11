@@ -1,18 +1,21 @@
 """hwmon readers over an injectable ``/sys/class/hwmon`` root: coretemp temperatures and board Vcore.
 
 * coretemp: ``temp*_input`` millidegrees C with ``temp*_label`` "Package id N" / "Core N" [DOC kernel Documentation/hwmon/coretemp.rst].
-  Whether coretemp labels E-cores on Arrow Lake is [UNVERIFIED]; we report exactly the labels present, nothing inferred.
+  On Arrow Lake the labels are "Package id 0" + "Core N" with N = the CPU's sysfs ``topology/core_id`` (not its CPU number), E-cores included
+  [MEASURED lnx 2026-10-11]; ``read_core_ids`` + the sampler map them to the dashboard's core names. We report exactly the labels present.
 * Vcore: board Super-I/O driver, ``in*_input`` millivolts (hwmon ABI). The chip ``name`` and the ``in*_label`` that is Vcore come from the
   platform file (``[sensors] vcore_hwmon_name / vcore_hwmon_label``): on this board hwmon ``nct6686`` (driver nct6683), ``in0`` label
   "VIN16" [MEASURED lnx 2026-10-11]. Chip or label absent => unavailable, never another input.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from .readings import Reading, unavailable
 
 DEFAULT_HWMON_ROOT = Path("/sys/class/hwmon")
+DEFAULT_CPU_ROOT = Path("/sys/devices/system/cpu")
 
 
 def _read(p: Path) -> str | None:
@@ -36,6 +39,18 @@ def _milli(path: Path, unit: str, scale: float, src: str) -> Reading:
         return Reading(int(raw) / scale, unit, src)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return unavailable(src, "unreadable or non-numeric", unit)
+
+
+def read_core_ids(cpus: Iterable[int], cpu_root: Path = DEFAULT_CPU_ROOT) -> dict[int, int]:
+    """Linux CPU -> sysfs ``topology/core_id`` for the CPUs whose file is readable and numeric (others are left out, never guessed)."""
+    out: dict[int, int] = {}
+    for cpu in cpus:
+        raw = _read(Path(cpu_root) / f"cpu{cpu}" / "topology" / "core_id")
+        try:
+            out[cpu] = int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 def read_coretemp(root: Path = DEFAULT_HWMON_ROOT) -> dict[str, Reading]:

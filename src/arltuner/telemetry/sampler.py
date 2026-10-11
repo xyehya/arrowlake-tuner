@@ -15,7 +15,7 @@ from arltuner.platform import Sensors, default_platform
 from arltuner.topology import cpumap
 
 from . import cpu as cpumod
-from .hwmon import DEFAULT_HWMON_ROOT, read_coretemp, read_vcore
+from .hwmon import DEFAULT_CPU_ROOT, DEFAULT_HWMON_ROOT, read_core_ids, read_coretemp, read_vcore
 from .imc import ImcStat
 from .msrio import TelemetryMsr
 from .rapl import DEFAULT_POWERCAP_ROOT, MsrPackagePower, PowercapPower
@@ -27,12 +27,14 @@ NO_MSR = "no MSR access (needs root)"
 class Sampler:
     def __init__(self, msr: TelemetryMsr | None, topology: cpumap.Topology | None = None,
                  hwmon_root: Path = DEFAULT_HWMON_ROOT, powercap_root: Path = DEFAULT_POWERCAP_ROOT,
-                 imc: ImcStat | None = None, sensors: Sensors | None = None, clock: Callable[[], float] = time.monotonic,
+                 imc: ImcStat | None = None, sensors: Sensors | None = None, cpu_root: Path = DEFAULT_CPU_ROOT, clock: Callable[[], float] = time.monotonic,
                  interval_s: float = 1.0) -> None:
         self._msr = msr
         self._topo = topology or cpumap.arl_s_285k()
         self._cpus = sorted(c.cpu for c in self._topo.cores)
         self._hwmon, self._imc, self._interval = Path(hwmon_root), imc, interval_s
+        self._cpu_root = Path(cpu_root)
+        self._label_cores: dict[str, tuple[str, int]] | None = None  # coretemp label -> (dashboard name, cpu); built on first use
         self._sensors = sensors or default_platform().sensors  # Vcore chip + label (platforms/arl-s-285k.toml [sensors])
         self._freq: cpumod.FreqSampler | None = None
         self._tsc = unavailable("msr 0xCE", NO_MSR, "MHz")
@@ -48,6 +50,22 @@ class Sampler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def _temp_json(self, label: str, r: Reading) -> dict:
+        """A temperature reading plus ``name`` (dashboard name: "P-Core 2", "E-Core 5", "Package"; the raw label when unmapped) and ``cpu``
+        (Linux CPU or ``None``). coretemp's "Core N" is the sysfs ``core_id`` N, resolved through the topology's CPUs [MEASURED lnx 2026-10-11]."""
+        if self._label_cores is None:
+            ids = read_core_ids(self._cpus, self._cpu_root)
+            by_id: dict[int, list[int]] = {}
+            for cpu, cid in ids.items():
+                by_id.setdefault(cid, []).append(cpu)
+            self._label_cores = {f"Core {cid}": (self._topo.xtu_name(self._topo.by_cpu(cpus[0])), cpus[0])
+                                 for cid, cpus in by_id.items() if len(cpus) == 1}  # an ambiguous core_id is left raw
+        name, cpu = ("Package", None) if label in ("Package", "Package id 0") else self._label_cores.get(label, (label, None))
+        if label.startswith("cpu") and label[3:].isdigit() and int(label[3:]) in self._cpus:  # MSR fallback keys
+            cpu = int(label[3:])
+            name = self._topo.xtu_name(self._topo.by_cpu(cpu))
+        return {**r.to_json(), "name": name, "cpu": cpu}
+
     def collect(self) -> dict:
         """One synchronous sample -> JSON-able dict. Every leaf is ``Reading.to_json()``."""
         msr, no = self._msr, lambda src, unit="": unavailable(src, NO_MSR, unit)
@@ -60,13 +78,13 @@ class Sampler:
             cores[core.cpu] = {"name": self._topo.xtu_name(core), "mhz": mhz.to_json(), "busy": busy.to_json(),
                                "vid": vid.to_json(), "ratio": ratio.to_json()}
         ct = read_coretemp(self._hwmon)
-        temps = {k: v.to_json() for k, v in ct.items()}
+        temps = {k: self._temp_json(k, v) for k, v in ct.items()}
         if not ct and msr:  # privileged fallback when coretemp hwmon is absent
-            temps = {"Package": cpumod.read_package_temp_msr(msr, 0, tjmax).to_json()}
+            temps = {"Package": self._temp_json("Package", cpumod.read_package_temp_msr(msr, 0, tjmax))}
             for core in self._topo.cores:
-                temps[f"cpu{core.cpu}"] = cpumod.read_core_temp_msr(msr, core.cpu, tjmax).to_json()
+                temps[f"cpu{core.cpu}"] = self._temp_json(f"cpu{core.cpu}", cpumod.read_core_temp_msr(msr, core.cpu, tjmax))
         elif not ct:
-            temps = {"Package": unavailable("hwmon coretemp", "no coretemp device and " + NO_MSR, "C").to_json()}
+            temps = {"Package": self._temp_json("Package", unavailable("hwmon coretemp", "no coretemp device and " + NO_MSR, "C"))}
         pkg = self._pkg_power.sample()
         if not pkg.available and self._msr_power is not None:
             pkg = self._msr_power.sample()
@@ -98,8 +116,14 @@ class Sampler:
         if self._thread is None:
             if self._imc:
                 self._imc.start()
-            self._thread = threading.Thread(target=self._loop, name="telemetry", daemon=True)
-            self._thread.start()
+            try:
+                self._thread = threading.Thread(target=self._loop, name="telemetry", daemon=True)
+                self._thread.start()
+            except BaseException:
+                self._thread = None
+                if self._imc:
+                    self._imc.stop()  # no orphan perf
+                raise
 
     def stop(self) -> None:
         self._stop.set()

@@ -1,4 +1,5 @@
 import io
+import subprocess
 import unittest
 
 from arltuner.telemetry import imc
@@ -63,7 +64,7 @@ class Process(unittest.TestCase):
     def test_single_process_started_once_and_latest(self):
         spawned = []
 
-        def popen(cmd):
+        def popen(cmd, **kw):
             spawned.append(cmd)
             return FakeProc(FIXTURE)
 
@@ -73,12 +74,59 @@ class Process(unittest.TestCase):
         s.start()
         s._thread.join(2)
         self.assertEqual(len(spawned), 1)
-        self.assertEqual(spawned[0][:6], ["perf", "stat", "-a", "-I", "1000", "-x"])
+        self.assertEqual(spawned[0][:6], ["/usr/bin/perf", "stat", "-a", "-I", "1000", "-x"])
         self.assertFalse(s.latest()[0].available)  # last interval of the fixture is not-counted
         s.stop()
 
+    def test_spawn_is_hardened(self):
+        calls = []
+
+        def popen(cmd, **kw):
+            calls.append((cmd, kw))
+            return FakeProc("")
+
+        s = imc.ImcStat(1000, popen=popen)
+        s.start()
+        s._thread.join(2)
+        s.stop()
+        (cmd, kw), = calls
+        self.assertEqual(cmd[0], "/usr/bin/perf")
+        self.assertIn("uncore_imc_free_running/data_read/,uncore_imc_free_running/data_write/", cmd)
+        self.assertEqual(kw["env"], {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"})  # nothing inherited
+        self.assertEqual(kw["cwd"], "/")
+        self.assertEqual(kw["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kw["stderr"], subprocess.STDOUT)
+
+    def test_trust_failure_means_no_spawn_and_a_reason(self):
+        spawned, checked = [], []
+
+        def refuse(path):
+            checked.append(path)
+            raise imc.PerfRefused("/usr/bin/perf: mode 0777 is group- or world-writable")
+
+        s = imc.ImcStat(1000, popen=lambda cmd, **kw: spawned.append(cmd), trust_check=refuse)
+        s.start()
+        self.assertEqual((spawned, checked), ([], ["/usr/bin/perf"]))
+        for r in s.latest():
+            self.assertIsNone(r.value)
+            self.assertIn("world-writable", r.reason)
+        s.stop()  # nothing to stop
+
+    def test_trusted_perf_is_spawned_and_stop_terminates_it(self):
+        procs = []
+
+        def popen(cmd, **kw):
+            procs.append(FakeProc(""))
+            return procs[-1]
+
+        s = imc.ImcStat(1000, popen=popen, trust_check=lambda path: None)
+        s.start()
+        s.stop()
+        self.assertEqual(len(procs), 1)
+        self.assertTrue(procs[0].terminated)
+
     def test_perf_missing(self):
-        def popen(cmd):
+        def popen(cmd, **kw):
             raise FileNotFoundError("perf")
 
         s = imc.ImcStat(popen=popen)
