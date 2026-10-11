@@ -131,14 +131,15 @@ class QuickRunTests(MeasureCase):
     def test_max_ratio_comes_from_the_turbo_tables_not_cpuinfo(self) -> None:
         # a lowered 0x650 table caps the E units; a failed table read falls back to cpuinfo_max_freq (49x) with a note
         self.io.read_msr = lambda cpu, msr: 0x2E2E2E2E2E2E2E2E if msr == 0x650 else 0x3737373737373737  # type: ignore[method-assign]
-        rec = self.start_measure().call("m", "vf.measure", {"mode": "dense", "units": ["P1", "EC0"]}, timeout=60)["result"]["record"]
+        h = self.start_measure()
+        rec = h.call("m", "vf.measure", {"mode": "dense", "units": ["P1", "EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual((max(points(rec, "EC0")), max(points(rec, "P1"))), (46, 55))
 
         def broken(cpu: int, msr: int) -> int:
             raise OSError(5, "no msr")
 
         self.io.read_msr = broken  # type: ignore[method-assign]
-        reply = self.start_measure().call("m2", "vf.measure", {"mode": "dense", "units": ["EC0"]}, timeout=60)["result"]
+        reply = h.call("m2", "vf.measure", {"mode": "dense", "units": ["EC0"]}, timeout=60)["result"]
         self.assertEqual(max(points(reply["record"], "EC0")), 49)
         self.assertTrue(any("turbo tables" in p for p in reply["problems"]), reply["problems"])
 
@@ -202,13 +203,14 @@ class QuickRunTests(MeasureCase):
 
     def test_stock_tuning_state_needs_a_complete_read_with_all_offsets_zero(self) -> None:
         zero = {cpu: [0x39, 0x08, 0x14, 0x1E] for cpu in range(24)}  # ratios only: every offset field 0
-        rec = self.start_measure(last_words=zero).call("s", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        h = self.start_measure(last_words=zero)
+        rec = h.call("s", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"], {"kind": "stock"})
-        tuned = {**zero, 9: [0x39, 0x08 | (0x7F0 << 21)]}  # a raw offset on one point of a non-first E CPU
-        rec = self.start_measure(last_words=tuned).call("t", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        h.helper.last_words = {**zero, 9: [0x39, 0x08 | (0x7F0 << 21)]}  # a raw offset on one point of a non-first E CPU
+        rec = h.call("t","vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"]["kind"], "words")
-        partial = {cpu: ws for cpu, ws in zero.items() if cpu < 8}  # P-cores only: not a complete read
-        rec = self.start_measure(last_words=partial).call("u", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        h.helper.last_words = {cpu: ws for cpu, ws in zero.items() if cpu < 8}  # P-cores only: not a complete read
+        rec = h.call("u","vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"]["kind"], "words")
 
     def test_fused_point_labels(self) -> None:
