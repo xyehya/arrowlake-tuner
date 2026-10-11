@@ -233,13 +233,15 @@ class TestTune(V3Base):
         self.assertEqual(p["steps"][0], {"kind": "write_percore_enable", "conditional": True})
         self.assertFalse(p["words_assumed"])
         self.assertGreater(p["ops_needed"], 0)
-        self.assertTrue(any("Revert" in w for w in p["warnings"]))
+        self.assertTrue(all(set(w) == {"code", "text"} for w in p["warnings"]))   # G-117: warnings are {code, text}
+        self.assertTrue(any(w["code"] == "NOTE" and "Revert" in w["text"] for w in p["warnings"]))
         pts = self.ok("tune.plan", self.intent(target="EC1", offset={"kind": "points", "mv": {"23": -80}}))
         self.assertEqual(list(pts["after"]["EC1"]), ["3"])           # point 3 is 23x
         self.assertEqual(pts["after"]["EC1"]["3"], {"ratio": 23, "offset_mv": -80.0, "v_target_v": None, "effective_v": None, "clamped_by": None})  # no baseline curve: no prediction
         w = self.ok("tune.plan", self.intent(target="P3", offset={"kind": "curve", "mv": 10}, v_target_v=1.5))
-        self.assertTrue(any("positive offset on P3" in x for x in w["warnings"]))
-        self.assertTrue(any("target above fused on P3" in x for x in w["warnings"]))
+        self.assertTrue(any(x["code"] == "POSITIVE_OFFSET" and "positive offset on P3" in x["text"] for x in w["warnings"]))
+        self.assertTrue(any(x["code"] == "NOTE" and "target above fused on P3" in x["text"] for x in w["warnings"]))
+        self.assertTrue(any(x["code"] == "NO_BASELINE" for x in w["warnings"]))
 
     def test_plan_refusals_names_and_checks(self):
         self.read()
@@ -407,16 +409,32 @@ class TestCpuFacts(V3Base):
         self.assertEqual(a["8"]["effective_v"], a["7"]["effective_v"])
         self.assertIsNone(a["7"]["clamped_by"])
         self.assertAlmostEqual(a["7"]["effective_v"], v3.stock_vid("P0", 56), places=3)
-        self.assertTrue(any("57x" in w and "clamped" in w for w in pl["warnings"]))
-        self.assertEqual(set(pl["vccia"]), {"predicted_v", "set_by"})
+        self.assertTrue(any(w["code"] == "CLAMPED" and "57x" in w["text"] for w in pl["warnings"]))
+        # G-114 shape: label / active_cores / margin_v / contributors / before_v / light_load beside predicted_v and set_by
+        self.assertEqual(set(pl["vccia"]), {"predicted_v", "set_by", "label", "active_cores", "margin_v", "contributors", "before_v", "light_load"})
         self.assertEqual(set(pl["vccia"]["set_by"]), {"unit", "ratio"})
+        self.assertEqual((pl["vccia"]["label"], pl["vccia"]["active_cores"]), ("prediction", "all"))
+        self.assertEqual(set(pl["vccia"]["contributors"]), {"P", "E", "ring"})
+        self.assertEqual(set(pl["vccia"]["light_load"]), {"predicted_v", "set_by", "active_cores"})
 
     def test_f8_warnings(self):
         self.fake.seed_curve("Stock baseline", baseline=True, offset_mv=0.0)
         self.read()
         pl = self.ok("tune.plan", {"intent": {"scope": "unit", "rows": [{"target": "EC1", "offset": {"kind": "points", "mv": {"40": -20}}, "v_target_v": 1.25, "ratio": None}]}})
-        self.assertTrue(any("EC1 40x" in w and "OCCT" in w for w in pl["warnings"]))
-        self.assertTrue(any("WHEA" in w for w in pl["warnings"]))
+        self.assertTrue(any(w["code"] == "E40_OFFSET" and "EC1 40x" in w["text"] and "OCCT" in w["text"] for w in pl["warnings"]))
+        self.assertTrue(any(w["code"] == "E_TARGET_WHEA" and "WHEA" in w["text"] for w in pl["warnings"]))
+
+    def test_a_turbo_only_intent_is_a_real_plan_without_mailbox_steps(self):
+        """G-117: ``{turbo: {...}}`` alone (what the page sends for a table-only edit) plans plain-MSR writes only: no 0x15, no unit words."""
+        self.read()
+        pl = self.ok("tune.plan", {"intent": {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}}})
+        self.assertEqual((pl["units"], pl["before"], pl["after"], pl["steps"], pl["writes"]), ([], {}, {}, [{"kind": "write_msr", "table": "p"}], 1))
+        self.assertTrue(any(w["code"] == "TURBO_RAISE" for w in pl["warnings"]), pl["warnings"])
+        applied = self.ok("tune.apply", {"plan_id": pl["plan_id"], "typed": "CONFIRM " + pl["nonce"]})
+        self.assertEqual((applied["complete"], applied["writes_sent"]), (True, 1))
+        self.assertEqual([(r["unit"], r["point"], r["match"]) for r in applied["readback"]], [("P", "turbo", True)])
+        self.assertEqual(self.read()["turbo"]["P"]["ratios"], [57, 57, 56, 55, 55, 55, 55, 55])
+        self.err("tune.plan", {"intent": {"turbo": {"E": [50, 51, 50, 50, 50, 50, 50, 50]}}}, "REFUSED")
 
     def test_turbo_intent_and_order(self):
         self.read()

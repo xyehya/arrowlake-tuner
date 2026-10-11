@@ -702,6 +702,8 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .tn-warn li.bad { background: var(--bad-bg); color: var(--bad-fg); border: 1px solid color-mix(in srgb, var(--bad-fg) 50%, transparent); font-weight: 600; }
 .plan-warn li.bad { color: var(--bad-fg); font-weight: 600; }
 .plan-vccia { margin: 6px 0; padding: 8px 12px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--raised) 70%, transparent); border: 1px solid var(--line-soft); }
+.plan-vccia p { margin: 2px 0; }
+.plan-warn li { margin: 2px 0; }
 .plan-turbo { margin-top: 10px; }
 
 .vccia-line { margin: 4px 0 8px; font-size: 17px; font-weight: 300; }
