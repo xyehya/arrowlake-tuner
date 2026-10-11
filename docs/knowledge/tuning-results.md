@@ -125,3 +125,7 @@ for an OC target below the top fused point; `stock` tagging ignores OC words; ac
   1.1025 V, 40× 0.9525 V (moves 40× too ⇒ E40 warning correct); 48× still reachable, **no OC point added**.
 - **Target retention without an OC point is not reliable:** offset-0 word `0x0005B439` was kept at 19:5x (that apply also sent 0x1D/0x27 after
   the 0x11), but at 21:05 (0x11 only) the CPU kept `0x00000039`. Rule adopted: a no-OC-point OC word is always written with V target 0 (G-124).
+
+### Page-driven write (headless Chrome, the GUI's own controls) [MEASURED lnx 2026-10-12 21:44 UTC]
+Tune (pre-populated from `tune.last`) → Per unit → P7 Per point → 55× −90.8 → −94.7 mV → Review → Apply: wrote `0xF3E00037`, read back equal;
+Restore accepted from the same page: 57 words read back as written (P7 `0xF4600037`). Audit operator `gui:uid1000`; no MCE.
