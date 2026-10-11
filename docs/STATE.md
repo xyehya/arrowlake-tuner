@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-11 · lnx · v3 + CPU facts (G-111…G-118) merged & installed; first real writes from the Tune path verified (OC point, adaptive, offsets, restore accepted). D-034: orchestrator fully autonomous._
+_Updated: 2026-10-12 · lnx · **v3 complete on the reference machine**: G-111…G-124 merged (suite 2260 OK), installed, verified on hardware end to end. User guide: `docs/USER-GUIDE.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -45,13 +45,14 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. **Done 2026-10-11 [MEASURED]:** read pass (preflight, mem.read 7200/G2/2T, tune.read fused+turbo, Quick + Dense stock curves: monotonic,
-   54× midpoint) and write stages via `tune.plan/apply` (EC1 OC point 48× ⇒ P2=7 appears; adaptive target follows/clamps; P2=0 whole-curve
-   offset; per-point 55×; Restore accepted 172 ops all matched). Machine now on the accepted tuning (+ EC1 neutral OC point until reboot).
-   Facts: `knowledge/tuning-results.md`. Helper for testing runs via `--helper sudo -n PKEXEC_UID=1000 /usr/lib/arltuner/arltuner-helper --device`.
-2. In flight: **G-119** Stress tab + one-click Apply + chart spans · **G-120** planner fixes from real writes (OC word shape, CLAMPED, stock rule,
-   accepted equivalence). Then reinstall, UI screenshot pass on real data, a short real stress screen, final review.
-3. W: first Windows restore from this repo. Restore scripts still use their checkout policy (session-2026-10-02). Workers `sonnet`/`high`.
+1. **Done 2026-10-11/12 [MEASURED]** (`knowledge/tuning-results.md`): reads (preflight, memory MCHBAR, tune.read with fused/turbo, Quick + Dense
+   curves), writes via the Tune path (OC point ⇒ P2=7 on E, adaptive follows/clamps, P2=0 whole-curve offset P and E (offset-only = 0x11 only),
+   per-point, Restore accepted 172 ops), stress screens (CPU/memory/capped). Machine on the accepted tuning; 11/12 match, CPU 12 = EC1 neutral OC
+   point 48× from the stage-1 test (clears at cold boot).
+2. Open, low priority: `write_percore_enable` still predicted as worst case (no 0x14 at plan time); ring/NGU tuning not in scope (SPEC §2);
+   E OC ratio above 48 untested on hardware; P OC ratio (58×) untested in v3; light theme dropped; restore scripts still use their checkout
+   policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
+3. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
 
 ## How we work
 Operator at the machine; orchestrator answers guard tokens only after a go-ahead. One variable at a time; acceptance gate = 60-min OCCT Linpack 2021
