@@ -299,6 +299,9 @@ class SimMsrPort(MsrPort):
         self._vf: dict[tuple[int, int, int], VfWord] = {}
         self._fused: dict[int, int] = {}  # cpu -> 0x09 P1=0x11 P2=0 word (read-only)
         self._favored: dict[int, int] = {}  # cpu -> 0x1C word (0x1D replaces [7:0])
+        #: G-126: called as ``(cpu, cpuinfo_max_khz)`` after a 0x1D took effect, the way the kernel's ``cpuinfo_max_freq`` follows HWP highest (a test or the
+        #: ``--sim`` wiring points it at its cpufreq store); ``None`` = nobody listens.
+        self.on_favored_write: Callable[[int, int], None] | None = None
         self._granular: dict[int, int] = {}  # cpu -> 0x26 word (0x27 replaces it)
         for core in topo.cores:
             default = _default_core_vf(core.cpu, core.kind, core.cluster)
@@ -473,6 +476,12 @@ class SimMsrPort(MsrPort):
     def favored_word(self, cpu: int) -> int:
         """The 0x1C word of ``cpu`` (``[7:0]`` favored ratio, ``[15:8]`` fused); a test-double peek, not a mailbox request."""
         return self._peek(self._favored, cpu)
+
+    def cpuinfo_max_khz(self, cpu: int) -> int:
+        """``cpuinfo_max_freq`` the kernel reports for ``cpu`` after its last 0x1D: HWP highest = the 0x1C ``[7:0]`` ratio; a P-core shows ratio x 100 MHz, an E-core
+        one bin more (intel_pstate N -> N-1 mapping: 48x reads 4.9 GHz, 49x 5.0 GHz, ``[MEASURED lnx 2026-10-12]``). A test-double peek, not a mailbox request."""
+        ratio = self.favored_word(cpu) & 0xFF
+        return (ratio + (1 if self._kind(cpu) == "E" else 0)) * 100_000
 
     def fused_word(self, cpu: int) -> int:
         """The 0x09 P1=0x11 P2=0 word of ``cpu`` (fused V/F point; ``floors[0]`` overrides it on the wire)."""
@@ -656,6 +665,8 @@ class SimMsrPort(MsrPort):
             return int(Rc.RatioExceedsLimits), 0
         if Cmd.FAVORED_CORE_WRITE not in self._silent:
             self._favored[cpu] = (self._favored[cpu] & ~0xFF) | data
+            if self.on_favored_write is not None:
+                self.on_favored_write(cpu, self.cpuinfo_max_khz(cpu))
         return int(Rc.Pass), data
 
     def _cmd_granular_read(self, cpu: int, p1: int, p2: int, data: int) -> tuple[int, int]:

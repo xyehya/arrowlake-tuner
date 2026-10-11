@@ -3399,6 +3399,30 @@
     return box;
   }
 
+  // G-126: scaling_max_freq of the CPUs whose OC ratio changed: the helper moves it with cpuinfo_max_freq (a cap the user set lower is kept)
+  function cpufreqNode(rows) {
+    const box = el("div", "cpufreq-box");
+    box.append(el("h3", "dlg-sub", "OS frequency cap"),
+      el("p", "muted", "scaling_max_freq follows the new ratio so the OS can use it; a cap you set below the old maximum is kept."));
+    const t = el("table", "grid num plan-table");
+    const thr = el("tr");
+    for (const x of ["CPU", "Before", "After", "Result"]) { const h = el("th", "", x); h.scope = "col"; thr.append(h); }
+    t.append(el("thead"), el("tbody"));
+    t.tHead.append(thr);
+    for (const x of rows) {
+      const tr = el("tr", x.after_khz !== x.before_khz ? "is-changed" : "");
+      const rc = el("td");
+      const word = x.after_khz > x.before_khz ? "raised" : x.after_khz < x.before_khz ? "lowered" : "kept";
+      rc.append(pill(word, word === "kept" ? "s-neutral" : "s-ok"));
+      tr.append(td(x.cpu, "n"), td((x.before_khz / 1e6).toFixed(2) + " GHz", "n"), td((x.after_khz / 1e6).toFixed(2) + " GHz", "n"), rc);
+      t.tBodies[0].append(tr);
+    }
+    const sc = el("div", "scroll plan-scroll");
+    sc.append(t);
+    box.append(sc);
+    return box;
+  }
+
   function planResultNode() {
     const P = T.plan;
     const box = el("div", "plan-result");
@@ -3440,6 +3464,7 @@
       const sc = el("div", "scroll plan-scroll");
       sc.append(t);
       box.append(sc);
+      if (P.cpufreq && P.cpufreq.length) box.append(cpufreqNode(P.cpufreq));
       if (P.ops !== null && P.ops !== undefined) box.append(el("p", "muted", P.ops + " mailbox operations used."));
     }
     return box;
@@ -3563,6 +3588,7 @@
       const rb = (Array.isArray(ev.result.readback) ? ev.result.readback : []).filter(isObj);
       P.state = "done";
       P.readback = rb;
+      P.cpufreq = (Array.isArray(ev.result.cpufreq) ? ev.result.cpufreq : []).filter((x) => isObj(x) && isNum(x.cpu) && isNum(x.before_khz) && isNum(x.after_khz));  // G-126
       P.partial = ev.result.complete === false ? (isObj(ev.result.stop) ? ev.result.stop : {}) : null;
       P.writesSent = isNum(ev.result.writes_sent) ? ev.result.writes_sent : null;
       P.ops = isNum(ev.result.ops_used) ? ev.result.ops_used : null;

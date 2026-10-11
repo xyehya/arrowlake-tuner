@@ -1693,6 +1693,79 @@ def _merge_applied_words(helper: Helper, report: Any) -> None:
     _set_last_words(helper, merged)
 
 
+# --------------------------------------------------------------------------------------------------------------
+# G-126: an OC ratio raise must lift the OS frequency ceiling
+# --------------------------------------------------------------------------------------------------------------
+#: ``cpuinfo_max_freq`` follows HWP highest a moment after the 0x1D: re-read this many times, this far apart, while it has not moved (hardware only).
+CPUINFO_POLL = (4, 0.25)
+
+
+def _khz(value: str | None) -> int | None:
+    return int(value) if value is not None and re.fullmatch(r"[0-9]{1,10}", value) else None
+
+
+def _cpufreq_before(helper: Helper, cpus: Sequence[int]) -> dict[int, tuple[int | None, int | None]]:
+    """``{cpu: (cpuinfo_max_freq, scaling_max_freq)}`` in kHz, read before the first write of an apply. Nothing without the measurement wiring."""
+    from .ops_measure import CAP_ATTR, MAX_ATTR
+
+    w = getattr(helper, "measure_wiring", None)
+    out: dict[int, tuple[int | None, int | None]] = {}
+    if w is None:
+        return out
+    for cpu in cpus:
+        try:
+            out[cpu] = (_khz(w.cpufreq.read(cpu, MAX_ATTR)), _khz(w.cpufreq.read(cpu, CAP_ATTR)))
+        except OSError:
+            out[cpu] = (None, None)
+    return out
+
+
+def _oc_ratio_cpus(report: Any) -> list[int]:
+    """The CPUs whose OC ratio (0x1D) an apply wrote successfully."""
+    return sorted({r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_FAVORED and r.status is StepStatus.OK})
+
+
+def _lift_cpufreq(helper: Helper, ctx: OpContext, before: Mapping[int, tuple[int | None, int | None]], cpus: Sequence[int], warnings: list[str]) -> list[dict[str, Any]]:
+    """G-126: after an apply that changed an OC ratio, ``cpuinfo_max_freq`` follows HWP highest but ``scaling_max_freq`` keeps the old value, so the new ratio is never
+    used (``[MEASURED lnx 2026-10-12]``). For each CPU whose OC ratio changed: a cap that sat AT the old cpuinfo max (no user cap) follows the new max (up or down); a
+    cap the user set below the old max is never touched; a cap above a lowered max is lowered to it. Writes go through the measurement wiring's cpufreq IO to
+    ``scaling_max_freq`` only, never while a measure/stress journal exists (those own the caps). Never raises: the hardware is already changed, the result must reach
+    the page. Returns ``[{cpu, before_khz, after_khz}]``."""
+    from .ops_measure import CAP_ATTR, MAX_ATTR
+
+    w = getattr(helper, "measure_wiring", None)
+    if w is None or not cpus:
+        return []
+    owned = Path(w.journal_path).exists()
+    if owned:
+        warnings.append("a measure/stress cpufreq journal exists: scaling_max_freq was not touched (restart the helper to recover it, then re-check the frequency cap)")
+    rows: list[dict[str, Any]] = []
+    tries, interval = (1, 0.0) if helper.cfg.simulator else CPUINFO_POLL
+    for cpu in cpus:
+        old_max, old_cap = before.get(cpu, (None, None))
+        try:
+            now_max = _khz(w.cpufreq.read(cpu, MAX_ATTR))
+            for _ in range(tries - 1):  # the kernel lags the 0x1D by a moment: wait while nothing moved
+                if now_max is not None and now_max != old_max:
+                    break
+                ctx.cancel.wait(interval)
+                now_max = _khz(w.cpufreq.read(cpu, MAX_ATTR))
+            cap = _khz(w.cpufreq.read(cpu, CAP_ATTR))
+            if old_cap is None:
+                old_cap = cap
+            after = cap
+            if not owned and now_max is not None and cap is not None and old_max is not None and now_max != old_max:
+                if cap == old_max or (now_max < old_max and cap > now_max):
+                    if cap != now_max:
+                        w.cpufreq.write(cpu, CAP_ATTR, str(now_max))
+                        after = _khz(w.cpufreq.read(cpu, CAP_ATTR))  # read back: the kernel may clamp
+            rows.append({"cpu": cpu, "before_khz": old_cap, "after_khz": after})
+        except (OSError, ValueError) as exc:
+            warnings.append(f"scaling_max_freq of cpu {cpu} could not be adjusted: {type(exc).__name__}: {exc}")
+            rows.append({"cpu": cpu, "before_khz": old_cap, "after_khz": old_cap})
+    return rows
+
+
 def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     st = _state(helper)
     plan = st.plans.claim(args["plan_id"], args["typed"])
@@ -1709,6 +1782,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
     needed = count_operations(targets, None, tables, len(points))
     progress_steps = 0
+    freq_before = _cpufreq_before(helper, sorted({t.cpu for t in targets}))  # G-126: the old cpuinfo / cap, before any write
 
     def progress(line: str) -> None:
         nonlocal progress_steps
@@ -1737,6 +1811,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
             raise
     _merge_applied_words(helper, report)
     steps, readback = _report_rows(report, topology)
+    cpufreq_warnings: list[str] = []
+    cpufreq = _lift_cpufreq(helper, ctx, freq_before, _oc_ratio_cpus(report), cpufreq_warnings)
     sent_writes = sum(1 for r in report.steps if r.step.kind.is_write and r.status is not StepStatus.REFUSED and r.status is not StepStatus.CANCELLED)
     if sent_writes:
         helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120 fix 4: any tune.apply that wrote ends "stock" for this boot (ops_measure._tuning_state)
@@ -1749,7 +1825,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         "msr_writes": report.msr_writes,   # G-119: the plain wrmsr (turbo tables) inside ops_used, so a page can show them apart from the mailbox ones
         "complete": report.ok,
         "writes_sent": sent_writes,
-        "warnings": list(report.warnings),
+        "warnings": [*report.warnings, *cpufreq_warnings],
+        "cpufreq": cpufreq,  # G-126: [{cpu, before_khz, after_khz}] of scaling_max_freq for the CPUs whose OC ratio changed
         "revert_plan": len(report.revert_plan),
     }
     if report.ok:

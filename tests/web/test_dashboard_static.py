@@ -252,6 +252,8 @@ class TestScript(unittest.TestCase):
         self.assertIn('api("curves.get", { id: rec.id, units: want })', JS)
         self.assertIn("P.partial", JS)                                   # complete:false + stop is shown as a partial apply
         self.assertIn('point === "turbo"', JS)                           # turbo read-back rows
+        self.assertIn("ev.result.cpufreq", JS)                           # G-126: scaling_max_freq of the CPUs whose OC ratio changed, shown under the read-back
+        self.assertIn("cpufreqNode(P.cpufreq)", func_body("planResultNode"))
         self.assertIn("detail.curve_id", JS)                             # the partial curve of a cancelled measure
         self.assertIn("body.result.note", JS)                            # profiles.list note
         self.assertIn('typeof u.id === "string"', JS)                    # tune.read names the unit

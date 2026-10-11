@@ -51,6 +51,7 @@ POINT_OVERHEAD_S = 0.1  # per attempt: cap writes + process start (only for the 
 EPP_VALUE = "balance_performance"
 EPP_ATTR = "energy_performance_preference"
 CAP_ATTR = "scaling_max_freq"
+MAX_ATTR = "cpuinfo_max_freq"
 MIN_ATTR = "scaling_min_freq"
 GOV_ATTR = "scaling_governor"
 #: What the run changes (journaled, restored); min freq and governor are only recorded as context, never touched, never restored.
@@ -461,7 +462,10 @@ def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None) -
         for attr in TOUCHED:
             value = w.cpufreq.read(cpu, attr)
             if value is not None:
-                entries.append({"cpu": cpu, "attr": attr, "value": value})
+                entry: dict[str, Any] = {"cpu": cpu, "attr": attr, "value": value}
+                if attr == CAP_ATTR and value == w.cpufreq.read(cpu, MAX_ATTR):
+                    entry["at_max"] = True  # G-126: the user had no own cap; restore to the *current* cpuinfo max (an OC ratio apply may have raised it)
+                entries.append(entry)
         context[str(cpu)] = {a: v for a in CONTEXT if (v := w.cpufreq.read(cpu, a)) is not None}
     if not any(e["attr"] == CAP_ATTR for e in entries):
         raise OpError(REFUSED, "cpufreq scaling_max_freq is not available for the selected CPUs (is a cpufreq driver loaded?)", {"check": "NO_CPUFREQ"})
@@ -496,6 +500,10 @@ def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
     for e in sorted(entries, key=lambda e: (e["cpu"], _ATTR_ORDER.get(e["attr"], 9))):
         cpu, attr, value = e["cpu"], e["attr"], e["value"]
         try:
+            if attr == CAP_ATTR and e.get("at_max") is True:  # G-126: the journaled cap was the cpuinfo max: follow it if it moved meanwhile
+                now_max = w.cpufreq.read(cpu, MAX_ATTR)
+                if now_max is not None and re.fullmatch(r"[0-9]{1,10}", now_max):
+                    value = now_max
             if w.cpufreq.read(cpu, attr) == value:
                 continue
             w.cpufreq.write(cpu, attr, value)
@@ -519,7 +527,10 @@ def _valid_entries(doc: Any) -> list[dict[str, Any]]:
         if (not isinstance(e, dict) or not _is_int(e.get("cpu")) or not 0 <= e["cpu"] < 1024 or e.get("attr") not in TOUCHED
                 or not isinstance(e.get("value"), str) or len(e["value"]) > 64 or not re.fullmatch(r"[A-Za-z0-9_ .-]*", e["value"])):
             raise ValueError(f"bad journal entry {e!r}")
-        out.append({"cpu": e["cpu"], "attr": e["attr"], "value": e["value"]})
+        item: dict[str, Any] = {"cpu": e["cpu"], "attr": e["attr"], "value": e["value"]}
+        if e.get("at_max") is True and e["attr"] == CAP_ATTR:
+            item["at_max"] = True
+        out.append(item)
     return out
 
 
