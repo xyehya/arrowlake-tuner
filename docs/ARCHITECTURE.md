@@ -224,3 +224,5 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     stop, helper exit and timeout. **Ratio cap** = the measure journal (`/run/arltuner/measure-journal.json`): `scaling_max_freq = cap×100000` and EPP `performance`
     on the selected CPUs, journaled first, restored in every path; a stale journal is applied before a capped start (`STALE_JOURNAL` if it cannot be) and by the
     helper at its start. Server `OPS`: `stress.start` (long), `stress.stop`, `stress.list`. `--sim`: simulated children and telemetry, 12× faster than real time.
+- **Addendum (G-119):** `tune.apply` result gains `msr_writes` (plain-MSR turbo-table writes); `ops_used` includes them. A turbo-only profile
+  (`[turbo]` table, no core/point entries) is valid.

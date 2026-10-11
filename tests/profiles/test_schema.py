@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import arltuner.profiles as profiles_pkg
-from arltuner.profiles import CoreSetting, CpuSetting, Profile, ProfileError, load_profile
+from arltuner.profiles import CoreSetting, CpuSetting, Profile, ProfileError, TurboTables, load_profile
 from arltuner.topology import Topology, arl_s_285k
 
 HEADER = '[meta]\nname = "t"\nplatform = "arl-s-285k"\n'
@@ -413,10 +413,16 @@ class PointEntries(unittest.TestCase):
             load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20\nexpect_ratio = 46'))
         load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20') + self.point('kind = "E"\nindex = 1\npoint = 5\noffset_mv = -9'))
 
-    def test_empty_and_turbo_only_profiles_stay_empty(self) -> None:
-        for text in (HEADER, "point = []\n" + HEADER, HEADER + "[turbo]\ne = [49, 49, 49, 49, 49, 49, 49, 49]\n"):
+    def test_empty_profiles_are_refused_but_a_turbo_table_alone_is_a_profile(self) -> None:
+        for text in (HEADER, "point = []\n" + HEADER):
             with self.subTest(text=text[-30:]), self.assertRaisesRegex(ProfileError, "profile is empty: at least one"):
                 load_profile(text)
+        prof = load_profile(HEADER + "[turbo]\ne = [49, 49, 49, 49, 49, 49, 49, 49]\n")  # G-119: turbo-only intents
+        self.assertEqual((prof.entries, prof.points), ((), ()))
+        self.assertEqual(prof.turbo.e, (49,) * 8)
+        self.assertEqual(Profile("t", (), TurboTables(p=(57,) * 8)).entries, ())
+        with self.assertRaisesRegex(ProfileError, "profile is empty"):
+            Profile("t", ())
 
     def test_expand_points_resolves_cpus_and_whole_e_clusters(self) -> None:
         prof = load_profile(HEADER + self.point('kind = "E"\nindex = 0\npoint = 6\noffset_mv = -20') + self.point('kind = "P"\nindex = 4\npoint = 8\noffset_mv = -5'))

@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-11 · lnx · G1 met; G-109/G-110 live. **v3 (SPEC-v3, D-032, D-033) merged + installed (`--reseed-config`, advanced policy live)**; stock-baseline curve measured; first write awaits go._ Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-11 · lnx · v3 + CPU facts (G-111…G-118) merged & installed; first real writes from the Tune path verified (OC point, adaptive, offsets, restore accepted). D-034: orchestrator fully autonomous._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
@@ -45,11 +45,12 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. **v3 live [MEASURED lnx 2026-10-11]:** G-111/G-112/G-113 merged (suite 2021 OK), reinstalled with the advanced policy; `mem.read` live
-   (DDR5-7200 G2 2T 36-44-44-96, 6/6 instances); Quick `vf.measure` 88 points in ~2 min, caps/EPP restored, baseline curve
-   `20261011T181718Z-y4c7` (table: knowledge/tuning-results.md). **First mailbox write from Tune needs the operator's go.**
-2. G-114 fixes: mem 0x13D98 cross-check off by ×2 (1800 vs 3600); 57× never settles on P0/P3, E 23× never settles; review dialog asks
-   to type the nonce (D-033 said one click) — operator to choose.
+1. **Done 2026-10-11 [MEASURED]:** read pass (preflight, mem.read 7200/G2/2T, tune.read fused+turbo, Quick + Dense stock curves: monotonic,
+   54× midpoint) and write stages via `tune.plan/apply` (EC1 OC point 48× ⇒ P2=7 appears; adaptive target follows/clamps; P2=0 whole-curve
+   offset; per-point 55×; Restore accepted 172 ops all matched). Machine now on the accepted tuning (+ EC1 neutral OC point until reboot).
+   Facts: `knowledge/tuning-results.md`. Helper for testing runs via `--helper sudo -n PKEXEC_UID=1000 /usr/lib/arltuner/arltuner-helper --device`.
+2. In flight: **G-119** Stress tab + one-click Apply + chart spans · **G-120** planner fixes from real writes (OC word shape, CLAMPED, stock rule,
+   accepted equivalence). Then reinstall, UI screenshot pass on real data, a short real stress screen, final review.
 3. W: first Windows restore from this repo. Restore scripts still use their checkout policy (session-2026-10-02). Workers `sonnet`/`high`.
 
 ## How we work
