@@ -64,6 +64,13 @@ class _Stop(Exception):
         self.reason = reason
 
 
+def _check_cancel(cancelled: Callable[[], bool] | None, step: PlanStep) -> None:
+    """G-112: the helper's cancel flag, looked at between two transactions only (never inside one). The CLI passes none."""
+    if cancelled is not None and cancelled():
+        detail = "the cancel flag was set; this step and the ones after it were not sent"
+        raise _Stop(StepResult(step, StepStatus.CANCELLED, detail=detail), StopKind.CANCELLED, f"step {step.number}: cancelled between transactions; nothing was sent for it")
+
+
 def _detail_of_exception(exc: BaseException) -> str:
     text = f"{type(exc).__name__}: {exc}"
     write_sent = getattr(exc, "write_sent", None)
@@ -197,6 +204,8 @@ def apply_profile(
     sleep: Callable[[float], object] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     progress: Callable[[str], None] | None = None,
+    plan_check: Callable[[ApplyPlan], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ApplyReport:
     """Apply ``profile`` through ``guard`` and return what happened.
 
@@ -223,6 +232,11 @@ def apply_profile(
     ``policy`` must be the policy the guard was built with (the guard is authoritative; this copy only drives prediction and
     pacing). ``sleep`` / ``clock`` should be the ones the guard uses, so dwell waits are seen by the guard. ``progress`` receives
     one line per step just before it is sent.
+
+    G-112 (helper ``tune.apply``): ``plan_check(plan)`` is called with the plan built from the actual reads, after ``require_allowed`` and before the first
+    write; whatever it raises propagates and nothing was written (the helper uses it to refuse a plan whose assumed words changed). ``cancelled()`` is
+    looked at before every step (both phases); once true the run stops with ``StopKind.CANCELLED`` -- a step in flight always completes. Both default to
+    ``None`` (the CLI's behaviour is unchanged).
     """
     targets = preflight(profile, topology, policy)
     warnings = plan_warnings(targets, policy, resolve_point_targets(profile, topology))
@@ -235,6 +249,7 @@ def apply_profile(
 
     try:
         for step in read_steps(targets, policy, profile, topology):
+            _check_cancel(cancelled, step)
             result, word = _run_step(guard, confirm, step, pacer, progress)
             results.append(result)
             if step.kind is StepKind.READ_MSR:
@@ -275,11 +290,14 @@ def apply_profile(
     except PreflightError as exc:
         exc.report = _report(profile, guard, results, plan, warnings, None, policy)
         raise
+    if plan_check is not None:
+        plan_check(plan)
 
     try:
         for step in plan.steps:
             if not step.kind.is_write:
                 continue
+            _check_cancel(cancelled, step)
             result, _ = _run_step(guard, confirm, step, pacer, progress)
             results.append(result)
     except _Stop as stop:
