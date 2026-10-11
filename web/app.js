@@ -2806,7 +2806,12 @@
 
   function onCommitResult(ev) {
     const P = T.plan;
-    if (!P) return;
+    if (!P) {  // the page was reloaded during the apply: no review dialog to show the read-back in
+      const rb0 = ev.ok === true && isObj(ev.result) && Array.isArray(ev.result.readback) ? ev.result.readback : null;
+      setText("tn-status", rb0 ? "An apply finished while this page was away: " + rb0.filter((x) => isObj(x) && x.match !== true).length + " of " + rb0.length + " words differ on read-back. Read the tuning words to see the state."
+        : "An apply ended while this page was away (" + errText(ev) + "). Read the tuning words to see where things stand.");
+      return;
+    }
     if (ev.ok === true && isObj(ev.result)) {
       const rb = (Array.isArray(ev.result.readback) ? ev.result.readback : []).filter(isObj);
       P.state = "done";
