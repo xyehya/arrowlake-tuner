@@ -71,6 +71,8 @@ from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
 from arltuner.platform import default_platform
 from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
+from arltuner.profiles.contents import intent_contents, profile_contents, summarize
+from arltuner.profiles.lastread import LastReadError, LastReadStore
 from arltuner.profiles.store import NAME_RE, ProfileStore, ProfileStoreError
 from arltuner.topology import Topology, TopologyError, UnknownCore
 from arltuner.vfmodel import CurvePoint, check_turbo_order, complete_baseline, effective_curve, predict_vccia, voltage_at
@@ -85,6 +87,7 @@ from .ops import (
     _trust,
     _trust_refusal,
     _VirtualClock,
+    accepted_match,
     op_vf_dump,
 )
 from .protocol import BAD_REQUEST, CANCELLED, CONFIRM_MISMATCH, INTERNAL, MAX_LINE, PLAN_STALE, REFUSED, OpError
@@ -211,7 +214,7 @@ class TuneState:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-_STATE_LOCK = threading.Lock()
+_STATE_LOCK = threading.RLock()  # re-entrant: the lazy restore of the last read (G-123) builds the state while holding it
 
 
 def _state(helper: Helper) -> TuneState:
@@ -224,6 +227,8 @@ def _state(helper: Helper) -> TuneState:
 
 
 def _last_words(helper: Helper) -> dict[int, list[int]] | None:
+    if not getattr(helper, "_last_restored", False):
+        _restore_last(helper)  # G-123: the first tune.* call of a helper process picks up this boot's stored read
     words = getattr(helper, "last_words", None)
     return words if isinstance(words, dict) and words else None
 
@@ -559,7 +564,157 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result["fused"] = None if fused is None else {str(c): v for c, v in fused.items()}  # contract 9 addendum: {first cpu of the unit (string): {word, ratio, v}}
     result["turbo"] = None if turbo is None else {**turbo, "favored": {str(c): r for c, r in turbo["favored"].items()}}  # {P: {ratios, counts}, E: {...}, favored: {cpu (string): ratio}}
     result["extras_notes"] = notes
-    return _fit(result)
+    result = _fit(result)
+    _save_last_read(helper, result)
+    return result
+
+
+# --------------------------------------------------------------------------------------------------------------
+# G-123: the last complete read of this boot (tune.last), kept root-owned next to the audit log
+# --------------------------------------------------------------------------------------------------------------
+def _word_json(w: int) -> dict[str, Any]:
+    """The ``vfdump.to_json`` shape of one word (the stored result is patched with it after an apply)."""
+    vf = VfWord.from_u32(w)
+    return {"word": f"{w:#010x}", "ratio": vf.ratio, "v_target_raw": vf.v_target_raw, "v_target_v": vf.v_target_v, "static": vf.static,
+            "offset_raw": vf.offset_raw, "offset_mv": round(vf.offset_mv, 3)}
+
+
+def _last_store(helper: Helper) -> LastReadStore:
+    cfg = helper.cfg
+    return LastReadStore(Path(cfg.audit_path).parent / "state", euid=cfg.euid_fn())
+
+
+def _current_boot(helper: Helper) -> str | None:
+    boot = helper.cfg.boot_id_fn()
+    return (boot.strip() or None) if isinstance(boot, str) else None
+
+
+def _log(helper: Helper, text: str) -> None:
+    try:
+        helper.cfg.log(text)
+    except Exception:  # noqa: BLE001 - logging must never fail an op
+        pass
+
+
+def _save_last_read(helper: Helper, result: dict[str, Any]) -> None:
+    """Store a *complete* read (all 12 units) with the boot id. Best effort: a store problem is logged, never an error of the read that succeeded."""
+    try:
+        boot = _current_boot(helper)
+        ids = {u.get("id") for u in result.get("units", []) if isinstance(u, dict)}
+        if boot is None or result.get("complete") is False or not set(UNITS) <= ids:
+            return
+        words = _words_of_document(result)
+        if not words:
+            return
+        record = {
+            "version": 1, "boot_id": boot, "at": helper.cfg.wall_clock(), "applied_at": None,
+            "words": {str(cpu): [f"{w:#010x}" for w in ws] for cpu, ws in words.items()}, "result": result,
+        }
+        _last_store(helper).save(record)
+    except (LastReadError, OSError, ValueError, TypeError) as exc:
+        _log(helper, f"last-read not stored: {exc}")
+
+
+def _boot_record(helper: Helper) -> dict[str, Any] | None:
+    """The stored record when it belongs to the current boot (both boot ids known and equal), else ``None``."""
+    boot = _current_boot(helper)
+    if boot is None:
+        return None
+    try:
+        record = _last_store(helper).load()
+    except LastReadError as exc:
+        _log(helper, f"last-read not used: {exc}")
+        return None
+    return record if record is not None and record.get("boot_id") == boot else None
+
+
+def _record_words(record: Mapping[str, Any]) -> dict[int, list[int]]:
+    out: dict[int, list[int]] = {}
+    try:
+        for cpu, ws in record["words"].items():
+            if isinstance(ws, list) and ws:
+                out[int(cpu)] = [int(w, 16) for w in ws]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return {}
+    return out
+
+
+def _restore_last(helper: Helper) -> None:
+    """Once per helper process (lazily, on the first tune.* call): this boot's stored read becomes ``helper.last_words`` and the turbo / fused facts of
+    the tune state, so ``tune.plan`` works after a helper restart without a new read. A read made in this process wins (nothing is overwritten)."""
+    with _STATE_LOCK:
+        if getattr(helper, "_last_restored", False):
+            return
+        helper._last_restored = True  # type: ignore[attr-defined]
+        try:
+            if getattr(helper, "last_words", None):
+                return
+            record = _boot_record(helper)
+            words = _record_words(record) if record is not None else {}
+            if record is None or not words:
+                return
+            result = record["result"]
+            st = _state(helper)
+            with st.lock:
+                tables = result.get("tables")
+                if st.tables is None and isinstance(tables, dict) and all(isinstance(tables.get(k), list) for k in ("e", "p")):
+                    st.tables = {k: tuple(int(x) for x in tables[k]) for k in ("e", "p")}
+                    st.tables_note = None
+                fused = result.get("fused")
+                if st.fused is None and isinstance(fused, dict):
+                    st.fused = {int(c): dict(v) for c, v in fused.items() if isinstance(v, dict)}
+                turbo = result.get("turbo")
+                if st.turbo is None and isinstance(turbo, dict):
+                    st.turbo = {**turbo, "favored": {int(c): int(r) for c, r in (turbo.get("favored") or {}).items()}}
+            _set_last_words(helper, words)
+        except Exception as exc:  # noqa: BLE001 - a bad stored record must never break a tune op
+            _log(helper, f"last-read not restored: {type(exc).__name__}: {exc}")
+
+
+def _persist_applied_words(helper: Helper) -> None:
+    """After an apply that wrote: the stored record's authoritative ``words`` follow ``helper.last_words`` (the verified read-backs)."""
+    try:
+        record = _boot_record(helper)
+        last = _last_words(helper)
+        if record is None or not last:
+            return
+        for cpu in list(record["words"]):
+            if int(cpu) in last:
+                record["words"][cpu] = [f"{w:#010x}" for w in last[int(cpu)]]
+        record["applied_at"] = helper.cfg.wall_clock()
+        _last_store(helper).save(record)
+    except (LastReadError, OSError, ValueError, TypeError, KeyError) as exc:
+        _log(helper, f"last-read not updated after the apply: {exc}")
+
+
+def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """``{available: false}``, or ``{available: true, boot_id, at, applied_at, result}`` with ``result`` shaped like ``tune.read``'s. After an apply the
+    stored words (the verified read-backs) are overlaid, the decoded copy rebuilt and the accepted comparison redone."""
+    _restore_last(helper)
+    record = _boot_record(helper)
+    if record is None:
+        return {"available": False}
+    topology = _topology(helper)
+    result = record["result"]
+    applied_at = record.get("applied_at")
+    if applied_at is not None:
+        words = _record_words(record)
+        for unit in result.get("units", []):
+            for cpu in unit.get("cpus", []):
+                ws = words.get(cpu.get("cpu"))
+                if not ws:
+                    continue
+                if cpu.get("oc") is not None:
+                    cpu["oc"] = _word_json(ws[0])
+                for p in cpu.get("points", []):
+                    if isinstance(p.get("point"), int) and 0 < p["point"] < len(ws):
+                        p.update(_word_json(ws[p["point"]]))
+        result["differences"] = []
+        result["differences_stale"] = True
+        matched, note = accepted_match(helper, result)
+        result["accepted_match"], result["accepted_note"] = matched, note
+    result["tune"] = _decode_document(result, topology)
+    return {"available": True, "boot_id": record["boot_id"], "at": record.get("at"), "applied_at": applied_at, "result": _fit(result)}
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1559,6 +1714,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     sent_writes = sum(1 for r in report.steps if r.step.kind.is_write and r.status is not StepStatus.REFUSED and r.status is not StepStatus.CANCELLED)
     if sent_writes:
         helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120 fix 4: any tune.apply that wrote ends "stock" for this boot (ops_measure._tuning_state)
+        _persist_applied_words(helper)  # G-123: the stored last read follows the verified read-backs
     result: dict[str, Any] = {
         "plan_id": plan.plan_id,
         "steps": steps,
@@ -1634,6 +1790,42 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     return {"name": record["name"], "source": "saved", "created": record["created"]}
 
 
+def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:
+    _only(args, {"name"})
+    name = args.get("name")
+    if not isinstance(name, str) or not NAME_RE.match(name):
+        raise _bad("'name' must be 1..64 characters of a-z 0-9 . _ -")
+    return {"name": name}
+
+
+def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Contract 9 (G-123): ``{name, source, created, contents: {rows, turbo}, summary}``; an accepted member also ``position`` / ``of`` / ``chain`` and
+    ``cumulative`` (the state after applying the chain up to and including it: what loading it into Tune means)."""
+    name = args["name"]
+    topology = _topology(helper)
+
+    def contents_of(profile: Profile) -> dict[str, Any]:
+        return profile_contents(profile, topology, lambda cpu: unit_of_cpu(topology, cpu), _POINT_RATIOS)
+
+    try:
+        chain = _accepted_chain(helper)
+    except OpError:
+        chain = []
+    for i, (stem, prof) in enumerate(chain):
+        if stem == name:
+            own = contents_of(prof)
+            cumulative = contents_of(_merge_profiles(name, [p for _, p in chain[: i + 1]]))
+            return {"name": name, "source": "accepted", "created": None, "position": i + 1, "of": len(chain), "chain": [n for n, _ in chain],
+                    "contents": own, "cumulative": cumulative, "summary": summarize(own), "cumulative_summary": summarize(cumulative)}
+    try:
+        record = _profile_store(helper).load(name)
+    except ProfileStoreError as exc:
+        raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
+    own = intent_contents(canonical_intent(record["intent"], rows_only=True))
+    created = record.get("created")
+    return {"name": name, "source": "saved", "created": created if isinstance(created, str) else None, "contents": own, "summary": summarize(own)}
+
+
 # --------------------------------------------------------------------------------------------------------------
 # registration
 # --------------------------------------------------------------------------------------------------------------
@@ -1650,4 +1842,7 @@ def tune_ops() -> list[OpSpec]:
         OpSpec("tune.apply", op_tune_apply, _validate_tune_apply, long=True, write=True, state=State.APPLYING),
         OpSpec("profiles.list", op_profiles_list, _no_args, slow=True),
         OpSpec("profiles.save", op_profiles_save, _validate_profiles_save, slow=True),
+        OpSpec("profiles.get", op_profiles_get, _validate_profiles_get, slow=True),
+        # G-123: the stored last read of this boot (a file read, no hardware); also restores the plan state after a helper restart
+        OpSpec("tune.last", op_tune_last, _no_args, slow=True),
     ]

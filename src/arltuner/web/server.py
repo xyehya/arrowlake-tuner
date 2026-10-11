@@ -92,6 +92,10 @@ def _tune_plan(a: dict) -> bool:  # contract 9; outer filter, the helper (ops_tu
 def _profiles_save(a: dict) -> bool:
     return (set(a) == {"name", "intent"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))
             and isinstance(a["intent"], dict) and len(json.dumps(a["intent"])) <= 16 * 1024)
+def _profiles_get(a: dict) -> bool:  # contract 9 (G-123)
+    return set(a) == {"name"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))
+
+
 def _unit_list(v: Any) -> bool:
     return isinstance(v, list) and 1 <= len(v) <= len(_UNITS) and len(set(v)) == len(v) and all(isinstance(u, str) and u in _UNITS for u in v)
 
@@ -149,6 +153,8 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "tune.apply": (_apply, True),
     "profiles.list": (_empty, False),
     "profiles.save": (_profiles_save, False),
+    "profiles.get": (_profiles_get, False),  # G-123: what a profile holds (saved intent / accepted chain member)
+    "tune.last": (_empty, False),  # G-123: this boot's stored read, or {available: false}
     "vf.measure": (_vf_measure, True),  # G-111, contract 9
     "curves.list": (_empty, False),
     "curves.get": (_curves_get, False),

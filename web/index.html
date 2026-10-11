@@ -107,18 +107,15 @@
         <figure class="chart" id="ch-ov-power"></figure>
         <figure class="chart" id="ch-ov-temp"></figure>
         <article class="card budget-card">
-          <div class="card-head"><h2>Mailbox budget</h2><button type="button" class="link" data-goto="system">Details</button></div>
-          <div class="ring-row">
-            <svg class="ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-              <circle cx="60" cy="60" r="50" class="ring-track"/>
-              <circle cx="60" cy="60" r="50" class="ring-used" id="ring-ov" pathLength="100"/>
-            </svg>
+          <div class="card-head"><h2>Mailbox ops this boot</h2><button type="button" class="link" data-goto="system">Details</button></div>
+          <div class="ops-row">
             <div class="ring-text">
-              <span class="ring-big" id="ov-left">n/a</span>
-              <span class="muted">ops left this boot</span>
+              <span class="ring-big" id="ov-used">n/a</span>
               <span class="muted" id="ov-state">helper n/a</span>
             </div>
+            <svg class="ops-spark" id="sp-ops-ov" viewBox="0 0 160 44" preserveAspectRatio="none" role="img" aria-label="Mailbox operations used this boot, over this session" focusable="false"></svg>
           </div>
+          <p class="muted ops-note" id="ov-cap"></p>
         </article>
       </div>
 
@@ -261,7 +258,7 @@
         <li><strong>Choose</strong> a voltage offset, an OC target voltage or an OC ratio, per unit or for all.</li>
         <li><strong>Review</strong> the before and after, then press Apply. Each word is read back.</li>
       </ol>
-      <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. About 112 to 124 operations of the <span id="tn-left">n/a</span> left this boot.</p>
+      <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. A read costs &#8776; 124&#8211;136 operations (112 V/F reads + 12 fused-point reads, plus the favored-ratio reads); <span id="tn-used">n/a</span> used so far this boot.</p>
       <p id="tn-reason" class="muted"></p>
       <div class="run-line" id="tn-run" hidden>
         <progress id="tn-bar" max="1" value="0" aria-label="Read progress"></progress>
@@ -400,10 +397,15 @@
   <!-- ============================== Profiles ============================== -->
   <section class="panel" id="panel-profiles" role="tabpanel" aria-labelledby="tab-profiles" tabindex="0" hidden>
     <div class="pr-grid">
-      <article class="card">
+      <article class="card pr-chain-card" id="pr-chain-card" hidden>
+        <div class="card-head"><h2>Accepted state</h2><span class="muted" id="pr-chain-note"></span></div>
+        <ol class="pr-chain" id="pr-chain" aria-label="Accepted profiles in the order Restore accepted applies them"></ol>
+      </article>
+      <article class="card pr-list-card">
         <div class="card-head"><h2>Profiles</h2><button type="button" id="btn-pr-refresh">Refresh</button></div>
         <p id="pr-empty" class="muted">Loading profiles.</p>
         <ul class="pr-list" id="pr-list"></ul>
+        <p id="pr-load-status" class="muted" role="status"></p>
       </article>
       <article class="card">
         <div class="card-head"><h2>Save the current Tune settings</h2></div>
@@ -414,16 +416,16 @@
         <p id="pr-status" class="muted" role="status"></p>
       </article>
       <article class="card pr-diff">
-        <div class="card-head"><h2>Compare two profiles</h2></div>
+        <div class="card-head"><h2>Compare two profiles</h2><div class="seg" id="pr-basis" role="group" aria-label="What an accepted profile is compared as"></div></div>
         <div class="diff-pick">
           <select id="pr-a" aria-label="First profile"></select>
           <span class="muted">against</span>
           <select id="pr-b" aria-label="Second profile"></select>
         </div>
         <p id="pr-diff-note" class="muted"></p>
-        <div class="scroll"><table class="grid" id="pr-diff" hidden>
+        <div class="scroll"><table class="grid num pr-diff-table" id="pr-diff" hidden>
           <caption class="sr">Differences between two profiles</caption>
-          <thead><tr><th scope="col">Unit</th><th scope="col">Setting</th><th scope="col">First</th><th scope="col">Second</th></tr></thead>
+          <thead><tr><th scope="col">Unit</th><th scope="col">Setting</th><th scope="col" class="n" id="pr-th-a">First</th><th scope="col" class="n" id="pr-th-b">Second</th><th scope="col" class="n">Change</th></tr></thead>
           <tbody id="pr-diff-body"></tbody>
         </table></div>
       </article>
@@ -434,20 +436,19 @@
   <section class="panel" id="panel-system" role="tabpanel" aria-labelledby="tab-system" tabindex="0" hidden>
     <div class="sys-grid">
       <article id="helper" class="card">
-        <div class="card-head"><h2>Helper and mailbox budget</h2></div>
-        <div class="ring-row">
-          <svg class="ring big" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-            <circle cx="60" cy="60" r="50" class="ring-track"/>
-            <circle cx="60" cy="60" r="50" class="ring-used" id="ring-sys" pathLength="100"/>
-          </svg>
-          <dl class="kv">
-            <dt>State</dt><dd id="hb-state">n/a</dd>
-            <dt>Ops used (this boot)</dt><dd id="hb-used">n/a</dd>
-            <dt>Per-boot budget</dt><dd id="hb-budget">n/a</dd>
-            <dt>Ops left</dt><dd id="hb-left">n/a</dd>
-            <dt>Last heartbeat</dt><dd id="hb-age">n/a</dd>
-          </dl>
+        <div class="card-head"><h2>Helper and mailbox operations</h2></div>
+        <div class="ops-row">
+          <div class="ring-text">
+            <span class="ring-big" id="hb-used">n/a</span>
+            <span class="muted">mailbox ops this boot</span>
+          </div>
+          <svg class="ops-spark" id="sp-ops-sys" viewBox="0 0 160 44" preserveAspectRatio="none" role="img" aria-label="Mailbox operations used this boot, over this session" focusable="false"></svg>
         </div>
+        <dl class="kv">
+          <dt>State</dt><dd id="hb-state">n/a</dd>
+          <dt>Last heartbeat</dt><dd id="hb-age">n/a</dd>
+        </dl>
+        <p class="muted ops-note" id="hb-cap"></p>
       </article>
 
       <article id="preflight" class="card">
