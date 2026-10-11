@@ -34,6 +34,14 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cache, ["x", "--cache", "2", "--taskset", "3-4", "--verify", "--metrics-brief", "--timeout", "30s"])
         self.assertNotIn("--cpu-method", cache)
 
+    def test_the_temp_path_is_the_last_stress_ng_argument(self) -> None:
+        cmd = cpu_command("x", "cache", [3], 30, temp_path="/run/user/1000")
+        self.assertEqual(cmd[-2:], ["--temp-path", "/run/user/1000"])
+        self.assertNotIn("--temp-path", cpu_command("x", "cache", [3], 30))
+        for bad in ("", ".", "relative", "/", "/a\0b", 5):
+            with self.assertRaises(ValueError):
+                cpu_command("x", "cache", [3], 30, temp_path=bad)  # type: ignore[arg-type]
+
     def test_the_memory_command(self) -> None:
         self.assertEqual(memory_command("/usr/bin/stressapptest", 120, 4096), ["/usr/bin/stressapptest", "-s", "120", "-M", "4096", "-W"])
 

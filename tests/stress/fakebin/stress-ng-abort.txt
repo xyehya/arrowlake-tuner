@@ -1,0 +1,3 @@
+stress-ng: info:  [4243] setting to a 30 second run per stressor
+stress-ng: info:  [4243] dispatching hogs: 8 cpu
+aborting: temp-path '.' must be readable and writeable
