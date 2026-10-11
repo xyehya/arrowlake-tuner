@@ -1,15 +1,17 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-08 · lnx · G1 code complete (7 of 7 merged); G1 exit needs the T1 install. Resume: `docs/START-PROMPT.md`._
+_Updated: 2026-10-11 · lnx · G1 read-only exit MET 2026-10-11 (install self-check 17/17; GUI + pkexec helper live). vf.dump pending its go. Resume: `docs/START-PROMPT.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
-  (2 review rounds), G-104 telemetry readers. Suite **1803 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
+  (2 review rounds), G-104 telemetry readers. Suite **1810 OK** (an occasional `ConnectionResetError` line is slow-client test log noise).
 - **All G1 tasks merged:** G-105 dashboard (layout unverified in a real browser; calls `telemetry.start` on every SSE open), G-106 install +
-  polkit + D-030 paths (2 review rounds), G-107 helper budget heartbeat + accepted compare (1 review round).
+  polkit + D-030 paths (2 review rounds), G-107 helper budget heartbeat + accepted compare (1 review round), G-108 plain uninstall keeps tmpfiles.d + /run/arltuner.
 - **Decisions this session:** D-026 telemetry own read allowlist · D-027 web↔helper (202 + SSE result, Sec-Fetch-Site) · D-028 web residual risks
   · D-029 root helper hardening (no argv as root) · D-030 path migration only when installed · D-031 install + operator CLI path.
-- **Hardware not touched this session.** Restore scripts not yet run from this repo. Since G-101, `topology`/`msr` read
+- **Installed 2026-10-11** (`sudo bash install.sh`, operator go; self-check all 17 passed; audit seeded from the legacy log, 24935 lines).
+  From now on CLI/restore use `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl` (D-030). **No mailbox traffic in the install.**
+- **Before 2026-10-11 hardware not touched by this repo.** Restore scripts not yet run from this repo. Since G-101, `topology`/`msr` read
   `platforms/arl-s-285k.toml` at import ⇒ the next boot's restore also exercises the platform loader (check it first).
 - **Sequencing (D-030):** before install, CLI keeps legacy lock/audit paths; after the install go-ahead (T1), the *following* restore is the first
   run on `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl`. The helper refuses to run from a checkout ⇒ first real helper run needs
@@ -43,8 +45,12 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
 
 ## Next
-1. G1 exit (ROADMAP: read-only app on the reference machine): T1 `sudo bash install.sh` + selfcheck, then GUI with the helper: `preflight` +
-   telemetry (plain reads, no mailbox). `vf.dump` (mailbox, ~124 ops) is a separate go-ahead. Restore after the install uses the new paths.
+1. **G1 read-only exit met [MEASURED lnx 2026-10-11]:** polkit prompt once → helper `python3 -I /usr/lib/arltuner/arltuner-helper --device`;
+   preflight all 15 pass (polkit agent gnome-shell), heartbeat live, ops 0/600, telemetry live (pkg/core W, per-CPU MHz/busy/ratio/VID, coretemp),
+   audit tail renders; no console errors, **no mailbox traffic**. n/a as expected: Vcore (board), DRAM r/w. Still open: `vf.dump` (~124 ops,
+   own go) to fill Applied-vs-accepted. UX nits for G2: header says "Mode: write / Writes allowed: yes" on a read-only page; temp sensors show
+   raw coretemp ids (Core 0..44), not P/E names; Chrome automation can't open the file:// launcher (own-origin POST /bootstrap works).
+   **No restore has run since the 2026-10-11 09:42 UTC boot** (audit last 10-10): next restore = first run on the D-030 paths; stop the GUI first. `vf.dump` (mailbox, ~124 ops) is a separate go-ahead. Restore after the install uses the new paths.
 2. Orchestrator rule: workers and reviewers run `model: sonnet`, `effort: high` (operator 2026-10-08).
 3. W: first Windows restore from this repo (check the rename end to end).
 
@@ -55,4 +61,4 @@ Operator at the machine; orchestrator answers guard tokens only after a go-ahead
 ## Tools
 CLI `python3 tools/arltuner.py read | read-vf | vf-dump [--measure] | point-offset | apply | plan` (`--device` Linux, `--device-win` Windows) ·
 `tools/lnx/`: restore_tuning.sh, reapply_current.sh, health_snapshot.sh, percore_stress.py, vfcurve.py, orchestrator_confirm.py · `tools/win/`:
-restore_tuning.ps1, Restore-Tuning.cmd, reapply_current.ps1, ts_driver.py, preflight.ps1 · tests `python3 tools/run_tests.py` (1261).
+restore_tuning.ps1, Restore-Tuning.cmd, reapply_current.ps1, ts_driver.py, preflight.ps1 · tests `python3 tools/run_tests.py` (1810).
