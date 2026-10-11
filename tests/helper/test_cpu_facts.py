@@ -273,6 +273,7 @@ class TurboOrderTests(FactsCase):
         self.assertEqual([(s["kind"], s["table"], s["status"]) for s in res["steps"]], [("write_msr", "p", "ok")])
         self.assertEqual([(rb["unit"], rb["point"], rb["match"]) for rb in res["readback"]], [("P", "turbo", True)])
         self.assertEqual(res["writes_sent"], 1)
+        self.assertEqual((res["msr_writes"], res["ops_used"]), (1, 1))  # G-119: the plain wrmsr is counted, and named apart
         self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
         self.assertEqual(self.table(8, 0x650), [48] * 8)
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
@@ -303,6 +304,7 @@ class TurboOrderTests(FactsCase):
         p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55], "E": [48, 47, 46, 46, 46, 46, 46, 46]}})
         self.assertEqual((p["writes"], p["ops_needed"]), (2, 2))
         res = self.apply_ok(h, p)
+        self.assertEqual((res["msr_writes"], res["ops_used"]), (2, 2))
         self.assertEqual(sorted(rb["unit"] for rb in res["readback"]), ["E", "P"])
         self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
         self.assertEqual(self.table(8, 0x650), [48, 47, 46, 46, 46, 46, 46, 46])

@@ -137,6 +137,12 @@ class ApplyReport:
         """T-023: plain ``rdmsr`` / ``wrmsr`` steps of the turbo tables that reached the port (refused steps excluded)."""
         return sum(1 for r in self.steps if r.status not in (StepStatus.REFUSED, StepStatus.CANCELLED) and r.step.kind.is_msr)
 
+    @property
+    def msr_writes(self) -> int:
+        """G-119: plain ``wrmsr`` steps (the turbo tables) that reached the port. The guard counts each as one operation; ``operations`` stays
+        mailbox-only (many figures pin it), so the helper adds this to ``ops_used`` and reports it apart as ``msr_writes``."""
+        return sum(1 for r in self.steps if r.step.kind is StepKind.WRITE_MSR and r.status not in (StepStatus.REFUSED, StepStatus.CANCELLED))
+
     def format_report(self) -> str:
         """Plain-text report: per-step results, applied values, stop reason, revert plan, warnings."""
         return _format_report(self)

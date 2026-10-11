@@ -284,6 +284,7 @@ class ApplyWordTests(TuneCase):
         self.assertEqual(self.sim.plain_msr(0, 0x650), 0x3131313131313131)  # every bucket raised to 49
         table = next(rb for rb in res["readback"] if rb["point"] == "turbo")
         self.assertTrue(table["match"])
+        self.assertEqual(res["msr_writes"], 1)  # G-119: one plain wrmsr, inside ops_used with the mailbox requests
 
     def test_ratio_without_a_table_read_warns_and_writes_no_table(self) -> None:
         self.policy.write_text(ADVANCED.read_text().split("# --- plain-MSR access")[0])

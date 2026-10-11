@@ -508,9 +508,9 @@ class ProfileSchema(unittest.TestCase):
             with self.assertRaises(ProfileError, msg=bad):
                 load_profile(bad)
 
-    def test_a_turbo_only_profile_is_still_empty(self) -> None:
-        with self.assertRaises(ProfileError):
-            load_profile('[meta]\nname = "t"\nplatform = "arl-s-285k"\n\n[turbo]\ne = [49, 49, 49, 49, 49, 49, 49, 49]\n')
+    def test_a_turbo_only_profile_loads(self) -> None:  # G-119: turbo-only intents are real profiles (it used to be refused as empty)
+        prof = load_profile('[meta]\nname = "t"\nplatform = "arl-s-285k"\n\n[turbo]\ne = [49, 49, 49, 49, 49, 49, 49, 49]\n')
+        self.assertEqual((prof.entries, prof.points, prof.turbo.e), ((), (), (49,) * 8))
 
 
 if __name__ == "__main__":

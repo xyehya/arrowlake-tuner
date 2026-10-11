@@ -209,7 +209,7 @@ class Profile:
             raise ProfileError("meta.name: must be a non-empty string")
         object.__setattr__(self, "entries", tuple(self.entries))
         object.__setattr__(self, "points", tuple(self.points))
-        _check_entries(self.entries, "entries", self.points)
+        _check_entries(self.entries, "entries", self.points, turbo_only_ok=self.turbo is not None)
         _check_points(self.points, "points")
         if self.turbo is not None and not isinstance(self.turbo, TurboTables):
             raise ProfileError(f"turbo: expected a TurboTables, got {type(self.turbo).__name__}")
@@ -295,9 +295,10 @@ def _describe(e: CoreSetting) -> str:
     return f"ratio={e.ratio}, oc_voltage_mv={e.oc_voltage_mv}, offset_mv={e.offset_mv}"
 
 
-def _check_entries(entries: tuple[CoreSetting, ...], label: str, points: tuple[PointSetting, ...] = ()) -> None:
-    """Whole-profile rules: non-empty (a ``[[core]]`` or a ``[[point]]``), no duplicate (kind, index), E entries agree within a cluster."""
-    if not entries and not points:
+def _check_entries(entries: tuple[CoreSetting, ...], label: str, points: tuple[PointSetting, ...] = (), turbo_only_ok: bool = False) -> None:
+    """Whole-profile rules: non-empty (a ``[[core]]`` or a ``[[point]]``, or -- G-119 -- a ``[turbo]`` table alone), no duplicate (kind, index),
+    E entries agree within a cluster."""
+    if not entries and not points and not turbo_only_ok:
         raise ProfileError("profile is empty: at least one [[core]] or [[point]] entry is required")
     seen: dict[tuple[str, int], int] = {}
     for i, e in enumerate(entries):
@@ -423,7 +424,7 @@ def _parse(text: str) -> Profile:
     raw_points = doc.get("point")
     if raw_points is not None and not isinstance(raw_points, list):
         raise ProfileError("point: expected an array of tables ([[point]]), got a single table")
-    if (cores is None or cores == []) and not raw_points:
+    if (cores is None or cores == []) and not raw_points and doc.get("turbo") is None:
         raise ProfileError("profile is empty: at least one [[core]] or [[point]] entry is required")
     if cores is None:
         cores = []
@@ -431,9 +432,9 @@ def _parse(text: str) -> Profile:
         raise ProfileError("core: expected an array of tables ([[core]]), got a single table")
     entries = tuple(_parse_core(i, table) for i, table in enumerate(cores))
     points = tuple(_parse_point(i, table) for i, table in enumerate(raw_points or []))
-    _check_entries(entries, "core", points)
-    _check_points(points, "point")
     turbo = _parse_turbo(doc.get("turbo"))
+    _check_entries(entries, "core", points, turbo_only_ok=turbo is not None)
+    _check_points(points, "point")
     return Profile(name=name, entries=entries, turbo=turbo, points=points)
 
 
