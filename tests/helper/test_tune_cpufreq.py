@@ -99,6 +99,47 @@ class CpufreqLiftTests(TuneCase):
         self.assertEqual(by[12]["after_khz"], 5_000_000)
         self.assertTrue(any("cpu 13" in w for w in res["warnings"]), res["warnings"])
 
+    def test_a_partial_apply_leaves_the_caps_alone(self) -> None:
+        h = self.boot_with_sysfs()
+        plan = self.plan(h, rows(row("EC1", ratio=49, v=1.165)))
+        follow = self.sim.on_favored_write
+        landed: list[int] = []
+
+        def after_two(cpu: int, khz: int) -> None:  # the third 0x1D and the following ones fail
+            follow(cpu, khz)  # type: ignore[misc]
+            landed.append(cpu)
+            if len(landed) == 2:
+                self.sim.force_rc(0x1D, 3)
+
+        self.sim.on_favored_write = after_two
+        r = self.apply(h, plan)
+        self.assertTrue(r["ok"], r)
+        res = r["result"]
+        self.assertFalse(res["complete"])
+        self.assertEqual(landed, [12, 13])  # two ratios landed and their cpuinfo max moved
+        self.assertEqual(self.cpufreq.read(12, MAX_ATTR), "5000000")
+        self.assertEqual(res["cpufreq"], [])
+        self.assertEqual(self.cpufreq.writes, [])
+        self.assertEqual({self.cap(c) for c in E_CPUS}, {"4900000"})
+        self.assertTrue(any("did not complete" in w for w in res["warnings"]), res["warnings"])
+
+    def test_an_oc_word_write_that_moved_the_max_is_followed_but_an_unmoved_one_is_not_listed(self) -> None:
+        """The OC word (0x11) carries the ratio too: a CPU written without a 0x1D is listed (and its cap lifted) only if its cpuinfo max moved."""
+        from arltuner.helper.ops_tune import _lift_cpufreq
+
+        h = self.boot_with_sysfs()
+        before = {12: (4_900_000, 4_900_000), 13: (4_900_000, 4_900_000)}
+        self.cpufreq.path(12, MAX_ATTR).write_text("5000000\n")  # cpu 12's max moved, cpu 13's did not
+
+        class Ctx:
+            import threading
+            cancel = threading.Event()
+
+        warnings: list[str] = []
+        rows_ = _lift_cpufreq(h.helper, Ctx(), before, [], [12, 13], warnings)  # type: ignore[arg-type]
+        self.assertEqual(rows_, [{"cpu": 12, "before_khz": 4_900_000, "after_khz": 5_000_000}])
+        self.assertEqual((self.cap(12), self.cap(13)), ("5000000", "4900000"))
+
     def test_without_measurement_wiring_the_result_still_has_the_key(self) -> None:
         h = self.boot()
         self.read(h)

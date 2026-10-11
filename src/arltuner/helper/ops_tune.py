@@ -1696,7 +1696,8 @@ def _merge_applied_words(helper: Helper, report: Any) -> None:
 # --------------------------------------------------------------------------------------------------------------
 # G-126: an OC ratio raise must lift the OS frequency ceiling
 # --------------------------------------------------------------------------------------------------------------
-#: ``cpuinfo_max_freq`` follows HWP highest a moment after the 0x1D: re-read this many times, this far apart, while it has not moved (hardware only).
+#: ``cpuinfo_max_freq`` follows HWP highest a moment after the 0x1D: re-read all unmoved CPUs this many rounds, this far apart (hardware only).
+#: ``[UNVERIFIED]``: nobody has measured the kernel's lag; check on the next write sitting by reading ``cpuinfo_max_freq`` right after a 0x1D.
 CPUINFO_POLL = (4, 0.25)
 
 
@@ -1720,45 +1721,62 @@ def _cpufreq_before(helper: Helper, cpus: Sequence[int]) -> dict[int, tuple[int 
     return out
 
 
-def _oc_ratio_cpus(report: Any) -> list[int]:
-    """The CPUs whose OC ratio (0x1D) an apply wrote successfully."""
-    return sorted({r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_FAVORED and r.status is StepStatus.OK})
+def _oc_ratio_cpus(report: Any) -> tuple[list[int], list[int]]:
+    """``(favored, vf)``: the CPUs whose 0x1D (OC ratio) an apply wrote successfully, and the others whose OC word (0x11) it wrote (the ratio is in its low byte
+    too, so HWP highest might follow it): the first are expected to move, the second are only checked."""
+    favored = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_FAVORED and r.status is StepStatus.OK}
+    vf = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_VF and r.status is StepStatus.OK} - favored
+    return sorted(favored), sorted(vf)
 
 
-def _lift_cpufreq(helper: Helper, ctx: OpContext, before: Mapping[int, tuple[int | None, int | None]], cpus: Sequence[int], warnings: list[str]) -> list[dict[str, Any]]:
+def _lift_cpufreq(
+    helper: Helper, ctx: OpContext, before: Mapping[int, tuple[int | None, int | None]], favored: Sequence[int], checked: Sequence[int], warnings: list[str],
+) -> list[dict[str, Any]]:
     """G-126: after an apply that changed an OC ratio, ``cpuinfo_max_freq`` follows HWP highest but ``scaling_max_freq`` keeps the old value, so the new ratio is never
-    used (``[MEASURED lnx 2026-10-12]``). For each CPU whose OC ratio changed: a cap that sat AT the old cpuinfo max (no user cap) follows the new max (up or down); a
-    cap the user set below the old max is never touched; a cap above a lowered max is lowered to it. Writes go through the measurement wiring's cpufreq IO to
-    ``scaling_max_freq`` only, never while a measure/stress journal exists (those own the caps). Never raises: the hardware is already changed, the result must reach
-    the page. Returns ``[{cpu, before_khz, after_khz}]``."""
+    used (``[MEASURED lnx 2026-10-12]``). For each CPU whose OC ratio changed (``favored``; ``checked`` = OC word written without a 0x1D: listed only if its max moved):
+    a cap that sat AT the old cpuinfo max (no user cap) follows the new max (up or down); a cap the user set below the old max is never touched; a cap above a lowered
+    max is lowered to it. Writes go through the measurement wiring's cpufreq IO to ``scaling_max_freq`` only, never while a measure/stress journal exists (those own
+    the caps). Never raises: the hardware is already changed, the result must reach the page. Returns ``[{cpu, before_khz, after_khz}]``."""
     from .ops_measure import CAP_ATTR, MAX_ATTR
 
     w = getattr(helper, "measure_wiring", None)
+    cpus = sorted({*favored, *checked})
     if w is None or not cpus:
         return []
     owned = Path(w.journal_path).exists()
     if owned:
-        warnings.append("a measure/stress cpufreq journal exists: scaling_max_freq was not touched (restart the helper to recover it, then re-check the frequency cap)")
+        warnings.append("a measure/stress cpufreq journal exists, so scaling_max_freq was not touched; fix cpufreq by hand (see the helper log) and check the frequency cap")
+    now: dict[int, int | None] = {}
+    rounds, interval = (1, 0.0) if helper.cfg.simulator else CPUINFO_POLL
+    pending = list(cpus)
+    for n in range(rounds):  # one shared wait: the kernel lags the 0x1D by a moment; only the CPUs a 0x1D was written to are waited for
+        still = []
+        for cpu in pending:
+            try:
+                now[cpu] = _khz(w.cpufreq.read(cpu, MAX_ATTR))
+            except OSError:
+                now[cpu] = None
+            if cpu in favored and now[cpu] == before.get(cpu, (None, None))[0]:
+                still.append(cpu)
+        pending = still
+        if not pending or n == rounds - 1:
+            break
+        ctx.cancel.wait(interval)
     rows: list[dict[str, Any]] = []
-    tries, interval = (1, 0.0) if helper.cfg.simulator else CPUINFO_POLL
     for cpu in cpus:
         old_max, old_cap = before.get(cpu, (None, None))
+        new_max = now.get(cpu)
+        moved = new_max is not None and old_max is not None and new_max != old_max
+        if cpu not in favored and not moved:
+            continue
         try:
-            now_max = _khz(w.cpufreq.read(cpu, MAX_ATTR))
-            for _ in range(tries - 1):  # the kernel lags the 0x1D by a moment: wait while nothing moved
-                if now_max is not None and now_max != old_max:
-                    break
-                ctx.cancel.wait(interval)
-                now_max = _khz(w.cpufreq.read(cpu, MAX_ATTR))
             cap = _khz(w.cpufreq.read(cpu, CAP_ATTR))
             if old_cap is None:
                 old_cap = cap
             after = cap
-            if not owned and now_max is not None and cap is not None and old_max is not None and now_max != old_max:
-                if cap == old_max or (now_max < old_max and cap > now_max):
-                    if cap != now_max:
-                        w.cpufreq.write(cpu, CAP_ATTR, str(now_max))
-                        after = _khz(w.cpufreq.read(cpu, CAP_ATTR))  # read back: the kernel may clamp
+            if not owned and moved and cap is not None and new_max is not None and old_max is not None and cap != new_max and (cap == old_max or (new_max < old_max and cap > new_max)):
+                w.cpufreq.write(cpu, CAP_ATTR, str(new_max))
+                after = _khz(w.cpufreq.read(cpu, CAP_ATTR))  # read back: the kernel may clamp
             rows.append({"cpu": cpu, "before_khz": old_cap, "after_khz": after})
         except (OSError, ValueError) as exc:
             warnings.append(f"scaling_max_freq of cpu {cpu} could not be adjusted: {type(exc).__name__}: {exc}")
@@ -1812,7 +1830,12 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     _merge_applied_words(helper, report)
     steps, readback = _report_rows(report, topology)
     cpufreq_warnings: list[str] = []
-    cpufreq = _lift_cpufreq(helper, ctx, freq_before, _oc_ratio_cpus(report), cpufreq_warnings)
+    favored_cpus, vf_cpus = _oc_ratio_cpus(report)
+    cpufreq: list[dict[str, Any]] = []
+    if report.ok:
+        cpufreq = _lift_cpufreq(helper, ctx, freq_before, favored_cpus, vf_cpus, cpufreq_warnings)
+    elif favored_cpus:  # a partial apply: the page says "do not rely on this state"; the OS caps are left exactly as they are
+        cpufreq_warnings.append("the apply did not complete, so scaling_max_freq was not adjusted to the OC ratios that did land")
     sent_writes = sum(1 for r in report.steps if r.step.kind.is_write and r.status is not StepStatus.REFUSED and r.status is not StepStatus.CANCELLED)
     if sent_writes:
         helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120 fix 4: any tune.apply that wrote ends "stock" for this boot (ops_measure._tuning_state)

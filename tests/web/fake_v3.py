@@ -773,8 +773,8 @@ class V3Ops:
                 readback.append({"unit": u, "point": idx, "cpu": UNIT_CPUS[u][0], "expected": exp,
                                  "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
                 sent += 1
-            new_r, old_r = p["new"][u]["oc"]["ratio"], self.tuning[u]["oc"]["ratio"]
-            if new_r and old_r and new_r != old_r:  # G-126: an OC ratio change moves cpuinfo_max_freq; the helper moves scaling_max_freq with it (E-cores read one bin more)
+            new_r, old_r = p["new"][u]["oc"]["ratio"], self.tuning[u]["oc"]["ratio"] or (48 if kind_of(u) == "E" else 55)  # unset OC word: the stock table top
+            if new_r and new_r != old_r:  # G-126: an OC ratio change moves cpuinfo_max_freq; the helper moves scaling_max_freq with it (E-cores read one bin more)
                 step = 1 if kind_of(u) == "E" else 0
                 cpufreq += [{"cpu": c, "before_khz": (old_r + step) * 100_000, "after_khz": (new_r + step) * 100_000} for c in UNIT_CPUS[u]]
             self.tuning[u] = copy.deepcopy(p["new"][u])
