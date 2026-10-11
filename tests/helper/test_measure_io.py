@@ -138,7 +138,7 @@ class SimIoTests(unittest.TestCase):
         self.assertEqual(m.settled("EC0", 3_000_000), 30)
         self.assertEqual(m.settled("EC0", 4_600_000), 46)
         self.assertEqual(m.settled("EC0", 4_800_000), 48)  # the E turbo table (0x650: 48x)
-        self.assertEqual((m.max_khz(0), m.max_khz(1), m.max_khz(8)), (5_700_000, 5_500_000, 4_800_000))
+        self.assertEqual((m.max_khz(0), m.max_khz(1), m.max_khz(8)), (5_700_000, 5_500_000, 4_900_000))  # E cpuinfo_max_freq 4.9 GHz although the table stops at 48x
 
     def test_the_sim_wiring_lives_under_the_state_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -34,19 +34,26 @@ TELEMETRY_MSRS = frozenset({
 
 MAILBOX_MSR = 0x150
 
+# G-118: the turbo ratio tables, READ by ``vf.measure`` to learn each unit's real max ratio (plain rdmsr; both are writable control MSRs elsewhere, so they are NOT in
+# ``TELEMETRY_MSRS`` -- the sampler cannot read them -- but in this separate read-only set that only the measurement's reader opts into). D-026 rule: rdmsr only.
+MSR_TURBO_RATIO_P = 0x1AD  # 8 buckets, bucket 0 = 1 active core; stock 57,57,55x6 [MEASURED lnx 2026-10-11]
+MSR_TURBO_RATIO_E = 0x650  # 8 buckets; stock 48 x8 [MEASURED lnx 2026-10-11]
+TURBO_TABLE_MSRS = TELEMETRY_MSRS | {MSR_TURBO_RATIO_P, MSR_TURBO_RATIO_E}
+
 
 class TelemetryMsr:
     """``rdmsr`` on allowlisted telemetry MSRs only. No ``wrmsr`` attribute exists."""
 
-    __slots__ = ("_port",)
+    __slots__ = ("_port", "_allow")
 
-    def __init__(self, port: MsrPort) -> None:
+    def __init__(self, port: MsrPort, allow: frozenset[int] = TELEMETRY_MSRS) -> None:
         self._port = port
+        self._allow = allow
 
     def rdmsr(self, cpu: int, msr: int) -> int:
         check_cpu(cpu)
         check_msr(msr)
-        if msr not in TELEMETRY_MSRS:
+        if msr not in self._allow:
             raise MsrError(errno.EPERM, f"MSR {msr:#x} is not a telemetry read-allowlist entry")
         return self._port.rdmsr(cpu, msr)
 

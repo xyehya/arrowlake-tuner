@@ -105,7 +105,7 @@ def _name(v: Any) -> bool:
 
 
 def _vf_measure(a: dict) -> bool:  # contract 9; the helper (ops_measure._validate_vf_measure) is the authority
-    return (set(a) <= {"mode", "units", "name"} and a.get("mode", "quick") in ("quick", "dense")
+    return (set(a) <= {"mode", "units", "name", "baseline"} and a.get("mode", "quick") in ("quick", "dense") and isinstance(a.get("baseline", False), bool)
             and ("units" not in a or _unit_list(a["units"])) and ("name" not in a or _name(a["name"])))
 
 
