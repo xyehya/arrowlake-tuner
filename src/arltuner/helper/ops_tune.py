@@ -872,12 +872,7 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
         turbo = _explicit_turbo(helper, intent["turbo"], turbo, policy, warnings)
     try:
         entries = tuple(CoreSetting(k, i, **v) for (k, i), v in cores.items())  # type: ignore[arg-type]
-        if not entries and not points and turbo is not None:
-            # A turbo-only plan: Profile insists on one [[core]] / [[point]]; the placeholder is removed again, so the plan carries the tables alone.
-            profile = Profile(name, (CoreSetting("P", 0, offset_mv=0),), turbo)
-            object.__setattr__(profile, "entries", ())
-        else:
-            profile = Profile(name, entries, turbo, tuple(points.values()))
+        profile = Profile(name, entries, turbo, tuple(points.values()))  # G-119: a turbo-only plan has no entries and no points
     except ProfileError as exc:
         raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
     return Resolved(profile, refs, warnings, units)
@@ -1539,7 +1534,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         "plan_id": plan.plan_id,
         "steps": steps,
         "readback": readback,
-        "ops_used": report.operations + sum(1 for r in report.steps if r.step.kind.is_write and not r.step.kind.is_msr and r.status is StepStatus.OK),
+        "ops_used": report.operations + sum(1 for r in report.steps if r.step.kind.is_write and not r.step.kind.is_msr and r.status is StepStatus.OK) + report.msr_writes,
+        "msr_writes": report.msr_writes,   # G-119: the plain wrmsr (turbo tables) inside ops_used, so a page can show them apart from the mailbox ones
         "complete": report.ok,
         "writes_sent": sent_writes,
         "warnings": list(report.warnings),

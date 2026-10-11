@@ -1,7 +1,7 @@
 "use strict";
-// arrowlake-tuner web UI (G-105, redesigned in G-110, SPEC-v3 pages in G-113): Dashboard, Curves, Tune, Profiles, System, Audit.
-// The only writes this page can start are in Tune: tune.plan opens a review dialog, and tune.apply is sent from that dialog's confirm button, carrying the
-// plan id and the typed "CONFIRM <nonce>". Everything else is a read, a cpufreq-only measurement, or curve/profile bookkeeping.
+// arrowlake-tuner web UI (G-105, redesigned in G-110, SPEC-v3 pages in G-113): Dashboard, Curves, Tune, Stress, Profiles, System, Audit.
+// The only writes this page can start are in Tune: tune.plan opens a review dialog, and tune.apply is sent from that dialog's Apply button (D-033 d: one
+// click, no typing), carrying the plan id and "CONFIRM <nonce>" of that plan. Everything else is a read, a cpufreq-only measurement, or curve/profile bookkeeping.
 // All data is written with textContent; no HTML strings are ever parsed and there is no inline style: geometry and colour go through SVG attributes
 // and classes only (CSP style-src 'self'). Contracts 8 and 9: docs/ARCHITECTURE.md.
 (function () {
@@ -144,6 +144,14 @@
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
     SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
     BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
+    NO_INVOKER: "the helper does not know which user to run the tool as (it must be started from the launcher)",
+    TOOL_MISSING: "the load tool is not installed (stress-ng for the CPU, stressapptest for the memory)",
+    TRUST_PATH: "the load tool is not in a root-owned place, so the helper refused to run it",
+    MEM_RANGE: "that much memory is not free: pick less, or leave it on automatic",
+    STALE_JOURNAL: "an earlier run left cpufreq limits that could not be put back; nothing was started",
+    CAP_WRITE: "the ratio cap could not be written to cpufreq, so nothing was started",
+    SPAWN: "the load tool could not be started",
+    RESTORE_FAILED: "the cpufreq limits could not be put back after the run: check System before doing anything else",
     TURBO_ORDER: "turbo ratios may only fall as more cores are active: a bucket cannot be higher than the one to its left (fewer active cores)",
   };
 
@@ -181,7 +189,7 @@
   function hideBanner() { $("banner").hidden = true; }
 
   // ---- tabs (ARIA tablist: roving tabindex, arrow keys, Home/End; the active tab lives in the URL hash) -----------------------------
-  const TABS = ["dashboard", "curves", "tune", "profiles", "system", "audit"];
+  const TABS = ["dashboard", "curves", "tune", "stress", "profiles", "system", "audit"];
   const SUBS = ["overview", "cores", "sensors"];
   const HASH_ALIAS = { overview: "dashboard/overview", cores: "dashboard/cores", sensors: "dashboard/sensors", vf: "tune" };
 
@@ -671,11 +679,18 @@
     return ch;
   }
 
-  function niceRange(lo, hi, zero) {
+  // Minimum y-spans (G-119): 1 degree or 1 W of noise must not draw as a cliff. A narrower range is widened around its middle to the span.
+  const MIN_SPAN = { temp: 10, power: 20, mhz: 500, volt: 0.05, gbs: 2 };
+  function niceRange(lo, hi, zero, minSpan) {
     if (zero) lo = Math.min(lo, 0);
     if (hi - lo < 1e-9) { const d = Math.abs(hi) > 1 ? Math.abs(hi) * 0.05 : 0.05; lo -= d; hi += d; }
     const pad = (hi - lo) * 0.08;
-    return [zero && lo >= 0 ? lo : lo - pad, hi + pad];
+    let a = zero && lo >= 0 ? lo : lo - pad, b = hi + pad;
+    if (isNum(minSpan) && b - a < minSpan) {
+      if (zero && a >= 0) b = a + minSpan;
+      else { const m = (a + b) / 2; a = m - minSpan / 2; b = m + minSpan / 2; }
+    }
+    return [a, b];
   }
 
   function fmtVal(v, digits) { return v.toFixed(digits); }
@@ -708,7 +723,7 @@
       ch.read.title = cfg.reason();
       return;
     }
-    const r = cfg.range ? [Math.min(cfg.range[0], lo), Math.max(cfg.range[1], hi)] : niceRange(lo, hi, cfg.zero === true);
+    const r = cfg.range ? [Math.min(cfg.range[0], lo), Math.max(cfg.range[1], hi)] : niceRange(lo, hi, cfg.zero === true, cfg.minSpan);
     ch.lo = r[0]; ch.hi = r[1];
     ch.yHi.textContent = fmtVal(ch.hi, cfg.digits);
     ch.yLo.textContent = fmtVal(ch.lo, cfg.digits);
@@ -748,14 +763,14 @@
     ch.read.title = "";
   }
 
-  function sparkline(svgId, getter, digits) {
+  function sparkline(svgId, getter, digits, minSpan) {
     const svg = $(svgId);
     const now = Date.now(), t0 = now - SPARK_MS;
     const pts = V.hist.filter((s) => s.t >= t0);
     let lo = Infinity, hi = -Infinity;
     for (const s of pts) { const v = getter(s); if (isNum(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
     if (!(lo <= hi)) { svg.replaceChildren(); return; }
-    const r = niceRange(lo, hi, false);
+    const r = niceRange(lo, hi, false, minSpan);
     let d = "", prevT = null;
     for (const s of pts) {
       const v = getter(s);
@@ -779,24 +794,24 @@
   }
 
   function initCharts() {
-    makeChart("ch-ov-power", { title: "Package power", unit: "W", digits: 1,
+    makeChart("ch-ov-power", { title: "Package power", unit: "W", digits: 1, minSpan: MIN_SPAN.power,
       series: [{ label: "Package", get: (s) => s.pkg, cls: "s1" }], reason: rsn(lastPower("package")) });
-    makeChart("ch-ov-temp", { title: "Hottest temperature", unit: "°C", digits: 0,
+    makeChart("ch-ov-temp", { title: "Hottest temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp,
       series: [{ label: "Hottest", get: (s) => s.hot, cls: "s2" }], reason: hotReason });
-    makeChart("ch-power", { title: "Power", unit: "W", digits: 1,
+    makeChart("ch-power", { title: "Power", unit: "W", digits: 1, minSpan: MIN_SPAN.power,
       series: [{ label: "Package", get: (s) => s.pkg, cls: "s1" }, { label: "Core", get: (s) => s.corew, cls: "s2" }], reason: rsn(lastPower("package")) });
-    makeChart("ch-hot", { title: "Hottest temperature", unit: "°C", digits: 0,
+    makeChart("ch-hot", { title: "Hottest temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp,
       series: [{ label: "Hottest", get: (s) => s.hot, cls: "s2" }], reason: hotReason });
-    makeChart("ch-vcore", { title: "Vcore (board sensor)", unit: "V", digits: 3,
+    makeChart("ch-vcore", { title: "Vcore (board sensor)", unit: "V", digits: 3, minSpan: MIN_SPAN.volt,
       series: [{ label: "Vcore", get: (s) => s.vcore, cls: "s1" }], reason: rsn(() => V.last.vcore) });
-    makeChart("ch-dram", { title: "DRAM bandwidth", unit: "GB/s", digits: 1,
+    makeChart("ch-dram", { title: "DRAM bandwidth", unit: "GB/s", digits: 1, minSpan: MIN_SPAN.gbs,
       series: [{ label: "Read", get: (s) => s.dr, cls: "s1" }, { label: "Write", get: (s) => s.dw, cls: "s2" }], reason: rsn(lastDram("read")) });
     const cd = (k) => (s) => (V.selected !== null && isObj(s.cores[V.selected]) ? s.cores[V.selected][k] : null);
     const cdr = (k) => () => coreReading(V.selected, k);
-    makeChart("ch-cd-mhz", { title: "Clock", unit: "MHz", digits: 0, series: [{ label: "Clock", get: cd("mhz"), cls: "s1" }], reason: rsn(cdr("mhz")) });
+    makeChart("ch-cd-mhz", { title: "Clock", unit: "MHz", digits: 0, minSpan: MIN_SPAN.mhz, series: [{ label: "Clock", get: cd("mhz"), cls: "s1" }], reason: rsn(cdr("mhz")) });
     makeChart("ch-cd-busy", { title: "Busy", unit: "%", digits: 1, range: [0, 100], series: [{ label: "Busy", get: cd("busy"), cls: "s1" }], reason: rsn(cdr("busy")) });
-    makeChart("ch-cd-vid", { title: "VID", unit: "V", digits: 3, series: [{ label: "VID", get: cd("vid"), cls: "s1" }], reason: rsn(cdr("vid")) });
-    makeChart("ch-cd-temp", { title: "Temperature", unit: "°C", digits: 0, series: [{ label: "Temp", get: cd("temp"), cls: "s2" }], reason: rsn(cdr("temp")) });
+    makeChart("ch-cd-vid", { title: "VID", unit: "V", digits: 3, minSpan: MIN_SPAN.volt, series: [{ label: "VID", get: cd("vid"), cls: "s1" }], reason: rsn(cdr("vid")) });
+    makeChart("ch-cd-temp", { title: "Temperature", unit: "°C", digits: 0, minSpan: MIN_SPAN.temp, series: [{ label: "Temp", get: cd("temp"), cls: "s2" }], reason: rsn(cdr("temp")) });
   }
 
   // ---- Cores tab -------------------------------------------------------------------------------------------------------------------
@@ -910,7 +925,7 @@
       setCell(ref.vid, coreReading(c.cpu, "vid"), 3);
       setCell(ref.temp, coreReading(c.cpu, "temp"), 0);
       if (!ref.spark.id) ref.spark.id = "sp-core-" + c.cpu;
-      if (!ref.cells.spark.hidden) sparkline(ref.spark.id, (s) => (isObj(s.cores[c.cpu]) ? s.cores[c.cpu].mhz : null), 0);
+      if (!ref.cells.spark.hidden) sparkline(ref.spark.id, (s) => (isObj(s.cores[c.cpu]) ? s.cores[c.cpu].mhz : null), 0, MIN_SPAN.mhz);
       ref.tr.setAttribute("aria-selected", V.selected === c.cpu ? "true" : "false");
     }
     // sorting: missing readings always go last; the header carries aria-sort
@@ -990,7 +1005,7 @@
       if (!x.ok) li.append(el("span", "temp-why", x.title));
       return li;
     }));
-    keys.forEach((k, i) => sparkline("sp-temp-" + i, (s) => (s.temps[k] === undefined ? null : s.temps[k]), 0));
+    keys.forEach((k, i) => sparkline("sp-temp-" + i, (s) => (s.temps[k] === undefined ? null : s.temps[k]), 0, MIN_SPAN.temp));
   }
 
   // ---- render scheduling: only the visible view draws ------------------------------------------------------------------------------
@@ -1000,12 +1015,12 @@
         renderDie();
         renderChart(charts["ch-ov-power"]);
         renderChart(charts["ch-ov-temp"]);
-        sparkline("sp-pkgw", (s) => s.pkg, 1);
-        sparkline("sp-corew", (s) => s.corew, 1);
-        sparkline("sp-vcore", (s) => s.vcore, 3);
-        sparkline("sp-temp", (s) => s.hot, 0);
-        sparkline("sp-mhz", (s) => s.top, 0);
-        sparkline("sp-dram", (s) => (isNum(s.dr) && isNum(s.dw) ? s.dr + s.dw : null), 1);
+        sparkline("sp-pkgw", (s) => s.pkg, 1, MIN_SPAN.power);
+        sparkline("sp-corew", (s) => s.corew, 1, MIN_SPAN.power);
+        sparkline("sp-vcore", (s) => s.vcore, 3, MIN_SPAN.volt);
+        sparkline("sp-temp", (s) => s.hot, 0, MIN_SPAN.temp);
+        sparkline("sp-mhz", (s) => s.top, 0, MIN_SPAN.mhz);
+        sparkline("sp-dram", (s) => (isNum(s.dr) && isNum(s.dw) ? s.dr + s.dw : null), 1, MIN_SPAN.gbs);
       } else if (V.sub === "cores") {
         renderCoreRows();
         renderCoreSelection();
@@ -1013,6 +1028,8 @@
         renderTemps();
         for (const id of ["ch-power", "ch-hot", "ch-vcore", "ch-dram"]) renderChart(charts[id]);
       }
+    } else if (V.tab === "stress") {
+      renderStress();
     }
   }
 
@@ -1075,10 +1092,11 @@
   }
 
   // ---- long operations: tune.read, vf.measure, tune.apply (one at a time; the helper state machine decides) ------------------------------
-  function opKindFromState(st) { return st === "measuring" ? "measure" : st === "applying" ? "commit" : "read"; }
+  function opKindFromState(st) { return st === "measuring" ? "measure" : st === "applying" ? "commit" : st === "stressing" ? "stress" : "read"; }
 
   function adoptOp(id, st) {
     S.opId = id; S.opKind = opKindFromState(st); S.adopted = true; S.cancelling = false;
+    if (S.opKind === "stress" && !ST.run) ST.run = { kind: "cpu", of: 0, elapsed: 0, errors: 0, units: UNIT_IDS.slice() };   // started elsewhere or before a reload: settings unknown
     onOpStarted();
   }
 
@@ -1115,10 +1133,10 @@
 
   function onProgress(ev) {
     const id = typeof ev.op_id === "string" ? ev.op_id : null;
-    if (!S.opId && id && !S.doneIds.has(id)) adoptOp(id, typeof ev.unit === "string" ? "measuring" : S.hbState);
+    if (!S.opId && id && !S.doneIds.has(id)) adoptOp(id, typeof ev.unit === "string" ? "measuring" : isNum(ev.elapsed_s) ? "stressing" : S.hbState);
     if (id !== S.opId) return;
     if (isNum(ev.ops_used) && isNum(ev.ops_budget)) { S.opsUsed = ev.ops_used; S.opsBudget = ev.ops_budget; renderHelper(); }
-    if (S.opKind === "measure") measureProgress(ev); else mailboxProgress(ev);
+    if (S.opKind === "measure") measureProgress(ev); else if (S.opKind === "stress") stressProgress(ev); else mailboxProgress(ev);
     updateGate();
   }
 
@@ -1126,6 +1144,7 @@
     const r = isObj(ev.result) ? ev.result : null;
     if (!r) return null;
     if ("curve_id" in r || "record" in r) return "measure";
+    if ("stopped_by" in r) return "stress";
     if ("readback" in r) return "commit";
     if (Array.isArray(r.units)) return "read";
     return null;
@@ -1144,12 +1163,14 @@
 
   function dispatchResult(kind, ev) {
     if (kind === "measure") onMeasureResult(ev);
+    else if (kind === "stress") onStressResult(ev);
     else if (kind === "commit") onCommitResult(ev);
     else onReadResult(ev);
   }
 
   function afterMissedResult(kind) {
     if (kind === "measure") { setText("cv-status", "The measurement ended while this page was away. Stored curves were reloaded."); loadCurves(true); }
+    else if (kind === "stress") { ST.run = null; setText("st-status", "A stress screen ended while this page was away. It is in the list below."); renderStress(); loadStressList(); }
     else if (kind === "commit") setText("tn-status", "An apply ended while this page was away. Read the tuning words to see where things stand.");
     else setText("tn-status", "A read ended while this page was away. Read again to see it.");
   }
@@ -1197,6 +1218,7 @@
     updateTuneGate();
     updateCurvesGate();
     updateModalGate();
+    updateStressGate();
     const tag = $("mode-tag");
     if (S.mode === "write") { tag.textContent = S.writesAllowed === true ? "guarded writes" : "writes off"; }
     else if (S.mode === null) tag.textContent = "reading preflight";
@@ -1437,7 +1459,7 @@
       let ylo = Math.min(...ys), yhi = Math.max(...ys);
       if (model.band) for (const b of model.band) { ylo = Math.min(ylo, b.lo); yhi = Math.max(yhi, b.hi); }
       if (model.ymode === "mv") { ylo = Math.min(ylo, 0); yhi = Math.max(yhi, 0); }
-      if (yhi - ylo < (model.ymode === "mv" ? 4 : 0.02)) { const m = (yhi + ylo) / 2, d = model.ymode === "mv" ? 2 : 0.01; ylo = m - d; yhi = m + d; }
+      if (yhi - ylo < (model.ymode === "mv" ? 4 : MIN_SPAN.volt)) { const m = (yhi + ylo) / 2, d = model.ymode === "mv" ? 2 : MIN_SPAN.volt / 2; ylo = m - d; yhi = m + d; }
       const step = niceStep(yhi - ylo, 6);
       ch.yDom = [Math.floor(ylo / step) * step, Math.ceil(yhi / step) * step];
       if (ch.yDom[1] - ch.yDom[0] < step) ch.yDom[1] += step;
@@ -1477,7 +1499,15 @@
         const p = sv("path", { d: s.pts.map((q, i) => (i ? "L" : "M") + ch.sx(q.mhz).toFixed(1) + " " + ch.sy(q.v).toFixed(1)).join("") }, cls);
         lines.append(p);
         ch.lineEls[s.key] = p;
-        if (s.pts.length <= 24 && !s.dash) for (const q of s.pts) lines.append(sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: 3 }, "vc-dot u-" + s.unit));
+        const marked = s.pts.some((q) => isFusedPoint(q.fused));   // fused points filled and larger, in-between ratios small and quiet (even on a dense run)
+        if ((marked || s.pts.length <= 24) && !s.dash) {
+          for (const q of s.pts) {
+            const fused = isFusedPoint(q.fused);
+            const dot = sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: !marked ? 3 : fused ? 4.5 : 2 }, "vc-dot u-" + s.unit + (marked ? (fused ? " fused" : " between") : ""));
+            if (marked && fused) { const t = sv("title"); t.textContent = s.unit + " " + q.mhz / 100 + "x: " + fusedLabel(q.fused); dot.append(t); }
+            lines.append(dot);
+          }
+        }
         if (s.live) {
           const last = s.pts[s.pts.length - 1];
           lines.append(sv("circle", { cx: ch.sx(last.mhz).toFixed(1), cy: ch.sy(last.v).toFixed(1), r: 7 }, "vc-head u-" + s.unit));
@@ -1643,12 +1673,18 @@
   }
   function curveTitle(c) { return (c.name || c.id) + " · " + fmtDate(c.created) + " · " + (c.mode || "?"); }
 
+  // G-118: a measured point carries fused_point (1-based int, or "oc") when its ratio is one of the unit's fused V/F points; the key is absent for the
+  // ratios in between. A record without the key anywhere (an older curve) draws every dot the same way, as before.
+  function isFusedPoint(x) { return x === "oc" || (isNum(x) && x >= 1); }
+  function fusedLabel(x) { return x === "oc" ? "OC point" : "fused point " + x; }
+
   // measured points of one unit: [{ratio, mhz, v, vmin, vmax, kept, total, status}] sorted by frequency; unmeasured / unreachable ones are left out
   function recPoints(rec, unit) {
     const u = isObj(rec) && isObj(rec.units) ? rec.units[unit] : null;
     const pts = isObj(u) && Array.isArray(u.points) ? u.points : [];
     return pts.filter((p) => isObj(p) && p.status !== "mismatch" && p.status !== "unreachable" && isNum(p.vid_v) && isNum(p.ratio))
-      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status }))
+      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status,
+        fused: isFusedPoint(p.fused_point) ? p.fused_point : null }))
       .sort((a, b) => a.mhz - b.mhz);
   }
   function recAllPoints(rec, unit) {
@@ -1728,7 +1764,7 @@
         const pts = pa.map((p) => { const at = interpAt(pb, p.mhz); return at ? { mhz: p.mhz, v: (p.v - at.v) * 1000 } : null; }).filter(Boolean);
         if (pts.length) model.series.push({ key: u, unit: u, label: label, pts: pts });
       } else {
-        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v })), live: CV.live !== null && CV.liveHead === u });
+        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v, fused: p.fused })), live: CV.live !== null && CV.liveHead === u });
         if (b) {
           const pb = recPoints(b, u);
           if (pb.length) model.series.push({ key: u + ":cmp", unit: u, label: u + " (compare)", pts: pb.map((p) => ({ mhz: p.mhz, v: p.v })), dash: true });
@@ -1783,6 +1819,10 @@
     } else if (baselineId() && a) base = "Stock baseline: " + (CV.list.find((c) => c.id === baselineId()) || {}).name + ". Predictions in Tune are made on it.";
     else base = "No curve is marked as the stock baseline yet. Tune predicts the effective voltage on it; set one in the Library.";
     setText("cv-base-note", base);
+    const stockPill = $("cv-stock");
+    const isStock = !!a && CV.live === null && tuningKind(a) === "stock";
+    stockPill.hidden = !isStock;
+    if (isStock) { stockPill.textContent = "stock = fused table as applied"; stockPill.title = "Measured with every offset at 0: the voltages are the CPU's fused V/F table as the CPU applies it."; }
     const un = [];
     if (a) for (const u of UNIT_IDS) {
       if (!CV.drawn.has(u)) continue;
@@ -2121,6 +2161,7 @@
     if (!CV.live) CV.live = { id: "live", name: "Measuring", mode: "?", units: {}, live: true };
     if (typeof ev.unit !== "string" || UNIT_IDS.indexOf(ev.unit) < 0 || !isNum(ev.ratio)) return;
     const u = CV.live.units[ev.unit] || (CV.live.units[ev.unit] = { cpus: unitCpus(ev.unit), points: [] });
+    if (ev.retry === true) { const i = u.points.findIndex((q) => q.ratio === ev.ratio); if (i >= 0) u.points.splice(i, 1); }   // G-118: a retry replaces the first attempt
     u.points.push({ ratio: ev.ratio, mhz: isNum(ev.mhz) ? ev.mhz : ev.ratio * 100, vid_v: isNum(ev.vid_v) ? ev.vid_v : null, status: typeof ev.status === "string" ? ev.status : "ok" });
     CV.liveHead = ev.status === "ok" ? ev.unit : CV.liveHead;
     paintCurves();
@@ -2169,7 +2210,7 @@
 
   // The tuning state recorded with a curve: "words" (read this boot) or "unknown" (no read this boot, so offsets are not known).
   function tuningWords(kind) {
-    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock" : "Tuning state unknown (no 'Read tuning words' this boot)";
+    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock = fused table as applied (every offset 0)" : "Tuning state unknown (no 'Read tuning words' this boot)";
   }
 
   function initCurves() {
@@ -3117,15 +3158,15 @@
   }
 
   function openPlanDialog(res, intent) {
-    const P = { res: res, intent: intent, title: describeIntent(intent), state: "review", typed: "", issued: Date.now(), diff: planDiff(res), readback: null };
+    const P = { res: res, intent: intent, title: describeIntent(intent), state: "review", issued: Date.now(), diff: planDiff(res), readback: null };
     T.plan = P;
     setText("dlg-plan-title", P.title);
     renderPlanBody();
     renderPlanFoot();
     openDialog($("dlg-plan"));
     updateModalGate();
-    const inp = document.getElementById("plan-typed");
-    if (inp) inp.focus();
+    const first = document.getElementById("plan-cancel");  // focus the safe button: Enter must never be one keystroke from a write
+    if (first) first.focus();
   }
 
   function stepKinds(steps) {
@@ -3357,6 +3398,13 @@
         });
         nodes.push(again);
       }
+      if (P.state === "done" && !P.partial) {
+        const val = el("button", "", "Validate with a stress screen");
+        val.type = "button";
+        val.title = "Opens Stress with " + (P.changedUnits && P.changedUnits.length ? "the units this apply changed" : "all units") + " selected. Nothing starts until you press Start.";
+        val.addEventListener("click", () => goValidate(P.changedUnits || []));
+        nodes.push(val);
+      }
       const close = el("button", "", "Close");
       close.type = "button";
       close.addEventListener("click", () => closeDialog($("dlg-plan")));
@@ -3364,17 +3412,8 @@
       fill(foot, nodes);
       return;
     }
-    const code = "CONFIRM " + res.nonce;
     const box = el("div", "confirm-box");
-    const lab = el("label", "confirm-label");
-    lab.htmlFor = "plan-typed";
-    lab.append(document.createTextNode("To write this to the CPU, type "), el("code", "confirm-code", code));
-    const inp = el("input", "confirm-input");
-    inp.type = "text"; inp.id = "plan-typed"; inp.autocomplete = "off"; inp.spellcheck = false; inp.maxLength = 32; inp.value = P.typed;
-    inp.setAttribute("aria-describedby", "plan-why");
-    inp.addEventListener("input", () => { P.typed = inp.value; updateModalGate(); });
-    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commitPlan(); } });
-    box.append(lab, inp);
+    box.append(el("p", "confirm-label", "Apply sends this plan once. Its confirmation code is single-use and expires; the helper checks it."));
     const why = el("p", "muted confirm-why");
     why.id = "plan-why";
     why.setAttribute("aria-live", "polite");
@@ -3403,7 +3442,6 @@
     if (P.state === "running") msg = "Applying. This window closes when it is done.";
     else if (!changed) msg = "Nothing would change.";
     else if (planExpired()) msg = "This plan expired. Close this window and review again.";
-    else if (P.typed !== "CONFIRM " + P.res.nonce) msg = "Type the confirmation code exactly as shown.";
     else msg = applyGate(P.res.ops_needed);
     go.disabled = msg !== "";
     why.textContent = msg === "" ? "Ready. This sends " + (isNum(P.res.ops_needed) ? P.res.ops_needed : "the planned") + " WRMSR requests." : msg;
@@ -3588,6 +3626,335 @@
     setInterval(() => { if ($("dlg-plan").open) updateModalGate(); }, 1000);
   }
 
+  // ---- Stress: a short screen of the CPU or the memory (G-116 ops, G-119 page). No mailbox, no write; a quick screen, never an acceptance gate (D-019). ----
+  const ST = {
+    kind: "cpu",            // cpu | memory
+    method: "integer",      // integer | vector-math | cache
+    dur: 300,               // preset length in seconds
+    custom: false,          // the custom slider is the length
+    cap: null,              // ratio cap or null
+    memMb: null,            // null = the helper's default (3/4 of free memory)
+    sel: new Set(UNIT_IDS),
+    list: [], loaded: false,
+    run: null,              // {kind, of, elapsed, errors, units: [unit]} while a screen runs
+    result: null,           // the last stress.start result seen by this page
+  };
+  const ST_DURS = [{ value: 60, label: "1 min" }, { value: 300, label: "5 min" }, { value: 900, label: "15 min" }, { value: 3600, label: "60 min" }, { value: "custom", label: "Custom" }];
+  const ST_METHODS = [
+    { value: "integer", label: "Integer", title: "Integer arithmetic on every selected core (stress-ng, int64)" },
+    { value: "vector-math", label: "Vector math", title: "Matrix products: heavier on the vector units (stress-ng, matrixprod)" },
+    { value: "cache", label: "Cache", title: "Cache thrashing on every selected core (stress-ng, cache)" },
+  ];
+  const ST_MEM_MB = [1024, 2048, 4096, 8192, 16384, 32768];
+  const ST_WORDS = { integer: "integer", "vector-math": "vector math", cache: "cache" };
+
+  function stRunning() { return S.opId !== null && S.opKind === "stress"; }
+  function stDuration() { return ST.custom ? Number($("st-dur-custom").value) : ST.dur; }
+  function fmtLen(s) { return s % 60 === 0 && s >= 60 ? s / 60 + " min" : s < 60 ? s + " s" : fmtClock(s); }
+  function mmss(s) { const t = Math.max(0, Math.round(s)), m = Math.floor(t / 60), r = t % 60; return m + ":" + (r < 10 ? "0" : "") + r; }
+  function stMean(rec, unit) {   // mean clock of a unit's cpus in a history sample
+    const vs = unitCpus(unit).map((c) => (isObj(rec.cores[String(c)]) ? rec.cores[String(c)].mhz : null)).filter(isNum);
+    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  }
+
+  function buildStressControls() {
+    segmented($("st-kind"), [{ value: "cpu", label: "CPU", title: "Load the cores you pick with stress-ng" }, { value: "memory", label: "Memory", title: "Test the memory with stressapptest on all CPUs" }], ST.kind,
+      (k) => { ST.kind = k; renderStress(); });
+    segmented($("st-method"), ST_METHODS, ST.method, (m) => { ST.method = m; renderStress(); });
+    segmented($("st-dur"), ST_DURS, ST.dur, (v) => {
+      if (v === "custom") ST.custom = true; else { ST.custom = false; ST.dur = v; }
+      renderStress();
+    });
+    $("st-dur-custom").addEventListener("input", () => { ST.custom = true; renderStress(); });
+    const cap = $("st-cap");
+    cap.append(new Option("No cap", ""));
+    for (let r = 60; r >= 8; r--) cap.append(new Option(r + "× (" + r * 100 + " MHz)", String(r)));
+    cap.addEventListener("change", () => { ST.cap = cap.value === "" ? null : Number(cap.value); renderStress(); });
+    const mem = $("st-mem");
+    mem.append(new Option("Automatic: 3/4 of free memory", ""));
+    for (const mb of ST_MEM_MB) mem.append(new Option(mb / 1024 + " GB", String(mb)));
+    mem.addEventListener("change", () => { ST.memMb = mem.value === "" ? null : Number(mem.value); renderStress(); });
+    // units: a mini core map. P-cores in one row, the four E-clusters (4 cores each) beside them.
+    const tiles = UNIT_IDS.map((u) => {
+      const b = el("button", "mm-tile u-" + u);
+      b.type = "button";
+      b.dataset.unit = u;
+      b.setAttribute("aria-pressed", "true");
+      b.title = unitLabel(u) + " (cpu " + unitCpus(u).join(", ") + ")" + (FAVORED.indexOf(u) >= 0 ? ", favored core" : "");
+      b.append(el("span", "mm-name", u), el("span", "mm-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]), el("span", "mm-mhz", ""));
+      b.addEventListener("click", () => { if (ST.sel.has(u)) ST.sel.delete(u); else ST.sel.add(u); renderStress(); });
+      return b;
+    });
+    const quick = el("div", "chip-quick");
+    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", UNIT_IDS.slice(0, 8)], ["E-clusters", UNIT_IDS.slice(8)], ["None", []]]) {
+      const b = el("button", "link", label);
+      b.type = "button";
+      b.addEventListener("click", () => { ST.sel = new Set(units); renderStress(); });
+      quick.append(b);
+    }
+    const p = el("div", "mm-p"), e = el("div", "mm-e");
+    p.append(...tiles.slice(0, 8)); e.append(...tiles.slice(8));
+    fill($("st-units"), [p, e, quick]);
+  }
+
+  // One place draws the whole page from ST, S and the telemetry history, so a reload (adopting a run) and a click give the same picture.
+  function renderStress() {
+    const running = stRunning();
+    const cpu = ST.kind === "cpu";
+    syncSegmented($("st-kind"), ST.kind);
+    syncSegmented($("st-method"), ST.method);
+    syncSegmented($("st-dur"), ST.custom ? "custom" : ST.dur);
+    $("st-f-method").hidden = !cpu;
+    $("st-f-units").hidden = !cpu;
+    $("st-f-mem").hidden = cpu;
+    $("st-f-custom").hidden = !ST.custom;
+    const secs = stDuration();
+    $("st-dur-val").textContent = fmtLen(secs);
+    $("st-dur-custom").setAttribute("aria-valuetext", fmtLen(secs));
+    // while a screen runs the setup is read-only
+    for (const id of ["st-cap", "st-mem", "st-dur-custom"]) $(id).disabled = running;
+    for (const host of ["st-kind", "st-method", "st-dur"]) for (const b of $(host).children) b.disabled = running;
+    const live = running && ST.run ? new Set(ST.run.units) : null;
+    const last = V.hist.length ? V.hist[V.hist.length - 1] : null;
+    for (const b of $("st-units").querySelectorAll(".mm-tile")) {
+      const u = b.dataset.unit;
+      const on = live ? live.has(u) : ST.sel.has(u);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.disabled = running;
+      const m = running && on && last ? stMean(last, u) : null;
+      b.querySelector(".mm-mhz").textContent = running && on ? (m === null ? "n/a" : Math.round(m) + " MHz") : "";
+    }
+    for (const b of $("st-units").querySelectorAll(".chip-quick .link")) b.disabled = running;
+    updateStressGate();
+    renderStressLive();
+    renderStressTemps();
+  }
+
+  function updateStressGate() {
+    const running = stRunning();
+    const why = running ? "" : idleGate();
+    const none = ST.kind === "cpu" && ST.sel.size === 0;
+    $("btn-stress-start").disabled = running || why !== "" || none;
+    $("btn-stress-stop").disabled = !running || S.cancelling || S.sessionLost;
+    const secs = stDuration();
+    let est;
+    if (running) est = S.cancelling ? "Stopping. The tool is ended and the cpufreq limits are put back." : "Running. Stop ends it early; the result is kept either way.";
+    else if (why !== "") est = why;
+    else if (none) est = "Select at least one unit.";
+    else est = "Ready: " + (ST.kind === "cpu" ? ST_WORDS[ST.method] + " load on " + (ST.sel.size === UNIT_IDS.length ? "all 12 units" : ST.sel.size + (ST.sel.size === 1 ? " unit" : " units")) : "memory test of " + (ST.memMb === null ? "3/4 of free memory" : ST.memMb / 1024 + " GB") + " on all CPUs") +
+      " for " + fmtLen(secs) + (ST.cap === null ? "" : ", capped at " + ST.cap + "×") + ". It raises power and heat for that time.";
+    setText("st-est", est);
+  }
+
+  function renderStressLive() {
+    const running = stRunning();
+    const r = ST.run;
+    const of = running && r && isNum(r.of) ? r.of : stDuration();
+    const el0 = running && r && isNum(r.elapsed) ? r.elapsed : (!running && ST.result ? ST.result.elapsed_s : 0);
+    const f = of > 0 ? clamp(el0 / of, 0, 1) * 100 : 0;
+    const errs = running && r ? r.errors : (ST.result ? ST.result.errors : 0);
+    $("st-ring").setAttribute("stroke-dasharray", f.toFixed(1) + " 100");
+    $("st-ring").setAttribute("class", "ring-used" + (f <= 0 ? " empty" : "") + (isNum(errs) && errs > 0 ? " bad" : ""));
+    setText("st-clock", mmss(el0));
+    setText("st-of", "of " + fmtLen(of));
+    const e = $("st-errors");
+    e.textContent = !running && !ST.result ? "no errors counted" : errs === 0 ? (running ? "no errors so far" : "no errors detected") : errs + (errs === 1 ? " error counted" : " errors counted");
+    e.className = "st-errors" + (isNum(errs) && errs > 0 ? " bad" : "");
+    const ph = running ? (S.cancelling ? "stopping" : "running") : "not running";
+    setPill("st-phase", ph, running ? "s-busy" : "s-neutral");
+  }
+
+  function renderStressTemps() {
+    const s = V.hist.length ? V.hist[V.hist.length - 1] : null;
+    setTile("t-st-temp", s && isNum(s.hot) ? s.hot.toFixed(0) : "n/a", "°C", !!s && isNum(s.hot), "");
+    setTile("t-st-pkgw", s && isNum(s.pkg) ? s.pkg.toFixed(1) : "n/a", "W", !!s && isNum(s.pkg), "");
+    sparkline("sp-st-temp", (x) => x.hot, 0, MIN_SPAN.temp);
+    sparkline("sp-st-pkgw", (x) => x.pkg, 1, MIN_SPAN.power);
+  }
+
+  async function startStress() {
+    if (stRunning() || idleGate() !== "" || (ST.kind === "cpu" && ST.sel.size === 0)) return;
+    const secs = stDuration();
+    const args = { kind: ST.kind, duration_s: secs };
+    let units = [];
+    if (ST.kind === "cpu") {
+      args.method = ST.method;
+      units = UNIT_IDS.filter((u) => ST.sel.has(u));
+      if (units.length < UNIT_IDS.length) args.units = units;
+    } else {
+      units = UNIT_IDS.slice();
+      if (ST.memMb !== null) args.memory_mb = ST.memMb;
+    }
+    if (ST.cap !== null) args.ratio_cap = ST.cap;
+    S.submitting = true;
+    setText("st-status", "Submitting...");
+    updateGate();
+    const { status, body } = await api("stress.start", args);
+    S.submitting = false;
+    if (launched("stress", status, body)) {
+      if (S.opId) {
+        ST.run = { kind: ST.kind, of: secs, elapsed: 0, errors: 0, units: ST.kind === "cpu" ? units : UNIT_IDS.slice() };
+        setText("st-status", "Started (operation " + S.opId + ").");
+        $("st-result").hidden = true;
+      }
+    } else {
+      setText("st-status", "Not started: " + (status === 429 ? "too many operations pending" : errText(body)));
+    }
+    updateGate();
+    renderStress();
+  }
+
+  async function stopStress() {
+    if (!stRunning()) return;
+    S.cancelling = true;
+    renderStress();
+    const { status, body } = await api("stress.stop", {});
+    if (!(status === 200 && body.ok)) { S.cancelling = false; setText("st-status", "Stop not accepted: " + errText(body)); }
+    else setText("st-status", "Stop requested. The result arrives in a moment.");
+    renderStress();
+  }
+
+  function stressProgress(ev) {
+    if (!ST.run) ST.run = { kind: "cpu", of: isNum(ev.of_s) ? ev.of_s : 0, elapsed: 0, errors: 0, units: UNIT_IDS.slice() };   // adopted after a reload: settings unknown
+    if (isNum(ev.elapsed_s)) ST.run.elapsed = ev.elapsed_s;
+    if (isNum(ev.of_s)) ST.run.of = ev.of_s;
+    if (isNum(ev.errors)) ST.run.errors = ev.errors;
+    renderStress();
+  }
+
+  function onStressResult(ev) {
+    ST.run = null;
+    if (ev.ok === true && isObj(ev.result)) {
+      ST.result = ev.result;
+      setText("st-status", "");
+      renderStressResult(ev.result);
+    } else {
+      ST.result = null;
+      const why = typeof ev.server_error === "string" ? (ev.server_error === "helper_lost" ? "The helper was lost during the screen. CPU limits are restored when it restarts." : ev.server_error) : errText(ev);
+      setText("st-status", "Failed: " + why);
+      $("st-result").hidden = true;
+    }
+    renderStress();
+    loadStressList();
+  }
+
+  // ---- the result card. Words: "no errors detected in N min" at most. Nothing here says a setting is proven stable. ----
+  function stSummary(r) {
+    const n = isNum(r.errors) ? r.errors : 0, ran = fmtLen(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0));
+    if (r.stopped_by === "cancel") return "Stopped after " + ran + " of " + fmtLen(r.duration_s) + ". " + (n === 0 ? "No errors detected in that time." : n + (n === 1 ? " error" : " errors") + " detected.");
+    if (n > 0) return n + (n === 1 ? " error" : " errors") + " detected in " + ran + ". Treat this setting as unstable.";
+    if (r.stopped_by === "error") return "The screen ended with a tool error after " + ran + ". See the lines below.";
+    if (r.health === "delta") return "No errors detected in " + ran + ", but the machine health check changed. See below.";
+    return "No errors detected in " + ran + ".";
+  }
+
+  function renderStressResult(r) {
+    const card = $("st-result");
+    card.hidden = false;
+    const n = isNum(r.errors) ? r.errors : 0;
+    const bad = n > 0 || r.stopped_by === "error" || r.health === "delta" || (isNum(r.mce_new) && r.mce_new > 0);
+    const head = el("div", "card-head");
+    const h = el("h2", "", "Result");
+    const pills = el("div", "row-tight");
+    pills.append(pill(r.stopped_by === "time" ? "ran to the end" : r.stopped_by === "cancel" ? "stopped by you" : "tool error", r.stopped_by === "error" ? "s-bad" : "s-neutral"));
+    pills.append(pill(r.health === "clean" ? "health clean" : "health changed", r.health === "clean" ? "s-ok" : "s-bad"));
+    if (isNum(r.mce_new) && r.mce_new > 0) pills.append(pill(r.mce_new + " new machine-check " + (r.mce_new === 1 ? "event" : "events"), "s-bad"));
+    if (r.cap_valid === true) { const p = pill("cap held", "s-ok"); p.title = "Every loaded unit ran within one ratio of the cap."; pills.append(p); }
+    else if (r.cap_valid === false) { const p = pill("cap not held", "s-bad"); p.title = "A loaded unit ran more than one ratio away from the cap, so the screen did not test the capped ratio."; pills.append(p); }
+    head.append(h, pills);
+    const sum = el("p", "st-sum" + (bad ? " bad" : ""), stSummary(r));
+    const note = el("p", "muted", "A quick screen, not an acceptance gate.");
+    const stats = el("div", "st-stats");
+    const stat = (k, v, cls) => { const d = el("div", "st-stat"); d.append(el("span", "ro-label", k), el("span", "st-stat-v" + (cls ? " " + cls : ""), v)); return d; };
+    stats.append(stat("Errors", String(n), n > 0 ? "bad" : ""),
+      stat("Ran", fmtClock(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0)) + " of " + fmtLen(r.duration_s)),
+      stat("Hottest", isNum(r.max_temp_c) ? r.max_temp_c.toFixed(0) + " °C" : "n/a"),
+      stat("Peak package power", isNum(r.max_pkg_w) ? r.max_pkg_w.toFixed(1) + " W" : "n/a"));
+    const nodes = [head, sum, note, stats];
+    const ach = isObj(r.achieved) ? r.achieved : {};
+    const units = UNIT_IDS.filter((u) => isObj(ach[u]));
+    if (units.length) {   // the same mini map as the picker: the units that ran, each with the clock it held and its usual ratio
+      const tile = (u) => {
+        const a = ach[u], d = el("div", "mm-tile static u-" + u);
+        d.title = unitLabel(u) + ": mean clock and the ratio most often seen under load" + (FAVORED.indexOf(u) >= 0 ? " (favored core)" : "");
+        d.append(el("span", "mm-name", u), el("span", "mm-cpus", isNum(a.ratio_mode) ? a.ratio_mode + "× mostly" : "ratio n/a"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
+        return d;
+      };
+      const p = el("div", "mm-p"), e = el("div", "mm-e");
+      p.append(...units.filter((u) => unitKind(u) === "P").map(tile)); e.append(...units.filter((u) => unitKind(u) === "E").map(tile));
+      const map = el("div", "st-map st-ach");
+      map.setAttribute("role", "group");
+      map.setAttribute("aria-label", "Achieved clock per unit");
+      map.append(...[p, e].filter((x) => x.children.length));
+      nodes.push(el("h3", "", "Clock each unit held"), map);
+    } else {
+      nodes.push(el("p", "muted", "Achieved clocks: n/a (no telemetry sampler was running)."));
+    }
+    const lines = Array.isArray(r.error_lines) ? r.error_lines.filter((x) => typeof x === "string") : [];
+    if (lines.length) {
+      const ul = el("ul", "st-lines");
+      for (const x of lines) ul.append(el("li", "", x));
+      nodes.push(el("h3", "", "Notes from the tool and the helper"), ul);
+    }
+    nodes.push(el("p", "muted", isStr(r.id) ? "Stored as " + r.id + "." : "This result could not be stored on the machine."));
+    fill(card, nodes);
+  }
+
+  // ---- history (stress.list) ----
+  async function loadStressList() {
+    const { status, body } = await api("stress.list", {});
+    if (status === 200 && body.ok && isObj(body.result) && Array.isArray(body.result.results)) { ST.list = body.result.results.filter(isObj); ST.loaded = true; }
+    renderStressHistory(status === 200 && body.ok ? "" : "Stored screens unavailable: " + errText(body));
+  }
+
+  function stScreenText(r) {
+    if (r.kind === "memory") return "Memory" + (isNum(r.memory_mb) ? " " + (r.memory_mb >= 1024 ? (r.memory_mb / 1024).toFixed(r.memory_mb % 1024 ? 1 : 0) + " GB" : r.memory_mb + " MB") : "") + (isNum(r.ratio_cap) ? ", cap " + r.ratio_cap + "×" : "");
+    return "CPU " + (ST_WORDS[r.method] || "load") + (isNum(r.ratio_cap) ? ", cap " + r.ratio_cap + "×" : "");
+  }
+  function stUnitsText(r) {
+    if (r.kind === "memory") return "all CPUs";
+    const u = Array.isArray(r.units) ? r.units.filter((x) => typeof x === "string") : [];
+    return !u.length || u.length >= UNIT_IDS.length ? "all 12" : u.join(" ");
+  }
+
+  function renderStressHistory(problem) {
+    const empty = $("st-hist-empty");
+    $("st-hist").hidden = ST.list.length === 0;
+    empty.hidden = ST.list.length > 0 && !problem;
+    if (problem) empty.textContent = problem;
+    else if (!ST.list.length) empty.textContent = "No stress screens stored yet. Start one above; the result is kept on this machine.";
+    fill($("st-hist-body"), ST.list.map((r) => {
+      const tr = el("tr");
+      const n = isNum(r.errors) ? r.errors : 0;
+      const ended = el("td");
+      ended.append(pill(r.stopped_by === "time" ? "full length" : r.stopped_by === "cancel" ? "stopped" : "tool error", r.stopped_by === "error" ? "s-bad" : "s-neutral"));
+      const health = el("td");
+      health.append(pill(r.health === "clean" ? "clean" : "changed", r.health === "clean" ? "s-ok" : "s-bad"));
+      if (isNum(r.mce_new) && r.mce_new > 0) health.append(document.createTextNode(" "), pill(r.mce_new + " MCE", "s-bad"));
+      const ran = td(fmtClock(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0)), "n", "asked for " + fmtLen(isNum(r.duration_s) ? r.duration_s : 0));
+      tr.append(td(fmtDate(r.started)), td(stScreenText(r)), td(stUnitsText(r)), ran, ended, td(String(n), n > 0 ? "n bad-text" : "n"), health,
+        td(isNum(r.max_temp_c) ? r.max_temp_c.toFixed(0) + " °C" : "n/a", "n"), td(isNum(r.max_pkg_w) ? r.max_pkg_w.toFixed(0) + " W" : "n/a", "n"));
+      return tr;
+    }));
+  }
+
+  function initStress() {
+    buildStressControls();
+    $("btn-stress-start").addEventListener("click", startStress);
+    $("btn-stress-stop").addEventListener("click", stopStress);
+    $("btn-stress-refresh").addEventListener("click", loadStressList);
+    renderStress();
+  }
+
+  // After a Tune apply: the review window offers a screen of the units it changed (the screen itself is started on the Stress tab).
+  function goValidate(units) {
+    ST.kind = "cpu";
+    ST.sel = new Set(units.length ? units : UNIT_IDS);
+    closeDialog($("dlg-plan"));
+    selectTab("stress", true);
+    renderStress();
+  }
+
   // ---- Profiles ---------------------------------------------------------------------------------------------------------------------------------
   const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;
   const PR = { list: [], loaded: false };
@@ -3721,6 +4088,7 @@
   function onTabShown(name) {
     if (name === "curves") { if (!CV.loaded && S.sseUp) loadCurves(false); renderCurves(); }
     else if (name === "tune") { if (!CV.loaded && S.sseUp) loadCurves(false); renderTunePreview(); updateTuneFoot(); }
+    else if (name === "stress") { if (S.sseUp && !ST.loaded) loadStressList(); renderStress(); }
     else if (name === "profiles") { if (S.sseUp) loadProfiles(); updateSaveState(); }
     else if (name === "audit") loadAudit();
   }
@@ -3839,6 +4207,7 @@
   syncCoreSet({});
   initCurves();
   initTune();
+  initStress();
   initProfiles();
   $("btn-preflight").addEventListener("click", loadPreflight);
   $("btn-audit").addEventListener("click", loadAudit);

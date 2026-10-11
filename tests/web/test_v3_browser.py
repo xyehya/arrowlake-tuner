@@ -2,7 +2,7 @@
 
 Skipped unless ``ARLTUNER_BROWSER_TESTS=1`` and Playwright (python) plus a Chrome/Chromium binary (``ARLTUNER_CHROME`` or ``/usr/bin/google-chrome``) exist.
 Asserts what static checks cannot: no console errors / CSP violations, every tab renders, the Curves chart fills while measuring, Tune can read, plan,
-confirm and apply in the fake, and the apply button stays disabled until the code is typed. No hardware, no real helper."""
+confirm and apply in the fake, and the Apply button is one click (no typed code). No hardware, no real helper."""
 from __future__ import annotations
 
 import os
@@ -61,15 +61,26 @@ class TestBrowser(unittest.TestCase):
                 page.locator(".tn-rowwrap").nth(0).locator("select.tn-sel").first.select_option("-45")
                 page.click("#btn-tn-plan")
                 page.wait_for_selector("#dlg-plan[open]")
-                self.assertTrue(page.locator("#plan-go").is_disabled())  # nothing typed yet
-                page.fill("#plan-typed", "CONFIRM WRONG1")
-                self.assertTrue(page.locator("#plan-go").is_disabled())
-                page.fill("#plan-typed", page.locator(".confirm-code").inner_text())
+                self.assertEqual(page.locator("#dlg-plan input").count(), 0)  # D-033 d: nothing to type
                 page.wait_for_function("!document.getElementById('plan-go').disabled")
                 page.click("#plan-go")
                 page.wait_for_selector(".plan-result .pill.s-ok", timeout=10000)
                 self.assertEqual(fake.tuning["P0"]["points"][0]["offset_mv"], -45.0)
                 self.assertEqual([r["op"] for r in fake.requests if r["op"] == "tune.apply"], ["tune.apply"])
+                # validate: the review window offers a stress screen of the changed units; nothing starts by itself
+                page.click("text=Validate with a stress screen")
+                page.wait_for_selector("#panel-stress:not([hidden])")
+                self.assertEqual(page.locator('.mm-tile[aria-pressed="true"]').count(), 8)  # the first row of the simple scope is "all P-cores"
+                self.assertEqual([r["op"] for r in fake.requests if r["op"] == "stress.start"], [])
+                self.assertIn("NOT an acceptance gate", page.inner_text("#st-banner"))
+                page.wait_for_selector("#btn-stress-start:not([disabled])", timeout=10000)
+                page.click("#btn-stress-start")
+                page.wait_for_selector("#st-result:not([hidden])", timeout=15000)
+                self.assertIn("No errors detected in", page.inner_text("#st-result"))
+                self.assertNotIn("pass", page.inner_text("#panel-stress").lower())
+                start = [r for r in fake.requests if r["op"] == "stress.start"]
+                self.assertEqual((len(start), start[0]["args"]["units"], start[0]["args"]["duration_s"]), (1, ["P%d" % i for i in range(8)], 300))
+                page.wait_for_selector("#st-hist-body tr", timeout=5000)
                 time.sleep(0.3)
             finally:
                 b.close()
