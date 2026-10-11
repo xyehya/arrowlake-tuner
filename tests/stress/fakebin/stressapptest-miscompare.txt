@@ -1,0 +1,7 @@
+2026/10/11-12:00:00(UTC) Log: Commandline - stressapptest -s 30 -M 4096 -W
+2026/10/11-12:00:00(UTC) Stats: SAT revision 1.0.9_autoconf, 64 bit binary
+2026/10/11-12:00:11(UTC) Report Error: miscompare : DIMM Unknown : 1 : 11s
+2026/10/11-12:00:11(UTC) Hardware Error: miscompare on CPU 3(<0x8>) at 0x7f0a12345678(0x1c3c4000:DIMM Unknown): read:0x00000000ffffffff, reread:0x0000000000000000 expected:0x00000000ffffffff
+2026/10/11-12:00:30(UTC) Stats: Found 2 hardware incidents
+2026/10/11-12:00:30(UTC) Stats: Completed: 123456.00M in 30.00s 4115.20MB/s, with 2 hardware incidents, 2 errors
+2026/10/11-12:00:30(UTC) Status: FAIL - test discovered HW problems
