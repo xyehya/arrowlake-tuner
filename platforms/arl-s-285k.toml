@@ -51,9 +51,11 @@ msr_0x1AE = 0x0807060504030201  # P bucket core counts (read-only by policy)
 msr_0x650 = 0x3030303030303030  # E ratios 48 x8
 msr_0x651 = 0x100C080604030201  # E bucket core counts (read-only by policy)
 
-# Sensors: temperatures from coretemp; Vcore from the board Super-I/O via hwmon (read-only files). The exact Nuvoton chip name is not recorded
-# in the knowledge base, so it is left empty rather than guessed.
+# Sensors: temperatures from coretemp; Vcore from the board Super-I/O via hwmon (read-only files). [MEASURED lnx 2026-10-11]: the ASRock Z890 board
+# binds hwmon name "nct6686" (kernel driver nct6683); its labels are generic and Vcore (VCCCORE VR output) is in0 = "VIN16".
+# VIN0 / in1 is NOT Vcore (CPU-0-activity-gated signal). Empty name or label = not recorded => Vcore unavailable, never a guess.
 [sensors]
 temp_hwmon_name = "coretemp"
 vcore_hwmon_vendor = "Nuvoton"
-vcore_hwmon_name = ""
+vcore_hwmon_name = "nct6686"
+vcore_hwmon_label = "VIN16"
