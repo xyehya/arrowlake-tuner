@@ -5,8 +5,14 @@ Command (root or perf_event_paranoid <= -1): ``perf stat -a -I <ms> -x , -e <rea
 
 Row format with ``-I`` and ``-x ,`` [DOC perf-stat(1) CSV output]: ``timestamp,count,unit,event,run-time,pct-running[,metric...]``
 where an unusable counter prints ``<not counted>`` / ``<not supported>`` in the count field. The free-running IMC events report
-MiB [MEASURED lnx 2026-10-03, linux-path.md s7: "units MiB; x1.0486 = MB"]. The event names ``uncore_imc_free_running_N/data_read/``
-and ``/data_write/`` are [UNVERIFIED] beyond this kernel; they are configurable. Nothing here runs perf at import or in tests.
+MiB [MEASURED lnx 2026-10-03, linux-path.md s7: "units MiB; x1.0486 = MB"]. The event spelling ``uncore_imc_free_running/data_read/`` and
+``/data_write/`` (perf merges the ``_0`` / ``_1`` instances) is [MEASURED lnx 2026-10-11] (root perf; sample CSV in docs/knowledge/telemetry-sources.md);
+it stays configurable. Nothing here runs perf at import or in tests.
+
+Hardening (the helper runs this as root): perf is the absolute ``/usr/bin/perf``, started with a fixed minimal environment (nothing inherited: no
+``PATH`` / ``LD_*`` / ``PERF_*`` / ``HOME``), ``stdin`` = /dev/null and ``cwd`` = ``/``. An optional ``trust_check(path)`` runs before every spawn; if it
+raises :class:`PerfRefused` no process is started and the readings are unavailable with that reason. If the helper dies, perf's next write hits a
+closed pipe (SIGPIPE) and it exits; a clean stop terminates it.
 """
 from __future__ import annotations
 
@@ -17,8 +23,14 @@ from dataclasses import dataclass
 
 from .readings import Reading, unavailable
 
-DEFAULT_EVENTS = ("uncore_imc_free_running/data_read/", "uncore_imc_free_running/data_write/")  # [UNVERIFIED] spelling
+DEFAULT_EVENTS = ("uncore_imc_free_running/data_read/", "uncore_imc_free_running/data_write/")  # [MEASURED lnx 2026-10-11]
+PERF_PATH = "/usr/bin/perf"
+PERF_ENV = {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"}  # fixed, nothing inherited; LC_ALL=C keeps the CSV decimal point a '.'
 MIB_TO_GB = 1.048576 / 1000.0  # MiB -> GB (decimal) [MEASURED lnx 2026-10-03: "x1.0486 = MB"]
+
+
+class PerfRefused(OSError):
+    """perf is not trusted (missing, not root-owned, group/world-writable, ...): it is not started."""
 
 
 @dataclass(frozen=True)
@@ -110,18 +122,15 @@ def parse_stream(lines: Iterable[str], interval_s: float) -> list[tuple[Reading,
     return out
 
 
-def _spawn(cmd: list[str]) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-
-
 class ImcStat:
     """One long-lived perf process + reader thread; ``latest()`` is the newest finished interval or unavailable."""
 
-    def __init__(self, interval_ms: int = 1000, events: tuple[str, ...] = DEFAULT_EVENTS, perf: str = "perf",
-                 popen: Callable[[list[str]], subprocess.Popen] = _spawn) -> None:
+    def __init__(self, interval_ms: int = 1000, events: tuple[str, ...] = DEFAULT_EVENTS, perf: str = PERF_PATH,
+                 popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+                 trust_check: Callable[[str], None] | None = None) -> None:
         self.interval_s = interval_ms / 1000.0
         self.command = [perf, "stat", "-a", "-I", str(interval_ms), "-x", ",", "-e", ",".join(events)]
-        self._popen = popen
+        self._popen, self._perf, self._trust_check = popen, perf, trust_check
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -131,8 +140,11 @@ class ImcStat:
         if self._proc is not None:
             return
         try:
-            self._proc = self._popen(self.command)
-        except OSError as e:  # perf not installed / not permitted
+            if self._trust_check is not None:
+                self._trust_check(self._perf)  # raises PerfRefused: no process is started
+            self._proc = self._popen(self.command, env=dict(PERF_ENV), cwd="/", stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
+        except OSError as e:  # perf not installed / not trusted / not permitted
             self._set(unavailable("perf stat", f"cannot start perf: {e}", "GB/s"))
             return
         self._thread = threading.Thread(target=self._run, args=(self._proc,), name="imc-perf", daemon=True)

@@ -42,7 +42,52 @@ class SamplerTests(unittest.TestCase):
         self.assertEqual(snap["power"]["package"]["value"], 50.0)  # MSR fallback (no powercap)
         self.assertEqual(snap["temps"]["Package"]["value"], 80)
         self.assertEqual(snap["temps"]["cpu3"]["value"], 85)
+        self.assertEqual((snap["temps"]["cpu3"]["name"], snap["temps"]["cpu3"]["cpu"]), ("P-Core 3", 3))  # MSR fallback names
+        self.assertEqual((snap["temps"]["Package"]["name"], snap["temps"]["Package"]["cpu"]), ("Package", None))
         self.assertEqual([m for _, m in port.reads if m == 0x150], [])
+
+    def test_temp_names_from_core_id(self):
+        # [MEASURED lnx 2026-10-11] CPU -> sysfs core_id; coretemp "Core N" labels carry the core_id
+        core_id = {0: 0, 1: 4, 2: 16, 3: 20, 4: 24, 5: 28, 6: 40, 7: 44, **{c: c for c in range(8, 16)}, **{c: c + 16 for c in range(16, 24)}}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for cpu, cid in core_id.items():
+                f = root / "cpu" / f"cpu{cpu}" / "topology" / "core_id"
+                f.parent.mkdir(parents=True)
+                f.write_text(f"{cid}\n")
+            hw = root / "h" / "hwmon3"
+            hw.mkdir(parents=True)
+            (hw / "name").write_text("coretemp\n")
+            labels = ["Package id 0"] + [f"Core {cid}" for cid in sorted(core_id.values())] + ["Core 99"]
+            for i, lab in enumerate(labels, start=1):
+                (hw / f"temp{i}_label").write_text(lab + "\n")
+                (hw / f"temp{i}_input").write_text(f"{40000 + i * 100}\n")
+            s = Sampler(None, hwmon_root=root / "h", powercap_root=root / "p", cpu_root=root / "cpu")
+            temps = s.collect()["temps"]
+        self.assertEqual(len(temps), 26)
+        self.assertEqual(temps["Core 4"]["name"], "P-Core 1")  # keys stay the raw labels; name/cpu are additive
+        self.assertEqual(temps["Core 4"]["cpu"], 1)
+        self.assertEqual(temps["Core 4"]["status"], "ok")
+        self.assertEqual((temps["Core 44"]["name"], temps["Core 44"]["cpu"]), ("P-Core 7", 7))
+        self.assertEqual((temps["Core 8"]["name"], temps["Core 8"]["cpu"]), ("E-Core 0", 8))
+        self.assertEqual((temps["Core 15"]["name"], temps["Core 15"]["cpu"]), ("E-Core 7", 15))
+        self.assertEqual((temps["Core 32"]["name"], temps["Core 32"]["cpu"]), ("E-Core 8", 16))
+        self.assertEqual((temps["Core 39"]["name"], temps["Core 39"]["cpu"]), ("E-Core 15", 23))
+        for cpu, cid in core_id.items():
+            self.assertEqual(temps[f"Core {cid}"]["cpu"], cpu)
+        self.assertEqual((temps["Package id 0"]["name"], temps["Package id 0"]["cpu"]), ("Package", None))
+        self.assertEqual((temps["Core 99"]["name"], temps["Core 99"]["cpu"]), ("Core 99", None))  # unmapped stays raw
+        json.dumps(temps)
+
+    def test_temp_names_without_topology_files_stay_raw(self):
+        with tempfile.TemporaryDirectory() as td:
+            hw = Path(td) / "h" / "hwmon3"
+            hw.mkdir(parents=True)
+            (hw / "name").write_text("coretemp\n")
+            (hw / "temp1_label").write_text("Core 4\n")
+            (hw / "temp1_input").write_text("41000\n")
+            t = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", cpu_root=Path(td) / "none").collect()["temps"]
+        self.assertEqual((t["Core 4"]["name"], t["Core 4"]["cpu"]), ("Core 4", None))
 
     def test_thread_start_stop(self):
         with tempfile.TemporaryDirectory() as td:
