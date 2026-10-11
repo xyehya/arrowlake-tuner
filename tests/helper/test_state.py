@@ -292,6 +292,13 @@ class HelperObjectTests(HelperCase):
         self.assertIn("stub.read", h.ops)
         self.assertEqual(set(h.ops) & {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"}, {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"})
 
+    def test_the_g1_ops_exist_and_every_write_op_is_long(self) -> None:
+        ops = Helper(self.config()).ops
+        self.assertGreaterEqual(set(ops), {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"})
+        self.assertGreaterEqual(set(ops), {"tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save"})  # G-112
+        # D-029: a non-long write op would skip machine.begin (no 'applying' state, no busy check): none may exist
+        self.assertEqual([n for n, s in ops.items() if s.write and not s.long], [])
+
     def test_the_g1_ops_and_the_g111_ops_exist(self) -> None:
         g1 = {"preflight", "vf.dump", "audit.tail", "telemetry.start", "telemetry.stop", "cancel"}
         g111 = {"vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "mem.read"}

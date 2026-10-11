@@ -40,6 +40,7 @@ class StepStatus(str, Enum):
     RC_ERROR = "rc_error"  # executed, non-zero completion code
     UNVERIFIED = "unverified"  # write accepted (rc 0) but the read-back differs (or is missing)
     ERROR = "error"  # the transport raised (MailboxTimeout, MsrError, ...)
+    CANCELLED = "cancelled"  # G-112: the cancel flag was set before this step; nothing was sent for it
 
 
 class StopKind(str, Enum):
@@ -51,6 +52,7 @@ class StopKind(str, Enum):
     UNVERIFIED = "unverified"
     TRANSPORT = "transport"
     TRIPPED = "tripped"  # the guard is tripped (refused TRIPPED, or tripped after the step: read-back / health gate)
+    CANCELLED = "cancelled"  # G-112: the helper's cancel flag was set between two steps (the CLI never sets it)
 
 
 def v_mv(word: VfWord) -> float:
@@ -128,12 +130,12 @@ class ApplyReport:
     def operations(self) -> int:
         """Mailbox operations that reached the transport (refused steps excluded, read-backs not counted; plain-MSR steps are not mailbox
         operations and are not counted here -- ``plain_msr_operations``)."""
-        return sum(1 for r in self.steps if r.status is not StepStatus.REFUSED and not r.step.kind.is_msr)
+        return sum(1 for r in self.steps if r.status not in (StepStatus.REFUSED, StepStatus.CANCELLED) and not r.step.kind.is_msr)
 
     @property
     def plain_msr_operations(self) -> int:
         """T-023: plain ``rdmsr`` / ``wrmsr`` steps of the turbo tables that reached the port (refused steps excluded)."""
-        return sum(1 for r in self.steps if r.status is not StepStatus.REFUSED and r.step.kind.is_msr)
+        return sum(1 for r in self.steps if r.status not in (StepStatus.REFUSED, StepStatus.CANCELLED) and r.step.kind.is_msr)
 
     def format_report(self) -> str:
         """Plain-text report: per-step results, applied values, stop reason, revert plan, warnings."""
@@ -334,6 +336,8 @@ def _result_line(r: StepResult) -> str:
         return f"{head} -> REFUSED by the guard, nothing sent: {r.detail}"
     if r.status is StepStatus.ERROR:
         return f"{head} -> TRANSPORT ERROR: {r.detail}"
+    if r.status is StepStatus.CANCELLED:
+        return f"{head} -> CANCELLED before it was sent: {r.detail}"
     if s.kind is StepKind.READ_MSR:
         return f"{head} -> {_msr_word_text(s.msr, r.response_data)}"
     if s.kind is StepKind.WRITE_MSR:

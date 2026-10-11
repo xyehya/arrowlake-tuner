@@ -46,6 +46,7 @@ _EVENT_RE = re.compile(r"[a-z0-9_.]{1,32}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _TYPED = re.compile(r"CONFIRM [A-Z2-9]{6}\Z")
 _REQ_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+_PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
 _CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
 _UNITS = tuple(f"P{n}" for n in range(8)) + tuple(f"EC{n}" for n in range(4))
 
@@ -84,6 +85,13 @@ def _apply(a: dict) -> bool:
             and isinstance(a["typed"], str) and bool(_TYPED.match(a["typed"])))
 
 
+def _tune_plan(a: dict) -> bool:  # contract 9; outer filter, the helper (ops_tune.canonical_intent) is the authority
+    return set(a) == {"intent"} and isinstance(a["intent"], dict) and len(json.dumps(a["intent"])) <= 16 * 1024
+
+
+def _profiles_save(a: dict) -> bool:
+    return (set(a) == {"name", "intent"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))
+            and isinstance(a["intent"], dict) and len(json.dumps(a["intent"])) <= 16 * 1024)
 def _unit_list(v: Any) -> bool:
     return isinstance(v, list) and 1 <= len(v) <= len(_UNITS) and len(set(v)) == len(v) and all(isinstance(u, str) and u in _UNITS for u in v)
 
@@ -124,6 +132,12 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "vf.dump": (_vf_dump, True),
     "apply": (_apply, True),
     "restore": (_empty, True),
+    # contract 9 (G-112): tune.* and profiles.*; tune.read is vf.dump with decoded words
+    "tune.read": (_vf_dump, True),
+    "tune.plan": (_tune_plan, False),
+    "tune.apply": (_apply, True),
+    "profiles.list": (_empty, False),
+    "profiles.save": (_profiles_save, False),
     "vf.measure": (_vf_measure, True),  # G-111, contract 9
     "curves.list": (_empty, False),
     "curves.get": (_curves_get, False),

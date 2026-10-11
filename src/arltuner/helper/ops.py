@@ -711,8 +711,9 @@ def builtin_ops() -> dict[str, OpSpec]:
         OpSpec("telemetry.start", op_telemetry_start, _validate_telemetry_start),
         OpSpec("telemetry.stop", op_telemetry_stop, _no_args),
         OpSpec("cancel", op_cancel, _validate_cancel),
-        # a mailbox read is a WRMSR (docs/SAFETY.md), so vf.dump needs the write gate on hardware
-        OpSpec("vf.dump", op_vf_dump, _validate_vf_dump, long=True, write=True, state=State.PLANNING),
         *measure_ops(),
     ]
+    from .ops_tune import tune_ops  # G-112: vf.dump (now remembering the words in force), tune.*, profiles.*; imported here because ops_tune imports this module
+
+    specs.extend(tune_ops())
     return {s.name: s for s in specs}

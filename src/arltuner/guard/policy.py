@@ -129,11 +129,11 @@ DEFAULT_OFFSET_CEILING_MV = 0
 
 #: Absolute sanity bounds a policy file can never exceed (``load_policy`` / ``Policy`` refuse more). Voltage: ``0x28`` per core minus one,
 #: XTU's rule (registers.md "Mailbox commands", ``[MEASURED win 2026-10-01]`` P ``0x681``, E ``0x56D`` per core): P 0x680 = 1664 raw =
-#: 1.625 V, E 0x56C = 1388 raw = 1.3555 V (S2.10), in whole mV. Ratio: 62 P / 60 E and the +100 mV offset ceiling are the orchestrator's
+#: 1.625 V, E 0x56C = 1388 raw = 1.3555 V (S2.10), in whole mV. Ratio: 62 P / 60 E and the +200 mV offset ceiling (D-032; was +100) are the orchestrator's
 #: sanity bounds (``[UNVERIFIED]``: not hardware limits; the simulator's pcode cap is its own SIM-ONLY model).
 SANITY_V_TARGET_MAX_MV: Mapping[str, int] = MappingProxyType({"P": 1625, "E": 1355})
 SANITY_RATIO_MAX: Mapping[str, int] = MappingProxyType({"P": 62, "E": 60})
-SANITY_OFFSET_CEILING_MV = 100
+SANITY_OFFSET_CEILING_MV = 200  # D-032 (operator yes, 2026-10-11): was 100; the menus never go beyond +/-200 mV
 _V_TARGET_MIN_MV = 500  # the profile schema's lower sanity bound for an OC-point voltage
 _RATIO_STEP_RANGE = (1, 8)
 _V_STEP_MV_RANGE = (2, 200)  # >= 2 mV so that every step window holds at least one whole-mV value (1 mV = 1.024 raw)

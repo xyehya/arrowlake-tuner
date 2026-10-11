@@ -118,6 +118,7 @@ class Helper:
         self._tele_lock = threading.Lock()
         self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
+        self.last_words: dict[int, list[int]] | None = None  # G-112: cpu -> [OC word, point 1, point 2, ...] after the last complete tune.read / vf.dump (and the read-backs of tune.apply); None = unknown
         self.measure_wiring: Any = None  # ops_measure.MeasureWiring (G-111): cpufreq / MSR read / store / journal for vf.measure, curves.*, mem.read; set by main (None: those ops answer INTERNAL)
 
     # ---------------------------------------------------------------- output

@@ -458,7 +458,7 @@ class PolicyBounds(unittest.TestCase):
 
     def test_the_sanity_maxima_themselves_are_accepted(self) -> None:
         q = load_policy(
-            "cpus = [0]\noffset_ceiling_mv = 100\nmax_ratio_step = 8\nmax_v_step_mv = 200\nmax_offset_step_mv = 200\n"
+            "cpus = [0]\noffset_ceiling_mv = 200\nmax_ratio_step = 8\nmax_v_step_mv = 200\nmax_offset_step_mv = 200\n"
             "[ratio_max]\nE = 60\nP = 62\n[v_target_max_mv]\nE = 1355\nP = 1625\n"
         )
         self.assertEqual((q.ratio_max["E"], q.v_target_max_mv["P"]), (60, 1625))
@@ -484,7 +484,7 @@ class PolicyBounds(unittest.TestCase):
             {"ratio_max": {"X": 5}},
             {"v_target_max_mv": {"E": 1356}},
             {"v_target_max_mv": 1250},
-            {"offset_ceiling_mv": 101},
+            {"offset_ceiling_mv": 201},
             {"max_v_step_mv": True},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(PolicyError):
