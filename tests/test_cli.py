@@ -269,7 +269,7 @@ class Apply(CliCase):
         self.assertIn("Result: OK", out)
         self.assertIn("read-back equal", out)
         self.assertIn("Revert plan", out)
-        self.assertEqual(self.sim.vf(4), P4_BASELINE.with_(offset_raw=-31))
+        self.assertEqual(self.sim.vf(4), P4_BASELINE.with_(offset_raw=-31, v_target_raw=0))  # G-120: no OC point at ratio 55
         self.assertTrue(self.sim.per_core_enabled)
         events = [r["event"] for r in read_all(self.audit)]
         self.assertEqual((events.count("attempt"), events.count("readback")), (9, 4))
@@ -477,7 +477,7 @@ class Measured(CliCase):
         self.assertEqual((code, err), (0, ""), out)
         self.assertIn("Operations required: 11 mailbox WRMSRs = 8 guard operations", out)  # 0x14 reads 0x8 on the measured machine: no 0x15
         self.assertNotIn("cmd 0x15", out)
-        self.assertIn("data 0xff653837", out)  # XTU's word for CPU 1 at -5 mV
+        self.assertIn("data 0xff600037", out)  # CPU 1 at -5 mV: ratio 55 (0x1C) | offset, no OC point -> V target 0 (G-120)
         self.assertIn("favored-core word of P-Core 1: data 0x37", out)
         self.assertIn("granular-ratio word of P-Core 1: data 0x3", out)
         self.assertIn("ratio 0 -> 55", out)  # the measured baseline word is 0x0
@@ -489,7 +489,7 @@ class Measured(CliCase):
         code, out, err = self.run_default_sim(*args, stdin=self.confirmed())
         self.assertEqual((code, err), (0, ""), out)
         self.assertIn("Result: OK", out)
-        self.assertIn("0xff65b439", out)
+        self.assertIn("0xff600039", out)  # G-120: P0 ratio 57 = top fused ratio, no OC point, target 0
         self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", out)
         self.assertIn("(restores the word in effect before the write", out)
 

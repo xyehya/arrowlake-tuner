@@ -202,7 +202,7 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(error_code(h.call("d", "vf.measure", {"baseline": "yes"})), "BAD_REQUEST")
 
     def test_stock_tuning_state_needs_a_complete_read_with_all_offsets_zero(self) -> None:
-        zero = {cpu: [0x39, 0x08, 0x14, 0x1E] for cpu in range(24)}  # ratios only: every offset field 0
+        zero = {cpu: [0x39 if cpu == 0 else 0, 0x08, 0x14, 0x1E] for cpu in range(24)}  # the cold-boot OC words (P0 0x39, others 0) and ratios only: every offset field 0
         h = self.start_measure(last_words=zero)
         rec = h.call("s", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"], {"kind": "stock"})
@@ -212,6 +212,22 @@ class QuickRunTests(MeasureCase):
         h.helper.last_words = {cpu: ws for cpu, ws in zero.items() if cpu < 8}  # P-cores only: not a complete read
         rec = h.call("u","vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"]["kind"], "words")
+
+    def test_a_raised_oc_word_or_any_apply_this_boot_is_not_stock(self) -> None:
+        """G-120 fix 4 [MEASURED lnx 2026-10-11]: offsets all 0 is not enough; the OC words must be the cold-boot ones and nothing may have been applied."""
+        zero = {cpu: [0x39 if cpu == 0 else 0, 0x08, 0x14, 0x1E] for cpu in range(24)}
+        h = self.start_measure(last_words=zero)
+        run = lambda tag: h.call(tag, "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]["tuning_state"]["kind"]
+        self.assertEqual(run("a"), "stock")
+        h.helper.last_words = {**zero, 12: [0x00048C30, 0x08]}  # EC1's OC point (ratio 48, adaptive 1.1367 V): offset 0 but not stock
+        self.assertEqual(run("b"), "words")
+        h.helper.last_words = {**zero, 0: [0x0005B439, 0x08]}  # P0 in the XTU shape: the same state, but not the cold-boot word
+        self.assertEqual(run("c"), "words")
+        h.helper.last_words = {**zero, 3: [0x39, 0x08]}  # P3 with an OC ratio 57
+        self.assertEqual(run("d"), "words")
+        h.helper.last_words = dict(zero)
+        h.helper.tuned_this_boot = True  # a tune.apply wrote this boot, even a restore
+        self.assertEqual(run("e"), "words")
 
     def test_fused_point_labels(self) -> None:
         rec = self.start_measure(last_words={0: [0x39]}).call("f", "vf.measure", {"mode": "dense", "units": ["P0", "P1", "EC0"]}, timeout=60)["result"]["record"]

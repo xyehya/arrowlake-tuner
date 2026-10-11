@@ -65,6 +65,7 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
+from arltuner.controls.planner import kept_word
 from arltuner.guard.policy import turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
@@ -1028,6 +1029,8 @@ def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Seque
         if setting.offset_mv is not None:
             changes["offset_raw"] = VfWord.mv_to_offset_raw(setting.offset_mv)
         goal = (cur or VfWord(0, 0, False, 0)).with_(**changes)
+        if goal.ratio:
+            goal = kept_word(_kind_of(unit), goal)  # G-120: no OC point (ratio <= the top fused ratio) + an offset = the hardware keeps no V target
         before.setdefault(unit, {})["0"] = None if cur is None else show(cur)
         after.setdefault(unit, {})["0"] = show(goal)
     for setting in profile.expand_points(topology):
@@ -1079,6 +1082,7 @@ class _UnitModel:
     baseline: dict[int, float | None] | None
     oc_ratio: int | None = None  # the plan's OC ratio for this unit
     oc_v: float | None = None  # the plan's OC-point voltage target (V)
+    cur_oc_ratio: int | None = None  # the ratio of the OC word of the last read (None = not read / 0)
     touched: bool = False
 
 
@@ -1119,6 +1123,8 @@ def _unit_models(
             if measured:
                 baseline = complete_baseline(ratios, measured, fused_v)
         m = _UnitModel(unit, kind, cpus, ratios, cur, new, baseline, touched=st is not None or bool(explicit))
+        if ref is not None:
+            m.cur_oc_ratio = VfWord.from_u32(ref[1][0]).ratio or None
         if st is not None:
             m.oc_ratio = st.ratio
             m.oc_v = None if st.oc_voltage_mv is None else st.oc_voltage_mv / 1000
@@ -1183,6 +1189,11 @@ def _predict(
                 n = int(point)
                 if n == 0:
                     entry["effective_v"], entry["clamped_by"] = entry.get("v_target_v"), None
+                    oc_model = models.get(unit)
+                    if curve is not None and oc_model is not None and entry.get("v_target_v") is not None and (entry.get("ratio") or 0) > max(oc_model.ratios):
+                        held = vfmodel.oc_point_voltage(curve, entry["v_target_v"])  # G-120 fix 3: max(target, V(top fused point))
+                        if held is not None:
+                            entry["effective_v"], entry["clamped_by"] = round(held[0], 4), (len(curve) if held[1] else None)
                 elif curve is not None and 1 <= n <= len(curve):
                     ev = curve[n - 1].effective_v
                     entry["effective_v"], entry["clamped_by"] = (None if ev is None else round(ev, 4)), curve[n - 1].clamped_by
@@ -1195,13 +1206,26 @@ def _predict(
         new, cur = curves_new.get(unit), curves_cur.get(unit)
         if new is not None and cur is not None:
             for p, c in zip(new, cur):
-                if p.clamped_by is not None and (c.clamped_by is None or p.effective_v != c.effective_v) and p.effective_v is not None and p.base_v is not None:
+                # G-120 fix 2: only a point the plan newly clamps is worth a warning. A point clamped at stock already (the 56/57x of a core that cannot reach them sit at the
+                # voltage of the point below) follows that point when the plan moves it: no new fact, and for a point the plan does not set an "offset +0.0 clamped" line.
+                newly = c.clamped_by is None
+                if newly and p.clamped_by is not None and p.effective_v is not None and p.base_v is not None:
                     landed = (p.effective_v - p.base_v) * 1000
                     warnings.append(Warn(
                         "CLAMPED",
                         f"{unit} point {p.index} ({p.ratio}x): offset {p.offset_mv:+.1f} mV is clamped up to the voltage of point {p.clamped_by} "
                         f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V [MEASURED lnx 2026-10-02, F4]",
                     ))
+        oc_ratio = m.oc_ratio or m.cur_oc_ratio
+        if new is not None and m.oc_v is not None and oc_ratio and oc_ratio > max(m.ratios):  # G-120 fix 2: an OC-point target below the top fused point is held up to it
+            held = vfmodel.oc_point_voltage(new, m.oc_v)
+            if held is not None and held[1]:
+                top = new[-1]
+                warnings.append(Warn(
+                    "CLAMPED",
+                    f"{unit} OC point ({oc_ratio}x): the adaptive target {m.oc_v:.4f} V is below the voltage of the top fused point ({top.ratio}x, point {top.index}) "
+                    f"{held[0]:.4f} V and is held up to it (the hardware keeps V(n) >= V(n-1)): effective {held[0]:.4f} V [MEASURED lnx 2026-10-11, F4]",
+                ))
         if m.kind == "E":
             at40 = m.new_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0)
             if at40 != 0.0 and at40 != m.cur_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0):
@@ -1527,9 +1551,14 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
             )
         except PreflightError as exc:
             raise _preflight_error(exc) from None
+        except BaseException:
+            helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120: an apply that died midway may have written; "stock" is never claimed after it
+            raise
     _merge_applied_words(helper, report)
     steps, readback = _report_rows(report, topology)
     sent_writes = sum(1 for r in report.steps if r.step.kind.is_write and r.status is not StepStatus.REFUSED and r.status is not StepStatus.CANCELLED)
+    if sent_writes:
+        helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120 fix 4: any tune.apply that wrote ends "stock" for this boot (ops_measure._tuning_state)
     result: dict[str, Any] = {
         "plan_id": plan.plan_id,
         "steps": steps,

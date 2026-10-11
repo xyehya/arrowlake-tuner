@@ -64,6 +64,20 @@ class InterpolationTests(unittest.TestCase):
         self.assertAlmostEqual(voltage_at(curve, 58, oc=(59, 1.5)), (1.4288 + 1.5) / 2, places=6)
         self.assertAlmostEqual(voltage_at(curve, 57, oc=(59, 1.5)), 1.4288, places=6)
 
+    def test_the_oc_point_of_ec1_matches_the_first_write_sittings(self) -> None:
+        """G-120 fix 3 [MEASURED lnx 2026-10-11] (tuning-results.md "First write sittings"): E point 6 (46x) 1.1375 V."""
+        e = (8, 15, 23, 30, 40, 46)
+        curve = effective_curve(e, {8: 0.775, 15: 0.775, 23: 0.775, 30: 0.775, 40: 0.970, 46: 1.1375}, {})
+        self.assertEqual(vfmodel.oc_point_voltage(curve, 1.117), (1.1375, True))  # 48x target below point 6: held up to it
+        self.assertEqual(vfmodel.oc_point_voltage(curve, 1.147), (1.147, False))
+        for ratio in (46, 47, 48):  # target 1.117 V: 48x = 47x = 1.1375 V
+            self.assertAlmostEqual(voltage_at(curve, ratio, oc=(48, 1.117)), 1.1375, places=6)
+        self.assertAlmostEqual(voltage_at(curve, 48, oc=(48, 1.147)), 1.147, places=6)  # measured 1.1475 (the target is quantised to 1/1024 V)
+        self.assertAlmostEqual(voltage_at(curve, 47, oc=(48, 1.147)), (1.1375 + 1.147) / 2, places=6)  # 47x = the midpoint of 46x and 48x (measured 1.1425)
+        self.assertAlmostEqual(voltage_at(curve, 48, oc=(48, 1.1367)), 1.1375, places=6)  # the neutral first write (1.1367 < 1.1375): unchanged
+        self.assertAlmostEqual(voltage_at(curve, 50, oc=(48, 1.147)), 1.147, places=6)  # flat above the OC ratio
+        self.assertIsNone(vfmodel.oc_point_voltage(effective_curve(e, {}, {}), 1.2))
+
     def test_interpolate_with_nothing_known(self) -> None:
         self.assertIsNone(interpolate({8: None}, 10))
 

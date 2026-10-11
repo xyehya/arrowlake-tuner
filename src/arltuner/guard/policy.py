@@ -78,6 +78,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
 from arltuner.mailbox import Cmd, VfWord, is_write
+from arltuner.platform import default_platform
 
 __all__ = [
     "CHECKS",
@@ -227,12 +228,20 @@ class CheckContext:
     max_ratio_step: int = DEFAULT_MAX_RATIO_STEP  # D-016 per-operation step limits, in word units (ratio bins / raw S2.10 / raw offset)
     max_v_step_raw: int = _DEFAULT_MAX_V_STEP_RAW
     max_offset_step_raw: int = _DEFAULT_MAX_OFFSET_STEP_RAW
+    top_fused_ratio: int | None = None  # G-120: the highest fused V/F point ratio of this CPU's kind; a P2 = 0 ratio at or below it has no OC point. None = not known
 
     def unlimited_steps(self) -> CheckContext:
         """The same context with the step limits lifted: the planner uses it to tell "refused only because the step is too big" (a ramp
         is the answer) from "refused by an absolute bound" (no ramp can help)."""
         ratio, v_raw, offset_raw = _NO_STEP_LIMIT
         return replace(self, max_ratio_step=ratio, max_v_step_raw=v_raw, max_offset_step_raw=offset_raw)
+
+
+def top_fused_ratio(kind: str) -> int:
+    """The highest fused V/F point ratio of a core kind: P 57x, E 46x (``platforms/arl-s-285k.toml``; ``docs/knowledge/platform-285k.md`` section 3
+    ``[MEASURED lnx 2026-10-02]``). An OC ratio (the ``P2 = 0`` word) at or below it creates no OC point."""
+    platform = default_platform()
+    return max(platform.p_point_ratios if kind == "P" else platform.e_point_ratios)
 
 
 def build_context(
@@ -248,6 +257,7 @@ def build_context(
     kind = policy.core_kind(cpu)
     v_max = policy.v_target_max_mv[kind]
     return CheckContext(
+        top_fused_ratio=top_fused_ratio(kind),
         offset_floor_raw=policy.offset_floor_raw(cpu),
         favored_word=favored_word,
         fused_word=fused_word,
@@ -354,7 +364,9 @@ def _check_vf_bounded(
     direction. Order of the tests (absolute bounds first, so a refusal names the root cause):
 
     1. mode adaptive in baseline and word (static / Power-Gate stay out of scope); ``ratio != 0`` and ``v_target_raw != 0`` (XTU never sends
-       a zero field and the hardware's acceptance of one was never observed, ``[UNVERIFIED]``);
+       a zero field and the hardware's acceptance of one was never observed, ``[UNVERIFIED]``) -- except (G-120, D-035) a zero V target on a word with
+       no OC point (``0 < ratio <= ctx.top_fused_ratio``: P 57, E 46), which is ``ratio | offset << 21`` as the hardware keeps it
+       ``[MEASURED lnx 2026-10-11]``; that word skips the V reference / V step / V ordering tests, every other bound applies;
     2. ``ratio <= ratio ceiling`` and ``v_target_raw <= V target ceiling``: the policy's per-kind number, **else the no-raise value**
        (``max`` of the non-zero baseline and ``0x1C[7:0]`` / fused ``0x09`` voltage), so the shipped policy refuses every raise;
     3. the hardware maximum: ``v_target_raw <= hw_v_max_raw(0x28 word)`` whenever the session read ``0x28``; a V target above the no-raise
@@ -384,15 +396,18 @@ def _check_vf_bounded(
         return False, "static (override) mode is not allowed (out of scope, D-016)"
     if new.ratio == 0:
         return False, "ratio 0 (XTU never sends a zero ratio; acceptance by the hardware is unverified)"
-    if new.v_target_raw == 0:
-        return False, "v_target_raw 0 (XTU never sends a zero V target; acceptance by the hardware is unverified)"
+    # G-120 (D-035): with no OC point (ratio <= the top fused ratio) the hardware keeps no V target next to an offset ([MEASURED lnx 2026-10-11]: wrote
+    # 0xFEC5B439, read 0xFEC00039), so the word is ratio | offset << 21 with target 0. Above the top fused ratio an OC point needs a real target.
+    no_oc_point = new.v_target_raw == 0 and ctx.top_fused_ratio is not None and 0 < new.ratio <= ctx.top_fused_ratio
+    if new.v_target_raw == 0 and not no_oc_point:
+        return False, "v_target_raw 0 (XTU never sends a zero V target; only a word with no OC point, ratio <= the top fused ratio, may carry none)"
     favored_ratio = None if ctx.favored_word is None else ctx.favored_word & 0xFF
     fused_v = None if ctx.fused_word is None else (ctx.fused_word >> 8) & 0xFFF
     ratio_now = base.ratio or favored_ratio or 0
     v_now = base.v_target_raw or fused_v or 0
     if ratio_now == 0:
         return False, "no ratio reference: the baseline ratio is 0 and 0x1C[7:0] is 0 or was not read this session"
-    if v_now == 0:
+    if v_now == 0 and not no_oc_point:
         return False, "no voltage reference: the baseline V target is 0 and the fused 0x09 V target is 0 or was not read this session"
     ratio_noraise = max(base.ratio, favored_ratio or 0)
     v_noraise = max(base.v_target_raw, fused_v or 0)
@@ -421,7 +436,7 @@ def _check_vf_bounded(
         )
     if abs(new.ratio - ratio_now) > ctx.max_ratio_step:
         return False, f"ratio step {new.ratio - ratio_now:+d} from {ratio_now} exceeds the per-operation limit {ctx.max_ratio_step}"
-    if abs(new.v_target_raw - v_now) > ctx.max_v_step_raw:
+    if not no_oc_point and abs(new.v_target_raw - v_now) > ctx.max_v_step_raw:
         return False, f"V target step {new.v_target_raw - v_now:+d} raw from {v_now:#x} exceeds the per-operation limit {ctx.max_v_step_raw} raw"
     if abs(new.offset_raw - base.offset_raw) > ctx.max_offset_step_raw:
         return False, (
@@ -432,7 +447,7 @@ def _check_vf_bounded(
     if ctx.vf_word_sent is not None:
         sent = VfWord.from_u32(ctx.vf_word_sent)
         ratio_before, v_before = sent.ratio, sent.v_target_raw
-    d_ratio, d_v = new.ratio - ratio_before, new.v_target_raw - v_before
+    d_ratio, d_v = new.ratio - ratio_before, 0 if no_oc_point else new.v_target_raw - v_before
     if d_ratio > 0 and d_v > 0:
         return False, "the word raises the ratio and the V target together: raise the V target first (one 0x11), the ratio in the next"
     if d_ratio < 0 and d_v < 0:

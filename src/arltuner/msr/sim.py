@@ -136,6 +136,7 @@ class SimConfig:
     point_counts: dict[str, int] | None = None  # core kind -> fused points (domain 0): P2 above it -> rc 0x11; None = legacy: every P2 1..15 answers
     point_ratios: dict[tuple[str, int], int] = field(default_factory=lambda: {("E", 6): 46})  # (kind, point) -> the ratio field the point starts with
     cpu_point_ratios: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> ratio field; wins over ``point_ratios`` (per-core tables)
+    drop_target_without_oc_point: bool = True  # G-120: a domain-0 P2 = 0 word whose ratio is <= the top fused ratio has no OC point: with a non-zero offset the V target is dropped (needs point_counts) [MEASURED lnx 2026-10-11]
     oc_adds_point: bool = False  # T-026: an OC ratio (P2 = 0 word) above the top fused ratio of the core creates ONE extra point (``[COMMUNITY]``, SkatterBencher)
     point_offsets: dict[tuple[str, int], int] = field(default_factory=dict)  # T-026: (kind, point) -> the offset field (raw) the point starts with (default 0)
     cpu_point_offsets: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> offset raw; wins over ``point_offsets`` (a BIOS that differs per core)
@@ -224,6 +225,7 @@ class SimConfig:
             # G-117: cold-boot stock has runtime point offsets 0 (as on the machine today); the old BIOS-like offsets are opt-in:
             # ``SimConfig.measured(point_offsets=dict(POINT_OFFSETS_ARL_S))``.
             "point_offsets": {},
+            "oc_adds_point": True,  # G-120 [MEASURED lnx 2026-10-11]: OC ratio 48 on E added P2 = 7; at stock P2 = top+1 answers rc 0x11
             "ring_point_ratios": dict(RING_POINT_RATIOS_ARL_S),  # T-028
             "ring_point_offsets": dict(RING_POINT_OFFSETS_ARL_S),
             # G-114 (SPEC-v3 F1): every P-core carries the SAME eight points (8,20,30,48,53,55,56,57x) [MEASURED lnx 2026-10-02, platform-285k.md section 3];
@@ -453,6 +455,12 @@ class SimMsrPort(MsrPort):
     def _fused_count(self, cpu: int) -> int:
         counts = self.config.point_counts
         return _MAX_POINT if counts is None else counts.get(self._kind(cpu), _MAX_POINT)
+
+    def _top_fused_ratio(self, cpu: int) -> int | None:
+        """The highest fused point ratio of ``cpu``'s core kind, or ``None`` when the point tables are not modelled (legacy config)."""
+        if self.config.point_counts is None:
+            return None
+        return max((self._point_ratio(cpu, n) for n in range(1, self._fused_count(cpu) + 1)), default=None)
 
     def _extra_point(self, cpu: int) -> int | None:
         """T-026 (``oc_adds_point``): the P2 of the additional point when the stored OC ratio is above the top fused ratio, else ``None``."""
@@ -730,7 +738,9 @@ class SimMsrPort(MsrPort):
         if p1 == Domain.CORE and cfg.per_core_requires_enable and not self.per_core_enabled:
             return int(Rc.OCLocked), 0
         word = VfWord.from_u32(data)
-        if cfg.reject_zero_fields and p1 == Domain.CORE and p2 == 0 and (word.ratio == 0 or word.v_target_raw == 0):  # T-025: a point word has V target 0 (OCCT, measured)
+        top = (self._top_fused_ratio(cpu) or max(_PLATFORM.p_point_ratios if self._kind(cpu) == "P" else _PLATFORM.e_point_ratios)) if p1 == Domain.CORE else None
+        zero_target = word.v_target_raw == 0 and not (top is not None and 0 < word.ratio <= top)  # G-120: no OC point (ratio <= top fused) = ratio | offset << 21, target 0 is the shape the planner writes
+        if cfg.reject_zero_fields and p1 == Domain.CORE and p2 == 0 and (word.ratio == 0 or zero_target):  # T-025: a point word has V target 0 (OCCT, measured)
             return int(Rc.InvalidParam), 0  # models the UNVERIFIED acceptance: XTU never sent a zero ratio / V target
         cap = cfg.oc_cap_ratio[self._kind(cpu)] if p1 == Domain.CORE else cfg.domain_cap_ratio.get(p1)
         if cap is not None and word.ratio > cap:
@@ -741,6 +751,10 @@ class SimMsrPort(MsrPort):
             return int(Rc.UndervoltProtection), 0
         if word.static and not cfg.allow_static:
             return int(Rc.InvalidParam), 0
+        if p1 == Domain.CORE and p2 == 0 and cfg.drop_target_without_oc_point and word.offset_raw != 0:
+            top = self._top_fused_ratio(cpu)
+            if top is not None and word.ratio <= top:  # no OC point: the hardware keeps ratio + offset only ([MEASURED lnx 2026-10-11]: 0xFEC5B439 read back 0xFEC00039)
+                word = VfWord(word.ratio, 0, word.static, word.offset_raw)
         if Cmd.VOLTAGE_FREQ_WRITE not in self._silent:
             for target in self._scope(cpu, p1):
                 self._vf[self._vf_key(p1, target, p2)] = word

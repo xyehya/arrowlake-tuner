@@ -102,8 +102,9 @@ class StepSequence(unittest.TestCase):
         plan = plan_for(profile(p4(offset_mv=-30)))
         write = next(s for s in plan.steps if s.kind is StepKind.WRITE_VF)
         self.assertEqual(write.before, P4_BASELINE)
-        self.assertEqual(write.after, P4_BASELINE.with_(offset_raw=-31))  # (30*1024+512)//1000 = 31, sign kept
-        self.assertEqual(write.data, P4_BASELINE.with_(offset_raw=-31).to_u32())
+        kept = P4_BASELINE.with_(offset_raw=-31, v_target_raw=0)  # G-120: ratio 55 <= 57 = no OC point: the hardware keeps no V target next to an offset
+        self.assertEqual(write.after, kept)  # (30*1024+512)//1000 = 31, sign kept
+        self.assertEqual(write.data, kept.to_u32())
         self.assertEqual(write.request().data, write.data)
 
     def test_ratio_only_and_voltage_only_leave_the_rest_alone(self) -> None:
@@ -116,14 +117,14 @@ class StepSequence(unittest.TestCase):
         self.assertEqual(w.v_target_raw, 1331)
         # ratio 55 -> 50 and V target 1348 -> 1331 both fall: two 0x11 words (frequency first); the LAST one is the full word
         full = [s for s in plan_for(profile(p4(offset_mv=-30, ratio=50, oc_voltage_mv=1300))).steps if s.kind is StepKind.WRITE_VF][-1]
-        self.assertEqual(full.after, VfWord(50, 1331, False, -31))
+        self.assertEqual(full.after, VfWord(50, 0, False, -31))  # G-120: no OC point at ratio 50 -> the 1300 mV target is not written (warned)
 
     def test_static_bit_is_never_changed(self) -> None:
         static = VfWord(55, 0x544, True, 0)
         plan = plan_for(profile(p4(offset_mv=-30)), {4: static})
         w = next(s for s in plan.steps if s.kind is StepKind.WRITE_VF)
         self.assertTrue(w.after.static)
-        self.assertEqual(w.after, static.with_(offset_raw=-31))
+        self.assertEqual(w.after, static.with_(offset_raw=-31, v_target_raw=0))
 
     def test_per_core_state_decides_the_0x15_step(self) -> None:
         enabled = plan_for(profile(p4(offset_mv=-30)), per_core_enabled=True)
@@ -171,11 +172,11 @@ class MeasuredShapes(unittest.TestCase):
 
     def test_cpu0_minus_5_mv_is_xtus_word(self) -> None:
         plan = self.plan(profile(p_core(0, -5)), [0])
-        self.assertEqual(write_words(plan, 0), (0xFF65B439, 0x39, 0x3))
+        self.assertEqual(write_words(plan, 0), (0xFF600039, 0x39, 0x3))  # G-120: P0's OC ratio 57 = top fused ratio, no OC point: ratio | offset << 21, target 0 [MEASURED lnx 2026-10-11]
         self.assertTrue(plan.allowed, plan.refusals)
 
     def test_cpu0_minus_15_mv_is_xtus_word(self) -> None:
-        self.assertEqual(write_words(self.plan(profile(p_core(0, -15)), [0]), 0), (0xFE25B439, 0x39, 0x3))
+        self.assertEqual(write_words(self.plan(profile(p_core(0, -15)), [0]), 0), (0xFE200039, 0x39, 0x3))
 
     def test_cpu0_revert_word_keeps_the_fused_v_target_not_the_zero_one(self) -> None:
         plan = self.plan(profile(p_core(0, 0)), [0])
@@ -184,7 +185,7 @@ class MeasuredShapes(unittest.TestCase):
 
     def test_cpu1_ratio_comes_from_0x1c_and_v_target_from_0x09(self) -> None:
         plan = self.plan(profile(p_core(1, -5)), [1])
-        self.assertEqual(write_words(plan, 1), (0xFF653837, 0x37, 0x3))  # ratio 0x37 = 55 (0x1C), not 57 (0x09); V target 0x538
+        self.assertEqual(write_words(plan, 1), (0xFF600037, 0x37, 0x3))  # ratio 0x37 = 55 (0x1C), not 57 (0x09); no OC point -> V target 0
         self.assertEqual(write_words(self.plan(profile(p_core(1, 0)), [1]), 1), (0x00053837, 0x37, 0x3))
         self.assertTrue(plan.allowed, plan.refusals)
 
@@ -195,7 +196,7 @@ class MeasuredShapes(unittest.TestCase):
         clear = self.plan(profile(p_core(1, -5)), [1], per_core_enabled=False)
         self.assertEqual([s.cmd for s in clear.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x15, 0x11, 0x1D, 0x27])
 
-    def test_no_word_with_a_zero_ratio_or_v_target_is_ever_planned(self) -> None:
+    def test_no_word_with_a_zero_ratio_is_ever_planned_and_a_zero_v_target_only_without_an_oc_point(self) -> None:
         for cpu in range(24):
             prof = profile(p_core(cpu, -5)) if cpu < 8 else profile(e_core(cpu - 8, -5))
             cpus = [cpu] if cpu < 8 else list(range(8 + 4 * ((cpu - 8) // 4), 12 + 4 * ((cpu - 8) // 4)))
@@ -204,7 +205,10 @@ class MeasuredShapes(unittest.TestCase):
                 w = VfWord.from_u32(write_words(plan, c)[0])
                 self.assertNotEqual((w.ratio, w.v_target_raw == 0), (0, True), c)
                 self.assertGreater(w.ratio, 0, c)
-                self.assertGreater(w.v_target_raw, 0, c)
+                if cpu < 8:  # G-120: ratio <= 57 = no OC point -> the kept word has no target
+                    self.assertEqual(w.v_target_raw, 0, c)
+                else:  # an E word takes ratio 0x1C[7:0] = 48 > 46 = the top fused ratio: it IS an OC point (XTU's shape), so it carries the fused target
+                    self.assertGreater(w.v_target_raw, 0, c)
                 self.assertFalse(w.static)
             self.assertTrue(plan.allowed, (cpu, plan.refusals))
 
@@ -233,8 +237,7 @@ class MeasuredShapes(unittest.TestCase):
         refused = build_plan(profile(p_core(1, -5)), TOPO, {1: none}, per_core_enabled=True, policy=POLICY)
         self.assertFalse(refused.allowed)
         self.assertTrue(any("ratio 0" in r.detail for r in refused.refusals), refused.refusals)
-        no_fused = dataclasses.replace(measured_readings(1), fused=0x39)  # fused V target 0
-        refused = build_plan(profile(p_core(1, -5)), TOPO, {1: no_fused}, per_core_enabled=True, policy=POLICY)
+        refused = build_plan(profile(e_core(0, -5)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
         self.assertTrue(any("v_target_raw 0" in r.detail for r in refused.refusals), refused.refusals)
 
     def test_xtu_word_helper(self) -> None:

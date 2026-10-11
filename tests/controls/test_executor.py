@@ -60,6 +60,9 @@ class Case(unittest.TestCase):
         return make_session(self.tmp, **kwargs)
 
 
+P4_KEPT = P4_BASELINE.with_(offset_raw=-31, v_target_raw=0)  # the word the planner writes for -30 mV on P4 (no OC point) and the hardware keeps
+
+
 class HappyPaths(Case):
     def test_p_core_offset_minus_30_mv_full_sequence(self) -> None:
         s = self.session()
@@ -78,8 +81,8 @@ class HappyPaths(Case):
             [(4, 0x14), (4, 0x10), (4, 0x1C), (4, 0x09), (4, 0x26), (4, 0x15), (4, 0x14), (4, 0x11), (4, 0x10), (4, 0x1D), (4, 0x1C), (4, 0x27), (4, 0x26)],
         )
         # the word in the simulator is the baseline with only the offset changed; 0x1D = its ratio, 0x27 = the 0x26 word
-        self.assertEqual(s.sim.vf(4), P4_BASELINE.with_(offset_raw=-31))
-        self.assertEqual((s.sim.vf(4).ratio, s.sim.vf(4).v_target_raw, s.sim.vf(4).static), (55, 0x544, False))
+        self.assertEqual(s.sim.vf(4), P4_KEPT)  # G-120: ratio 55 <= 57 = no OC point: ratio | offset << 21, V target 0
+        self.assertEqual((s.sim.vf(4).ratio, s.sim.vf(4).v_target_raw, s.sim.vf(4).static), (55, 0, False))
         self.assertEqual([d for _, cmd, d in s.requests() if cmd in (0x1D, 0x27)], [55, 3])
         self.assertTrue(s.sim.per_core_enabled)
         self.assertEqual(s.sim.misc_global_config, 0x8)
@@ -91,7 +94,7 @@ class HappyPaths(Case):
         self.assertEqual(write.before, P4_BASELINE)
         self.assertEqual(write.after, s.sim.vf(4))
         self.assertAlmostEqual(write.applied_offset_mv, -31 * 1000 / 1024)
-        self.assertAlmostEqual(write.applied_v_mv, 0x544 * 1000 / 1024)
+        self.assertAlmostEqual(write.applied_v_mv, 0.0)  # G-120: no OC point, the word carries no V target
         # nothing else moved
         fresh = SimMsrPort()
         for cpu in range(24):
@@ -117,7 +120,7 @@ class HappyPaths(Case):
         )
         self.assertTrue(all(a["purpose"].startswith("apply:") for a in attempts))
         self.assertEqual(attempts[6]["baseline"], f"0x{P4_BASELINE.to_u32():08X}")
-        self.assertEqual(attempts[6]["req_data"], f"0x{P4_BASELINE.with_(offset_raw=-31).to_u32():08X}")
+        self.assertEqual(attempts[6]["req_data"], f"0x{P4_KEPT.to_u32():08X}")
         self.assertEqual(attempts[7]["req_data"], "0x00000037")  # 0x1D = the ratio 55
         self.assertEqual(attempts[7]["baseline"], "0x00003737")  # the 0x1C word read
         self.assertEqual(attempts[8]["req_data"], "0x00000003")  # 0x27 = the 0x26 word
@@ -144,7 +147,7 @@ class HappyPaths(Case):
         )
         # execute the CPU's three revert requests in a NEW guard session (the old one never executes them)
         fake, sim = s.fake, s.sim
-        self.assertEqual(sim.vf(4), P4_BASELINE.with_(offset_raw=-31))
+        self.assertEqual(sim.vf(4), P4_KEPT)
         g2 = WriteGuard(
             MailboxTransport(sim, sleep=fake.sleep, clock=fake.clock),
             policy_with(dwell=0.0),
@@ -229,19 +232,15 @@ class HappyPaths(Case):
         s = self.session()
         report = s.apply(profile(p4(offset_mv=-30, ratio=50, oc_voltage_mv=1300)))
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(s.sim.vf(4), VfWord(50, 1331, False, -31))
+        self.assertEqual(s.sim.vf(4), VfWord(50, 0, False, -31))  # G-120: ratio 50 <= 57 = no OC point, the 1300 mV target is not written
         self.assertEqual(s.sim.favored_word(4) & 0xFF, 50)  # 0x1D carried the ratio of the 0x11 word
         writes = [r for r in report.steps if r.step.kind is StepKind.WRITE_VF]
-        self.assertEqual(len(writes), 2)  # ratio and V target both fall (D-016): frequency first, then the full word
-        self.assertEqual(writes[0].after, VfWord(50, 1348, False, 0))  # the first word: only the ratio moved (read back)
+        self.assertEqual(len(writes), 1)  # no V target to order against the falling ratio: one word
         write = writes[-1]
-        self.assertAlmostEqual(write.applied_v_mv, 1331 * 1000 / 1024)  # 1299.80 mV, not 1300
-        self.assertNotAlmostEqual(write.applied_v_mv, 1300.0, places=1)
         self.assertAlmostEqual(write.applied_offset_mv, -30.2734375)
         self.assertIn(XTU_SHAPE_CAVEAT, report.warnings)
         text = report.format_report()
         self.assertIn(XTU_SHAPE_CAVEAT, text)
-        self.assertIn("1299.80 mV", text)
         self.assertIn("-30.27 mV", text)
         self.assertIn("raw -31", text)
 

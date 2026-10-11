@@ -62,6 +62,7 @@ def dump_sim(**overrides: object) -> SimMsrPort:
         overrides.setdefault("cpu_point_ratios", non_favored_tables())
     overrides.setdefault("cpu_point_ratios", non_favored_tables())
     overrides.setdefault("reject_zero_fields", True)
+    overrides.setdefault("oc_adds_point", False)  # G-120: measured() models the OC point; these walk tests predate it
     return SimMsrPort(SimConfig.measured(**overrides))
 
 
@@ -514,7 +515,8 @@ class PerfSim(SimMsrPort):
 
 def perf_sim(io: FakeIO, **overrides: object) -> PerfSim:
     overrides.setdefault("per_point", True)
-    overrides.setdefault("initial_vf", {0: VfWord.from_u32(0x39), 8: VfWord(48, 0x4A0, False, 0)})
+    overrides.setdefault("oc_adds_point", False)  # G-120: E starts at 48x > 46 here; these measure tests predate the modelled OC point
+    overrides.setdefault("initial_vf", {0:VfWord.from_u32(0x39), 8: VfWord(48, 0x4A0, False, 0)})
     sim = PerfSim(SimConfig.measured(**overrides))
     sim.io = io
     return sim

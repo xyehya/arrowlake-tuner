@@ -228,6 +228,25 @@ class ApplyWordTests(TuneCase):
         self.assertEqual({rb["unit"] for rb in res["readback"]}, {"P2"})
         self.assertEqual(self.word(1).offset_raw, 0)  # nothing else moved
 
+    def test_the_first_hardware_sittings_p0_whole_curve_and_ec1_oc_point(self) -> None:
+        """G-120 [MEASURED lnx 2026-10-11] (tuning-results.md "First write sittings"): P0's OC ratio 57 is the top fused ratio = no OC point, so a whole-curve offset is
+        ratio | offset << 21 with target 0 and reads back whole (the hardware kept 0xFEC00039 where the old plan wrote 0xFEC5B439 and tripped); an OC ratio above the
+        top fused one is an OC point and keeps its adaptive target (EC1 48x 1.1367 V = 0x48C30)."""
+        h = self.boot()
+        self.read(h)
+        self.assertFalse(getattr(h.helper, "tuned_this_boot", False))
+        res = self.apply_ok(h, self.plan(h, rows(row("P0", curve=-10))))
+        self.assertEqual(self.word(0).to_u32(), 0xFEC00039)
+        self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
+        self.assertTrue(h.helper.tuned_this_boot)  # fix 4: any apply this boot ends "stock"
+        res = self.apply_ok(h, self.plan(h, rows(row("P0", curve=0))))  # back to 0: XTU-shaped word, target kept with offset 0 (read back 0x0005B439)
+        self.assertEqual(self.word(0).to_u32(), 0x0005B439)
+        self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
+        res = self.apply_ok(h, self.plan(h, rows(row("EC1", ratio=48, v=1.1367))))
+        self.assertEqual(self.word(12).to_u32(), 0x00048C30)
+        self.assertEqual(self.sim.vf(12, 0, 7).ratio, 48)  # the OC point appeared as P2 = 7
+        self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
+
     def test_per_point_offset_by_ratio_leaves_the_point_ratio_and_v_target_alone(self) -> None:
         h = self.boot(ALL_P_53)
         self.read(h)

@@ -67,9 +67,9 @@ class Cpu0(MeasuredCase):
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual(report.operations, 8)
         self.assertEqual([r.step.cmd for r in report.steps], XTU_READS + [0x11, 0x1D, 0x27])
-        self.assertEqual(self.writes(s), [(0, 0x11, 0xFF65B439), (0, 0x1D, 0x39), (0, 0x27, 0x3)])  # S-04, in XTU's per-core order
+        self.assertEqual(self.writes(s), [(0, 0x11, 0xFF600039), (0, 0x1D, 0x39), (0, 0x27, 0x3)])  # S-04, in XTU's per-core order
         self.assertNotIn(0x15, [cmd for _, cmd, _ in s.requests()])  # 0x14 bit 3 is set: XTU skips the 0x15, so do we
-        self.assertEqual(s.sim.vf(0).to_u32(), 0xFF65B439)
+        self.assertEqual(s.sim.vf(0).to_u32(), 0xFF600039)
         self.assertEqual((s.sim.favored_word(0), s.sim.granular_word(0)), (0x3939, 3))
         self.assertEqual(report.zero_baseline_cpus, (0,))  # its baseline 0x39 carries no V target
         self.assertTrue(all(r.verified for r in report.steps if r.step.kind.is_write))
@@ -78,8 +78,8 @@ class Cpu0(MeasuredCase):
         s = self.session()
         report = s.apply(profile(p_core(0, -15)))
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(self.writes(s)[0], (0, 0x11, 0xFE25B439))  # S-04c
-        self.assertEqual(s.sim.vf(0).to_u32(), 0xFE25B439)
+        self.assertEqual(self.writes(s)[0], (0, 0x11, 0xFE200039))  # S-04c
+        self.assertEqual(s.sim.vf(0).to_u32(), 0xFE200039)
 
     def test_reverting_with_offset_0_writes_xtus_revert_word_not_the_baseline(self) -> None:
         s = self.session()
@@ -109,9 +109,9 @@ class Cpu1(MeasuredCase):
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual([r.step.cmd for r in report.steps], [0x14, 0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27])  # the task's step list
         self.assertEqual([(r.step.cmd, r.step.p1) for r in report.steps if r.step.cmd == 0x09], [(0x09, 0x11)])
-        self.assertEqual(self.writes(s), [(1, 0x11, 0xFF653837), (1, 0x1D, 0x37), (1, 0x27, 0x3)])  # S-04d
+        self.assertEqual(self.writes(s), [(1, 0x11, 0xFF600037), (1, 0x1D, 0x37), (1, 0x27, 0x3)])  # S-04d
         word = s.sim.vf(1)
-        self.assertEqual((word.ratio, word.v_target_raw, word.static, word.offset_raw), (0x37, 0x538, False, -5))
+        self.assertEqual((word.ratio, word.v_target_raw, word.static, word.offset_raw), (0x37, 0, False, -5))
         self.assertEqual(report.steps[1].after.to_u32(), 0)  # the baseline read: all zero
         self.assertEqual(s.sim.vf(0).to_u32(), 0x39)  # CPU 0 untouched
         self.assertEqual(s.sim.vf(2).to_u32(), 0)  # so is every other core
