@@ -14,6 +14,6 @@
 | G-110 | dashboard redesign: futuristic, tabbed, diagrams, interactive (Opus + frontend-design) | lnx | T0 | **merged** 2026-10-11 | G-105 |
 | G-111 | helper: V/F curve measurement (cpufreq caps + VID), curve store, mem.read (MCHBAR), telemetry restart | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
 | G-112 | D-032 advanced policy + tune ops (read/plan/apply/reset/restore) + profiles store | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
-| G-113 | web v3: Dashboard+memory+slider, Curves, Tune, Profiles | lnx | T0 | ready 2026-10-11 | SPEC-v3 |
+| G-113 | web v3: Dashboard+memory+slider, Curves, Tune, Profiles | lnx | T0 | **merged** 2026-10-11 | SPEC-v3 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
