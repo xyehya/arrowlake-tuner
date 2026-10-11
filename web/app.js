@@ -1499,8 +1499,8 @@
         const p = sv("path", { d: s.pts.map((q, i) => (i ? "L" : "M") + ch.sx(q.mhz).toFixed(1) + " " + ch.sy(q.v).toFixed(1)).join("") }, cls);
         lines.append(p);
         ch.lineEls[s.key] = p;
-        if (s.pts.length <= 24 && !s.dash) {
-          const marked = s.pts.some((q) => isFusedPoint(q.fused));   // fused points filled and larger, in-between ratios small and quiet
+        const marked = s.pts.some((q) => isFusedPoint(q.fused));   // fused points filled and larger, in-between ratios small and quiet (even on a dense run)
+        if ((marked || s.pts.length <= 24) && !s.dash) {
           for (const q of s.pts) {
             const fused = isFusedPoint(q.fused);
             const dot = sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: !marked ? 3 : fused ? 4.5 : 2 }, "vc-dot u-" + s.unit + (marked ? (fused ? " fused" : " between") : ""));
@@ -3758,7 +3758,7 @@
     setText("st-clock", mmss(el0));
     setText("st-of", "of " + fmtLen(of));
     const e = $("st-errors");
-    e.textContent = !running && !ST.result ? "no errors counted" : errs === 0 ? "no errors so far" : errs + (errs === 1 ? " error counted" : " errors counted");
+    e.textContent = !running && !ST.result ? "no errors counted" : errs === 0 ? (running ? "no errors so far" : "no errors detected") : errs + (errs === 1 ? " error counted" : " errors counted");
     e.className = "st-errors" + (isNum(errs) && errs > 0 ? " bad" : "");
     const ph = running ? (S.cancelling ? "stopping" : "running") : "not running";
     setPill("st-phase", ph, running ? "s-busy" : "s-neutral");
@@ -3873,22 +3873,20 @@
     const nodes = [head, sum, note, stats];
     const ach = isObj(r.achieved) ? r.achieved : {};
     const units = UNIT_IDS.filter((u) => isObj(ach[u]));
-    if (units.length) {
-      const t = el("table", "grid num st-ach");
-      t.append(el("caption", "sr", "Achieved clock per unit"));
-      const hd = el("thead"), hr = el("tr");
-      hr.append(...["Unit", "Mean clock", "Ratio mostly seen"].map((x, i) => { const c = el("th", i ? "n" : "", x); c.scope = "col"; return c; }));
-      hd.append(hr);
-      const tb = el("tbody");
-      for (const u of units) {
-        const a = ach[u], tr = el("tr");
-        tr.append(td(unitLabel(u) + (FAVORED.indexOf(u) >= 0 ? " (favored)" : "")), td(isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a", "n"), td(isNum(a.ratio_mode) ? a.ratio_mode + "×" : "n/a", "n"));
-        tb.append(tr);
-      }
-      t.append(hd, tb);
-      const wrap = el("div", "scroll");
-      wrap.append(t);
-      nodes.push(wrap);
+    if (units.length) {   // the same mini map as the picker: the units that ran, each with the clock it held and its usual ratio
+      const tile = (u) => {
+        const a = ach[u], d = el("div", "mm-tile static u-" + u);
+        d.title = unitLabel(u) + ": mean clock and the ratio most often seen under load" + (FAVORED.indexOf(u) >= 0 ? " (favored core)" : "");
+        d.append(el("span", "mm-name", u), el("span", "mm-cpus", isNum(a.ratio_mode) ? a.ratio_mode + "× mostly" : "ratio n/a"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
+        return d;
+      };
+      const p = el("div", "mm-p"), e = el("div", "mm-e");
+      p.append(...units.filter((u) => unitKind(u) === "P").map(tile)); e.append(...units.filter((u) => unitKind(u) === "E").map(tile));
+      const map = el("div", "st-map st-ach");
+      map.setAttribute("role", "group");
+      map.setAttribute("aria-label", "Achieved clock per unit");
+      map.append(...[p, e].filter((x) => x.children.length));
+      nodes.push(el("h3", "", "Clock each unit held"), map);
     } else {
       nodes.push(el("p", "muted", "Achieved clocks: n/a (no telemetry sampler was running)."));
     }

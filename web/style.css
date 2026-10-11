@@ -75,7 +75,7 @@ p { margin: 8px 0; }
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 8px 24px;
+  gap: 8px 16px;
   padding: 10px clamp(16px, 3vw, 40px);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(12px);
@@ -107,7 +107,7 @@ p { margin: 8px 0; }
 .tabs [role="tab"][aria-selected="true"]::after {
   content: "";
   position: absolute;
-  left: 14px; right: 14px; bottom: -11px;
+  left: 11px; right: 11px; bottom: -11px;
   height: 2px;
   border-radius: 2px;
   background: var(--signal);
@@ -799,7 +799,10 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .st-stat { display: grid; gap: 0; }
 .st-stat-v { font-size: 20px; font-weight: 300; }
 .st-stat-v.bad { color: var(--bad-fg); font-weight: 600; }
-.st-ach { max-width: 520px; }
+.st-ach { margin: 6px 0 4px; }
+.st-ach .mm-p { grid-template-columns: repeat(8, minmax(92px, 1fr)); }
+.st-ach .mm-e { grid-template-columns: repeat(4, minmax(92px, 1fr)); }
+.mm-tile.static { cursor: default; }
 .st-lines { margin: 8px 0; padding: 8px 12px 8px 28px; font: 13px var(--mono); border-radius: var(--radius-s); background: var(--die); color: var(--text-2); overflow-wrap: anywhere; }
 .st-hist td, .st-hist th { white-space: nowrap; }
 .st-result h3 { margin-top: 12px; }
@@ -809,8 +812,13 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 @media (max-width: 1100px) {
   .st-grid { grid-template-columns: minmax(0, 1fr); }
 }
+@media (max-width: 1100px) {
+  .st-ach .mm-p { grid-template-columns: repeat(4, minmax(92px, 1fr)); }
+  .st-ach .mm-e { grid-template-columns: repeat(2, minmax(92px, 1fr)); }
+}
 @media (max-width: 860px) {
   .mm-p { grid-template-columns: repeat(2, minmax(92px, 1fr)); }
+  .st-ach .mm-p { grid-template-columns: repeat(2, minmax(92px, 1fr)); }
   .st-fields input[type="range"] { width: 100%; }
   .st-sum { font-size: 17px; }
 }
