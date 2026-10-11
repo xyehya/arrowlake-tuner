@@ -144,6 +144,14 @@
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
     SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
     BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
+    NO_INVOKER: "the helper does not know which user to run the tool as (it must be started from the launcher)",
+    TOOL_MISSING: "the load tool is not installed (stress-ng for the CPU, stressapptest for the memory)",
+    TRUST_PATH: "the load tool is not in a root-owned place, so the helper refused to run it",
+    MEM_RANGE: "that much memory is not free: pick less, or leave it on automatic",
+    STALE_JOURNAL: "an earlier run left cpufreq limits that could not be put back; nothing was started",
+    CAP_WRITE: "the ratio cap could not be written to cpufreq, so nothing was started",
+    SPAWN: "the load tool could not be started",
+    RESTORE_FAILED: "the cpufreq limits could not be put back after the run: check System before doing anything else",
     TURBO_ORDER: "turbo ratios may only fall as more cores are active: a bucket cannot be higher than the one to its left (fewer active cores)",
   };
 
@@ -181,7 +189,7 @@
   function hideBanner() { $("banner").hidden = true; }
 
   // ---- tabs (ARIA tablist: roving tabindex, arrow keys, Home/End; the active tab lives in the URL hash) -----------------------------
-  const TABS = ["dashboard", "curves", "tune", "profiles", "system", "audit"];
+  const TABS = ["dashboard", "curves", "tune", "stress", "profiles", "system", "audit"];
   const SUBS = ["overview", "cores", "sensors"];
   const HASH_ALIAS = { overview: "dashboard/overview", cores: "dashboard/cores", sensors: "dashboard/sensors", vf: "tune" };
 
@@ -1020,6 +1028,8 @@
         renderTemps();
         for (const id of ["ch-power", "ch-hot", "ch-vcore", "ch-dram"]) renderChart(charts[id]);
       }
+    } else if (V.tab === "stress") {
+      renderStress();
     }
   }
 
@@ -1082,10 +1092,11 @@
   }
 
   // ---- long operations: tune.read, vf.measure, tune.apply (one at a time; the helper state machine decides) ------------------------------
-  function opKindFromState(st) { return st === "measuring" ? "measure" : st === "applying" ? "commit" : "read"; }
+  function opKindFromState(st) { return st === "measuring" ? "measure" : st === "applying" ? "commit" : st === "stressing" ? "stress" : "read"; }
 
   function adoptOp(id, st) {
     S.opId = id; S.opKind = opKindFromState(st); S.adopted = true; S.cancelling = false;
+    if (S.opKind === "stress" && !ST.run) ST.run = { kind: "cpu", of: 0, elapsed: 0, errors: 0, units: UNIT_IDS.slice() };   // started elsewhere or before a reload: settings unknown
     onOpStarted();
   }
 
@@ -1122,10 +1133,10 @@
 
   function onProgress(ev) {
     const id = typeof ev.op_id === "string" ? ev.op_id : null;
-    if (!S.opId && id && !S.doneIds.has(id)) adoptOp(id, typeof ev.unit === "string" ? "measuring" : S.hbState);
+    if (!S.opId && id && !S.doneIds.has(id)) adoptOp(id, typeof ev.unit === "string" ? "measuring" : isNum(ev.elapsed_s) ? "stressing" : S.hbState);
     if (id !== S.opId) return;
     if (isNum(ev.ops_used) && isNum(ev.ops_budget)) { S.opsUsed = ev.ops_used; S.opsBudget = ev.ops_budget; renderHelper(); }
-    if (S.opKind === "measure") measureProgress(ev); else mailboxProgress(ev);
+    if (S.opKind === "measure") measureProgress(ev); else if (S.opKind === "stress") stressProgress(ev); else mailboxProgress(ev);
     updateGate();
   }
 
@@ -1133,6 +1144,7 @@
     const r = isObj(ev.result) ? ev.result : null;
     if (!r) return null;
     if ("curve_id" in r || "record" in r) return "measure";
+    if ("stopped_by" in r) return "stress";
     if ("readback" in r) return "commit";
     if (Array.isArray(r.units)) return "read";
     return null;
@@ -1151,12 +1163,14 @@
 
   function dispatchResult(kind, ev) {
     if (kind === "measure") onMeasureResult(ev);
+    else if (kind === "stress") onStressResult(ev);
     else if (kind === "commit") onCommitResult(ev);
     else onReadResult(ev);
   }
 
   function afterMissedResult(kind) {
     if (kind === "measure") { setText("cv-status", "The measurement ended while this page was away. Stored curves were reloaded."); loadCurves(true); }
+    else if (kind === "stress") { ST.run = null; setText("st-status", "A stress screen ended while this page was away. It is in the list below."); renderStress(); loadStressList(); }
     else if (kind === "commit") setText("tn-status", "An apply ended while this page was away. Read the tuning words to see where things stand.");
     else setText("tn-status", "A read ended while this page was away. Read again to see it.");
   }
@@ -1204,6 +1218,7 @@
     updateTuneGate();
     updateCurvesGate();
     updateModalGate();
+    updateStressGate();
     const tag = $("mode-tag");
     if (S.mode === "write") { tag.textContent = S.writesAllowed === true ? "guarded writes" : "writes off"; }
     else if (S.mode === null) tag.textContent = "reading preflight";
@@ -3383,6 +3398,13 @@
         });
         nodes.push(again);
       }
+      if (P.state === "done" && !P.partial) {
+        const val = el("button", "", "Validate with a stress screen");
+        val.type = "button";
+        val.title = "Opens Stress with " + (P.changedUnits && P.changedUnits.length ? "the units this apply changed" : "all units") + " selected. Nothing starts until you press Start.";
+        val.addEventListener("click", () => goValidate(P.changedUnits || []));
+        nodes.push(val);
+      }
       const close = el("button", "", "Close");
       close.type = "button";
       close.addEventListener("click", () => closeDialog($("dlg-plan")));
@@ -3604,6 +3626,337 @@
     setInterval(() => { if ($("dlg-plan").open) updateModalGate(); }, 1000);
   }
 
+  // ---- Stress: a short screen of the CPU or the memory (G-116 ops, G-119 page). No mailbox, no write; a quick screen, never an acceptance gate (D-019). ----
+  const ST = {
+    kind: "cpu",            // cpu | memory
+    method: "integer",      // integer | vector-math | cache
+    dur: 300,               // preset length in seconds
+    custom: false,          // the custom slider is the length
+    cap: null,              // ratio cap or null
+    memMb: null,            // null = the helper's default (3/4 of free memory)
+    sel: new Set(UNIT_IDS),
+    list: [], loaded: false,
+    run: null,              // {kind, of, elapsed, errors, units: [unit]} while a screen runs
+    result: null,           // the last stress.start result seen by this page
+  };
+  const ST_DURS = [{ value: 60, label: "1 min" }, { value: 300, label: "5 min" }, { value: 900, label: "15 min" }, { value: 3600, label: "60 min" }, { value: "custom", label: "Custom" }];
+  const ST_METHODS = [
+    { value: "integer", label: "Integer", title: "Integer arithmetic on every selected core (stress-ng, int64)" },
+    { value: "vector-math", label: "Vector math", title: "Matrix products: heavier on the vector units (stress-ng, matrixprod)" },
+    { value: "cache", label: "Cache", title: "Cache thrashing on every selected core (stress-ng, cache)" },
+  ];
+  const ST_MEM_MB = [1024, 2048, 4096, 8192, 16384, 32768];
+  const ST_WORDS = { integer: "integer", "vector-math": "vector math", cache: "cache" };
+
+  function stRunning() { return S.opId !== null && S.opKind === "stress"; }
+  function stDuration() { return ST.custom ? Number($("st-dur-custom").value) : ST.dur; }
+  function fmtLen(s) { return s % 60 === 0 && s >= 60 ? s / 60 + " min" : s < 60 ? s + " s" : fmtClock(s); }
+  function mmss(s) { const t = Math.max(0, Math.round(s)), m = Math.floor(t / 60), r = t % 60; return m + ":" + (r < 10 ? "0" : "") + r; }
+  function stMean(rec, unit) {   // mean clock of a unit's cpus in a history sample
+    const vs = unitCpus(unit).map((c) => (isObj(rec.cores[String(c)]) ? rec.cores[String(c)].mhz : null)).filter(isNum);
+    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  }
+
+  function buildStressControls() {
+    segmented($("st-kind"), [{ value: "cpu", label: "CPU", title: "Load the cores you pick with stress-ng" }, { value: "memory", label: "Memory", title: "Test the memory with stressapptest on all CPUs" }], ST.kind,
+      (k) => { ST.kind = k; renderStress(); });
+    segmented($("st-method"), ST_METHODS, ST.method, (m) => { ST.method = m; renderStress(); });
+    segmented($("st-dur"), ST_DURS, ST.dur, (v) => {
+      if (v === "custom") ST.custom = true; else { ST.custom = false; ST.dur = v; }
+      renderStress();
+    });
+    $("st-dur-custom").addEventListener("input", () => { ST.custom = true; renderStress(); });
+    const cap = $("st-cap");
+    cap.append(new Option("No cap", ""));
+    for (let r = 60; r >= 8; r--) cap.append(new Option(r + "× (" + r * 100 + " MHz)", String(r)));
+    cap.addEventListener("change", () => { ST.cap = cap.value === "" ? null : Number(cap.value); renderStress(); });
+    const mem = $("st-mem");
+    mem.append(new Option("Automatic: 3/4 of free memory", ""));
+    for (const mb of ST_MEM_MB) mem.append(new Option(mb / 1024 + " GB", String(mb)));
+    mem.addEventListener("change", () => { ST.memMb = mem.value === "" ? null : Number(mem.value); renderStress(); });
+    // units: a mini core map. P-cores in one row, the four E-clusters (4 cores each) beside them.
+    const tiles = UNIT_IDS.map((u) => {
+      const b = el("button", "mm-tile u-" + u);
+      b.type = "button";
+      b.dataset.unit = u;
+      b.setAttribute("aria-pressed", "true");
+      b.title = unitLabel(u) + " (cpu " + unitCpus(u).join(", ") + ")" + (FAVORED.indexOf(u) >= 0 ? ", favored core" : "");
+      b.append(el("span", "mm-name", u), el("span", "mm-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]), el("span", "mm-mhz", ""));
+      b.addEventListener("click", () => { if (ST.sel.has(u)) ST.sel.delete(u); else ST.sel.add(u); renderStress(); });
+      return b;
+    });
+    const quick = el("div", "chip-quick");
+    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", UNIT_IDS.slice(0, 8)], ["E-clusters", UNIT_IDS.slice(8)], ["None", []]]) {
+      const b = el("button", "link", label);
+      b.type = "button";
+      b.addEventListener("click", () => { ST.sel = new Set(units); renderStress(); });
+      quick.append(b);
+    }
+    const p = el("div", "mm-p"), e = el("div", "mm-e");
+    p.append(...tiles.slice(0, 8)); e.append(...tiles.slice(8));
+    fill($("st-units"), [p, e, quick]);
+  }
+
+  // One place draws the whole page from ST, S and the telemetry history, so a reload (adopting a run) and a click give the same picture.
+  function renderStress() {
+    const running = stRunning();
+    const cpu = ST.kind === "cpu";
+    syncSegmented($("st-kind"), ST.kind);
+    syncSegmented($("st-method"), ST.method);
+    syncSegmented($("st-dur"), ST.custom ? "custom" : ST.dur);
+    $("st-f-method").hidden = !cpu;
+    $("st-f-units").hidden = !cpu;
+    $("st-f-mem").hidden = cpu;
+    $("st-f-custom").hidden = !ST.custom;
+    const secs = stDuration();
+    $("st-dur-val").textContent = fmtLen(secs);
+    $("st-dur-custom").setAttribute("aria-valuetext", fmtLen(secs));
+    // while a screen runs the setup is read-only
+    for (const id of ["st-cap", "st-mem", "st-dur-custom"]) $(id).disabled = running;
+    for (const host of ["st-kind", "st-method", "st-dur"]) for (const b of $(host).children) b.disabled = running;
+    const live = running && ST.run ? new Set(ST.run.units) : null;
+    const last = V.hist.length ? V.hist[V.hist.length - 1] : null;
+    for (const b of $("st-units").querySelectorAll(".mm-tile")) {
+      const u = b.dataset.unit;
+      const on = live ? live.has(u) : ST.sel.has(u);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.disabled = running;
+      const m = running && on && last ? stMean(last, u) : null;
+      b.querySelector(".mm-mhz").textContent = running && on ? (m === null ? "n/a" : Math.round(m) + " MHz") : "";
+    }
+    for (const b of $("st-units").querySelectorAll(".chip-quick .link")) b.disabled = running;
+    updateStressGate();
+    renderStressLive();
+    renderStressTemps();
+  }
+
+  function updateStressGate() {
+    const running = stRunning();
+    const why = running ? "" : idleGate();
+    const none = ST.kind === "cpu" && ST.sel.size === 0;
+    $("btn-stress-start").disabled = running || why !== "" || none;
+    $("btn-stress-stop").disabled = !running || S.cancelling || S.sessionLost;
+    const secs = stDuration();
+    let est;
+    if (running) est = S.cancelling ? "Stopping. The tool is ended and the cpufreq limits are put back." : "Running. Stop ends it early; the result is kept either way.";
+    else if (why !== "") est = why;
+    else if (none) est = "Select at least one unit.";
+    else est = "Ready: " + (ST.kind === "cpu" ? ST_WORDS[ST.method] + " load on " + (ST.sel.size === UNIT_IDS.length ? "all 12 units" : ST.sel.size + (ST.sel.size === 1 ? " unit" : " units")) : "memory test of " + (ST.memMb === null ? "3/4 of free memory" : ST.memMb / 1024 + " GB") + " on all CPUs") +
+      " for " + fmtLen(secs) + (ST.cap === null ? "" : ", capped at " + ST.cap + "×") + ". It raises power and heat for that time.";
+    setText("st-est", est);
+  }
+
+  function renderStressLive() {
+    const running = stRunning();
+    const r = ST.run;
+    const of = running && r && isNum(r.of) ? r.of : stDuration();
+    const el0 = running && r && isNum(r.elapsed) ? r.elapsed : (!running && ST.result ? ST.result.elapsed_s : 0);
+    const f = of > 0 ? clamp(el0 / of, 0, 1) * 100 : 0;
+    const errs = running && r ? r.errors : (ST.result ? ST.result.errors : 0);
+    $("st-ring").setAttribute("stroke-dasharray", f.toFixed(1) + " 100");
+    $("st-ring").setAttribute("class", "ring-used" + (f <= 0 ? " empty" : "") + (isNum(errs) && errs > 0 ? " bad" : ""));
+    setText("st-clock", mmss(el0));
+    setText("st-of", "of " + fmtLen(of));
+    const e = $("st-errors");
+    e.textContent = !running && !ST.result ? "no errors counted" : errs === 0 ? "no errors so far" : errs + (errs === 1 ? " error counted" : " errors counted");
+    e.className = "st-errors" + (isNum(errs) && errs > 0 ? " bad" : "");
+    const ph = running ? (S.cancelling ? "stopping" : "running") : "not running";
+    setPill("st-phase", ph, running ? "s-busy" : "s-neutral");
+  }
+
+  function renderStressTemps() {
+    const s = V.hist.length ? V.hist[V.hist.length - 1] : null;
+    setTile("t-st-temp", s && isNum(s.hot) ? s.hot.toFixed(0) : "n/a", "°C", !!s && isNum(s.hot), "");
+    setTile("t-st-pkgw", s && isNum(s.pkg) ? s.pkg.toFixed(1) : "n/a", "W", !!s && isNum(s.pkg), "");
+    sparkline("sp-st-temp", (x) => x.hot, 0, MIN_SPAN.temp);
+    sparkline("sp-st-pkgw", (x) => x.pkg, 1, MIN_SPAN.power);
+  }
+
+  async function startStress() {
+    if (stRunning() || idleGate() !== "" || (ST.kind === "cpu" && ST.sel.size === 0)) return;
+    const secs = stDuration();
+    const args = { kind: ST.kind, duration_s: secs };
+    let units = [];
+    if (ST.kind === "cpu") {
+      args.method = ST.method;
+      units = UNIT_IDS.filter((u) => ST.sel.has(u));
+      if (units.length < UNIT_IDS.length) args.units = units;
+    } else {
+      units = UNIT_IDS.slice();
+      if (ST.memMb !== null) args.memory_mb = ST.memMb;
+    }
+    if (ST.cap !== null) args.ratio_cap = ST.cap;
+    S.submitting = true;
+    setText("st-status", "Submitting...");
+    updateGate();
+    const { status, body } = await api("stress.start", args);
+    S.submitting = false;
+    if (launched("stress", status, body)) {
+      if (S.opId) {
+        ST.run = { kind: ST.kind, of: secs, elapsed: 0, errors: 0, units: ST.kind === "cpu" ? units : UNIT_IDS.slice() };
+        setText("st-status", "Started (operation " + S.opId + ").");
+        $("st-result").hidden = true;
+      }
+    } else {
+      setText("st-status", "Not started: " + (status === 429 ? "too many operations pending" : errText(body)));
+    }
+    updateGate();
+    renderStress();
+  }
+
+  async function stopStress() {
+    if (!stRunning()) return;
+    S.cancelling = true;
+    renderStress();
+    const { status, body } = await api("stress.stop", {});
+    if (!(status === 200 && body.ok)) { S.cancelling = false; setText("st-status", "Stop not accepted: " + errText(body)); }
+    else setText("st-status", "Stop requested. The result arrives in a moment.");
+    renderStress();
+  }
+
+  function stressProgress(ev) {
+    if (!ST.run) ST.run = { kind: "cpu", of: isNum(ev.of_s) ? ev.of_s : 0, elapsed: 0, errors: 0, units: UNIT_IDS.slice() };   // adopted after a reload: settings unknown
+    if (isNum(ev.elapsed_s)) ST.run.elapsed = ev.elapsed_s;
+    if (isNum(ev.of_s)) ST.run.of = ev.of_s;
+    if (isNum(ev.errors)) ST.run.errors = ev.errors;
+    renderStress();
+  }
+
+  function onStressResult(ev) {
+    ST.run = null;
+    if (ev.ok === true && isObj(ev.result)) {
+      ST.result = ev.result;
+      setText("st-status", "");
+      renderStressResult(ev.result);
+    } else {
+      ST.result = null;
+      const why = typeof ev.server_error === "string" ? (ev.server_error === "helper_lost" ? "The helper was lost during the screen. CPU limits are restored when it restarts." : ev.server_error) : errText(ev);
+      setText("st-status", "Failed: " + why);
+      $("st-result").hidden = true;
+    }
+    renderStress();
+    loadStressList();
+  }
+
+  // ---- the result card. Words: "no errors detected in N min" at most. Nothing here says a setting is proven stable. ----
+  function stSummary(r) {
+    const n = isNum(r.errors) ? r.errors : 0, ran = fmtLen(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0));
+    if (r.stopped_by === "cancel") return "Stopped after " + ran + " of " + fmtLen(r.duration_s) + ". " + (n === 0 ? "No errors detected in that time." : n + (n === 1 ? " error" : " errors") + " detected.");
+    if (n > 0) return n + (n === 1 ? " error" : " errors") + " detected in " + ran + ". Treat this setting as unstable.";
+    if (r.stopped_by === "error") return "The screen ended with a tool error after " + ran + ". See the lines below.";
+    if (r.health === "delta") return "No errors detected in " + ran + ", but the machine health check changed. See below.";
+    return "No errors detected in " + ran + ".";
+  }
+
+  function renderStressResult(r) {
+    const card = $("st-result");
+    card.hidden = false;
+    const n = isNum(r.errors) ? r.errors : 0;
+    const bad = n > 0 || r.stopped_by === "error" || r.health === "delta" || (isNum(r.mce_new) && r.mce_new > 0);
+    const head = el("div", "card-head");
+    const h = el("h2", "", "Result");
+    const pills = el("div", "row-tight");
+    pills.append(pill(r.stopped_by === "time" ? "ran to the end" : r.stopped_by === "cancel" ? "stopped by you" : "tool error", r.stopped_by === "error" ? "s-bad" : "s-neutral"));
+    pills.append(pill(r.health === "clean" ? "health clean" : "health changed", r.health === "clean" ? "s-ok" : "s-bad"));
+    if (isNum(r.mce_new) && r.mce_new > 0) pills.append(pill(r.mce_new + " new machine-check " + (r.mce_new === 1 ? "event" : "events"), "s-bad"));
+    if (r.cap_valid === true) { const p = pill("cap held", "s-ok"); p.title = "Every loaded unit ran within one ratio of the cap."; pills.append(p); }
+    else if (r.cap_valid === false) { const p = pill("cap not held", "s-bad"); p.title = "A loaded unit ran more than one ratio away from the cap, so the screen did not test the capped ratio."; pills.append(p); }
+    head.append(h, pills);
+    const sum = el("p", "st-sum" + (bad ? " bad" : ""), stSummary(r));
+    const note = el("p", "muted", "A quick screen, not an acceptance gate.");
+    const stats = el("div", "st-stats");
+    const stat = (k, v, cls) => { const d = el("div", "st-stat"); d.append(el("span", "ro-label", k), el("span", "st-stat-v" + (cls ? " " + cls : ""), v)); return d; };
+    stats.append(stat("Errors", String(n), n > 0 ? "bad" : ""),
+      stat("Ran", fmtClock(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0)) + " of " + fmtLen(r.duration_s)),
+      stat("Hottest", isNum(r.max_temp_c) ? r.max_temp_c.toFixed(0) + " °C" : "n/a"),
+      stat("Peak package power", isNum(r.max_pkg_w) ? r.max_pkg_w.toFixed(1) + " W" : "n/a"));
+    const nodes = [head, sum, note, stats];
+    const ach = isObj(r.achieved) ? r.achieved : {};
+    const units = UNIT_IDS.filter((u) => isObj(ach[u]));
+    if (units.length) {
+      const t = el("table", "grid num st-ach");
+      t.append(el("caption", "sr", "Achieved clock per unit"));
+      const hd = el("thead"), hr = el("tr");
+      hr.append(...["Unit", "Mean clock", "Ratio mostly seen"].map((x, i) => { const c = el("th", i ? "n" : "", x); c.scope = "col"; return c; }));
+      hd.append(hr);
+      const tb = el("tbody");
+      for (const u of units) {
+        const a = ach[u], tr = el("tr");
+        tr.append(td(unitLabel(u) + (FAVORED.indexOf(u) >= 0 ? " (favored)" : "")), td(isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a", "n"), td(isNum(a.ratio_mode) ? a.ratio_mode + "×" : "n/a", "n"));
+        tb.append(tr);
+      }
+      t.append(hd, tb);
+      const wrap = el("div", "scroll");
+      wrap.append(t);
+      nodes.push(wrap);
+    } else {
+      nodes.push(el("p", "muted", "Achieved clocks: n/a (no telemetry sampler was running)."));
+    }
+    const lines = Array.isArray(r.error_lines) ? r.error_lines.filter((x) => typeof x === "string") : [];
+    if (lines.length) {
+      const ul = el("ul", "st-lines");
+      for (const x of lines) ul.append(el("li", "", x));
+      nodes.push(el("h3", "", "Notes from the tool and the helper"), ul);
+    }
+    nodes.push(el("p", "muted", isStr(r.id) ? "Stored as " + r.id + "." : "This result could not be stored on the machine."));
+    fill(card, nodes);
+  }
+
+  // ---- history (stress.list) ----
+  async function loadStressList() {
+    const { status, body } = await api("stress.list", {});
+    if (status === 200 && body.ok && isObj(body.result) && Array.isArray(body.result.results)) { ST.list = body.result.results.filter(isObj); ST.loaded = true; }
+    renderStressHistory(status === 200 && body.ok ? "" : "Stored screens unavailable: " + errText(body));
+  }
+
+  function stScreenText(r) {
+    if (r.kind === "memory") return "Memory" + (isNum(r.memory_mb) ? " " + (r.memory_mb >= 1024 ? (r.memory_mb / 1024).toFixed(r.memory_mb % 1024 ? 1 : 0) + " GB" : r.memory_mb + " MB") : "") + (isNum(r.ratio_cap) ? ", cap " + r.ratio_cap + "×" : "");
+    return "CPU " + (ST_WORDS[r.method] || "load") + (isNum(r.ratio_cap) ? ", cap " + r.ratio_cap + "×" : "");
+  }
+  function stUnitsText(r) {
+    if (r.kind === "memory") return "all CPUs";
+    const u = Array.isArray(r.units) ? r.units.filter((x) => typeof x === "string") : [];
+    return !u.length || u.length >= UNIT_IDS.length ? "all 12" : u.join(" ");
+  }
+
+  function renderStressHistory(problem) {
+    const empty = $("st-hist-empty");
+    $("st-hist").hidden = ST.list.length === 0;
+    empty.hidden = ST.list.length > 0 && !problem;
+    if (problem) empty.textContent = problem;
+    else if (!ST.list.length) empty.textContent = "No stress screens stored yet. Start one above; the result is kept on this machine.";
+    fill($("st-hist-body"), ST.list.map((r) => {
+      const tr = el("tr");
+      const n = isNum(r.errors) ? r.errors : 0;
+      const ended = el("td");
+      ended.append(pill(r.stopped_by === "time" ? "full length" : r.stopped_by === "cancel" ? "stopped" : "tool error", r.stopped_by === "error" ? "s-bad" : "s-neutral"));
+      const health = el("td");
+      health.append(pill(r.health === "clean" ? "clean" : "changed", r.health === "clean" ? "s-ok" : "s-bad"));
+      if (isNum(r.mce_new) && r.mce_new > 0) health.append(document.createTextNode(" "), pill(r.mce_new + " MCE", "s-bad"));
+      const ran = td(fmtClock(Math.round(isNum(r.elapsed_s) ? r.elapsed_s : 0)), "n", "asked for " + fmtLen(isNum(r.duration_s) ? r.duration_s : 0));
+      tr.append(td(fmtDate(r.started)), td(stScreenText(r)), td(stUnitsText(r)), ran, ended, td(String(n), n > 0 ? "n bad-text" : "n"), health,
+        td(isNum(r.max_temp_c) ? r.max_temp_c.toFixed(0) + " °C" : "n/a", "n"), td(isNum(r.max_pkg_w) ? r.max_pkg_w.toFixed(0) + " W" : "n/a", "n"));
+      return tr;
+    }));
+  }
+
+  function initStress() {
+    buildStressControls();
+    $("btn-stress-start").addEventListener("click", startStress);
+    $("btn-stress-stop").addEventListener("click", stopStress);
+    $("btn-stress-refresh").addEventListener("click", loadStressList);
+    renderStress();
+  }
+
+  // After a Tune apply: the review window offers a screen of the units it changed (the screen itself is started on the Stress tab).
+  function goValidate(units) {
+    ST.kind = "cpu";
+    ST.sel = new Set(units.length ? units : UNIT_IDS);
+    closeDialog($("dlg-plan"));
+    selectTab("stress", true);
+    renderStress();
+  }
+
   // ---- Profiles ---------------------------------------------------------------------------------------------------------------------------------
   const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;
   const PR = { list: [], loaded: false };
@@ -3737,6 +4090,7 @@
   function onTabShown(name) {
     if (name === "curves") { if (!CV.loaded && S.sseUp) loadCurves(false); renderCurves(); }
     else if (name === "tune") { if (!CV.loaded && S.sseUp) loadCurves(false); renderTunePreview(); updateTuneFoot(); }
+    else if (name === "stress") { if (S.sseUp && !ST.loaded) loadStressList(); renderStress(); }
     else if (name === "profiles") { if (S.sseUp) loadProfiles(); updateSaveState(); }
     else if (name === "audit") loadAudit();
   }
@@ -3855,6 +4209,7 @@
   syncCoreSet({});
   initCurves();
   initTune();
+  initStress();
   initProfiles();
   $("btn-preflight").addEventListener("click", loadPreflight);
   $("btn-audit").addEventListener("click", loadAudit);

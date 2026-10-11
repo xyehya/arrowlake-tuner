@@ -403,7 +403,7 @@ select option { background: var(--surface); color: var(--text); }
 button.small { padding: 3px 10px; font-size: 13px; }
 button.danger { border-color: color-mix(in srgb, var(--bad-fg) 50%, var(--line)); color: var(--bad-fg); }
 button.danger:hover:not(:disabled) { border-color: var(--bad-fg); background: var(--bad-bg); }
-button[aria-pressed="true"]:not(.seg-btn):not(.lg-chip):not(.unit-chip) { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); font-weight: 600; }
+button[aria-pressed="true"]:not(.seg-btn):not(.lg-chip):not(.unit-chip):not(.mm-tile) { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); font-weight: 600; }
 .seg-solo { padding: 4px 12px; font-size: 13px; border-radius: 999px; }
 .seg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .seg-s .seg-btn { padding: 2px 9px; font-size: 12.5px; }
@@ -745,4 +745,72 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
   .turbo-grid { grid-template-columns: minmax(0, 1fr); }
   .vccia-list li { grid-template-columns: minmax(0, 1fr) 80px; }
   .vccia-list .vc-at { grid-column: 1 / -1; }
+}
+
+/* ======================= Stress (G-119): a quick screen, never an acceptance gate ======================= */
+.st-banner {
+  margin: 0; padding: 10px 16px;
+  border-radius: var(--radius-s);
+  background: var(--warn-bg); color: var(--warn-fg);
+  border: 1px solid color-mix(in srgb, var(--warn-fg) 40%, transparent);
+  border-left-width: 5px;
+}
+.st-banner strong { color: var(--warn-fg); }
+.st-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
+.st-setup .card-head > .muted { max-width: 62ch; font-size: 13px; }
+.st-fields { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-end; margin-bottom: 14px; }
+.st-fields input[type="range"] { width: 200px; accent-color: var(--signal); }
+.st-fields output { min-width: 7ch; color: var(--text); }
+.st-units-field { margin-bottom: 14px; }
+.st-map { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: flex-start; }
+.mm-p, .mm-e { display: grid; gap: 6px; }
+.mm-p { grid-template-columns: repeat(4, minmax(92px, 1fr)); }
+.mm-e { grid-template-columns: repeat(2, minmax(92px, 1fr)); }
+.mm-tile {
+  display: grid; justify-items: start; gap: 0; min-height: 58px;
+  padding: 6px 10px 6px 14px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: var(--raised);
+  position: relative; overflow: hidden; text-align: left; line-height: 1.25;
+}
+.mm-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--u); }
+.mm-name { font-weight: 600; font-size: 14px; }
+.mm-cpus { font-size: 11px; color: var(--text-2); }
+.mm-mhz { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text); min-height: 1.25em; }
+.mm-tile[aria-pressed="false"] { background: transparent; color: var(--text-2); border-style: dashed; }
+.mm-tile[aria-pressed="false"]::before { opacity: 0.25; }
+.mm-tile[aria-pressed="true"] { border-color: color-mix(in srgb, var(--u) 55%, var(--line)); }
+.mm-tile:disabled { cursor: default; }
+.mm-tile:disabled[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--u) 12%, var(--raised)); }
+.st-map .chip-quick { flex: 1 1 100%; margin-left: 0; }
+.st-go { display: grid; gap: 8px; }
+.st-go .muted { margin: 0; min-height: 1.5em; }
+.st-live .ring-row { margin-bottom: 8px; }
+.st-errors { margin-top: 6px; font-size: 14px; color: var(--ok-fg); }
+.st-errors.bad, .bad-text { color: var(--bad-fg); font-weight: 600; }
+.ring-used.bad { stroke: var(--bad-fg); }
+.ring-used.empty { stroke-opacity: 0; }
+.st-ro.readouts { background: none; border: 0; padding: 0; border-top: 1px solid var(--line-soft); }
+.st-live #st-status { margin: 6px 0 0; min-height: 1.5em; }
+.st-result .card-head { align-items: center; }
+.st-sum { margin: 2px 0 0; font-size: 20px; font-weight: 300; line-height: 1.3; color: var(--ok-fg); }
+.st-sum.bad { color: var(--bad-fg); }
+.st-stats { display: flex; flex-wrap: wrap; gap: 8px 36px; margin: 14px 0; }
+.st-stat { display: grid; gap: 0; }
+.st-stat-v { font-size: 20px; font-weight: 300; }
+.st-stat-v.bad { color: var(--bad-fg); font-weight: 600; }
+.st-ach { max-width: 520px; }
+.st-lines { margin: 8px 0; padding: 8px 12px 8px 28px; font: 13px var(--mono); border-radius: var(--radius-s); background: var(--die); color: var(--text-2); overflow-wrap: anywhere; }
+.st-hist td, .st-hist th { white-space: nowrap; }
+.st-result h3 { margin-top: 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .st-live .ring-used { transition: stroke-dasharray 1600ms linear; }
+}
+@media (max-width: 1100px) {
+  .st-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .mm-p { grid-template-columns: repeat(2, minmax(92px, 1fr)); }
+  .st-fields input[type="range"] { width: 100%; }
+  .st-sum { font-size: 17px; }
 }

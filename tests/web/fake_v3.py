@@ -15,7 +15,10 @@ G-111 deviations from contract 9 (orchestrator, 2026-10-11), mirrored here:
   * ``vf.measure`` / ``curves.get`` are budgeted to the 64 KiB line: a record may carry ``omitted_units: [unit]``; ``curves.get {id, units: [unit]}`` returns those.
     (``FakeHelper.record_budget_units = N`` switches the budget on; default ``None`` = whole records.)
   * ``curves.update`` returns the list row; ``vf.measure`` may add ``problems: [str]`` (``measure_problems``).
-  * ``tuning_state.kind`` is only ``"words"`` (a ``tune.read`` this boot) or ``"unknown"``; never ``"stock"``.
+  * ``tuning_state.kind`` is ``"words"`` (a ``tune.read`` this boot), ``"unknown"``, or (G-118) ``"stock"`` (``seed_curve(offset_mv=0.0)``); a point of a
+    fused V/F ratio carries ``fused_point`` (1-based int, ``"oc"`` above the table), the in-between ratios of a dense run carry none.
+  * G-119: ``stress.start`` / ``stress.stop`` / ``stress.list`` with the contract 9 "G-116" shapes (``FakeHelper.stress_delay`` seconds per 2 s of the screen;
+    ``stress_errors`` / ``stress_lines`` / ``stress_health`` shape the result; ``stress_gate`` holds a run open).
   * On cancel / refusal the error ``detail`` carries the scalar ``curve_id`` of the stored partial curve (the server strips non-scalars); new
     ``detail.check`` values NO_CPUFREQ, LOAD_GENERATOR, MEASURE_UNAVAILABLE, JOURNAL_UNAVAILABLE, CURVE_LIMIT, EXISTS, NO_SUCH_CURVE.
 """
@@ -48,7 +51,7 @@ OFFSET_LIMIT = 200
 CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
 PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
 V3_OPS = frozenset({"mem.read", "vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "tune.read", "tune.plan", "tune.apply",
-                    "profiles.list", "profiles.save"})
+                    "profiles.list", "profiles.save", "stress.start", "stress.stop", "stress.list"})
 
 
 class W(str):
@@ -226,6 +229,15 @@ class V3Ops:
         self.apply_delay = 0.0
         self.apply_mismatch: set[tuple[str, int]] = set()
         self.tele_interval: float | None = None
+        self.stress_delay = 0.0                       # seconds of real time per progress event (2 s of the screen); 0 = finish at once
+        self.stress_errors = 0
+        self.stress_lines: list[str] = []
+        self.stress_health = "clean"
+        self.stress_refusal: dict | None = None       # {"code", "message", "check"}
+        self.stress_gate = threading.Event()
+        self.stress_gate.set()
+        self.stress_results: list[dict] = []          # stress.list rows, newest first
+        self._stressing: set[str] = set()
         self._measuring: set[str] = set()
         self._applying: set[str] = set()
         self.plans_v3: dict[str, dict] = {}
@@ -238,12 +250,14 @@ class V3Ops:
             return "measuring", sorted(self._measuring)[0]
         if self._applying:
             return "applying", sorted(self._applying)[0]
+        if self._stressing:
+            return "stressing", sorted(self._stressing)[0]
         return "idle", None
 
     def seed_curve(self, name: str = "Stock baseline", *, mode: str = "quick", baseline: bool = False, offset_mv: float | None = None,
                    created: str | None = None, units: list[str] | None = None) -> dict:
         """Store a finished synthetic curve; ``offset_mv`` overrides the offsets in force (e.g. 0.0 for a stock curve)."""
-        rec = self._new_record(name, mode, units or list(UNITS))
+        rec = self._new_record(name, mode, units or list(UNITS), stock=offset_mv == 0.0)
         for u in rec["units"]:
             for r in measure_ratios(u, mode):
                 rec["units"][u]["points"].append(self._point(u, r, offset_mv))
@@ -253,14 +267,16 @@ class V3Ops:
         self.curves[rec["id"]] = rec
         return rec
 
-    def _new_record(self, name: str, mode: str, units: list[str]) -> dict:
+    def _new_record(self, name: str, mode: str, units: list[str], stock: bool = False) -> dict:
         now = datetime.now(timezone.utc)
         cid = now.strftime("%Y%m%dT%H%M%SZ") + "-" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
         while cid in self.curves:
             cid = now.strftime("%Y%m%dT%H%M%SZ") + "-" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
         kind = "unknown"
         words = None
-        if self.tuning_read:
+        if stock:
+            kind = "stock"
+        elif self.tuning_read:
             kind = "words"
             words = {str(UNIT_CPUS[u][0]): [_word(u, p) for p in self.tuning[u]["points"]] for u in UNITS}
         ts = {"kind": kind}
@@ -276,8 +292,12 @@ class V3Ops:
             return {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable", "reason": why}
         off = offset_override if offset_override is not None else interp_offset(self.tuning[unit]["points"], ratio)
         v = stock_vid(unit, ratio) + off / 1000.0
-        return {"ratio": ratio, "mhz": ratio * 100.0 + 2.0, "vid_v": round(v, 4), "vid_min": round(v - 0.004, 4), "vid_max": round(v + 0.005, 4),
-                "kept": 28, "total": 30, "status": "ok"}
+        pt = {"ratio": ratio, "mhz": ratio * 100.0 + 2.0, "vid_v": round(v, 4), "vid_min": round(v - 0.004, 4), "vid_max": round(v + 0.005, 4),
+              "kept": 28, "total": 30, "status": "ok"}
+        fused = (P_POINTS if kind_of(unit) == "P" else E_POINTS)
+        if ratio in fused:   # G-118: the key is absent for the ratios in between
+            pt["fused_point"] = fused.index(ratio) + 1
+        return pt
 
     @staticmethod
     def _summary(rec: dict) -> dict:
@@ -336,6 +356,64 @@ class V3Ops:
         if self.curves.pop(args.get("id"), None) is None:
             return self._err(rid, "BAD_REQUEST", "no such curve", check="NO_SUCH_CURVE")
         self._reply(rid, True, result={"deleted": args["id"]})
+
+    # ---- stress (long; G-116 shapes) ----
+    def _op_stress_start(self, rid, args):
+        if self.stress_refusal:
+            r = self.stress_refusal
+            return self._err(rid, r["code"], r["message"], check=r["check"])
+        if self._measuring or self._applying or self._stressing:
+            return self._err(rid, "BUSY", "another operation is running", state=self.busy_state()[0])
+        threading.Thread(target=self._stress, args=(rid, args), daemon=True).start()
+
+    def _op_stress_stop(self, rid, args):
+        if self._stressing:
+            op = sorted(self._stressing)[0]
+            self._cancelled.add(op)
+            return self._reply(rid, True, result={"cancelled": True, "state": "stressing", "op_id": op})
+        self._reply(rid, True, result={"cancelled": False, "state": self.busy_state()[0]})
+
+    def _op_stress_list(self, rid, args):
+        self._reply(rid, True, result={"results": copy.deepcopy(self.stress_results[:50])})
+
+    def _stress(self, rid: str, args: dict) -> None:
+        kind = args["kind"]
+        total = int(args["duration_s"])
+        units = [u for u in UNITS if u in (args.get("units") or UNITS)] if kind == "cpu" else list(UNITS)
+        started = datetime.now(timezone.utc)
+        self._stressing.add(rid)
+        elapsed = 0.0
+        by = "time"
+        try:
+            while elapsed < total:
+                while not self.stress_gate.wait(0.02):
+                    if rid in self._cancelled:
+                        break
+                if rid in self._cancelled:
+                    by = "cancel"
+                    break
+                if self.stress_delay:
+                    time.sleep(self.stress_delay)
+                elapsed = min(total, elapsed + 2.0 if self.stress_delay else total)
+                self.emit({"event": "progress", "op_id": rid, "elapsed_s": round(elapsed, 1), "of_s": total, "errors": self.stress_errors if elapsed > total / 2 else 0})
+            if self.stress_errors and by == "time":
+                by = "error"
+            cap = args.get("ratio_cap")
+            ach = {u: {"mhz_mean": round(min(cap, unit_max_ratio(u)) * 100 - 9.0, 1) if cap else unit_max_ratio(u) * 100 - 15.0,
+                       "ratio_mode": min(cap, unit_max_ratio(u)) if cap else unit_max_ratio(u)} for u in units}
+            sid = started.strftime("%Y%m%dT%H%M%SZ") + "-" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
+            res = {"id": sid, "kind": kind, "started": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "ended": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                   "duration_s": total, "elapsed_s": round(elapsed, 1), "stopped_by": by, "errors": self.stress_errors, "error_lines": list(self.stress_lines),
+                   "achieved": ach if kind == "cpu" else {}, "cap_valid": (True if cap else None), "max_temp_c": 71.0, "max_pkg_w": 188.5,
+                   "mce_new": 0, "health": self.stress_health, "record_path": "/var/lib/arltuner/stress/" + sid + ".json"}
+            row = {k: res[k] for k in ("id", "kind", "started", "ended", "duration_s", "elapsed_s", "stopped_by", "errors", "cap_valid", "health", "mce_new", "max_temp_c", "max_pkg_w")}
+            row.update({"method": args.get("method", "integer") if kind == "cpu" else None, "units": units if kind == "cpu" else None,
+                        "ratio_cap": args.get("ratio_cap"), "memory_mb": args.get("memory_mb", 6144) if kind == "memory" else None})
+            self.stress_results.insert(0, row)
+            self._reply(rid, True, result=res)
+        finally:
+            self._stressing.discard(rid)
+            self._cancelled.discard(rid)
 
     # ---- measure (long) ----
     def _op_vf_measure(self, rid, args):

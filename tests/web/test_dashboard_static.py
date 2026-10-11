@@ -18,10 +18,11 @@ CSS = (WEB / "style.css").read_text(encoding="utf-8")
 
 # Ops the page may name at a call site: contract 8 reads, contract 9 (SPEC-v3) measure / curves / memory / tune / profiles, and cancel. Nothing else.
 ALLOWED_OPS = {"preflight", "audit.tail", "telemetry.start", "cancel", "mem.read", "vf.measure", "curves.list", "curves.get", "curves.update",
-               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save"}
-# Raw contract 8 write / stress / frequency ops stay out of the page (it uses the tune.* ops instead).
-FORBIDDEN_OPS = ("apply", "restore", "plan", "vf.dump", "telemetry.stop", "stress.start", "stress.stop", "freq.cap", "freq.restore")
-TABS = ("dashboard", "curves", "tune", "profiles", "system", "audit")
+               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save", "stress.start", "stress.stop", "stress.list"}
+# Raw contract 8 write / frequency ops stay out of the page (it uses the tune.* ops instead). G-119: the stress ops (no mailbox, no MSR write) are the
+# Stress tab's.
+FORBIDDEN_OPS = ("apply", "restore", "plan", "vf.dump", "telemetry.stop", "freq.cap", "freq.restore")
+TABS = ("dashboard", "curves", "tune", "stress", "profiles", "system", "audit")
 
 
 def func_body(name: str, async_: bool = False) -> str:
@@ -149,6 +150,50 @@ class TestScript(unittest.TestCase):
         for op in FORBIDDEN_OPS:
             self.assertNotRegex(JS, rf"[\"']{re.escape(op)}[\"']", op)
         self.assertEqual(len(re.findall(r"\bapi\(", JS)), len(re.findall(r"\bapi\(\s*\"", JS)) + 1)  # +1: the definition; every call names its op literally
+
+    def test_stress_tab_is_a_quick_screen_and_says_so(self):  # G-119
+        self.assertIn("Quick screen — NOT an acceptance gate (D-019: Linpack 2021 60 min + SSE 60 min).", HTML)
+        for ident in ("st-banner", "st-kind", "st-method", "st-dur", "st-dur-custom", "st-cap", "st-mem", "st-units", "btn-stress-start", "btn-stress-stop", "st-ring",
+                      "st-errors", "st-result", "st-hist", "btn-stress-refresh"):
+            self.assertIn(f'id="{ident}"', HTML)
+        self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-stress-start"[^>]*\bdisabled\b')
+        self.assertRegex(HTML, r'<input\b[^>]*\bid="st-dur-custom"[^>]*\bmin="30"[^>]*\bmax="3600"')   # the custom length is the helper's 30..3600 s
+        # SPEC 9.3: never "pass": the words are "no errors detected in N min". Checked on the page copy of the Stress tab (not on CSS class names).
+        stress_js = JS[JS.index("// ---- Stress:"):JS.index("// ---- Profiles ---")]
+        panel = HTML[HTML.index('id="panel-stress"'):HTML.index('id="panel-profiles"')]
+        self.assertNotRegex(stress_js + panel, r"(?i)\bpass(ed|es|ing)?\b(?!\w*[-_])")
+        self.assertNotRegex(stress_js, r"(?i)\bstable\b[^\n]*\bproven|\bis stable\b|\bverified stable")
+        self.assertIn('"No errors detected in " + ran + "."', stress_js)
+        self.assertIn("A quick screen, not an acceptance gate.", stress_js)
+
+    def test_stress_start_sends_the_contract_arguments_and_nothing_writes(self):  # G-119
+        body = func_body("startStress")
+        self.assertIn('api("stress.start", args)', body)
+        self.assertIn("idleGate() !== \"\"", body)          # not a mailbox gate: an idle helper with a heartbeat is enough
+        for needle in ("args.method", "args.units", "args.ratio_cap", "args.memory_mb", "duration_s: secs"):
+            self.assertIn(needle, body)
+        self.assertEqual(len(re.findall(r"\bapi\(\s*\"stress\.start\"", JS)), 1)
+        self.assertIn('api("stress.stop", {})', func_body("stopStress"))
+        self.assertIn('api("stress.list", {})', func_body("loadStressList"))
+        self.assertIn('st === "stressing" ? "stress"', JS)   # a heartbeat in state stressing re-attaches after a reload
+        self.assertIn('"stopped_by" in r', func_body("inferKind"))
+
+    def test_after_an_apply_the_page_offers_a_stress_screen(self):  # G-119
+        self.assertIn("Validate with a stress screen", func_body("renderPlanFoot"))
+        self.assertIn('selectTab("stress", true)', func_body("goValidate"))
+        self.assertNotIn("startStress", func_body("goValidate"))   # it only opens the tab: nothing starts by itself
+
+    def test_chart_minimum_spans(self):  # G-119
+        self.assertIn("const MIN_SPAN = { temp: 10, power: 20, mhz: 500, volt: 0.05, gbs: 2 };", JS)
+        for needle in ('minSpan: MIN_SPAN.temp', 'minSpan: MIN_SPAN.power', 'minSpan: MIN_SPAN.volt', 'minSpan: MIN_SPAN.mhz', 'minSpan: MIN_SPAN.gbs'):
+            self.assertIn(needle, JS)
+
+    def test_curves_mark_fused_points_and_stock(self):  # G-119 with G-118 shapes
+        self.assertIn("p.fused_point", JS)
+        self.assertIn('x === "oc"', JS)
+        self.assertIn("stock = fused table as applied", JS)
+        self.assertIn('id="cv-stock"', HTML)
+        self.assertIn("ev.retry === true", JS)   # a retried vf.point replaces the first attempt
 
     def test_mailbox_read_is_never_automatic(self):
         self.assertEqual(len(re.findall(r"\bapi\(\s*\"tune\.read\"", JS)), 1)

@@ -67,6 +67,20 @@ class TestBrowser(unittest.TestCase):
                 page.wait_for_selector(".plan-result .pill.s-ok", timeout=10000)
                 self.assertEqual(fake.tuning["P0"]["points"][0]["offset_mv"], -45.0)
                 self.assertEqual([r["op"] for r in fake.requests if r["op"] == "tune.apply"], ["tune.apply"])
+                # validate: the review window offers a stress screen of the changed units; nothing starts by itself
+                page.click("text=Validate with a stress screen")
+                page.wait_for_selector("#panel-stress:not([hidden])")
+                self.assertEqual(page.locator('.mm-tile[aria-pressed="true"]').count(), 8)  # the first row of the simple scope is "all P-cores"
+                self.assertEqual([r["op"] for r in fake.requests if r["op"] == "stress.start"], [])
+                self.assertIn("NOT an acceptance gate", page.inner_text("#st-banner"))
+                page.wait_for_selector("#btn-stress-start:not([disabled])", timeout=10000)
+                page.click("#btn-stress-start")
+                page.wait_for_selector("#st-result:not([hidden])", timeout=15000)
+                self.assertIn("No errors detected in", page.inner_text("#st-result"))
+                self.assertNotIn("pass", page.inner_text("#panel-stress").lower())
+                start = [r for r in fake.requests if r["op"] == "stress.start"]
+                self.assertEqual((len(start), start[0]["args"]["units"], start[0]["args"]["duration_s"]), (1, ["P%d" % i for i in range(8)], 300))
+                page.wait_for_selector("#st-hist-body tr", timeout=5000)
                 time.sleep(0.3)
             finally:
                 b.close()

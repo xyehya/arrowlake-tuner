@@ -27,6 +27,7 @@
     <button type="button" role="tab" id="tab-dashboard" aria-controls="panel-dashboard" aria-selected="true">Dashboard</button>
     <button type="button" role="tab" id="tab-curves" aria-controls="panel-curves" aria-selected="false" tabindex="-1">Curves</button>
     <button type="button" role="tab" id="tab-tune" aria-controls="panel-tune" aria-selected="false" tabindex="-1">Tune</button>
+    <button type="button" role="tab" id="tab-stress" aria-controls="panel-stress" aria-selected="false" tabindex="-1">Stress</button>
     <button type="button" role="tab" id="tab-profiles" aria-controls="panel-profiles" aria-selected="false" tabindex="-1">Profiles</button>
     <button type="button" role="tab" id="tab-system" aria-controls="panel-system" aria-selected="false" tabindex="-1">System</button>
     <button type="button" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1">Audit</button>
@@ -324,6 +325,75 @@
       </table></div>
       <p id="acc-summary" class="muted"></p>
       <div id="tn-tables"></div>
+    </article>
+  </section>
+
+  <!-- ============================== Stress ============================== -->
+  <section class="panel" id="panel-stress" role="tabpanel" aria-labelledby="tab-stress" tabindex="0" hidden>
+    <p class="st-banner" id="st-banner" role="note"><strong>Quick screen — NOT an acceptance gate (D-019: Linpack 2021 60 min + SSE 60 min).</strong> It can find an unstable setting fast. It cannot show that a setting is stable.</p>
+
+    <div class="st-grid">
+      <article class="card st-setup" id="st-setup">
+        <div class="card-head">
+          <h2>Stress screen</h2>
+          <span class="muted">Loads the CPU or the memory for a few minutes and counts errors. It writes no tuning words; cpufreq limits are put back when it ends.</span>
+        </div>
+        <div class="st-fields">
+          <div class="field"><span class="field-label" id="lbl-st-kind">Screen</span><div class="seg" id="st-kind" role="group" aria-labelledby="lbl-st-kind"></div></div>
+          <div class="field" id="st-f-method"><span class="field-label" id="lbl-st-method">CPU load</span><div class="seg" id="st-method" role="group" aria-labelledby="lbl-st-method"></div></div>
+          <div class="field" id="st-f-mem"><label class="field-label" for="st-mem">Memory to test</label><select id="st-mem"></select></div>
+          <div class="field"><span class="field-label" id="lbl-st-dur">Length</span><div class="seg" id="st-dur" role="group" aria-labelledby="lbl-st-dur"></div></div>
+          <div class="field" id="st-f-custom">
+            <label class="field-label" for="st-dur-custom">Custom length</label>
+            <div class="row-tight"><input type="range" id="st-dur-custom" min="30" max="3600" step="30" value="300" list="st-dur-ticks"><output id="st-dur-val" for="st-dur-custom">5 min</output></div>
+            <datalist id="st-dur-ticks"><option value="30"></option><option value="600"></option><option value="1200"></option><option value="1800"></option><option value="2400"></option><option value="3000"></option><option value="3600"></option></datalist>
+          </div>
+          <div class="field"><label class="field-label" for="st-cap">Ratio cap</label><select id="st-cap"></select></div>
+        </div>
+        <div class="field st-units-field" id="st-f-units">
+          <span class="field-label" id="lbl-st-units">Units to load</span>
+          <div class="st-map" id="st-units" role="group" aria-labelledby="lbl-st-units"></div>
+        </div>
+        <div class="st-go">
+          <div class="row-tight">
+            <button type="button" id="btn-stress-start" class="primary" disabled>Start</button>
+            <button type="button" id="btn-stress-stop" disabled>Stop</button>
+          </div>
+          <p id="st-est" class="muted" role="status"></p>
+        </div>
+      </article>
+
+      <article class="card st-live" id="st-live">
+        <div class="card-head"><h2>Live</h2><span id="st-phase" class="pill s-neutral">not running</span></div>
+        <div class="ring-row">
+          <svg class="ring big" viewBox="0 0 120 120" role="img" aria-label="Elapsed time of the screen" focusable="false">
+            <circle cx="60" cy="60" r="50" class="ring-track"/>
+            <circle cx="60" cy="60" r="50" class="ring-used" id="st-ring" pathLength="100" stroke-dasharray="0 100"/>
+          </svg>
+          <div class="ring-text">
+            <span class="ring-big" id="st-clock">0:00</span>
+            <span class="muted" id="st-of">of 5 min</span>
+            <span class="st-errors" id="st-errors">no errors yet</span>
+          </div>
+        </div>
+        <div class="readouts st-ro">
+          <div class="ro"><span class="ro-label">Hottest sensor</span><span class="ro-value" id="t-st-temp">n/a</span><svg class="spark" id="sp-st-temp" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">Package power</span><span class="ro-value" id="t-st-pkgw">n/a</span><svg class="spark" id="sp-st-pkgw" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        </div>
+        <p id="st-status" class="muted" role="status"></p>
+      </article>
+    </div>
+
+    <article class="card st-result" id="st-result" hidden aria-live="polite"></article>
+
+    <article class="card" id="st-history-card">
+      <div class="card-head"><h2>Earlier screens</h2><button type="button" id="btn-stress-refresh" class="small">Refresh</button></div>
+      <p id="st-hist-empty" class="muted">No stress screens stored yet. Start one above; the result is kept on this machine.</p>
+      <div class="scroll"><table class="grid num st-hist" id="st-hist" hidden>
+        <caption class="sr">Stored stress screens, newest first</caption>
+        <thead><tr><th scope="col">Started</th><th scope="col">Screen</th><th scope="col">Units</th><th scope="col" class="n">Ran</th><th scope="col">Ended</th><th scope="col" class="n">Errors</th><th scope="col">Health</th><th scope="col" class="n">Max temp</th><th scope="col" class="n">Max power</th></tr></thead>
+        <tbody id="st-hist-body"></tbody>
+      </table></div>
     </article>
   </section>
 

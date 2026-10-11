@@ -82,7 +82,7 @@ class TestCurves(V3Base):
         self.assertEqual(set(rec["units"]), set(v3.UNITS))
         self.assertEqual(rec["units"]["EC1"]["cpus"], [12, 13, 14, 15])
         p = rec["units"]["P0"]["points"][0]
-        self.assertEqual(set(p), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status"})
+        self.assertEqual(set(p), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status", "fused_point"})  # G-118: ratio 8 is fused point 1
         # one baseline at most; rename; delete
         self.ok("curves.update", {"id": b["id"], "baseline": True})
         flags = {r["name"]: r["baseline"] for r in self.ok("curves.list")["curves"]}
@@ -103,6 +103,47 @@ class TestCurves(V3Base):
         self.assertAlmostEqual(e0[0]["vid_v"], 0.65, delta=0.04)
         self.assertAlmostEqual(e0[-1]["vid_v"], 1.15, delta=0.04)
         self.assertEqual((len(rec["units"]["P0"]["points"]), len(rec["units"]["P1"]["points"])), (50, 50))  # 8..57 on every P-core (F1); 56/57 are unreachable on the non-favored ones
+
+
+class TestStress(V3Base):
+    """G-119: the fake speaks the contract 9 "G-116" stress shapes, so the page and its browser test run without a helper."""
+
+    def test_start_returns_the_documented_result_and_stress_list_keeps_it(self):
+        res = self.ok("stress.start", {"kind": "cpu", "duration_s": 60, "units": ["P0", "EC1"], "ratio_cap": 50})
+        for key in ("id", "kind", "started", "ended", "duration_s", "elapsed_s", "stopped_by", "errors", "error_lines", "achieved", "cap_valid", "max_temp_c",
+                    "max_pkg_w", "mce_new", "health", "record_path"):
+            self.assertIn(key, res)
+        self.assertEqual((res["stopped_by"], res["errors"], res["health"], res["cap_valid"]), ("time", 0, "clean", True))
+        self.assertEqual(sorted(res["achieved"]), ["EC1", "P0"])
+        rows = self.ok("stress.list")["results"]
+        self.assertEqual([r["id"] for r in rows], [res["id"]])
+        self.assertEqual((rows[0]["method"], rows[0]["units"], rows[0]["ratio_cap"], rows[0]["memory_mb"]), ("integer", ["P0", "EC1"], 50, None))
+        self.assertTrue(all("pass" not in k for k in res))   # D-019: no pass field
+
+    def test_stop_cancels_a_running_screen_and_the_heartbeat_says_stressing(self):
+        self.fake.stress_delay = 0.05
+        self.fake.stress_gate.clear()
+        done: list[dict] = []
+        t = threading.Thread(target=lambda: done.append(self.fake.link.call("stress.start", {"kind": "memory", "duration_s": 300}, timeout=10.0)))
+        t.start()
+        for _ in range(100):
+            if self.fake.busy_state()[0] == "stressing":
+                break
+            time.sleep(0.02)
+        self.assertEqual(self.fake.busy_state()[0], "stressing")
+        self.err("stress.start", {"kind": "cpu", "duration_s": 60}, "BUSY")
+        self.assertTrue(self.ok("stress.stop")["cancelled"])
+        t.join(5)
+        self.assertTrue(done[0]["ok"], done)
+        self.assertEqual(done[0]["result"]["stopped_by"], "cancel")
+        self.assertEqual(self.fake.busy_state()[0], "idle")
+        self.assertEqual(self.ok("stress.stop"), {"cancelled": False, "state": "idle"})
+
+    def test_errors_make_the_result_an_error_stop(self):
+        self.fake.stress_errors = 3
+        self.fake.stress_lines = ["stress-ng: fail: [123] cpu 4 int64: verify failed"]
+        res = self.ok("stress.start", {"kind": "cpu", "duration_s": 30})
+        self.assertEqual((res["stopped_by"], res["errors"], res["error_lines"]), ("error", 3, self.fake.stress_lines))
 
 
 class TestMeasure(V3Base):
