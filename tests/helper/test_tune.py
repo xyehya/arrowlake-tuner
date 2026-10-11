@@ -247,9 +247,10 @@ class ApplyWordTests(TuneCase):
         self.assertEqual(self.sim.vf(12, 0, 7).ratio, 48)  # the OC point appeared as P2 = 7
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
 
-    def test_plan_steps_list_exactly_what_the_executor_sends(self) -> None:
+    def test_plan_steps_list_the_per_cpu_writes_the_executor_sends(self) -> None:
         """G-124: an offset-only target sends the 0x11 alone, so ``tune.plan`` lists ``write_vf`` only (the conditional 0x15 aside); a target that sets an OC ratio
-        also lists ``write_favored`` and ``write_granular``. ``ops_needed`` counts the same writes (plus a read-back each)."""
+        also lists ``write_favored`` and ``write_granular``. ``ops_needed`` is the worst case: it counts the conditional 0x15 (the helper has no 0x14 word at plan time, so
+        whether it is sent is unknown until apply) and a read-back per write."""
         h = self.boot()
         self.read(h)
         plan = self.plan(h, rows(row("P0", curve=-10)))
@@ -349,9 +350,11 @@ class ApplyWordTests(TuneCase):
         p5_before = self.word(4, 5)
         plan = self.plan(h, rows(row("P4", v=1.300)))
         self.assertEqual(sorted(plan["after"]["P4"]), ["0"])  # no point word is part of a V target change
+        self.assertEqual(plan["after"]["P4"]["0"]["v_target_v"], None)  # G-124: the prediction shows the word the hardware keeps (a 0 field reads None), not the requested 1.3 V
         self.apply_ok(h, plan)
         self.assertEqual(self.word(4).v_target_raw, 0)  # G-124: P4 sits at 55x, no OC point: a requested V target is not written
         self.assertEqual(self.word(4, 5), p5_before)  # a point word keeps its (zero) V target field
+        self.assertEqual(self.plan(h, rows(row("EC1", v=1.1367)))["after"]["EC1"]["0"]["v_target_v"], round(round(1.1367 * 1024) / 1024, 4))  # a cold E word + an OC voltage fills 48 > 46: an OC point
         plan = self.plan(h, rows(row("EC1", ratio=48, v=1.1367)))  # an OC point (48 > 46) carries its target, on the OC word only
         self.assertEqual(sorted(plan["after"]["EC1"]), ["0"])
         self.apply_ok(h, plan)

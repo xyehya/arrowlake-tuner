@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from arltuner.guard import MsrRequest, Policy, Request
-from arltuner.guard.policy import hw_v_max_raw, turbo_bytes
+from arltuner.guard.policy import hw_v_max_raw, top_fused_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import TurboTables
 
@@ -115,12 +115,15 @@ class ApplyReport:
 
     @property
     def zero_baseline_cpus(self) -> tuple[int, ...]:
-        """CPUs whose 0x10 baseline word read back with a zero ratio or V target (XTU cannot restore such a word either)."""
-        return tuple(
-            r.step.cpu
-            for r in self.steps
-            if r.step.kind is StepKind.READ_VF and r.after is not None and (r.after.ratio == 0 or r.after.v_target_raw == 0)
-        )
+        """CPUs whose 0x10 baseline word read back with a zero ratio, or a zero V target next to an OC ratio (above the top fused ratio): no write restores such
+        a word. G-124: a zero V target at or below the top fused ratio is the word the hardware keeps without an OC point (e.g. the cold ``0x39``) and is restorable."""
+
+        def unreachable(step: PlanStep, word: VfWord) -> bool:
+            if word.ratio == 0:
+                return True
+            return word.v_target_raw == 0 and step.core_kind is not None and word.ratio > top_fused_ratio(step.core_kind)
+
+        return tuple(r.step.cpu for r in self.steps if r.step.kind is StepKind.READ_VF and r.after is not None and unreachable(r.step, r.after))
 
     @property
     def ok(self) -> bool:
@@ -375,7 +378,7 @@ _REVERT_MEANING = {
 
 def format_revert_plan(revert_plan: Sequence[Request | MsrRequest], zero_baseline_cpus: Sequence[int] = ()) -> list[str]:
     """Text lines for ``guard.revert_plan()`` output (per CPU, in the order to send them). Nothing here is ever executed.
-    ``zero_baseline_cpus``: CPUs whose baseline word had a zero ratio / V target (named in the note, when known)."""
+    ``zero_baseline_cpus``: CPUs whose baseline word cannot be written back (named in the note, when known)."""
     lines = ["Revert plan (NOT executed; each is a new guarded request after the dwell, or reboot/power-cycle):"]
     for i, req in enumerate(revert_plan, 1):
         if isinstance(req, MsrRequest):
@@ -391,7 +394,7 @@ def format_revert_plan(revert_plan: Sequence[Request | MsrRequest], zero_baselin
     lines.append(f"  Note: {REVERT_NOTE}.")
     if zero_baseline_cpus:
         cpus = ", ".join(str(c) for c in sorted(set(zero_baseline_cpus)))
-        lines.append(f"  CPU(s) {cpus} read a baseline 0x10 word with a zero ratio or V target: only a reboot restores it.")
+        lines.append(f"  CPU(s) {cpus} read a baseline 0x10 word that no write restores (a zero ratio, or a zero V target next to an OC ratio): only a reboot restores it.")
     lines.append("  Volatility of these settings is unproven (SAFETY.md): if in doubt, reboot; a write taints the kernel (CPU_OUT_OF_SPEC).")
     return lines
 

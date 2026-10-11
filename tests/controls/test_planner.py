@@ -84,7 +84,29 @@ class KeptWord(unittest.TestCase):
             self.assertEqual(kept_word(kind, word), word, (kind, ratio))
 
 
-class StepSequence(unittest.TestCase):
+class RaiseFromNoOcPoint(unittest.TestCase):
+    """G-124: at or below the top fused ratio the hardware keeps no V target, so a voltage-first word there cannot be verified: ratio + voltage together is a plan
+    error; the ratio alone first (the OC point appears at the current target), then the voltage, passes the guard."""
+
+    RAISE = policy_with(ratio_max={"P": 58}, v_target_max_mv={"P": 1500}, max_ratio_step=1, max_v_step_mv=20)
+    P57 = {4: readings_of(P4_BASELINE.with_(ratio=57))}
+
+    def test_ratio_and_voltage_together_is_refused_at_plan_time(self) -> None:
+        with self.assertRaises(PlanError) as ctx:
+            plan_for(profile(p4(ratio=58, oc_voltage_mv=1400)), self.P57, policy=self.RAISE)
+        self.assertIn("raise the ratio alone first", str(ctx.exception))
+
+    def test_ratio_alone_then_voltage_alone_are_allowed(self) -> None:
+        plan = plan_for(profile(p4(ratio=58)), self.P57, policy=self.RAISE)
+        self.assertTrue(plan.allowed, plan.refusals)
+        word = next(s for s in plan.steps if s.kind is StepKind.WRITE_VF).after
+        self.assertEqual((word.ratio, word.v_target_raw), (58, 0x544))  # an OC point: the current target is kept
+        up = {4: dataclasses.replace(readings_of(word), vmax=0x800)}  # 0x28 read: the hardware maximum bounds a raised V target
+        plan = plan_for(profile(p4(oc_voltage_mv=1336)), up, policy=self.RAISE)
+        self.assertTrue(plan.allowed, plan.refusals)
+
+
+
     def test_p_core_offset_sequence_follows_the_xtu_procedure(self) -> None:
         plan = plan_for(profile(p4(offset_mv=-30)))
         self.assertEqual(

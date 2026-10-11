@@ -12,8 +12,8 @@ S-04...S-07; registers.md "Measured via XTU's level-4 log"), is reproduced here:
 
 The ``0x11`` word is built as XTU builds it: **ratio** = the core's non-zero baseline ratio, else ``0x1C[7:0]``; **V target** = the core's
 non-zero baseline V target, else the fused voltage (``0x09`` ``[19:8]``: the XTU UI "Voltage Override", ``[MEASURED]``); adaptive mode; only
-the requested fields changed. XTU never sends a ratio of 0 or a V target of 0, and neither does this planner (it would plan a word the guard
-refuses). All reads are ordered before all writes (including the ``0x15``), so pre-flight judges every write against the real words
+the requested fields changed. XTU never sends a ratio of 0 or a V target of 0, and neither does this planner -- except (G-124, D-035) the V target of a word with no OC point
+(ratio <= the top fused ratio), which is always 0 because the hardware keeps none. All reads are ordered before all writes (including the ``0x15``), so pre-flight judges every write against the real words
 before the first write is sent; XTU's own order interleaves them (``0x26`` is read between ``0x1D`` and ``0x27``) and, for the 16
 E-cores, batches ``0x11`` x16, ``0x1D`` x16, ``0x27`` x16 -- whether the hardware needs XTU's order is ``[UNVERIFIED]``. An E-core entry
 applies to all four CPUs of its cluster (XTU wrote every core of an E tile and never one alone; whether one write is cluster-wide is
@@ -537,7 +537,8 @@ def _vf_words(current: VfWord, goal: VfWord, kind: str = "P", label: str = "") -
         if not has_oc_point(kind, current.ratio):
             raise PlanError(
                 f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
-                f"V target (G-124: a word without an OC point always keeps target 0), so the voltage-first word cannot be verified"
+                f"V target (G-124: a word without an OC point always keeps target 0), so the voltage-first word cannot be verified; raise the ratio alone first "
+                f"(the OC point appears at the current V target), then the voltage in a second profile"
             )
         return ((current.with_(v_target_raw=goal.v_target_raw), "1/2 voltage first"), (goal, "2/2 full word"))
     if d_ratio < 0 and d_v < 0:

@@ -73,7 +73,7 @@ class Cpu0(MeasuredCase):
         self.assertNotIn(0x15, [cmd for _, cmd, _ in s.requests()])  # 0x14 bit 3 is set: XTU skips the 0x15, so do we
         self.assertEqual(s.sim.vf(0).to_u32(), 0xFF600039)
         self.assertEqual((s.sim.favored_word(0), s.sim.granular_word(0)), (0x3939, 3))
-        self.assertEqual(report.zero_baseline_cpus, (0,))  # its baseline 0x39 carries no V target
+        self.assertEqual(report.zero_baseline_cpus, ())  # G-124: its baseline 0x39 (57x, no V target) is the word the hardware keeps without an OC point: restorable
         self.assertTrue(all(r.verified for r in report.steps if r.step.kind.is_write))
 
     def test_minus_15_mv_is_xtus_word(self) -> None:
@@ -98,7 +98,7 @@ class Cpu0(MeasuredCase):
         self.assertEqual([(r.cmd, r.data) for r in report.revert_plan], [(0x11, 0x00000039), (0x1D, 0x39), (0x27, 3)])
         text = report.format_report()
         self.assertIn("a reboot restores the BIOS-programmed state; a baseline of 0x0 cannot be restored by a write", text)
-        self.assertIn("CPU(s) 0 read a baseline 0x10 word with a zero ratio or V target: only a reboot restores it.", text)
+        self.assertNotIn("only a reboot restores it", text)  # G-124: the revert word 0x39 equals the cold baseline
         self.assertIn("0x00000039", text)
         self.run_revert_plan(s, report, [0])
         self.assertEqual(s.sim.vf(0).to_u32(), 0x00000039)
