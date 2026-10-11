@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import signal
+import stat
 import statistics
 import subprocess
+import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,7 +42,10 @@ from .protocol import BAD_REQUEST, INTERNAL, REFUSED, OpError
 from .state import State
 from .trust import TrustError, check_trusted_path
 
-__all__ = ["Invoker", "InvokerError", "SimStress", "StressWiring", "default_invoker", "device_wiring", "sim_wiring", "stress_ops"]
+__all__ = [
+    "Invoker", "InvokerError", "SimStress", "StressWiring", "Workdir", "default_invoker", "default_workdir", "device_wiring", "prepare_workdir", "sim_wiring",
+    "stress_ops",
+]
 
 #: SPEC section 9.2: EPP pinned to performance for the run (the measure run uses balance_performance; this is its own value). Restored from the journal.
 STRESS_EPP = "performance"
@@ -48,6 +55,9 @@ SETTLE_S = 3.0  # samples of the first seconds (ramp-up) are not part of the ach
 GRACE_S = 20.0  # past duration + this the helper stops a child that did not end by its own timeout
 TERM_WAIT_S = 5.0
 NOTE_LINES = 6  # helper notes at the head of ``error_lines``
+TAIL_LINES = 5  # last output lines of a child that ended abnormally, shown after the helper notes (G-121)
+RUNTIME_ROOT = "/run/user"
+TMP_ROOT = "/tmp"
 SIM_TIME_SCALE = 1 / 12
 _UNIT_NAMES = list(UNITS)
 _ALL_CPUS = tuple(sorted(c for u in UNITS for c in unit_cpus(u)))
@@ -92,6 +102,80 @@ def default_invoker(environ: dict[str, str] | None = None, getpwuid: Callable[[i
 
 
 # =============================================================================================================================================
+# the child's private working / temp directory (G-121)
+# =============================================================================================================================================
+@dataclass
+class Workdir:
+    """A directory the stress child may use as cwd and ``--temp-path``. ``cleanup()`` removes what the helper created (nothing for ``/run/user/<uid>``) and
+    returns a problem text, or ``None``."""
+
+    path: str
+    cleanup: Callable[[], str | None] = lambda: None
+
+
+def _chown_nofollow(path: str, uid: int, gid: int) -> None:
+    os.chown(path, uid, gid, follow_symlinks=False)
+
+
+def prepare_workdir(
+    invoker: Invoker, *, runtime_root: str = RUNTIME_ROOT, tmp_root: str = TMP_ROOT, lstat_fn: Callable[[str], Any] = os.lstat,
+    mkdtemp_fn: Callable[..., str] = tempfile.mkdtemp, chown_fn: Callable[[str, int, int], object] = _chown_nofollow,
+    rmtree_fn: Callable[[str], object] = shutil.rmtree, euid: int | None = None,
+) -> Workdir:
+    """``<runtime_root>/<uid>`` when it is a real directory (``lstat``: a symlink is not one) owned by the invoking user with mode 0700, else a fresh 0700
+    ``mkdtemp`` directory under ``tmp_root``, chowned to the user and removed afterwards. Raises ``OSError`` when no safe directory can be had: the helper
+    never hands the child a path that is a symlink or belongs to somebody else."""
+    runtime = os.path.join(runtime_root, str(invoker.uid))
+    try:
+        st = lstat_fn(runtime)
+    except OSError:
+        st = None
+    if st is not None and stat.S_ISDIR(st.st_mode) and st.st_uid == invoker.uid and stat.S_IMODE(st.st_mode) == 0o700:
+        return Workdir(runtime)
+    me = os.geteuid() if euid is None else euid
+    path = mkdtemp_fn(prefix="arltuner-stress-", dir=tmp_root)
+    made: Any = None
+
+    def same_dir(now: Any) -> bool:
+        return stat.S_ISDIR(now.st_mode) and (now.st_dev, now.st_ino) == (made.st_dev, made.st_ino)
+
+    def cleanup() -> str | None:
+        try:
+            now = lstat_fn(path)
+            if not same_dir(now):  # replaced since: not ours to delete
+                return f"{path} was replaced while the stress program ran; it was left alone"
+            rmtree_fn(path)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            return f"could not remove {path}: {exc.strerror or exc}"
+        return None
+
+    try:
+        made = lstat_fn(path)
+        if not stat.S_ISDIR(made.st_mode) or made.st_uid != me or stat.S_IMODE(made.st_mode) & 0o077:
+            raise OSError(f"{path} is not a private directory of this process")
+        chown_fn(path, invoker.uid, invoker.gid)
+        after = lstat_fn(path)
+        if not same_dir(after) or after.st_uid != invoker.uid:
+            raise OSError(f"{path} is not owned by uid {invoker.uid} after chown")
+    except BaseException:
+        if made is not None:
+            cleanup()
+        else:
+            try:
+                rmtree_fn(path)
+            except OSError:
+                pass
+        raise
+    return Workdir(path, cleanup)
+
+
+def default_workdir(invoker: Invoker) -> Workdir:
+    return prepare_workdir(invoker)
+
+
+# =============================================================================================================================================
 # wiring
 # =============================================================================================================================================
 @dataclass
@@ -114,6 +198,7 @@ class StressWiring:
     grace_s: float = GRACE_S
     term_wait_s: float = TERM_WAIT_S
     prepare: Callable[[], None] = lambda: None  # --sim creates its scratch directory here, lazily
+    workdir_fn: Callable[[Invoker], Workdir] = default_workdir  # the child's private cwd / temp dir (raises OSError)
 
 
 def read_mem_available_mb(path: str = "/proc/meminfo") -> int:
@@ -293,6 +378,7 @@ def sim_wiring(measure_wiring: Any, *, time_scale: float = SIM_TIME_SCALE) -> St
         progress_s=1.0,
         settle_s=0.0,
         prepare=lambda: state.mkdir(mode=0o700, parents=True, exist_ok=True),
+        workdir_fn=lambda invoker: Workdir(str(state)),
     )
 
 
@@ -510,7 +596,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if cap is not None and mw is None:
         raise OpError(REFUSED, "a ratio cap needs the cpufreq journal of the measurement support, which this helper does not have", {"check": "NO_CPUFREQ"})
     exe = _trusted_exe(w, w.stress_ng if kind == "cpu" else w.stressapptest, "stress-ng" if kind == "cpu" else "stressapptest")
-    cmd = cpu_command(exe, method, cpus, duration) if kind == "cpu" else memory_command(exe, duration, memory_mb)
+    cmd = cpu_command(exe, method, cpus, duration) if kind == "cpu" else memory_command(exe, duration, memory_mb)  # --temp-path is added at the spawn
     if cap is not None:
         recover_journal(mw, helper.cfg.log)  # a stale journal (a run that died) is applied first; if it cannot be, nothing new is started
         if Path(mw.journal_path).exists():
@@ -522,6 +608,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
             if raw and raw.isdigit():
                 unit_max[u] = int(raw) // 100_000
     scanner = StressNgScanner() if kind == "cpu" else StressappScanner()
+    tail: deque[str] = deque(maxlen=TAIL_LINES)  # the child's last non-empty output lines
     collector = _Collector(units)
     watch = w.klog_factory()
     notes: list[str] = []
@@ -534,6 +621,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     journaled = False
     proc: Any = None
     reader: threading.Thread | None = None
+    workdir: Workdir | None = None
     cancelled = timed_out = False
     error: BaseException | None = None
     elapsed = 0.0
@@ -561,10 +649,17 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
             cancelled = True
         else:
             exe = _trusted_exe(w, exe, "stress-ng" if kind == "cpu" else "stressapptest")  # again, right before the spawn
-            cmd[0] = exe
+            try:
+                workdir = w.workdir_fn(invoker)
+            except OSError as exc:
+                raise OpError(REFUSED, f"no private working directory for the stress program: {exc.strerror or exc}", {"check": "WORKDIR"}) from None
+            if kind == "cpu":
+                cmd = cpu_command(exe, method, cpus, duration, temp_path=workdir.path)
+            else:
+                cmd[0] = exe
             try:
                 proc = w.popen(
-                    cmd, cwd="/", env=dict(CHILD_ENV), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True, shell=False,
+                    cmd, cwd=workdir.path, env=dict(CHILD_ENV), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True, shell=False,
                     start_new_session=True, user=invoker.uid, group=invoker.gid, extra_groups=[], text=True, encoding="utf-8", errors="replace", bufsize=1,
                 )
             except OSError as exc:
@@ -575,6 +670,8 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 try:
                     for line in stream:
                         scanner.feed(line)
+                        if line.strip():
+                            tail.append(clean_line(line))
                 except (OSError, ValueError):
                     pass
 
@@ -608,6 +705,10 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 notes += _stop_child(w, proc, reader)
             except BaseException as exc:
                 notes.append(f"helper: stopping the stress process failed: {type(exc).__name__}: {exc}")
+        if workdir is not None:
+            problem = workdir.cleanup()
+            if problem:
+                notes.append(f"helper: {problem}")
         elapsed = max(elapsed, w.monotonic() - t0) if proc is not None else elapsed
         if journaled:
             restore_problems = _restore(mw, entries)
@@ -630,8 +731,10 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     # ---- the verdict of the tool, the health bracket
     rc = proc.returncode if proc is not None else None
     verdict = scanner.finish(rc)
+    tail_lines: list[str] = []
     if proc is not None and not cancelled and not verdict.ok and verdict.errors == 0:
         notes.append(f"helper: the stress program ended abnormally (exit code {rc})" if not timed_out else "helper: the stress program did not end by its own timeout and was stopped")
+        tail_lines = list(tail)  # the real reason, e.g. "aborting: temp-path '.' must be readable and writeable"
     klog_lines = watch.new_lines()
     mce_new = count_bad(klog_lines)
     clean = True
@@ -663,7 +766,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result: dict[str, Any] = {
         "kind": kind, "started": stamp, "ended": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ended_wall)), "duration_s": duration,
         "elapsed_s": round(elapsed, 1), "stopped_by": stopped_by, "errors": verdict.errors,
-        "error_lines": ([clean_line(n) for n in notes[:NOTE_LINES]] + verdict.error_lines)[:MAX_ERROR_LINES],
+        "error_lines": ([clean_line(n) for n in notes[:NOTE_LINES]] + tail_lines + verdict.error_lines)[:MAX_ERROR_LINES],
         "achieved": achieved, "cap_valid": _cap_valid(cap, achieved, unit_max),
         "max_temp_c": None if collector.max_temp is None else round(collector.max_temp, 1),
         "max_pkg_w": None if collector.max_w is None else round(collector.max_w, 1),

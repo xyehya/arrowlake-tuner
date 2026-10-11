@@ -1,7 +1,7 @@
 """Command lines of the stress children (G-116, contract 9 addendum). Arguments come from enumerated values and integers in ranges only; nothing is a shell
 string and nothing the caller typed reaches argv except through these builders.
 
-``stress-ng`` flags: [DOC stress-ng(1)] ``--cpu N``, ``--cache N``, ``--taskset LIST``, ``--cpu-method``, ``--verify``, ``--metrics-brief``, ``--timeout Ns``.
+``stress-ng`` flags: [DOC stress-ng(1)] ``--temp-path DIR``, ``--cpu N``, ``--cache N``, ``--taskset LIST``, ``--cpu-method``, ``--verify``, ``--metrics-brief``, ``--timeout Ns``.
 ``stressapptest`` flags: [DOC stressapptest --help] ``-s`` seconds, ``-M`` MB of memory, ``-W`` more CPU-stressful memory copy.
 """
 from __future__ import annotations
@@ -49,8 +49,15 @@ def _check_duration(duration_s: object) -> int:
     return duration_s
 
 
-def cpu_command(exe: str, method: str, cpus: Sequence[int], duration_s: int) -> list[str]:
-    """``stress-ng --cpu N --taskset LIST --cpu-method <mapped> --verify --metrics-brief --timeout Ts`` (``cache``: ``--cache N`` and no method)."""
+def _check_temp_path(temp_path: str) -> str:
+    if not isinstance(temp_path, str) or not temp_path.startswith("/") or "\0" in temp_path or temp_path == "/":
+        raise ValueError("temp_path must be an absolute directory path (not /)")
+    return temp_path
+
+
+def cpu_command(exe: str, method: str, cpus: Sequence[int], duration_s: int, temp_path: str | None = None) -> list[str]:
+    """``stress-ng --cpu N --taskset LIST --cpu-method <mapped> --verify --metrics-brief --timeout Ts [--temp-path DIR]`` (``cache``: ``--cache N`` and no
+    method). ``--temp-path`` is the child's private directory (G-121): stress-ng refuses to run when its temp path is not readable and writeable."""
     if method not in CPU_METHODS:
         raise ValueError(f"method must be one of {', '.join(CPU_METHODS)}")
     flag, value = CPU_METHODS[method]
@@ -58,7 +65,10 @@ def cpu_command(exe: str, method: str, cpus: Sequence[int], duration_s: int) -> 
     cmd = [exe, flag, str(len(set(cpus))), "--taskset", lst]
     if value is not None:
         cmd += ["--cpu-method", value]
-    return cmd + ["--verify", "--metrics-brief", "--timeout", f"{_check_duration(duration_s)}s"]
+    cmd += ["--verify", "--metrics-brief", "--timeout", f"{_check_duration(duration_s)}s"]
+    if temp_path is not None:
+        cmd += ["--temp-path", _check_temp_path(temp_path)]
+    return cmd
 
 
 def memory_command(exe: str, duration_s: int, memory_mb: int) -> list[str]:

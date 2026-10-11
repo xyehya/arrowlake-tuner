@@ -6,14 +6,16 @@ The fake "tools" are tiny Python scripts generated into a temp directory (never 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from arltuner.health import HealthSnapshot
-from arltuner.helper.ops_stress import Invoker, StressWiring
+from arltuner.helper.ops_stress import Invoker, StressWiring, Workdir
 from arltuner.stress import KernelLogWatch, StressStore
 
 FAKEBIN = Path(__file__).parent / "fakebin"
@@ -98,6 +100,27 @@ def health_snapshot(**overrides: Any) -> HealthSnapshot:
     return HealthSnapshot(**values)
 
 
+class FakeWorkdirs:
+    """A ``workdir_fn`` that hands out real scratch directories under ``root`` (no chown, no ``/run/user``) and records them and their removal."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.made: list[str] = []
+        self.removed: list[str] = []
+
+    def __call__(self, invoker: Invoker) -> Workdir:
+        self.root.mkdir(exist_ok=True)
+        path = tempfile.mkdtemp(prefix="work-", dir=self.root)
+        self.made.append(path)
+
+        def cleanup() -> str | None:
+            shutil.rmtree(path)
+            self.removed.append(path)
+            return None
+
+        return Workdir(path, cleanup)
+
+
 def stress_wiring(tmp: Path, **overrides: Any) -> StressWiring:
     defaults = tmp / "default-bin"  # not ``tmp`` itself: a test's own fake of the same name must not be overwritten by the default one
     defaults.mkdir(exist_ok=True)
@@ -117,6 +140,7 @@ def stress_wiring(tmp: Path, **overrides: Any) -> StressWiring:
         settle_s=0.0,
         grace_s=30.0,
         term_wait_s=0.5,
+        workdir_fn=FakeWorkdirs(tmp / "workdirs"),
     )
     values.update(overrides)
     return StressWiring(**values)

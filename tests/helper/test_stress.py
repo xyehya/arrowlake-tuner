@@ -17,12 +17,12 @@ from typing import Any
 
 from arltuner.health import HealthSnapshot
 from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR
-from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker
+from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker, prepare_workdir
 from arltuner.helper.trust import TrustError
 from arltuner.stress import CHILD_ENV, KernelLogWatch
 
 from tests.stress._support import (
-    FakeKlog, RecordingKillpg, RecordingPopen, alive, health_snapshot, make_fake, sim_sampler, stress_wiring,
+    FakeKlog, FakeWorkdirs, RecordingKillpg, RecordingPopen, alive, health_snapshot, make_fake, sim_sampler, stress_wiring,
 )
 
 from ._measure_support import ORIGINAL_EPP, MeasureCase
@@ -41,11 +41,12 @@ class StressCase(MeasureCase):
         self.popen = RecordingPopen()
         self.killpg = RecordingKillpg()
         self.klog = FakeKlog()
+        self.workdirs = FakeWorkdirs(self.tmp / "workdirs")
 
     def swiring(self, **overrides: Any) -> StressWiring:
         values: dict[str, Any] = dict(
             popen=self.popen, killpg=self.killpg, klog_factory=lambda: KernelLogWatch([self.klog]),
-            sample_fn=sim_sampler(self.cpufreq, self.model),
+            sample_fn=sim_sampler(self.cpufreq, self.model), workdir_fn=self.workdirs,
         )
         values.update(overrides)
         return stress_wiring(self.tmp, **values)
@@ -118,9 +119,132 @@ class ValidationTests(StressCase):
         reply = self.run_stress(h)
         self.assertTrue(reply["ok"], reply)
         cmd, _ = self.popen.calls[0]
-        self.assertEqual(cmd[1:], ["--cpu", "24", "--taskset", "0-23", "--cpu-method", "int64", "--verify", "--metrics-brief", "--timeout", "30s"])
+        self.assertEqual(cmd[1:11], ["--cpu", "24", "--taskset", "0-23", "--cpu-method", "int64", "--verify", "--metrics-brief", "--timeout", "30s"])
+        self.assertEqual(cmd[11:], ["--temp-path", self.workdirs.made[0]])
         record = json.loads(Path(reply["result"]["record_path"]).read_text())
         self.assertEqual((record["method"], record["units"], record["ratio_cap"], record["memory_mb"]), ("integer", [f"P{n}" for n in range(8)] + [f"EC{n}" for n in range(4)], None, None))
+
+
+class _FakeFs:
+    """lstat / mkdtemp / chown / rmtree over a dict of fake entries, for ``prepare_workdir``."""
+
+    def __init__(self, entries: dict[str, Any] | None = None, euid: int = 0) -> None:
+        self.entries: dict[str, Any] = dict(entries or {})
+        self.euid, self.chowned, self.removed, self.n = euid, [], [], 0
+
+    @staticmethod
+    def node(kind: str = "dir", uid: int = 1000, mode: int = 0o700, ino: int = 1) -> Any:
+        bits = {"dir": stat.S_IFDIR, "link": stat.S_IFLNK, "file": stat.S_IFREG}[kind]
+        return types.SimpleNamespace(st_mode=bits | mode, st_uid=uid, st_dev=1, st_ino=ino)
+
+    def lstat(self, path: str) -> Any:
+        if path not in self.entries:
+            raise FileNotFoundError(2, "missing", path)
+        return self.entries[path]
+
+    def mkdtemp(self, prefix: str = "", dir: str = "") -> str:
+        self.n += 1
+        path = f"{dir}/{prefix}{self.n}"
+        self.entries[path] = self.node(uid=self.euid, mode=0o700, ino=100 + self.n)
+        return path
+
+    def chown(self, path: str, uid: int, gid: int) -> None:
+        self.chowned.append((path, uid, gid))
+        self.entries[path] = types.SimpleNamespace(**{**vars(self.entries[path]), "st_uid": uid})
+
+    def rmtree(self, path: str) -> None:
+        self.removed.append(path)
+        del self.entries[path]
+
+    def prepare(self, uid: int = 1000, **kw: Any) -> Any:
+        return prepare_workdir(
+            Invoker(uid, 1001, "yk"), lstat_fn=self.lstat, mkdtemp_fn=self.mkdtemp, chown_fn=kw.pop("chown_fn", self.chown), rmtree_fn=self.rmtree, euid=self.euid,
+            runtime_root="/run/user", tmp_root="/tmp", **kw,
+        )
+
+
+class WorkdirTests(unittest.TestCase):
+    def test_a_private_runtime_dir_of_the_user_is_used_as_is(self) -> None:
+        fs = _FakeFs({"/run/user/1000": _FakeFs.node()})
+        wd = fs.prepare()
+        self.assertEqual(wd.path, "/run/user/1000")
+        self.assertIsNone(wd.cleanup())
+        self.assertEqual((fs.n, fs.chowned, fs.removed), (0, [], []), "nothing created, nothing removed")
+
+    def test_a_runtime_dir_that_is_not_safe_falls_back_to_a_fresh_tmp_dir(self) -> None:
+        cases = {
+            "missing": {},
+            "symlink": {"/run/user/1000": _FakeFs.node("link", mode=0o777)},
+            "a file": {"/run/user/1000": _FakeFs.node("file")},
+            "someone else's": {"/run/user/1000": _FakeFs.node(uid=1234)},
+            "root's": {"/run/user/1000": _FakeFs.node(uid=0)},
+            "group readable": {"/run/user/1000": _FakeFs.node(mode=0o750)},
+            "world writable": {"/run/user/1000": _FakeFs.node(mode=0o777)},
+        }
+        for name, entries in cases.items():
+            with self.subTest(name):
+                fs = _FakeFs(entries)
+                wd = fs.prepare()
+                self.assertEqual(wd.path, "/tmp/arltuner-stress-1")
+                self.assertEqual(fs.chowned, [("/tmp/arltuner-stress-1", 1000, 1001)], "chowned to the user's uid / gid before exec")
+                self.assertIsNone(wd.cleanup())
+                self.assertEqual(fs.removed, ["/tmp/arltuner-stress-1"])
+
+    def test_the_runtime_dir_of_another_uid_is_never_looked_at(self) -> None:
+        fs = _FakeFs({"/run/user/1000": _FakeFs.node(uid=1000)})
+        self.assertEqual(fs.prepare(uid=1001).path, "/tmp/arltuner-stress-1")
+
+    def test_a_tmp_dir_that_is_not_ours_is_not_handed_out(self) -> None:
+        for name, node in {"foreign owner": _FakeFs.node(uid=4242), "open mode": _FakeFs.node(uid=0, mode=0o777), "symlink": _FakeFs.node("link", uid=0)}.items():
+            with self.subTest(name):
+                fs = _FakeFs()
+
+                def odd(prefix: str = "", dir: str = "", fs: _FakeFs = fs, node: Any = node) -> str:
+                    fs.entries[f"{dir}/x"] = node
+                    return f"{dir}/x"
+
+                fs.mkdtemp = odd  # type: ignore[method-assign]
+                with self.assertRaises(OSError):
+                    fs.prepare()
+                self.assertEqual(fs.chowned, [])
+
+    def test_a_failed_chown_refuses_and_removes_the_directory(self) -> None:
+        fs = _FakeFs()
+
+        def denied(path: str, uid: int, gid: int) -> None:
+            raise PermissionError(1, "Operation not permitted")
+
+        with self.assertRaises(PermissionError):
+            fs.prepare(chown_fn=denied)
+        self.assertEqual(fs.removed, ["/tmp/arltuner-stress-1"])
+
+    def test_a_chown_that_did_not_take_refuses(self) -> None:
+        fs = _FakeFs()
+        with self.assertRaises(OSError):
+            fs.prepare(chown_fn=lambda path, uid, gid: None)
+        self.assertEqual(fs.removed, ["/tmp/arltuner-stress-1"])
+
+    def test_a_directory_swapped_for_something_else_is_left_alone(self) -> None:
+        fs = _FakeFs()
+        wd = fs.prepare()
+        fs.entries[wd.path] = _FakeFs.node("link", uid=1000, ino=999)  # the user replaced it by a symlink while the child ran
+        self.assertIn("left alone", wd.cleanup() or "")
+        self.assertEqual(fs.removed, [])
+        fs.entries[wd.path] = _FakeFs.node("dir", uid=1000, ino=555)  # or by another directory
+        self.assertIn("left alone", wd.cleanup() or "")
+        self.assertEqual(fs.removed, [])
+
+    def test_a_real_directory_is_private_and_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            me = Invoker(os.getuid(), os.getgid(), "me")
+            wd = prepare_workdir(me, runtime_root=os.path.join(root, "nope"), tmp_root=root)
+            path = Path(wd.path)
+            self.assertEqual(path.parent, Path(root))
+            self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o700)
+            (path / "inner").mkdir()
+            (path / "inner" / "f").write_text("x")
+            self.assertIsNone(wd.cleanup())
+            self.assertFalse(path.exists())
 
 
 class InvokerTests(unittest.TestCase):
@@ -197,10 +321,13 @@ class RunTests(StressCase):
         cmd, kw = self.popen.calls[0]
         self.assertEqual(cmd[0], os.path.realpath(tool), "argv[0] is the resolved executable")
         self.assertEqual(seen, [os.path.realpath(tool)] * 2, "the resolved path is trust-checked before the spawn (twice: early refusal, then right before)")
-        self.assertEqual(cmd[1:], ["--cpu", "6", "--taskset", "0-1,8-11", "--cpu-method", "matrixprod", "--verify", "--metrics-brief", "--timeout", "30s"])
+        self.assertEqual(cmd[1:11], ["--cpu", "6", "--taskset", "0-1,8-11", "--cpu-method", "matrixprod", "--verify", "--metrics-brief", "--timeout", "30s"])
+        self.assertEqual(cmd[11:], ["--temp-path", self.workdirs.made[0]], "the private directory is the child's temp path")
         self.assertEqual((kw["user"], kw["group"], kw["extra_groups"]), (1234, 5678, []), "setgroups([]) / setgid / setuid in the child, before exec")
         self.assertIs(kw["start_new_session"], True)
-        self.assertEqual((kw["cwd"], kw["env"], kw["shell"], kw["close_fds"]), ("/", CHILD_ENV, False, True))
+        self.assertEqual((kw["cwd"], kw["env"], kw["shell"], kw["close_fds"]), (self.workdirs.made[0], CHILD_ENV, False, True))
+        self.assertEqual(self.workdirs.removed, self.workdirs.made, "the directory is removed after the run")
+        self.assertFalse(Path(self.workdirs.made[0]).exists())
         self.assertIsNot(kw["env"], CHILD_ENV)
         self.assertEqual(kw["stdin"], -3)  # subprocess.DEVNULL
 
@@ -231,6 +358,47 @@ class RunTests(StressCase):
         r = self.run_stress(h)["result"]
         self.assertEqual((r["stopped_by"], r["errors"]), ("error", 0))
         self.assertTrue(any("ended abnormally (exit code 127)" in line for line in r["error_lines"]), r["error_lines"])
+
+    def test_a_tool_that_aborts_shows_its_last_output_lines(self) -> None:
+        reason = "aborting: temp-path '.' must be readable and writeable"
+        tool = self.fake("stress-ng", "stress-ng-abort", 1)
+        h = self.start_stress(self.swiring(stress_ng=tool))
+        r = self.run_stress(h)["result"]
+        self.assertEqual((r["stopped_by"], r["errors"]), ("error", 0))
+        lines = r["error_lines"]
+        self.assertIn("ended abnormally (exit code 1)", lines[0])
+        self.assertIn(reason, lines)
+        self.assertLessEqual(len(lines) - 1, 5, "at most five output lines after the helper line")
+        self.assertTrue(all(len(line) <= 200 for line in lines))
+
+    def test_only_the_last_five_non_empty_lines_are_kept_and_trimmed(self) -> None:
+        tool = self.fake("stress-ng", "stress-ng-noisy", 3)
+        h = self.start_stress(self.swiring(stress_ng=tool))
+        lines = self.run_stress(h)["result"]["error_lines"]
+        self.assertEqual(lines[1:], ["line 3", "line 4", "line 5", "line 6", ("line 7 " + "x" * 400)[:200]])
+
+    def test_a_clean_run_has_no_output_tail(self) -> None:
+        tool = self.fake("stress-ng", "stress-ng-ok")
+        h = self.start_stress(self.swiring(stress_ng=tool))
+        self.assertEqual(self.run_stress(h)["result"]["error_lines"], [])
+
+    def test_no_private_directory_is_a_refusal_and_nothing_starts(self) -> None:
+        def nowhere(invoker: Invoker) -> Any:
+            raise OSError(28, "No space left on device")
+
+        h = self.start_stress(self.swiring(workdir_fn=nowhere))
+        reply = self.run_stress(h)
+        self.assertEqual(error_code(reply), "REFUSED")
+        self.assertEqual(reply["error"]["detail"]["check"], "WORKDIR")
+        self.assertEqual(self.popen.calls, [])
+
+    def test_the_directory_is_removed_after_a_failed_spawn_too(self) -> None:
+        def boom(cmd: list[str], **kw: Any) -> Any:
+            raise OSError(2, "No such file")
+
+        h = self.start_stress(self.swiring(popen=boom))
+        self.assertEqual(error_code(self.run_stress(h)), "REFUSED")
+        self.assertEqual((len(self.workdirs.made), self.workdirs.removed), (1, self.workdirs.made))
 
     def test_a_memory_run(self) -> None:
         h = self.start_stress()
