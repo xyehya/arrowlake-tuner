@@ -445,40 +445,43 @@ def _health(w: StressWiring) -> Any:
         return None
 
 
-def _stop_child(w: StressWiring, proc: Any, reader: threading.Thread | None) -> None:
-    """TERM the child's whole process group, KILL it if it does not go (or if something in the group still holds the output pipe); reap."""
-    if proc.poll() is None:
-        try:
-            w.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            pass
+def _signal_group(w: StressWiring, proc: Any, sig: int) -> bool:
+    """Signal the child's process group, but only while the leader is known alive and not yet reaped: ``poll() is None`` immediately before the ``killpg``. An
+    unreaped leader (even a zombie) keeps its pid, hence the group id, reserved; once a ``poll`` / ``wait`` has returned a code the id may be reused by an
+    unrelated process group and is never signalled again."""
+    if proc.poll() is not None:
+        return False
+    try:
+        w.killpg(proc.pid, sig)
+    except OSError:  # ProcessLookupError included: nothing left to signal
+        pass
+    return True
+
+
+def _stop_child(w: StressWiring, proc: Any, reader: threading.Thread | None) -> list[str]:
+    """TERM the child's process group, KILL it if the leader does not go; reap. Returns helper notes (a pipe holder that outlived the leader cannot be signalled
+    safely: the group id may already belong to someone else)."""
+    notes: list[str] = []
+    if _signal_group(w, proc, signal.SIGTERM):
         try:
             proc.wait(timeout=w.term_wait_s)
         except subprocess.TimeoutExpired:
-            try:
-                w.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=TERM_WAIT_S)
-            except subprocess.TimeoutExpired:
-                pass
+            if _signal_group(w, proc, getattr(signal, "SIGKILL", signal.SIGTERM)):
+                try:
+                    proc.wait(timeout=TERM_WAIT_S)
+                except subprocess.TimeoutExpired:
+                    pass
     if reader is not None:
         reader.join(1.0)
-        if reader.is_alive():  # a grandchild outlived the leader and keeps the pipe: the group still exists, so its id is still ours
-            try:
-                w.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-            except OSError:
-                pass
-            reader.join(3.0)
+        if reader.is_alive():
+            notes.append("helper: something the stress program started still holds its output after it exited; it was not signalled (its process group id may be reused)")
     stream = getattr(proc, "stdout", None)
     if stream is not None and (reader is None or not reader.is_alive()):
         try:
             stream.close()
         except (OSError, ValueError):
             pass
+    return notes
 
 
 def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -602,7 +605,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     finally:
         if proc is not None:
             try:
-                _stop_child(w, proc, reader)
+                notes += _stop_child(w, proc, reader)
             except BaseException as exc:
                 notes.append(f"helper: stopping the stress process failed: {type(exc).__name__}: {exc}")
         elapsed = max(elapsed, w.monotonic() - t0) if proc is not None else elapsed

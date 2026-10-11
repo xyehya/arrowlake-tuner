@@ -6,6 +6,9 @@ import json
 import os
 import signal
 import stat
+import subprocess
+import tempfile
+import threading
 import time
 import types
 import unittest
@@ -14,7 +17,7 @@ from typing import Any
 
 from arltuner.health import HealthSnapshot
 from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR
-from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, default_invoker
+from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker
 from arltuner.helper.trust import TrustError
 from arltuner.stress import CHILD_ENV, KernelLogWatch
 
@@ -169,7 +172,7 @@ class RunTests(StressCase):
         self.assertGreaterEqual(r["elapsed_s"], 0.2)
         self.assertEqual(list(r["achieved"]), ["P0", "EC1"], "in unit order, only the units that ran")
         self.assertEqual(r["achieved"]["P0"]["ratio_mode"], 57)
-        self.assertEqual(r["achieved"]["EC1"]["ratio_mode"], 46)
+        self.assertEqual(r["achieved"]["EC1"]["ratio_mode"], 48, "E max turbo 48x (0x650), the G-114 model")
         self.assertAlmostEqual(r["achieved"]["P0"]["mhz_mean"], 5701.0, delta=0.5)
         self.assertEqual(r["max_temp_c"], 75.5)
         self.assertGreater(r["max_pkg_w"], 180)
@@ -288,6 +291,12 @@ class RunTests(StressCase):
         self.assertTrue(any("did not end by its own timeout" in line for line in r["error_lines"]), r["error_lines"])
         self.assertLess(r["elapsed_s"], 10)
         self.assertTrue(self.killpg.calls)
+
+    def test_a_run_that_ends_by_itself_signals_no_process_group(self) -> None:
+        tool = self.fake("stress-ng", "stress-ng-ok", delay=0.1)
+        h = self.start_stress(self.swiring(stress_ng=tool))
+        self.assertTrue(self.run_stress(h)["ok"])
+        self.assertEqual(self.killpg.calls, [], "the leader exited by itself and was reaped: its group id may be reused, so it is never signalled")
 
     def test_stop_with_nothing_running(self) -> None:
         h = self.start_stress()
@@ -415,7 +424,7 @@ class CapTests(StressCase):
         self.assertEqual((self.read(2, CAP_ATTR), self.read(2, EPP_ATTR)), ("4000000", "performance"))
         self.assertEqual((self.read(3, CAP_ATTR), self.read(3, EPP_ATTR)), (str(self.model.max_khz(3)), ORIGINAL_EPP), "only the selected unit is touched")
         doc = json.loads(self.journal.read_text())
-        self.assertEqual({(e["cpu"], e["attr"], e["value"]) for e in doc["entries"]}, {(2, CAP_ATTR, "5700000"), (2, EPP_ATTR, ORIGINAL_EPP)})
+        self.assertEqual({(e["cpu"], e["attr"], e["value"]) for e in doc["entries"]}, {(2, CAP_ATTR, str(self.model.max_khz(2))), (2, EPP_ATTR, ORIGINAL_EPP)})
         h.call("stop", "stress.stop")
         r = h.response("s", 30)["result"]
         self.assertEqual(r["stopped_by"], "cancel")
@@ -437,10 +446,13 @@ class CapTests(StressCase):
         self.assertIs(r["cap_valid"], False)
         self.assertEqual({u: a["ratio_mode"] for u, a in r["achieved"].items()}, {"P2": 36, "P3": 40})
         self.assert_cpufreq_pristine()
-        # a cap above what a non-favored P-core reaches (55x): the turbo table binds first -> invalid, not silently fine
+        # a cap above what a non-favored P-core can reach (cpuinfo_max 55x): the unit's own maximum is the reference, so settling at 55x is valid
         h = self.start_stress()
         r2 = self.run_stress(h, {"units": ["P2"], "ratio_cap": 57})["result"]
-        self.assertEqual((r2["cap_valid"], r2["achieved"]["P2"]["ratio_mode"]), (False, 55))
+        self.assertEqual((r2["cap_valid"], r2["achieved"]["P2"]["ratio_mode"]), (True, 55))
+        # ... but settling lower than that (power / turbo limits binding first) is not
+        low2 = self.start_stress(self.swiring(sample_fn=sim_sampler(self.cpufreq, self.model, lambda cpu: 50)))
+        self.assertIs(self.run_stress(low2, {"units": ["P2"], "ratio_cap": 57})["result"]["cap_valid"], False)
 
     def test_no_cap_means_no_cpufreq_write_and_no_journal(self) -> None:
         h = self.start_stress()
@@ -484,7 +496,7 @@ class CapTests(StressCase):
         self.assertTrue(self.run_stress(h, {}, rid="ok")["ok"], "an uncapped run needs no cpufreq")
 
     def test_a_restore_that_fails_is_loud_and_the_journal_stays_for_the_next_start(self) -> None:
-        self.cpufreq.fail = lambda cpu, attr, value: cpu == 2 and attr == CAP_ATTR and value == "5700000"  # the restore write
+        self.cpufreq.fail = lambda cpu, attr, value: cpu == 2 and attr == CAP_ATTR and value == str(self.model.max_khz(2))  # the restore write
         h = self.start_stress()
         reply = self.run_stress(h, {"units": ["P2"], "ratio_cap": 40})
         self.assertEqual(error_code(reply), "INTERNAL")
@@ -502,6 +514,63 @@ class CapTests(StressCase):
         self.assertTrue(ok["ok"], ok)
         self.assertTrue(any("stale measure journal applied" in line for line in self.logs), self.logs)
         self.assert_cpufreq_pristine()
+
+
+# =============================================================================================================================================
+class _Proc:
+    """A child as ``_stop_child`` sees it: ``poll`` answers from a script (``None`` = running), ``wait`` times out or reaps."""
+
+    pid = 4321
+    stdout = None
+
+    def __init__(self, polls: list[int | None], wait_times_out: bool = False) -> None:
+        self.polls, self.wait_times_out = list(polls), wait_times_out
+
+    def poll(self) -> int | None:
+        return self.polls.pop(0) if len(self.polls) > 1 else self.polls[0]
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.wait_times_out:
+            raise subprocess.TimeoutExpired("fake", timeout or 0)
+        self.polls = [-15]
+        return -15
+
+
+class ProcessGroupReuseTests(unittest.TestCase):
+    """The process group id is signalled only while the leader is alive and unreaped (a reaped leader's pgid may belong to someone else by now)."""
+
+    def wiring(self) -> tuple[StressWiring, list[tuple[int, int]]]:
+        calls: list[tuple[int, int]] = []
+        return stress_wiring(Path(tempfile.mkdtemp()), killpg=lambda pgid, sig: calls.append((pgid, int(sig))), term_wait_s=0.01), calls
+
+    def test_a_child_that_is_already_reaped_is_never_signalled(self) -> None:
+        w, calls = self.wiring()
+        _stop_child(w, _Proc([0]), None)
+        self.assertEqual(calls, [])
+
+    def test_term_then_no_kill_once_wait_returned(self) -> None:
+        w, calls = self.wiring()
+        _stop_child(w, _Proc([None]), None)
+        self.assertEqual(calls, [(4321, int(signal.SIGTERM))], "wait() reaped it: no further signal")
+
+    def test_kill_only_if_the_leader_is_still_unreaped_after_the_wait(self) -> None:
+        w, calls = self.wiring()
+        _stop_child(w, _Proc([None], wait_times_out=True), None)
+        self.assertEqual([s for _, s in calls], [int(signal.SIGTERM), int(signal.SIGKILL)])
+        # it exited on its own between the TERM and the end of the wait (poll now answers a code): the KILL must not go out
+        w2, calls2 = self.wiring()
+        _stop_child(w2, _Proc([None, 0], wait_times_out=True), None)
+        self.assertEqual([s for _, s in calls2], [int(signal.SIGTERM)])
+
+    def test_a_pipe_holder_after_the_leader_is_gone_is_reported_not_signalled(self) -> None:
+        w, calls = self.wiring()
+        release = threading.Event()
+        reader = threading.Thread(target=release.wait, daemon=True)
+        reader.start()
+        notes = _stop_child(w, _Proc([0]), reader)
+        release.set()
+        self.assertEqual(calls, [])
+        self.assertTrue(any("not signalled" in n for n in notes))
 
 
 # =============================================================================================================================================

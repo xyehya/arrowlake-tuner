@@ -220,7 +220,7 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   - **Child:** `/usr/bin/stress-ng` (cpu: `--cpu N --taskset LIST --cpu-method int64|matrixprod --verify --metrics-brief --timeout Ts`; `cache`: `--cache N` and no
     method) or `/usr/bin/stressapptest` (`-s T -M MB -W`; memory runs on all CPUs, `ratio_cap` applies to all); `realpath` trust-checked before every spawn; run **as
     the invoking user** by `Popen(user=uid, group=gid, extra_groups=[], start_new_session=True)` (setgroups/setgid/setuid in the child in C, no `preexec_fn`:
-    unsafe in a threaded process); `cwd=/`, env `PATH=/usr/sbin:/usr/bin LC_ALL=C` only, stdin null, stdout+stderr piped and parsed; killed (group TERM, then KILL) on
+    unsafe in a threaded process); `cwd=/`, env `PATH=/usr/sbin:/usr/bin LC_ALL=C` only, stdin null, stdout+stderr piped and parsed; killed (group TERM, then KILL; only while the leader is alive and unreaped, `poll() is None` right before each `killpg`, so a reused pgid is never signalled) on
     stop, helper exit and timeout. **Ratio cap** = the measure journal (`/run/arltuner/measure-journal.json`): `scaling_max_freq = cap×100000` and EPP `performance`
     on the selected CPUs, journaled first, restored in every path; a stale journal is applied before a capped start (`STALE_JOURNAL` if it cannot be) and by the
     helper at its start. Server `OPS`: `stress.start` (long), `stress.stop`, `stress.list`. `--sim`: simulated children and telemetry, 12× faster than real time.
