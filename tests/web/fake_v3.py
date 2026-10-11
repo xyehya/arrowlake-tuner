@@ -1,0 +1,528 @@
+"""Contract 9 (docs/ARCHITECTURE.md, SPEC-v3) for the fake helper: ``mem.read``, ``vf.measure``, ``curves.*``, ``tune.*``, ``profiles.*``.
+
+No hardware and no real helper code. Numbers are synthetic but shaped like the machine: P ~0.70 -> 1.40 V, E ~0.65 -> 1.15 V; the memory fixture is the
+measured one in ``docs/knowledge/memory-mchbar.md``. ``FakeHelper`` inherits ``V3Ops`` and calls ``handle_v3`` for the ops listed in ``V3_OPS``.
+
+Assumptions the web page binds to (not pinned by contract 9; reported in the G-113 handoff):
+  * ``tune.read`` keeps the ``vf.dump`` document shape (units -> cpus -> ``oc`` / ``points``); the page derives the tuning unit from ``kind`` and
+    ``cluster_cpus`` (P: cpu n -> ``Pn``; E: first cluster cpu -> ``EC<(cpu-8)//4>``).
+  * ``tune.plan`` ``before`` / ``after``: ``{unit: [{point, ratio, offset_mv, v_target_v}]}``; ``point`` 0 is the OC word (vfdump convention).
+  * ``tune.apply`` ``readback``: ``[{unit, point, expected, actual, match}]`` with the same point numbering.
+  * ``tune.plan`` may carry ``gates: [{name, status}]`` (SPEC §5 badges); the page shows them when present and invents nothing when absent.
+  * ``curves.list`` rows carry ``tuning_state`` (object with ``kind``) and ``created`` as ISO-8601 UTC; ``vf.point`` / ``progress`` carry ``op_id``.
+
+G-111 deviations from contract 9 (orchestrator, 2026-10-11), mirrored here:
+  * ``vf.measure`` / ``curves.get`` are budgeted to the 64 KiB line: a record may carry ``omitted_units: [unit]``; ``curves.get {id, units: [unit]}`` returns those.
+    (``FakeHelper.record_budget_units = N`` switches the budget on; default ``None`` = whole records.)
+  * ``curves.update`` returns the list row; ``vf.measure`` may add ``problems: [str]`` (``measure_problems``).
+  * ``tuning_state.kind`` is only ``"words"`` (a ``tune.read`` this boot) or ``"unknown"``; never ``"stock"``.
+  * On cancel / refusal the error ``detail`` carries the scalar ``curve_id`` of the stored partial curve (the server strips non-scalars); new
+    ``detail.check`` values NO_CPUFREQ, LOAD_GENERATOR, MEASURE_UNAVAILABLE, JOURNAL_UNAVAILABLE, CURVE_LIMIT, EXISTS, NO_SUCH_CURVE.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import secrets
+import threading
+import time
+from datetime import datetime, timezone
+
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
+UNITS = [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]
+UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)}}
+FAVORED = ("P0", "P3")
+P_QUICK = [8, 20, 30, 48, 53, 55, 56, 57]
+E_QUICK = [8, 15, 23, 30, 40, 46]
+P_POINTS_FAVORED = [8, 20, 30, 48, 53, 55, 56, 57]
+P_POINTS_OTHER = [8, 20, 30, 45, 50, 52, 54, 55]
+E_POINTS = [8, 15, 23, 30, 40, 46]
+RATIO_MAX = {"P": 57, "E": 49}
+V_TARGET_MAX = {"P": 1.625, "E": 1.355}
+V_TARGET_MIN = 0.900
+OFFSET_LIMIT = 200
+CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
+PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
+V3_OPS = frozenset({"mem.read", "vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "tune.read", "tune.plan", "tune.apply",
+                    "profiles.list", "profiles.save"})
+
+
+def kind_of(unit: str) -> str:
+    return "P" if unit.startswith("P") else "E"
+
+
+def unit_ratios(unit: str) -> list[int]:
+    """The V/F point ratios of a unit (tables are per core: the favored P-cores boost higher)."""
+    if kind_of(unit) == "E":
+        return list(E_POINTS)
+    return list(P_POINTS_FAVORED if unit in FAVORED else P_POINTS_OTHER)
+
+
+def measure_ratios(unit: str, mode: str) -> list[int]:
+    """Ratios a measurement visits: Quick = the V/F point ratios of the unit kind (SPEC-v3 section 3), Dense = every ratio from 8 to the top."""
+    if mode == "quick":
+        return list(P_QUICK if kind_of(unit) == "P" else E_QUICK)
+    return list(range(8, unit_max_ratio(unit) + 1))
+
+
+def unit_max_ratio(unit: str) -> int:
+    return unit_ratios(unit)[-1]
+
+
+def memory_fixture(*, available: bool = True) -> dict:
+    """``mem.read`` result: the live values of the reference machine [MEASURED lnx 2026-10-11], DDR5-7200 36-44-44-96."""
+    if not available:
+        return {"available": False, "reason": "MCHBAR disabled (host bridge 8086:7d1a reports bit 0 clear)"}
+    dimms = []
+    for i, temp in enumerate((38.5, 39.25)):
+        dimms.append({"locator": f"DIMM_A{i + 1}" if i == 0 else "DIMM_B1", "size": "24 GB", "part": "F5-7200J3445G24G", "manufacturer": "G.Skill",
+                      "speed": "7200 MT/s", "configured_speed": "7200 MT/s", "voltage": "1.40 V", "rank": 1,
+                      "temp_c": {"value": temp, "unit": "C", "source": "spd5118", "status": "ok"}})
+    return {"available": True, "mts": 7200, "qclk_mhz": 3600.0, "gear": 2, "cmd_rate": "2T", "bclk_mhz": 100.0,
+            "timings": {"tCL": 36, "tRCD": 44, "tRP": 44, "tRAS": 96, "tRC": 140, "tRFC": 574, "tRFCpb": 467, "tREFI": 32767, "tFAW": 32,
+                        "tRRD_L": 12, "tRRD_S": 8, "tCWL": 34, "tRTP": 23, "tWR": 110, "tWTP": 152, "tRCDW": 44, "tRPab": 44, "tREFSBRD": 20},
+            "turnaround": {"RDRD": {"SG": 18, "DG": 8, "SD": 16, "DD": 16}, "RDWR": {"SG": 23, "DG": 23, "SD": 23, "DD": 23},
+                           "WRRD": {"SG": 68, "DG": 48, "SD": 13, "DD": 13}, "WRWR": {"SG": 72, "DG": 8, "SD": 18, "DD": 18}},
+            "instances_ok": 6, "cross_check": {"agree": True, "mhz_a": 3600.0, "mhz_b": 3600.0}, "max_bandwidth_mbs": 115200, "dimms": dimms}
+
+
+def stock_vid(unit: str, ratio: int) -> float:
+    """Synthetic stock V/F curve, volts at a ratio (before any offset); a small per-unit silicon skew."""
+    skew = ((UNITS.index(unit) * 7) % 5 - 2) * 0.013
+    if kind_of(unit) == "P":
+        return 0.70 + 0.70 * ((ratio - 8) / 49.0) ** 1.7 + skew
+    return 0.65 + 0.50 * ((ratio - 8) / 38.0) ** 1.6 + skew * 0.6
+
+
+def interp_offset(points: list[dict], ratio: int) -> float:
+    """Offset (mV) in force at ``ratio``: linear between V/F points, flat beyond the ends."""
+    pts = sorted(points, key=lambda p: p["ratio"])
+    if ratio <= pts[0]["ratio"]:
+        return pts[0]["offset_mv"]
+    for a, b in zip(pts, pts[1:]):
+        if ratio <= b["ratio"]:
+            return a["offset_mv"] + (b["offset_mv"] - a["offset_mv"]) * (ratio - a["ratio"]) / (b["ratio"] - a["ratio"])
+    return pts[-1]["offset_mv"]
+
+
+def initial_tuning() -> dict:
+    """The tuning state at boot: P -25 mV, E -50 mV on every point; the OC word carries the adaptive target (what the cores request at the top ratio)."""
+    out = {}
+    for u in UNITS:
+        off = -25.0 if kind_of(u) == "P" else -50.0
+        ratios = unit_ratios(u)
+        # the OC word of 23 of 24 cores reads 0 in ratio and V target (unset): None; only P0 carries them (G-112, tune.read)
+        out[u] = {"points": [{"point": i + 1, "ratio": r, "offset_mv": off} for i, r in enumerate(ratios)],
+                  "oc": {"point": 0, "ratio": ratios[-1] if u == "P0" else None, "offset_mv": off,
+                         "v_target_v": round(stock_vid(u, ratios[-1]) + 0.01, 4) if u == "P0" else None}}
+    return out
+
+
+def _word(unit: str, point: dict) -> str:
+    h = hashlib.sha256(f"{unit}:{point['point']}:{point['ratio']}:{point['offset_mv']}".encode()).hexdigest()
+    return "0x" + h[:8]
+
+
+def _entry(unit: str, p: dict) -> dict:
+    return {"point": p["point"], "ratio": p["ratio"], "offset_mv": p["offset_mv"], "v_target_v": p.get("v_target_v")}
+
+
+class V3Ops:
+    """Mixed into ``FakeHelper`` (which provides ``_reply``, ``_err``, ``progress`` / ``emit``)."""
+
+    def _init_v3(self) -> None:
+        self.memory = memory_fixture()
+        self.curves: dict[str, dict] = {}
+        self.tuning = initial_tuning()
+        self.accepted = copy.deepcopy(self.tuning)
+        self.fused_vt = {u: round(stock_vid(u, unit_ratios(u)[-1]) + 0.01, 4) for u in UNITS}
+        self.tables = {"p": [57, 57, 55, 55, 55, 55, 55, 55], "e": [48, 48, 47, 46, 46, 46, 46, 46]}  # 0x1AD / 0x650 bucket bytes, bucket 0 first
+        self.tables_note: str | None = None
+        self.replay: dict[str, dict] = {}
+        self.tuning_version = 0           # bumped by every apply; a plan made before it is PLAN_STALE
+        self.plan_steps_truncated = False
+        self.apply_stop_after: int | None = None   # stop the apply after this many units: complete False + stop (G-112)
+        self.profiles: dict[str, dict] = {"accepted": {"name": "accepted", "source": "accepted", "created": "2026-10-06T21:14:02Z", "intent": None}}
+        self.profiles_include_intent = True
+        self.tuning_read = False          # tune.read happened this boot (decides a record's tuning_state)
+        self.measure_delay = 0.0          # seconds between vf.point events
+        self.measure_gate = threading.Event()
+        self.measure_gate.set()
+        self.record_budget_units: int | None = None   # G-111: max units per curve response (None = whole records)
+        self.measure_problems: list[str] = []
+        self.measure_refusal: dict | None = None      # {"code", "message", "check"}: refuse vf.measure up front
+        self.apply_delay = 0.0
+        self.apply_mismatch: set[tuple[str, int]] = set()
+        self.tele_interval: float | None = None
+        self._measuring: set[str] = set()
+        self._applying: set[str] = set()
+        self.plans_v3: dict[str, dict] = {}
+        self.ops_used_v3 = 0
+
+    # ---- helpers ----
+    def busy_state(self) -> tuple[str, str | None]:
+        """What a real helper's heartbeat would say right now: ``(state, op_id)``."""
+        if self._measuring:
+            return "measuring", sorted(self._measuring)[0]
+        if self._applying:
+            return "applying", sorted(self._applying)[0]
+        return "idle", None
+
+    def seed_curve(self, name: str = "Stock baseline", *, mode: str = "quick", baseline: bool = False, offset_mv: float | None = None,
+                   created: str | None = None, units: list[str] | None = None) -> dict:
+        """Store a finished synthetic curve; ``offset_mv`` overrides the offsets in force (e.g. 0.0 for a stock curve)."""
+        rec = self._new_record(name, mode, units or list(UNITS))
+        for u in rec["units"]:
+            for r in measure_ratios(u, mode):
+                rec["units"][u]["points"].append(self._point(u, r, offset_mv))
+        rec["baseline"] = baseline
+        if created:
+            rec["created"] = created
+        self.curves[rec["id"]] = rec
+        return rec
+
+    def _new_record(self, name: str, mode: str, units: list[str]) -> dict:
+        now = datetime.now(timezone.utc)
+        cid = now.strftime("%Y%m%dT%H%M%SZ") + "-" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
+        while cid in self.curves:
+            cid = now.strftime("%Y%m%dT%H%M%SZ") + "-" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
+        kind = "unknown"
+        words = None
+        if self.tuning_read:
+            kind = "words"
+            words = {str(UNIT_CPUS[u][0]): [_word(u, p) for p in self.tuning[u]["points"]] for u in UNITS}
+        ts = {"kind": kind}
+        if words:
+            ts["words"] = words
+        return {"id": cid, "name": name or cid, "created": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "boot_id": "fake-boot-0001", "mode": mode, "complete": True,
+                "kernel": "7.2.9-200.fc44.x86_64", "tuning_state": ts, "temps": {"min_c": 41.0, "max_c": 72.5},
+                "units": {u: {"cpus": UNIT_CPUS[u], "points": []} for u in units}, "baseline": False}
+
+    def _point(self, unit: str, ratio: int, offset_override: float | None = None) -> dict:
+        if kind_of(unit) == "P" and unit not in FAVORED and ratio > 55:
+            return {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable"}
+        off = offset_override if offset_override is not None else interp_offset(self.tuning[unit]["points"], ratio)
+        v = stock_vid(unit, ratio) + off / 1000.0
+        return {"ratio": ratio, "mhz": ratio * 100.0 + 2.0, "vid_v": round(v, 4), "vid_min": round(v - 0.004, 4), "vid_max": round(v + 0.005, 4),
+                "kept": 28, "total": 30, "status": "ok"}
+
+    @staticmethod
+    def _summary(rec: dict) -> dict:
+        ts = rec.get("tuning_state")
+        return {"id": rec["id"], "name": rec["name"], "created": rec["created"], "mode": rec["mode"], "complete": rec["complete"],
+                "tuning_state": {"kind": ts["kind"]} if isinstance(ts, dict) else {"kind": "unknown"}, "units": list(rec["units"]), "baseline": rec["baseline"]}
+
+    # ---- dispatcher ----
+    def handle_v3(self, rid: str, op: str, args: dict) -> None:
+        if op in self.replay:   # dev aid: answer with a result captured from the real simulator helper (shape checks without re-implementing it)
+            return self._reply(rid, True, result=self.replay[op])
+        try:
+            getattr(self, "_op_" + op.replace(".", "_"))(rid, args)
+        except Exception as e:  # a fake: surface programming errors as INTERNAL instead of killing the serve loop
+            self._err(rid, "INTERNAL", f"fake helper bug: {e!r}")
+
+    def _op_mem_read(self, rid, args):
+        self._reply(rid, True, result=self.memory)
+
+    # ---- curves ----
+    def _op_curves_list(self, rid, args):
+        rows = sorted(self.curves.values(), key=lambda r: r["created"], reverse=True)
+        self._reply(rid, True, result={"curves": [self._summary(r) for r in rows]})
+
+    def _budgeted(self, rec: dict, only: list[str] | None = None) -> dict:
+        """The record as one 64 KiB line would carry it: at most ``record_budget_units`` units, the rest named in ``omitted_units``."""
+        names = [u for u in rec["units"] if only is None or u in only]
+        if self.record_budget_units is None:
+            return {**rec, "units": {u: rec["units"][u] for u in names}} if only is not None else rec
+        keep, rest = names[:self.record_budget_units], names[self.record_budget_units:]
+        out = {**rec, "units": {u: rec["units"][u] for u in keep}}
+        if rest:
+            out["omitted_units"] = rest
+        return out
+
+    def _op_curves_get(self, rid, args):
+        rec = self.curves.get(args.get("id"))
+        if rec is None:
+            return self._err(rid, "BAD_REQUEST", "no such curve", check="NO_SUCH_CURVE")
+        self._reply(rid, True, result=self._budgeted(rec, args.get("units")))
+
+    def _op_curves_update(self, rid, args):
+        rec = self.curves.get(args.get("id"))
+        if rec is None:
+            return self._err(rid, "BAD_REQUEST", "no such curve", check="NO_SUCH_CURVE")
+        if "name" in args:
+            rec["name"] = str(args["name"])[:64]
+        if "baseline" in args:
+            if args["baseline"]:
+                for r in self.curves.values():
+                    r["baseline"] = False
+            rec["baseline"] = bool(args["baseline"])
+        self._reply(rid, True, result=self._summary(rec))
+
+    def _op_curves_delete(self, rid, args):
+        if self.curves.pop(args.get("id"), None) is None:
+            return self._err(rid, "BAD_REQUEST", "no such curve", check="NO_SUCH_CURVE")
+        self._reply(rid, True, result={"deleted": args["id"]})
+
+    # ---- measure (long) ----
+    def _op_vf_measure(self, rid, args):
+        if self.measure_refusal:
+            r = self.measure_refusal
+            return self._err(rid, r["code"], r["message"], check=r["check"])
+        threading.Thread(target=self._measure, args=(rid, args), daemon=True).start()
+
+    def _measure(self, rid: str, args: dict) -> None:
+        mode = args.get("mode", "quick")
+        units = [u for u in UNITS if u in (args.get("units") or UNITS)]
+        rec = self._new_record(str(args.get("name") or ""), mode, units)
+        plan = [(u, r) for u in units for r in measure_ratios(u, mode)]
+        self._measuring.add(rid)
+        t0 = time.monotonic()
+        try:
+            for i, (u, r) in enumerate(plan):
+                while not self.measure_gate.wait(0.02):
+                    if rid in self._cancelled:
+                        break
+                if rid in self._cancelled:
+                    rec["complete"] = False
+                    self.curves[rec["id"]] = rec
+                    return self._err(rid, "CANCELLED", "vf.measure was cancelled", state="measuring", curve_id=rec["id"])
+                if self.measure_delay:
+                    time.sleep(self.measure_delay)
+                pt = self._point(u, r)
+                rec["units"][u]["points"].append(pt)
+                eta = (time.monotonic() - t0) / (i + 1) * (len(plan) - i - 1) if self.measure_delay else (len(plan) - i - 1) * 0.5
+                self.emit({"event": "progress", "op_id": rid, "step": i + 1, "of": len(plan), "unit": u, "ratio": r, "eta_s": round(eta, 1)})
+                self.emit({"event": "vf.point", "op_id": rid, "unit": u, "ratio": r, "mhz": pt["mhz"], "vid_v": pt["vid_v"], "status": pt["status"]})
+            self.curves[rec["id"]] = rec
+            result = {"curve_id": rec["id"], "record": self._budgeted(rec)}
+            if self.measure_problems:
+                result["problems"] = list(self.measure_problems)
+            self._reply(rid, True, result=result)
+        finally:
+            self._measuring.discard(rid)
+            self._cancelled.discard(rid)
+
+    # ---- tuning words (G-112 shapes: docs/ARCHITECTURE.md contract 9 as built) ----
+    def _oc_view(self, u: str) -> dict:
+        """The OC word as ``tune.read`` decodes it: ratio / V target are ``None`` (unset, the word reads 0) on most cores."""
+        oc = self.tuning[u]["oc"]
+        return {"point": 0, "ratio": oc["ratio"], "offset_mv": oc["offset_mv"], "v_target_v": oc["v_target_v"], "mode": "adaptive"}
+
+    def _op_tune_read(self, rid, args):
+        self.tuning_read = True
+        units, tune = [], {}
+        for u in UNITS:
+            t = self.tuning[u]
+            oc_t = self._oc_view(u)
+            oc = {**oc_t, "word": _word(u, t["oc"]), "ratio": oc_t["ratio"] or 0, "v_target_v": oc_t["v_target_v"] or 0.0, "static": False}
+            points = [{**_entry(u, p), "v_target_v": None, "word": _word(u, p), "mode": "adaptive", "static": False} for p in t["points"]]
+            cpus = [{"cpu": UNIT_CPUS[u][0], "name": (f"P-Core {UNIT_CPUS[u][0]}" if kind_of(u) == "P" else f"E-Core {UNIT_CPUS[u][0]}"),
+                     "oc": oc, "points": points, "end": None}]
+            name = f"P-Core {u[1:]}" if kind_of(u) == "P" else f"E-cluster {u[2:]} (CPUs {UNIT_CPUS[u][0]}-{UNIT_CPUS[u][-1]})"
+            units.append({"id": u, "name": name, "kind": kind_of(u), "cluster": None if kind_of(u) == "P" else int(u[2:]), "cluster_cpus": UNIT_CPUS[u],
+                          "cpus": cpus, "measured": None})
+            tune[u] = {"cpus": [{"cpu": UNIT_CPUS[u][0], "points": [oc_t] + [{"point": p["point"], "ratio": p["ratio"], "offset_mv": p["offset_mv"],
+                                                                                "v_target_v": None, "mode": "adaptive"} for p in t["points"]]}]}
+        match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
+                  "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
+        self.ops_used_v3 += 112
+        self._reply(rid, True, result={"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
+                                       "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
+                                       "tables_note": self.tables_note})
+
+    # ---- plan ----
+    def _refuse_range(self, rid, field: str, limit: str):
+        self._err(rid, "REFUSED", f"{field} is outside the policy: {limit}", check="POLICY_RANGE")
+
+    def _targets(self, target) -> list[str] | None:
+        if target == "P":
+            return [u for u in UNITS if u.startswith("P")]
+        if target == "E":
+            return [u for u in UNITS if u.startswith("E")]
+        return [target] if target in UNITS else None
+
+    def _op_tune_plan(self, rid, args):
+        intent = args.get("intent")
+        if not isinstance(intent, dict):
+            return self._err(rid, "BAD_REQUEST", "intent must be an object")
+        new = copy.deepcopy(self.tuning)
+        warnings: list[str] = []
+        written: dict[str, set[int]] = {}   # unit -> word indexes the plan writes (0 = OC word)
+        if "reset" in intent:
+            if not self.tuning_read:
+                return self._err(rid, "REFUSED", "reset needs the words last read; run 'Read tuning words' (tune.read) first. Nothing was sent.", check="NO_READ")
+            for u in UNITS:   # offsets only: ratio, V target and the turbo tables stay
+                for p in new[u]["points"] + [new[u]["oc"]]:
+                    p["offset_mv"] = 0.0
+                written[u] = {0}
+        elif "restore" in intent:
+            new = copy.deepcopy(self.accepted)
+            written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
+        elif "profile" in intent:
+            prof = self.profiles.get(intent["profile"])
+            if prof is None:
+                return self._err(rid, "REFUSED", "no such profile", check="PROFILE_NOT_FOUND")
+            if prof["source"] == "accepted":
+                new = copy.deepcopy(self.accepted)
+                written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
+            elif self._apply_rows(rid, new, prof["intent"].get("rows", []), warnings, written):
+                return
+        elif isinstance(intent.get("rows"), list):
+            rows = [r for r in intent["rows"] if isinstance(r, dict) and (r.get("offset") or r.get("v_target_v") is not None or r.get("ratio") is not None)]
+            if not rows:
+                return self._err(rid, "BAD_REQUEST", "the intent changes nothing (every row is empty)", check="NOTHING_TO_DO")
+            scope = intent.get("scope")
+            for r in rows:
+                if r.get("target") not in (("P", "E") if scope == "simple" else tuple(UNITS)):
+                    return self._err(rid, "BAD_REQUEST", f"row target {r.get('target')!r} is not valid for scope {scope!r}")
+                if isinstance(r.get("offset"), dict) and r["offset"].get("kind") == "points" and not self.tuning_read:
+                    return self._err(rid, "REFUSED", f"{r['target']}: per-point offsets are addressed by ratio and need the words last read; run 'Read tuning words' "
+                                     "(tune.read) first. Nothing was sent.", check="NO_READ")
+            if self._apply_rows(rid, new, rows, warnings, written):
+                return
+        else:
+            return self._err(rid, "BAD_REQUEST", "intent must be {scope, rows}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
+        before, after, ops, changed_units, steps = {}, {}, 0, [], []
+        for u in UNITS:
+            idx = sorted(written.get(u, ()))
+            if not idx:
+                continue
+            changed_units.append(u)
+            word = lambda state, i: _entry(u, state[u]["oc"] if i == 0 else next(p for p in state[u]["points"] if p["point"] == i))  # noqa: E731
+            show = lambda e: {"ratio": e["ratio"], "offset_mv": e["offset_mv"], "v_target_v": e["v_target_v"]}  # noqa: E731
+            before[u] = {str(i): (show(word(self.tuning, i)) if self.tuning_read else None) for i in idx}
+            after[u] = {str(i): show(word(new, i)) for i in idx}
+            ops += 3 * len(idx) + 1
+            for i in idx:
+                steps.append({"kind": "write_vf" if i == 0 else "write_vf_point", "unit": u, "cpu": UNIT_CPUS[u][0], "point": i})
+        top = {"P": self.tables["p"][0], "E": self.tables["e"][0]}
+        raised = {k for u in changed_units for k in [kind_of(u)] if (new[u]["oc"]["ratio"] or 0) > top[k]}
+        steps = [{"kind": "write_percore_enable", "conditional": True}] + steps + [{"kind": "write_msr", "table": k.lower()} for k in sorted(raised)]
+        if any(new[u]["oc"]["ratio"] != self.tuning[u]["oc"]["ratio"] for u in changed_units):
+            warnings.append("Raising the OC ratio or target is not validated on this machine; the hardware may ignore a ratio inside the current turbo table.")
+        warnings.append("Revert: cold boot, or reapply the accepted profile.")
+        plan_id = hashlib.sha256(json.dumps([after, rid], sort_keys=True).encode()).hexdigest()
+        nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
+        self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "written": written, "created": time.monotonic(),
+                                  "version": self.tuning_version, "bad": 0, "raised": sorted(raised)}
+        result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - 1, "reads": len(changed_units),
+                  "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3, "expires_s": 600, "units": changed_units, "before": before,
+                  "after": after, "warnings": warnings, "words_assumed": not self.tuning_read}
+        if self.plan_steps_truncated:
+            result["steps"] = steps[: len(steps) // 2]
+            result["steps_truncated"] = True
+        self._reply(rid, True, result=result)
+
+    def _apply_rows(self, rid, new: dict, rows: list, warnings: list[str], written: dict) -> bool:
+        """Apply plan rows to ``new``; True (after sending the refusal) if a row is out of policy."""
+        for row in rows:
+            units = self._targets(row.get("target"))
+            if units is None:
+                self._err(rid, "BAD_REQUEST", f"unknown target {row.get('target')!r}")
+                return True
+            for u in units:
+                k = kind_of(u)
+                off = row.get("offset")
+                if isinstance(off, dict):
+                    mvs = [off["mv"]] if off.get("kind") == "curve" else list(off.get("mv", {}).values())
+                    for mv in mvs:
+                        if not isinstance(mv, (int, float)) or abs(mv) > OFFSET_LIMIT:
+                            self._refuse_range(rid, "offset.mv", f"-{OFFSET_LIMIT}..+{OFFSET_LIMIT} mV")
+                            return True
+                    if off.get("kind") == "curve":
+                        for p in new[u]["points"] + [new[u]["oc"]]:
+                            p["offset_mv"] = float(off["mv"])
+                        written.setdefault(u, set()).add(0)
+                    else:
+                        for p in new[u]["points"]:
+                            if str(p["ratio"]) in off["mv"]:
+                                p["offset_mv"] = float(off["mv"][str(p["ratio"])])
+                                written.setdefault(u, set()).add(p["point"])
+                    if any(p["offset_mv"] > 0 for p in new[u]["points"]):
+                        warnings.append(f"positive offset on {u}: raises voltage above the fused curve")
+                vt = row.get("v_target_v")
+                if vt is not None:
+                    if not (V_TARGET_MIN - 1e-9 <= vt <= V_TARGET_MAX[k] + 1e-9):
+                        self._refuse_range(rid, "v_target_v", f"{V_TARGET_MIN:.3f}..{V_TARGET_MAX[k]:.3f} V for {k}")
+                        return True
+                    new[u]["oc"]["v_target_v"] = float(vt)
+                    written.setdefault(u, set()).add(0)
+                    if vt > self.fused_vt[u] + 1e-9:
+                        warnings.append(f"target above fused on {u}: {vt:.3f} V > {self.fused_vt[u]:.3f} V")
+                ratio = row.get("ratio")
+                if ratio is not None:
+                    if not (isinstance(ratio, int) and ratio <= RATIO_MAX[k]):
+                        self._refuse_range(rid, "ratio", f"at most {RATIO_MAX[k]} for {k}")
+                        return True
+                    new[u]["oc"]["ratio"] = ratio
+                    written.setdefault(u, set()).add(0)
+        return False
+
+    # ---- apply (long) ----
+    def _op_tune_apply(self, rid, args):
+        p = self.plans_v3.get(args.get("plan_id"))
+        if p is None:
+            return self._err(rid, "PLAN_STALE", "unknown plan (plans do not survive a helper restart)")
+        if p["used"] or args.get("typed") != "CONFIRM " + p["nonce"]:
+            p["bad"] += 1
+            if p["bad"] >= 3:
+                del self.plans_v3[args["plan_id"]]
+            return self._err(rid, "CONFIRM_MISMATCH", "typed text does not match")
+        if p["version"] != self.tuning_version:
+            return self._err(rid, "PLAN_STALE", "a word changed since this plan was made; plan again")
+        p["used"] = True
+        self._applying.add(rid)
+        threading.Thread(target=self._apply, args=(rid, p), daemon=True).start()
+
+    def _apply(self, rid: str, p: dict) -> None:
+        n = max(len(p["changed"]), 1)
+        stop_after = self.apply_stop_after
+        readback, sent = [], 0
+        for i, u in enumerate(p["changed"]):
+            if self.apply_delay:
+                time.sleep(self.apply_delay)
+            self.emit({"event": "progress", "op_id": rid, "step": i + 1, "of": n, "ops_used": self.ops_used_v3 + 3 * (i + 1), "ops_budget": self.ops_budget})
+            if stop_after is not None and i >= stop_after:
+                break
+            for idx in sorted(p["written"][u]):
+                q = p["new"][u]["oc"] if idx == 0 else next(x for x in p["new"][u]["points"] if x["point"] == idx)
+                exp = _word(u, q)
+                bad = (u, idx) in self.apply_mismatch
+                readback.append({"unit": u, "point": idx, "cpu": UNIT_CPUS[u][0], "expected": exp,
+                                 "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
+                sent += 1
+            self.tuning[u] = copy.deepcopy(p["new"][u])
+        for k in p["raised"]:
+            top = max(p["new"][u]["oc"]["ratio"] or 0 for u in p["changed"] if kind_of(u) == k)
+            self.tables[k.lower()] = [top] + self.tables[k.lower()][1:]
+            readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
+        self.tuning_version += 1
+        self.ops_used_v3 += 3 * n
+        self._applying.discard(rid)
+        result = {"plan_id": next((k for k, v in self.plans_v3.items() if v is p), ""), "steps": [{"n": i + 1, "kind": "write_vf", "unit": u, "status": "ok"} for i, u in enumerate(p["changed"])],
+                  "readback": readback, "ops_used": 3 * n, "complete": stop_after is None, "writes_sent": sent, "warnings": [], "revert_plan": sent}
+        if stop_after is not None:
+            result["stop"] = {"kind": "refused", "reason": "the guard refused a step: step limit", "tripped": False}
+        self._reply(rid, True, result=result)
+
+    # ---- profiles ----
+    def _op_profiles_list(self, rid, args):
+        rows = []
+        for r in self.profiles.values():
+            row = {"name": r["name"], "source": r["source"], "created": r["created"]}
+            if self.profiles_include_intent and r.get("intent") is not None:
+                row["intent"] = r["intent"]
+            rows.append(row)
+        self._reply(rid, True, result={"profiles": rows})
+
+    def _op_profiles_save(self, rid, args):
+        name, intent = args.get("name"), args.get("intent")
+        if not isinstance(name, str) or not PROFILE_NAME.match(name) or not isinstance(intent, dict):
+            return self._err(rid, "BAD_REQUEST", "name must match ^[a-z0-9._-]{1,64}$ and intent must be an object")
+        if name in self.profiles:
+            return self._err(rid, "REFUSED", f"profile {name!r} exists and is never overwritten", check="EXISTS")
+        self.profiles[name] = {"name": name, "source": "saved", "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "intent": intent}
+        self._reply(rid, True, result={"name": name, "saved": True})
