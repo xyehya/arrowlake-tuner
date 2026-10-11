@@ -232,6 +232,14 @@ class PathsOutTests(MeasureCase):
         self.assertEqual(self.cpufreq.writes, [])
         self.assertFalse(self.journal.exists())
 
+    def test_dense_without_cpufreq_is_refused_too(self) -> None:
+        self.io.read_max_khz = lambda cpu: int((self.sysfs / f"cpu{cpu}" / "cpufreq" / "cpuinfo_max_freq").read_text())  # type: ignore[method-assign]
+        for cpu in range(24):
+            (self.sysfs / f"cpu{cpu}" / "cpufreq" / "cpuinfo_max_freq").unlink()
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "dense"}, timeout=30)
+        self.assertEqual((error_code(reply), reply["error"]["detail"]["check"]), ("REFUSED", "NO_CPUFREQ"))
+        self.assertEqual(self.cpufreq.writes, [])
+
     def test_a_load_generator_that_is_not_usable_is_refused(self) -> None:
         self.io.check = lambda: "python3 is not trusted"  # type: ignore[method-assign]
         reply = self.start_measure().call("m", "vf.measure", {}, timeout=30)
@@ -280,8 +288,9 @@ class CurvesOpsTests(MeasureCase):
         self.assertEqual(error_code(h.call("n2", "curves.get", {"id": "x"})), "BAD_REQUEST")  # not an id
 
     def test_a_dense_record_of_all_units_fits_the_line(self) -> None:
-        """The 64 KiB line cap of contract 8: the worst realistic record (dense, 12 units) must travel in one response, or be cut by whole units with ``omitted_units``."""
-        h = self.start_measure()
+        """The 64 KiB line cap of contract 8: the worst realistic record (dense, 12 units, plus the tuning words of 24 CPUs a ``tune.read`` leaves in ``tuning_state``)
+        must travel in one response, whole; anything bigger would be cut by whole units with ``omitted_units``."""
+        h = self.start_measure(last_words={cpu: [0x12345678] * 9 for cpu in range(24)})
         reply = h.call("m", "vf.measure", {"mode": "dense"}, timeout=120)
         self.assertTrue(reply["ok"], reply)
         n_points = sum(len(u["points"]) for u in self.store.get(reply["result"]["curve_id"])["units"].values())

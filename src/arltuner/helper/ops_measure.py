@@ -27,7 +27,7 @@ from typing import Any
 
 from arltuner import vfdump
 from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
-from arltuner.curves.record import QUICK_RATIOS
+from arltuner.curves.record import QUICK_RATIOS, RECORD_BUDGET
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, OpError
@@ -42,7 +42,7 @@ __all__ = [
 SETTLE_S = 0.3
 SAMPLES = 10
 SAMPLE_INTERVAL_S = 0.1
-MIN_VALID = 5  # of SAMPLES, the same fraction as the CLI's 5 of 30 is not used: 10 samples need half to be at the target
+MIN_VALID = 5  # of SAMPLES: half must run at the target ratio (the CLI needs 5 of 30; a knob to tune on the machine, T-027 saw the ratio waver under load)
 POINT_OVERHEAD_S = 0.1  # per attempt: cap writes + process start (only for the first ETA, before any point has been timed)
 EPP_VALUE = "balance_performance"
 EPP_ATTR = "energy_performance_preference"
@@ -576,7 +576,10 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         if cancel.is_set():
             raise _Cancelled()
         cpus = [cpu for u in units for cpu in unit_cpus(u)]
-        plan = {u: _plan_ratios(run.io, u, mode) for u in units}
+        try:
+            plan = {u: _plan_ratios(run.io, u, mode) for u in units}
+        except (OSError, ValueError) as exc:  # dense reads cpuinfo_max_freq before anything else
+            raise OpError(REFUSED, f"cpufreq is not available for the selected CPUs: {exc}", {"check": "NO_CPUFREQ"}) from None
         total = sum(len(r) for r in plan.values())
         try:
             boot = helper.cfg.boot_id_fn()
@@ -669,7 +672,7 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
     detail: dict[str, Any] = {}
     if stored is not None:
         detail["curve_id"] = stored["id"]
-        detail["partial"] = fit_record(stored)
+        detail["partial"] = fit_record(stored, RECORD_BUDGET - 4096)  # the message and the problems share the line
     if problems:
         detail["problems"] = problems[:10]
     note = ""
@@ -689,7 +692,8 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
     if store_problem or restore_bad:
         raise OpError(INTERNAL, f"the measurement finished but:{note}", detail or None)
     assert stored is not None
-    return {"curve_id": stored["id"], "record": fit_record(stored), **({"problems": problems} if problems else {})}
+    extra = {"problems": problems[:10]} if problems else {}
+    return {"curve_id": stored["id"], "record": fit_record(stored, RECORD_BUDGET - len(json.dumps(extra))), **extra}
 
 
 # =============================================================================================================================================

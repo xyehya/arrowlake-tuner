@@ -23,8 +23,9 @@ QUICK_RATIOS: dict[str, tuple[int, ...]] = {"P": (8, 20, 30, 48, 53, 55, 56, 57)
 MAX_NAME = 64
 _ID_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
-#: Responses are one JSON line of at most 64 KiB (contract 8); leave room for the envelope and the other result keys.
-RECORD_BUDGET = 60 * 1024
+#: Responses are one JSON line of at most 64 KiB (contract 8); 2 KiB are left for the envelope (``{"id","ok","result":{"curve_id",...}}``) and the other result keys.
+#: A dense run of all 12 units is ~60 KB, ~63 KB with the tuning words of 24 CPUs in ``tuning_state``: the budget is sized so that both travel whole.
+RECORD_BUDGET = 64 * 1024 - 2048
 
 
 def unit_kind(unit: str) -> str:
