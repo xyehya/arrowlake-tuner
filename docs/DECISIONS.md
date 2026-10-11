@@ -132,3 +132,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   word read (`vf.dump`) is renamed **"Read tuning words"** and lives on the Tune page. (c) SPEC §5 hardware gates become informational badges, not
   locks. (d) O-4 changes: apply = before/after diff modal + one **Apply** click that carries the plan nonce (no typing); plan-binding, expiry and
   single-use stay. (e) The orchestrator still asks for a go before the first mailbox write from the new UI.
+- **D-034 · 2026-10-11 · Orchestrator fully autonomous (operator).** Operator, verbatim: "u have the go to do anything to keep thie project going
+  plz. dont wait any more ok from my side. orchestrator can go autonomously." This is the standing go for every sitting the orchestrator runs
+  (installs, sudo, read and write sittings, merges). Unchanged: workers never touch hardware; guard, one transaction at a time, health bracket,
+  smallest step first, honest reporting; stop on a traceback, health delta, MCE/WHEA. Operator sequencing: reads + UI to standard first, then writes
+  (OC point → adaptive voltage → offsets).
