@@ -371,6 +371,10 @@ class MeasureGroup:
     cpus: tuple[int, ...]
     rep: int
     ratios: tuple[int, ...]
+    #: G-114 (F3, orchestrator measurement ``[MEASURED lnx 2026-10-11]``: a favored core pinned at 57x spent 31 of 40 samples there, the rest at 55/51/56 when a
+    #: 3rd core woke): ratios that only a FEW active cores allow. They are sampled longer (``LONG_SAMPLES`` x ``LONG_INTERVAL_S``), stopping as soon as
+    #: ``min_valid`` samples sit at the target; only if that is still not reached does the point count as not reachable (``active_cores``).
+    intermittent: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -416,6 +420,11 @@ def _temp_or_none(io: MeasureIO, cpu: int) -> float | None:
         return None
 
 
+#: Samples for an ``intermittent`` ratio: up to 40 readings 50 ms apart (2 s), stopping early once ``min_valid`` readings are at the target.
+LONG_SAMPLES = 40
+LONG_INTERVAL_S = 0.05
+
+
 def _sample(
     io: MeasureIO,
     group: MeasureGroup,
@@ -425,8 +434,10 @@ def _sample(
     settle_s: float,
     samples: int,
     interval_s: float,
+    early: tuple[int, int] | None = None,
 ) -> tuple[list[int], list[float]]:
-    """Cap every CPU of the group at ``cap``, load them, take ``samples`` readings of ``0x198`` (and the temperature) on the rep CPU; the load is always stopped."""
+    """Cap every CPU of the group at ``cap``, load them, take ``samples`` readings of ``0x198`` (and the temperature) on the rep CPU; the load is always stopped.
+    ``early = (target ratio, n)``: stop as soon as ``n`` readings have that running ratio ``[15:8]``."""
     for cpu in group.cpus:
         io.write_cap(cpu, cap)
     load = io.start_load(group.cpus, settle_s + samples * interval_s + 2.0)
@@ -439,6 +450,8 @@ def _sample(
             temp = _temp_or_none(io, group.rep)
             if temp is not None:
                 temps.append(temp)
+            if early is not None and sum(((w >> 8) & 0xFF) == early[0] for w in words) >= early[1]:
+                break
             if i + 1 < samples:
                 sleep(interval_s)
     finally:
@@ -488,7 +501,10 @@ def measure_group(
             for n, cap in enumerate(attempts):
                 if progress is not None:
                     progress(f"measuring {group.name} at {ratio}x (scaling_max_freq {cap // 1000} MHz on CPUs {','.join(map(str, group.cpus))})")
-                words, temps = _sample(io, group, cap, read_perf, sleep, settle_s, samples, interval_s)
+                if ratio in group.intermittent:
+                    words, temps = _sample(io, group, cap, read_perf, sleep, settle_s, max(samples, LONG_SAMPLES), min(interval_s, LONG_INTERVAL_S), (ratio, min_valid))
+                else:
+                    words, temps = _sample(io, group, cap, read_perf, sleep, settle_s, samples, interval_s)
                 running = [(w >> 8) & 0xFF for w in words]
                 seen = tuple(sorted(set(running)))
                 kept = [w for w, r in zip(words, running) if r == ratio]

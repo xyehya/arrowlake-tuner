@@ -5,7 +5,8 @@ import json
 import threading
 import unittest
 
-from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR
+from arltuner import vfdump
+from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, SimModel
 from arltuner.helper.protocol import MAX_LINE, encode
 
 from ._measure_support import ORIGINAL_EPP, MeasureCase
@@ -28,14 +29,15 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(list(rec["units"]), [f"P{n}" for n in range(8)] + [f"EC{n}" for n in range(4)])
         self.assertEqual(rec["units"]["EC2"]["cpus"], [16, 17, 18, 19])
         self.assertEqual([p["ratio"] for p in rec["units"]["P1"]["points"]], [8, 20, 30, 48, 53, 55, 56, 57])
-        self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], [8, 15, 23, 30, 40, 46])
-        self.assertEqual(set(rec["units"]["P0"]["points"][0]), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status"})
+        self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], [8, 15, 23, 30, 40, 46, 47, 48])  # F9: + the max turbo bins
+        self.assertEqual(set(rec["units"]["P0"]["points"][0]), {"ratio", "mhz", "vid_v", "vid_min", "vid_max", "kept", "total", "status"})  # no reason on an ok point
         # 56x / 57x: reachable on the favored P0 and P3 only
         for unit in ("P0", "P3"):
             self.assertEqual({r: points(rec, unit)[r]["status"] for r in (55, 56, 57)}, {55: "ok", 56: "ok", 57: "ok"})
         for unit in ("P1", "P2", "P4", "P5", "P6", "P7"):
             self.assertEqual({r: points(rec, unit)[r]["status"] for r in (55, 56, 57)}, {55: "ok", 56: "unreachable", 57: "unreachable"})
             self.assertIsNone(points(rec, unit)[57]["vid_v"])
+            self.assertEqual({r: points(rec, unit)[r]["reason"] for r in (56, 57)}, {56: "max_turbo", 57: "max_turbo"})  # cpuinfo_max_freq 5.5 GHz
         p0 = points(rec, "P0")
         self.assertAlmostEqual(p0[8]["vid_v"], 0.70, delta=0.04)
         self.assertAlmostEqual(p0[57]["vid_v"], 1.40, delta=0.04)
@@ -60,12 +62,12 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(reply["result"]["record"]["name"], "mine")
         self.assertEqual(list(reply["result"]["record"]["units"]), ["P2", "EC3"])  # display order, not request order
         pts = [m for m in h.messages if m.get("event") == "vf.point"]
-        self.assertEqual(len(pts), 8 + 6)
+        self.assertEqual(len(pts), 8 + 8)
         self.assertEqual(set(pts[0]), {"event", "op_id", "unit", "ratio", "mhz", "vid_v", "status"})
         self.assertEqual((pts[0]["op_id"], pts[0]["unit"], pts[0]["ratio"], pts[0]["mhz"]), ("m", "P2", 8, 800))
         prog = [m for m in h.messages if m.get("event") == "progress" and m.get("op_id") == "m"]
-        self.assertEqual((prog[0]["step"], prog[0]["of"]), (0, 14))
-        self.assertEqual((prog[-1]["step"], prog[-1]["of"], prog[-1]["unit"], prog[-1]["ratio"]), (14, 14, "EC3", 46))
+        self.assertEqual((prog[0]["step"], prog[0]["of"]), (0, 16))
+        self.assertEqual((prog[-1]["step"], prog[-1]["of"], prog[-1]["unit"], prog[-1]["ratio"]), (16, 16, "EC3", 48))
         self.assertEqual(set(prog[-1]), {"event", "op_id", "step", "of", "unit", "ratio", "eta_s"})
         self.assertEqual(prog[-1]["eta_s"], 0)
         self.assertGreaterEqual(prog[0]["eta_s"], 1)
@@ -76,18 +78,68 @@ class QuickRunTests(MeasureCase):
         h = self.start_measure()
         rec = h.call("m", "vf.measure", {"mode": "dense", "units": ["P0", "P1", "EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual([p["ratio"] for p in rec["units"]["P0"]["points"]], list(range(8, 58)))
-        self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], list(range(8, 47)))
-        self.assertEqual({points(rec, "P0")[r]["status"] for r in range(8, 58)}, {"ok"})
-        self.assertEqual({points(rec, "P1")[r]["status"] for r in (56, 57)}, {"unreachable"})
+        self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], list(range(8, 49)))
+        self.assertEqual({points(rec, "P0")[r]["status"] for r in range(8, 58) if r != 52}, {"ok"})
+        self.assertEqual(max(points(rec, "P1")), 55)  # dense stops at the unit maximum (cpuinfo_max_freq 5.5 GHz): nothing above is tried
+        self.assertEqual(points(rec, "P1")[52]["reason"], "cpufreq_granularity")  # F9: P 52x is not pinnable
 
-    def test_mismatch_is_not_unreachable(self) -> None:
-        """E ratio 29: the cap 29 settles one bin low, the retry (cap 30) runs above it => MISMATCH (a clean read could not be made), unlike a ratio that is never reached."""
+    def test_unpinnable_ratios_are_unreachable_with_a_granularity_reason(self) -> None:
+        """F9: E 29x (cap 29 -> 28, retry cap 30 -> 30) and E 23x never land on the target: no sample at it => unreachable, not an error and not a mismatch."""
         rec = self.start_measure().call("m", "vf.measure", {"mode": "dense", "units": ["EC0", "P4"]}, timeout=60)["result"]["record"]
-        e29 = points(rec, "EC0")[29]
-        self.assertEqual((e29["status"], e29["vid_v"], e29["vid_min"], e29["vid_max"]), ("mismatch", None, None, None))
-        self.assertLess(e29["kept"], 5)
-        self.assertEqual(points(rec, "EC0")[23]["status"], "ok")  # the +1 cap retry works for the others
-        self.assertEqual(points(rec, "P4")[56]["status"], "unreachable")
+        for ratio in (23, 29):
+            e = points(rec, "EC0")[ratio]
+            self.assertEqual((e["status"], e["reason"], e["vid_v"]), ("unreachable", "cpufreq_granularity", None), ratio)
+            self.assertLessEqual(e["kept"], 2)
+        self.assertEqual(points(rec, "EC0")[24]["status"], "ok")
+        self.assertEqual(points(rec, "EC0")[22]["status"], "ok")
+        self.assertEqual(points(rec, "P4")[52]["reason"], "cpufreq_granularity")
+        self.assertEqual(points(rec, "P4")[53]["status"], "ok")
+
+    def test_classify_keeps_a_rarely_hit_target_a_mismatch(self) -> None:
+        from arltuner.helper.ops_measure import _classify
+
+        hover = vfdump.RatioMeasurement(30, "MISMATCH", 3_000_000, seen_ratios=(29, 30), samples_kept=4, samples_total=10, why="above")
+        self.assertEqual(_classify(hover, 46, ()), ("mismatch", None))
+        never = vfdump.RatioMeasurement(30, "MISMATCH", 3_000_000, seen_ratios=(29, 31), samples_kept=0, samples_total=10, why="above")
+        self.assertEqual(_classify(never, 46, ()), ("unreachable", "cpufreq_granularity"))
+        self.assertEqual(_classify(vfdump.RatioMeasurement(57, "skipped", why="below"), 55, ()), ("unreachable", "max_turbo"))
+
+    def test_favored_57x_needs_few_active_cores_and_is_sampled_longer(self) -> None:
+        """F3 [MEASURED lnx 2026-10-11]: quiet system => P0/P3 reach 56/57x on ~70 % of the samples (ok, early stop at min_valid, kept < total); with 2+ other busy
+        cores the samples never reach it => unreachable, reason active_cores (never an error)."""
+        rec = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P0", "P3"]}, timeout=60)["result"]["record"]
+        for unit in ("P0", "P3"):
+            for ratio in (56, 57):
+                p = points(rec, unit)[ratio]
+                self.assertEqual(p["status"], "ok", (unit, ratio, p))
+                self.assertTrue(5 <= p["kept"] <= p["total"] <= 40, p)
+        self.assertAlmostEqual(points(rec, "P0")[57]["vid_v"], 1.4288, delta=0.004)
+        self.assertAlmostEqual(points(rec, "P3")[57]["vid_v"], 1.3964, delta=0.004)
+        self.assertEqual(points(rec, "P0")[55]["total"], 10)  # the ordinary points keep 10 samples
+
+    def test_favored_57x_with_two_other_busy_cores_is_unreachable_for_active_cores(self) -> None:
+        self.model.background_busy = 2  # a desktop session keeps two more cores awake
+        rec = self.start_measure().call("m2", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        for ratio in (56, 57):
+            p = points(rec, "P0")[ratio]
+            self.assertEqual((p["status"], p["reason"], p["vid_v"], p["total"]), ("unreachable", "active_cores", None, 40), p)
+        self.assertEqual(points(rec, "P0")[55]["status"], "ok")
+
+    def test_other_units_stay_idle_while_one_is_measured(self) -> None:
+        seen: list[set[int]] = []
+        self.perf_hook = lambda cpu: seen.append(set(self.io.loaded))
+        self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P0", "EC1"]}, timeout=60)
+        self.assertTrue(all(loaded <= {0} or loaded <= {12, 13, 14, 15} for loaded in seen))
+
+    def test_the_sim_vid_is_the_stock_curve_with_the_f4_clamp(self) -> None:
+        """The model's VID = the measured stock curve; an offset at 57x deeper than the 56x voltage is clamped up to it (the measured P0 case)."""
+        m = SimModel()
+        self.assertAlmostEqual(m.vid("P0", 53), 1.216, places=4)
+        self.assertAlmostEqual(m.vid("P0", 54), (1.216 + 1.299) / 2, places=4)  # 54x has no point: the midpoint of 53x / 55x
+        self.assertAlmostEqual(m.vid("EC0", 48), 1.157, places=4)  # E 47-48x run on point 6
+        m.offsets_mv["P0"] = {57: -49.8}
+        self.assertAlmostEqual(m.vid("P0", 57), 1.386, places=4)  # 1.4288 - 0.0498 = 1.379 < V(56x): clamped
+        self.assertAlmostEqual(m.vid("P0", 56), 1.386, places=4)
 
     def test_the_run_writes_only_cap_and_epp_and_journals_first(self) -> None:
         self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P5", "EC1"]}, timeout=60)
@@ -294,7 +346,7 @@ class CurvesOpsTests(MeasureCase):
         reply = h.call("m", "vf.measure", {"mode": "dense"}, timeout=120)
         self.assertTrue(reply["ok"], reply)
         n_points = sum(len(u["points"]) for u in self.store.get(reply["result"]["curve_id"])["units"].values())
-        self.assertEqual(n_points, 8 * 50 + 4 * 39)
+        self.assertEqual(n_points, 2 * 50 + 6 * 48 + 4 * 41)
         self.assertLessEqual(len(encode(reply)), MAX_LINE)  # encode() raises when it would not fit
         self.assertNotIn("omitted_units", reply["result"]["record"], "a dense run of all 12 units should still fit one line")
         got = h.call("g", "curves.get", {"id": reply["result"]["curve_id"]})

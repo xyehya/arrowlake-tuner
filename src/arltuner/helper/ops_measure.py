@@ -28,6 +28,8 @@ from typing import Any
 from arltuner import vfdump
 from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
 from arltuner.curves.record import QUICK_RATIOS, RECORD_BUDGET
+from arltuner.platform import default_platform
+from arltuner.vfmodel import complete_baseline, effective_curve, voltage_at
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, OpError
@@ -190,54 +192,108 @@ class HelperMeasureIO(vfdump.SysfsMeasureIO):
 # =============================================================================================================================================
 # the simulator model
 # =============================================================================================================================================
+#: First-run STOCK V/F curve, requested VID in volts per fused point ``[MEASURED lnx 2026-10-11 18:17 UTC]`` (``tuning-results.md`` "Stock V/F curve, measured";
+#: ``None`` = never settled: P0/P3 57x intermittent, E 23x not pinnable, non-favored P 56/57x unreachable). P0 57x 1.4288 V and P3 57x 1.3964 V are the
+#: orchestrator's longer single-core samples of the same day (fused ``0x09``: 1.4258 / 1.3945). The simulator's ``vid`` is this curve through
+#: :mod:`arltuner.vfmodel` (offsets, F4 clamp, interpolation), not an invented formula.
+STOCK_VID: dict[str, dict[int, float | None]] = {
+    "P0": {8: 0.693, 20: 0.721, 30: 0.811, 48: 1.041, 53: 1.216, 55: 1.299, 56: 1.386, 57: 1.4288},
+    "P1": {8: 0.691, 20: 0.723, 30: 0.806, 48: 1.041, 53: 1.221, 55: 1.306},
+    "P2": {8: 0.691, 20: 0.721, 30: 0.821, 48: 1.073, 53: 1.271, 55: 1.366},
+    "P3": {8: 0.691, 20: 0.721, 30: 0.821, 48: 1.061, 53: 1.221, 55: 1.299, 56: 1.359, 57: 1.3964},
+    "P4": {8: 0.688, 20: 0.713, 30: 0.804, 48: 1.033, 53: 1.226, 55: 1.319},
+    "P5": {8: 0.690, 20: 0.721, 30: 0.811, 48: 1.054, 53: 1.261, 55: 1.359},
+    "P6": {8: 0.691, 20: 0.721, 30: 0.805, 48: 1.033, 53: 1.249, 55: 1.346},
+    "P7": {8: 0.690, 20: 0.719, 30: 0.811, 48: 1.041, 53: 1.271, 55: 1.376},
+    "EC0": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.970, 46: 1.157},
+    "EC1": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.970, 46: 1.137},
+    "EC2": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.963, 46: 1.137},
+    "EC3": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.963, 46: 1.137},
+}
+_FAVORED_UNITS = frozenset(f"P{i}" for i in default_platform().topology.favored_p)  # platforms/arl-s-285k.toml: P0, P3
+_P_ALL_CORE_RATIO = (default_platform().turbo_defaults[0x1AD] >> 56) & 0xFF  # 55: the 0x1AD bucket for 8 active cores [MEASURED lnx 2026-09-29]
+
+
+def intermittent_ratios(unit: str, points: Sequence[int]) -> tuple[int, ...]:
+    """Ratios of ``unit`` that only a few active cores allow (F3): the favored P-cores above the all-core bucket (56, 57x)."""
+    return tuple(r for r in points if unit in _FAVORED_UNITS and r > _P_ALL_CORE_RATIO)
+
+
 class SimModel:
-    """A plausible 285K: ``vid(unit, ratio)``, what ratio a cap settles at, jitter. Deterministic (seeded per unit / ratio), so tests are reproducible.
+    """A 285K for the simulator: ``vid(unit, ratio)`` = the measured stock curve (:data:`STOCK_VID`) through the F4 clamp / interpolation of
+    :mod:`arltuner.vfmodel` (``offsets_mv[unit] = {point ratio: mV}`` moves it), what ratio a cap settles at, jitter. Deterministic (seeded per unit / ratio / sample).
 
-    P ~0.70 V at 8x rising to ~1.40 V at 57x, per-core spread +-25 mV; E ~0.65 V at 8x to ~1.15 V at 46x. P0 and P3 reach 57x, the other P-cores 55x; the E-clusters
-    46x. E-cores settle one bin low when the cap is in 16..29 (the intel_pstate quirk of T-027, so the cap search retries ``ratio + 1``); a cap of 29 therefore makes
-    the target 29 unreachable-by-search (MISMATCH, ran above) like the real hardware can."""
+    Reach (F3): favored P-cores 57x, other P-cores 55x (``cpuinfo_max_freq`` 5.5 GHz, ``[MEASURED lnx 2026-10-11]``), E-clusters 48x (turbo table ``0x650``; their
+    ``cpuinfo_max_freq`` is [UNVERIFIED], the simulator says 4.8 GHz). **A favored core only holds 56/57x while at most one other CPU is busy** (measured: a pinned
+    spinner on CPU 0 spent 31 of 40 samples at 57x, the rest at 55/51/56x as soon as a 3rd core woke): about 70 % of the samples at 57x when quiet, none when
+    ``busy_others >= 2``. cpufreq granularity (F9): E 23x and P 52x are not pinnable (the caps land on the neighbours). E-cores also settle one bin low when the cap is in
+    16..29 (the intel_pstate quirk of T-027, so the cap search retries ``ratio + 1``)."""
 
-    P_REACH_FAVORED, P_REACH, E_REACH = 57, 55, 46
+    P_REACH_FAVORED, P_REACH, E_REACH = 57, 55, 48
     E_QUIRK = range(16, 30)
+    QUIET_SHARE = 0.7  # share of samples a favored core spends at 56/57x when no other core is busy (measured 31/40 at 57x on CPU 0)
 
-    def __init__(self, seed: int = 285) -> None:
+    def __init__(self, seed: int = 285, background_busy: int = 0) -> None:
         self.seed = seed
+        self.background_busy = background_busy  # busy CPUs outside the run (a desktop session, the helper): >= 2 takes the favored 57x away
         spread = random.Random(seed)
         self.spread = {u: round(spread.uniform(-0.025, 0.025), 4) for u in UNITS}
+        self.offsets_mv: dict[str, dict[int, float]] = {}
+        self._base: dict[str, dict[int, float | None]] = {}
 
     @staticmethod
     def unit_of(cpu: int) -> str:
         return f"P{cpu}" if cpu < 8 else f"EC{(cpu - 8) // 4}"
 
     def max_khz(self, cpu: int) -> int:
-        return 5_700_000 if cpu < 8 else 4_600_000
+        if cpu >= 8:
+            return self.E_REACH * 100_000
+        return (self.P_REACH_FAVORED if cpu in (0, 3) else self.P_REACH) * 100_000
 
     def reach(self, unit: str) -> int:
-        return self.E_REACH if unit.startswith("E") else (self.P_REACH_FAVORED if unit in ("P0", "P3") else self.P_REACH)
+        return self.E_REACH if unit.startswith("E") else (self.P_REACH_FAVORED if unit in _FAVORED_UNITS else self.P_REACH)
+
+    def points(self, unit: str) -> tuple[int, ...]:
+        return QUICK_RATIOS[unit_kind(unit)]
+
+    def _baseline(self, unit: str) -> dict[int, float | None]:
+        if unit not in self._base:
+            fused_top = None
+            if unit.startswith("P"):  # the unmeasured 57x of a non-favored core: its fused 0x09 voltage (F7)
+                word = default_platform().fused_point[int(unit[1:])]
+                fused_top = ((word >> 8) & 0xFFF) / 1024
+            self._base[unit] = complete_baseline(self.points(unit), STOCK_VID[unit], fused_top)
+        return self._base[unit]
 
     def vid(self, unit: str, ratio: int) -> float:
-        if unit.startswith("E"):
-            x = max(0.0, min(1.0, (ratio - 8) / 38))
-            return 0.65 + 0.50 * x**1.6 + self.spread[unit] * (0.3 + 0.7 * x)
-        x = max(0.0, min(1.0, (ratio - 8) / 49))
-        return 0.70 + 0.70 * x**1.7 + self.spread[unit] * (0.3 + 0.7 * x)
+        curve = effective_curve(self.points(unit), self._baseline(unit), self.offsets_mv.get(unit, {}))
+        v = voltage_at(curve, ratio)
+        assert v is not None
+        return v
 
     def temp_c(self, unit: str, ratio: int) -> float:
         return round(34 + 30 * min(1.0, (ratio - 8) / 49) + self.spread[unit] * 60, 1)
 
     def settled(self, unit: str, cap_khz: int) -> int:
-        """The ratio the unit settles at under load with ``scaling_max_freq = cap_khz``."""
+        """The ratio the unit settles at under load with ``scaling_max_freq = cap_khz`` (quiet system)."""
         cap_ratio = cap_khz // 100_000
-        if unit.startswith("E") and cap_ratio in self.E_QUIRK:
+        if unit.startswith("E") and cap_ratio in self.E_QUIRK and cap_ratio != 24:  # 24 is not low: with 23 it makes 23x unpinnable
             cap_ratio -= 1
+        if unit.startswith("P") and cap_ratio == 52:  # P 52x is not pinnable either: the cap lands on 51 (cap 53 gives 53)
+            cap_ratio = 51
         return max(8, min(cap_ratio, self.reach(unit)))
 
-    def word(self, cpu: int, cap_khz: int, loaded: bool, n: int) -> int:
-        """The ``0x198`` word of sample ``n``: running ratio ``[15:8]`` (one bin low now and then, as the real ratio wavers), VID ``[47:32]`` in 1/8192 V."""
+    def word(self, cpu: int, cap_khz: int, loaded: bool, n: int, busy_others: int = 0) -> int:
+        """The ``0x198`` word of sample ``n``: running ratio ``[15:8]`` (one bin low now and then, as the real ratio wavers; a favored core at 56/57x
+        falls to 55x/51x for most samples when other cores are busy), VID ``[47:32]`` in 1/8192 V."""
         unit = self.unit_of(cpu)
         ratio = self.settled(unit, cap_khz) if loaded else 8
         rng = random.Random(f"{self.seed}/{unit}/{ratio}/{n}")
-        if rng.random() < 0.08 and ratio > 8:
+        if loaded and unit in _FAVORED_UNITS and ratio > _P_ALL_CORE_RATIO:
+            share = 0.0 if busy_others + self.background_busy >= 2 else self.QUIET_SHARE
+            if rng.random() >= share:
+                ratio = _P_ALL_CORE_RATIO if rng.random() < 0.8 else 51
+        elif rng.random() < 0.08 and ratio > 8:
             ratio -= 1
         vid = self.vid(unit, ratio) + rng.uniform(-0.0015, 0.0015)
         return (round(vid * 8192) << 32) | (ratio << 8)
@@ -285,10 +341,12 @@ class SimMeasureIO:
         return self.model.temp_c(unit, ratio)
 
     def read_perf(self, cpu: int) -> int:
+        unit_cpus_ = set(unit_cpus(self.model.unit_of(cpu)))
         with self.lock:
             n = self._n[cpu] = self._n.get(cpu, 0) + 1
             loaded = cpu in self.loaded
-        return self.model.word(cpu, self.read_cap(cpu), loaded, n)
+            busy_others = len(self.loaded - unit_cpus_)
+        return self.model.word(cpu, self.read_cap(cpu), loaded, n, busy_others)
 
 
 # =============================================================================================================================================
@@ -520,29 +578,49 @@ def _store_error(exc: StoreError) -> OpError:
     return OpError(exc.code, exc.message, exc.detail)
 
 
+def _max_ratio(io: Any, unit: str) -> int:
+    """The unit's max turbo ratio from cpufreq ``cpuinfo_max_freq`` (the lowest of its CPUs), in ratio bins of 100 MHz."""
+    return min(io.read_max_khz(cpu) for cpu in unit_cpus(unit)) // 100_000
+
+
 def _plan_ratios(io: Any, unit: str, mode: str) -> tuple[int, ...]:
+    """Quick = the fused point ratios (F1) plus every ratio above the top point up to the unit's max turbo (F9: E 47, 48x); dense = every ratio 8..max turbo."""
     kind = unit_kind(unit)
+    top = max(_max_ratio(io, unit), 8)
     if mode == "quick":
-        return QUICK_RATIOS[kind]
-    top = min(io.read_max_khz(cpu) for cpu in unit_cpus(unit)) // 100_000
-    return tuple(range(8, max(top, 8) + 1))
+        points = QUICK_RATIOS[kind]
+        return points + tuple(range(points[-1] + 1, top + 1))
+    return tuple(range(8, top + 1))
 
 
-def _point(m: vfdump.RatioMeasurement) -> dict[str, Any]:
+def _classify(m: vfdump.RatioMeasurement, max_ratio: int, intermittent: Sequence[int]) -> tuple[str, str | None]:
+    """``(status, reason)`` of a measured point (F3/F9). ``unreachable`` + ``max_turbo`` (the ratio is above ``cpuinfo_max_freq``), ``active_cores`` (a favored core's
+    56/57x never got ``min_valid`` samples even with the longer sampling), ``cpufreq_granularity`` (only stray samples at the target: the caps land on its neighbours,
+    E 23x / P 52x). A target that was hit now and then but too rarely stays ``mismatch``."""
     if m.status == "ok":
-        status = "ok"
-    elif m.status == "skipped" or m.why == "below":
-        status = "unreachable"
-    else:
-        status = "mismatch"
+        return "ok", None
+    if m.status == "skipped":
+        return "unreachable", "max_turbo"
+    if m.ratio in intermittent and not (m.seen_ratios and m.seen_ratios[-1] > m.ratio):  # still below min_valid after the long sampling (never ran above)
+        return "unreachable", "active_cores"
+    if m.samples_kept <= max(1, m.samples_total // 5):  # a stray sample or two (the ratio wavers by a bin) is not hitting the target
+        return "unreachable", "max_turbo" if m.ratio > max_ratio else "cpufreq_granularity"
+    return "mismatch", None
+
+
+def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequence[int] = ()) -> dict[str, Any]:
+    status, reason = _classify(m, max_ratio, intermittent)
     ok = status == "ok"
-    return {
+    point = {
         "ratio": m.ratio, "mhz": m.ratio * 100,
         "vid_v": round(m.vid_mean, 4) if ok and m.vid_mean is not None else None,
         "vid_min": round(m.vid_min, 4) if ok and m.vid_min is not None else None,
         "vid_max": round(m.vid_max, 4) if ok and m.vid_max is not None else None,
         "kept": m.samples_kept, "total": m.samples_total, "status": status,
     }
+    if reason is not None:
+        point["reason"] = reason  # contract 9 addendum: only on unreachable
+    return point
 
 
 def _tuning_state(helper: Any) -> dict[str, Any]:
@@ -581,6 +659,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         except (OSError, ValueError) as exc:  # dense reads cpuinfo_max_freq before anything else
             raise OpError(REFUSED, f"cpufreq is not available for the selected CPUs: {exc}", {"check": "NO_CPUFREQ"}) from None
         total = sum(len(r) for r in plan.values())
+        top_of = {u: _max_ratio(run.io, u) for u in units}
         try:
             boot = helper.cfg.boot_id_fn()
         except Exception:
@@ -629,16 +708,16 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
 
             def on_result(m: vfdump.RatioMeasurement, unit: str = unit, entry: dict[str, Any] = entry) -> None:
                 nonlocal done
-                point = _point(m)
+                point = _point(m, top_of[unit], intermittent_ratios(unit, plan[unit]))
                 entry["points"].append(point)
                 done += 1
                 seen = [t for t in (m.temp_min_c, m.temp_max_c, record["temps"]["min_c"], record["temps"]["max_c"]) if t is not None]
                 if seen:
                     record["temps"] = {"min_c": round(min(seen), 1), "max_c": round(max(seen), 1)}
-                ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": m.ratio, "mhz": point["mhz"], "vid_v": point["vid_v"], "status": point["status"]})
+                ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": m.ratio, "mhz": point["mhz"], "vid_v": point["vid_v"], "status": point["status"], **({"reason": point["reason"]} if "reason" in point else {})})
                 ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": m.ratio, "eta_s": eta()})
 
-            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], tuple(plan[unit]))
+            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], tuple(plan[unit]), intermittent_ratios(unit, plan[unit]))
             vfdump.measure_group(
                 run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=on_result,
             )
