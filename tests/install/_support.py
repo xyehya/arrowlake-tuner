@@ -62,6 +62,9 @@ def run_script(
     """Run install.sh / uninstall.sh. SAFETY: always with a DESTDIR, so a test can never touch the real system."""
     assert destdir is not None and destdir.is_absolute(), "tests never run the install scripts without a DESTDIR"
     env = {"PATH": os.environ["PATH"], "DESTDIR": str(destdir), "ARLTUNER_PYTHON": sys.executable, "HOME": str(destdir / "nohome")}
+    fake_proc = destdir.parent / "fake-proc"  # never scan the real /proc: a running helper (dev GUI, sim) must not fail install tests
+    fake_proc.mkdir(exist_ok=True)
+    env["ARLTUNER_PROC"] = str(fake_proc)
     if legacy_audit is not None:
         env["ARLTUNER_LEGACY_AUDIT"] = str(legacy_audit)
     env.update(extra_env or {})
