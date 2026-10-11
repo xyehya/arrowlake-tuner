@@ -9,6 +9,7 @@ import threading
 import time
 
 from arltuner.web.helperlink import HelperLink
+from tests.web.fake_v3 import V3_OPS, V3Ops
 
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"  # [A-Z2-9] per Contract 8
 _UNSET = object()
@@ -64,7 +65,7 @@ def vf_dump_document(accepted_match=_UNSET, *, ops_done: int = 112, complete: bo
     return doc
 
 
-class FakeHelper:
+class FakeHelper(V3Ops):
     def __init__(self) -> None:
         req_r, req_w = os.pipe()    # server -> helper
         resp_r, resp_w = os.pipe()  # helper -> server
@@ -86,6 +87,7 @@ class FakeHelper:
         self.audit_truncated = False
         self.cancel_cancels = False                 # True -> cancel{op_id} ends the matching held vf.dump with CANCELLED (default: BUSY, as before)
         self._cancelled: set[str] = set()
+        self._init_v3()                             # Contract 9 state (tests/web/fake_v3.py); inert until a v3 op is sent
         self._t = threading.Thread(target=self._serve, daemon=True)
         self._t.start()
 
@@ -171,10 +173,16 @@ class FakeHelper:
                 self._reply(rid, True, result={"path": "/var/lib/arltuner/audit.jsonl", "records": self.audit_records[-args.get("n", 20):],
                                                "truncated": self.audit_truncated})
             elif op == "telemetry.start":
-                self._reply(rid, True, result={"running": True, "already_running": False, "op_id": rid, "interval_s": args.get("interval_s", 1.0)})
+                iv = args.get("interval_s", 1.0)
+                restarted = self.tele_interval is not None and iv != self.tele_interval
+                same = self.tele_interval is not None and iv == self.tele_interval
+                self.tele_interval = iv
+                self._reply(rid, True, result={"running": True, "already_running": same, "restarted": restarted, "op_id": rid, "interval_s": iv})
             elif op == "telemetry.stop":
                 self._reply(rid, True, result={"stopped": True, "op_id": "t1"})
-            elif op == "cancel" and self.cancel_cancels:
+            elif op in V3_OPS:
+                self.handle_v3(rid, op, args)
+            elif op == "cancel" and (self.cancel_cancels or args.get("op_id") in self._measuring):
                 self._cancelled.add(args.get("op_id", ""))
                 self._reply(rid, True, result={"cancelled": True, "op_id": args.get("op_id"), "state": "planning"})
             elif op == "cancel":

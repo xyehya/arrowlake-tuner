@@ -1,4 +1,7 @@
-"""G-105 dashboard: the three static files are served with the CSP, and static checks hold on their source (no browser needed)."""
+"""G-105 / G-113 web UI: the three static files are served with the CSP, and static checks hold on their source (no browser needed).
+
+G-113 (SPEC-v3): the page now has write-capable controls, so the old "no write controls" rule became "exactly one way to write": ``tune.apply`` is
+sent from one call site, inside the review dialog's confirm handler, carrying the plan id and ``CONFIRM <nonce>`` from the plan result."""
 from __future__ import annotations
 
 import re
@@ -13,9 +16,18 @@ HTML = (WEB / "index.html").read_text(encoding="utf-8")
 JS = (WEB / "app.js").read_text(encoding="utf-8")
 CSS = (WEB / "style.css").read_text(encoding="utf-8")
 
-# Ops the page may name at a call site: read-only ones, the explicit V/F read (write-gated in the helper) and its cancel. Nothing else.
-ALLOWED_OPS = {"preflight", "audit.tail", "telemetry.start", "vf.dump", "cancel"}
-FORBIDDEN_OPS = ("apply", "restore", "plan", "telemetry.stop", "stress.start", "stress.stop", "freq.cap", "freq.restore")
+# Ops the page may name at a call site: contract 8 reads, contract 9 (SPEC-v3) measure / curves / memory / tune / profiles, and cancel. Nothing else.
+ALLOWED_OPS = {"preflight", "audit.tail", "telemetry.start", "cancel", "mem.read", "vf.measure", "curves.list", "curves.get", "curves.update",
+               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save"}
+# Raw contract 8 write / stress / frequency ops stay out of the page (it uses the tune.* ops instead).
+FORBIDDEN_OPS = ("apply", "restore", "plan", "vf.dump", "telemetry.stop", "stress.start", "stress.stop", "freq.cap", "freq.restore")
+TABS = ("dashboard", "curves", "tune", "profiles", "system", "audit")
+
+
+def func_body(name: str, async_: bool = False) -> str:
+    m = re.search(r"(?:async )?function " + re.escape(name) + r"\(.*?\) \{(.*?)\n  \}\n", JS, re.S)
+    assert m, name
+    return m.group(1)
 
 
 class TestServed(Base):
@@ -71,28 +83,33 @@ class TestHtml(unittest.TestCase):
         self.assertTrue(used)
         self.assertEqual(sorted(used - set(ids)), [])
 
-    def test_panels_required_by_the_task_exist(self):
-        for ident in ("preflight", "banner", "helper", "core-table", "tiles", "vf", "btn-dump", "btn-cancel", "accepted", "audit"):
+    def test_pages_and_panels_required_by_the_task_exist(self):
+        for ident in ("preflight", "banner", "helper", "core-table", "tiles", "audit", "mem-card", "refresh-range", "cv-chart", "cv-measure", "cv-lib",
+                      "btn-measure", "btn-tune-read", "tn-rows", "btn-tn-plan", "btn-tn-reset", "btn-tn-restore", "tn-chart", "dlg-plan", "pr-list", "btn-pr-save"):
             self.assertIn(f'id="{ident}"', HTML)
-        self.assertIn("Read V/F curve", HTML)
-        self.assertIn("112 to 124", HTML)  # the cost is stated next to the button
-        self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-dump"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
+        self.assertIn("Read tuning words", HTML)
+        self.assertIn("each request is a WRMSR", HTML)  # stated next to the mailbox read button
+        self.assertIn("112 to 124", HTML)               # with the op estimate
+        self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tune-read"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
+        self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-measure"[^>]*\bdisabled\b')
+        self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tn-plan"[^>]*\bdisabled\b')
+        self.assertIn("12 curves (8 P-cores + 4 E-clusters)", HTML)
 
-    def test_tabs_are_an_aria_tablist(self):  # G-110
+    def test_tabs_are_an_aria_tablist(self):  # G-110, tab set from SPEC-v3
         self.assertIn('role="tablist"', HTML)
-        for name in ("overview", "cores", "sensors", "vf", "system", "audit"):
+        for name in TABS:
             self.assertRegex(HTML, rf'<button\b[^>]*role="tab"[^>]*id="tab-{name}"[^>]*aria-controls="panel-{name}"')
             self.assertRegex(HTML, rf'id="panel-{name}" role="tabpanel" aria-labelledby="tab-{name}"')
+        self.assertEqual(sorted(re.findall(r'role="tab"[^>]*id="(tab-[a-z]+)"', HTML)), sorted("tab-" + t for t in TABS))
         self.assertIn("ArrowRight", JS)
         self.assertIn("prefers-reduced-motion", CSS)
 
-    def test_no_write_controls(self):
-        self.assertNotRegex(HTML, r"(?i)<(input|textarea|select)\b")
-        buttons = re.findall(r'<button\b[^>]*\bid="([^"]+)"', HTML)
-        tabs = sorted(b for b in buttons if b.startswith("tab-"))
-        self.assertEqual(tabs, ["tab-audit", "tab-cores", "tab-overview", "tab-sensors", "tab-system", "tab-vf"])  # navigation only
-        self.assertEqual(sorted(b for b in buttons if not b.startswith("tab-")), ["btn-audit", "btn-cancel", "btn-dump", "btn-preflight"])
-        for m in re.finditer(r"<button\b([^>]*)>", HTML):  # every other button is a view control (tab or data-goto), never an action
+    def test_dialogs_are_native_and_the_html_has_only_known_controls(self):
+        self.assertEqual(sorted(re.findall(r'<dialog\b[^>]*\bid="([^"]+)"', HTML)), ["dlg-confirm", "dlg-plan", "dlg-timings"])
+        self.assertNotRegex(HTML, r"(?i)<textarea\b")
+        for m in re.finditer(r"<input\b([^>]*)>", HTML):  # only a range (refresh), and text fields for names; never a number box for a voltage
+            self.assertRegex(m.group(1), r'type="(range|text)"')
+        for m in re.finditer(r"<button\b([^>]*)>", HTML):  # every button is a tab, a view control or has an id the script binds
             attrs = m.group(1)
             self.assertTrue(re.search(r'\bid="(btn|tab)-', attrs) or "data-goto=" in attrs, attrs)
 
@@ -100,9 +117,18 @@ class TestHtml(unittest.TestCase):
 class TestScript(unittest.TestCase):
     def test_no_unsafe_dom_or_code_execution(self):
         for bad in (r"innerHTML", r"outerHTML", r"insertAdjacentHTML", r"document\.write", r"\beval\s*\(", r"new\s+Function", r"setAttribute\(\s*[\"']style",
-                    r"\.style\b", r"cssText", r"createContextualFragment", r"DOMParser", r"\blocalStorage\b", r"\bsessionStorage\b", r"\bdocument\.cookie\b",
+                    r"\.style\b", r"cssText", r"createContextualFragment", r"DOMParser", r"\bsessionStorage\b", r"\bindexedDB\b", r"\bdocument\.cookie\b",
                     r"\bXMLHttpRequest\b", r"\bWebSocket\b", r"setTimeout\(\s*[\"']", r"setInterval\(\s*[\"']", r"\bimport\s*\("):
             self.assertNotRegex(JS, bad)
+
+    def test_local_storage_is_only_the_remembered_view_prefs(self):
+        """SPEC-v3 section 2 wants the refresh rate remembered per browser: one key, two helpers, try/catch, nothing sensitive."""
+        uses = [m.start() for m in re.finditer(r"\blocalStorage\b", JS)]
+        self.assertEqual(len(uses), 2)
+        self.assertIn('const PREFS_KEY = "arltuner.prefs";', JS)
+        for fn in ("loadPrefs", "savePrefs"):
+            self.assertRegex(func_body(fn), r"try \{.*localStorage\.(get|set)Item\(PREFS_KEY.*\} catch", fn)
+        self.assertIn("JSON.stringify({ refresh_s: S.intervalS, win_min: V.winMin })", JS)  # the whole payload
 
     def test_no_external_urls(self):
         self.assertNotRegex(JS, r"(?i)https?://")
@@ -124,23 +150,66 @@ class TestScript(unittest.TestCase):
             self.assertNotRegex(JS, rf"[\"']{re.escape(op)}[\"']", op)
         self.assertEqual(len(re.findall(r"\bapi\(", JS)), len(re.findall(r"\bapi\(\s*\"", JS)) + 1)  # +1: the definition; every call names its op literally
 
-    def test_vf_dump_is_never_automatic(self):
-        self.assertEqual(len(re.findall(r"\bapi\(\s*\"vf\.dump\"", JS)), 1)
-        body = re.search(r"async function startDump\(\) \{(.*?)\n  \}\n", JS, re.S).group(1)
-        self.assertIn('api("vf.dump"', body)
-        self.assertIn("gateReason() !== \"\"", body)  # re-checks the gate itself
-        self.assertEqual(re.findall(r"\bstartDump\b", JS).count("startDump"), 2)  # the definition and the one click listener
-        self.assertIn('$("btn-dump").addEventListener("click", startDump);', JS)
+    def test_mailbox_read_is_never_automatic(self):
+        self.assertEqual(len(re.findall(r"\bapi\(\s*\"tune\.read\"", JS)), 1)
+        body = func_body("startRead")
+        self.assertIn('api("tune.read"', body)
+        self.assertIn('gateReason() !== ""', body)  # re-checks the gate itself
+        self.assertEqual(re.findall(r"\bstartRead\b", JS).count("startRead"), 2)  # the definition and the one click listener
+        self.assertIn('$("btn-tune-read").addEventListener("click", startRead);', JS)
         # the gate: preflight write, writes allowed, a heartbeat with the budget, idle helper, and the upper cost bound must fit
-        gate = re.search(r"function gateReason\(\) \{(.*?)\n  \}\n", JS, re.S).group(1)
+        gate = func_body("gateReason")
         for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < COST_HIGH"):
             self.assertIn(needle, gate)
         self.assertIn("const COST_LOW = 112;", JS)
         self.assertIn("const COST_HIGH = 124;", JS)
 
+    def test_apply_is_only_sent_from_the_review_dialog_with_the_nonce(self):
+        """Exactly one call site; it sits in the confirm handler; it sends the plan id and CONFIRM + the nonce of that plan; and it is gated."""
+        self.assertEqual(len(re.findall(r"\bapi\(\s*\"tune\.apply\"", JS)), 1)
+        body = func_body("commitPlan")
+        self.assertIn('api("tune.apply", { plan_id: P.res.plan_id, typed: "CONFIRM " + P.res.nonce })', body)
+        self.assertIn('getElementById("plan-go").disabled', body)  # re-checks the dialog gate
+        self.assertIn('P.state !== "review"', body)     # a plan is applied once, from its own dialog
+        gate = func_body("updateModalGate")
+        for needle in ('P.typed !== "CONFIRM " + P.res.nonce', "planExpired()", "applyGate(P.res.ops_needed)"):
+            self.assertIn(needle, gate)
+        self.assertEqual(len(re.findall(r"\bcommitPlan\b", JS)), 3)  # the definition, the Enter key in the code field, the Apply button
+        self.assertNotIn('typed: "CONFIRM " + P.typed', JS)
+        # the mailbox gate for apply has the same needles as the read gate
+        ag = func_body("applyGate")
+        for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < ops"):
+            self.assertIn(needle, ag)
+
+    def test_every_plan_goes_through_one_call_site_and_the_dialog(self):
+        self.assertEqual(len(re.findall(r"\bapi\(\s*\"tune\.plan\"", JS)), 1)
+        self.assertIn("openPlanDialog(body.result, intent)", func_body("requestPlan"))
+        # three entry points on Tune + profiles: all via requestPlan
+        self.assertIn("requestPlan({ reset: \"stock\" }", JS)
+        self.assertIn("requestPlan({ restore: \"accepted\" }", JS)
+        self.assertIn("requestPlan({ profile: p.name }", JS)
+        self.assertIn("requestPlan(intent,", JS)
+
+    def test_mailbox_actions_state_the_wrmsr_cost(self):
+        self.assertIn("Each request is a WRMSR. ", JS)  # in the review dialog
+        self.assertIn("each request is a WRMSR", HTML)  # next to the read button
+        self.assertIn('"This plan needs "', JS)
+
+    def test_policy_ranges_are_the_d032_numbers_and_voltages_are_dropdowns(self):
+        self.assertIn("offsetMin: -200, offsetMax: 200, offsetStep: 5", JS)
+        self.assertIn("vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005", JS)
+        self.assertIn("ratioMax: { P: 57, E: 49 }", JS)
+        self.assertNotRegex(JS, r'type\s*=\s*"number"')
+        self.assertNotRegex(HTML, r'type="number"')
+        for sel in ("offSel", "vtSel", "rSel"):  # the three row controls are <select>s
+            self.assertRegex(JS, rf'const {sel} = el\("select"')
+        # the only text inputs: names (curve, profile) and the typed confirmation
+        self.assertEqual(sorted(re.findall(r'el\("input", "([\w-]+)"\)', JS)), ["confirm-input", "inline-edit"])
+        self.assertNotRegex(JS, r'type = "number"|type = "range"')
+
     def test_sse_events_handled_are_contract_events(self):
-        handled = set(re.findall(r"\bon\(\"([a-z]+)\"", JS))
-        self.assertEqual(handled, {"heartbeat", "telemetry", "progress", "result", "state"})
+        handled = set(re.findall(r"\bon\(\"([a-z.]+)\"", JS))
+        self.assertEqual(handled, {"heartbeat", "telemetry", "progress", "vf.point", "result", "state"})
 
     def test_unavailable_is_na_never_a_guess(self):
         self.assertIn('text: "n/a"', JS)
@@ -149,6 +218,14 @@ class TestScript(unittest.TestCase):
 
     def test_uses_textcontent(self):
         self.assertIn("textContent", JS)
+
+    def test_refresh_slider_calls_telemetry_start_with_the_chosen_step(self):
+        self.assertIn("const REFRESH_STEPS = [0.25, 0.5, 1, 2, 5];", JS)
+        self.assertIn('api("telemetry.start", { interval_s: S.intervalS })', JS)
+
+    def test_curve_ids_and_profile_names_are_checked_like_the_helper(self):
+        self.assertIn("const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;", JS)
+        self.assertIn("maxlength=\"64\"", HTML)
 
 
 class TestCss(unittest.TestCase):
@@ -167,6 +244,13 @@ class TestCss(unittest.TestCase):
     def test_status_classes_used_by_the_script_exist(self):
         for cls in ("s-pass", "s-read-only", "s-refuse", "s-unknown", "s-ok", "s-bad", "s-busy", "b-readonly", "b-refuse", "stale", "na"):
             self.assertIn(cls, CSS)
+
+    def test_every_unit_has_a_colour_and_motion_respects_the_preference(self):
+        for u in [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]:
+            self.assertRegex(CSS, rf"\.u-{u} \{{ --u: #[0-9a-f]{{6}}; \}}")
+        for m in re.finditer(r"animation\s*:", CSS):
+            before = CSS[:m.start()]
+            self.assertGreater(before.rfind("prefers-reduced-motion: no-preference"), before.rfind("\n}\n"), "animation outside a no-preference block")
 
 
 if __name__ == "__main__":

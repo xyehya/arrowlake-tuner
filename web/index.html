@@ -21,17 +21,23 @@
       <rect x="13" y="13" width="5" height="5" rx="1" class="bm-p"/>
     </svg>
     <span class="wordmark">arrowlake<b>tuner</b></span>
-    <span class="ro-tag" title="This page reads telemetry and can start one guarded V/F read. It has no write controls.">read-only</span>
+    <span class="ro-tag" id="mode-tag" title="Writes happen only from the review dialog in Tune, after you type the confirmation code.">reading preflight</span>
   </div>
-  <nav class="tabs" role="tablist" aria-label="Dashboard sections">
-    <button type="button" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true">Overview</button>
-    <button type="button" role="tab" id="tab-cores" aria-controls="panel-cores" aria-selected="false" tabindex="-1">Cores</button>
-    <button type="button" role="tab" id="tab-sensors" aria-controls="panel-sensors" aria-selected="false" tabindex="-1">Sensors</button>
-    <button type="button" role="tab" id="tab-vf" aria-controls="panel-vf" aria-selected="false" tabindex="-1">V/F</button>
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button type="button" role="tab" id="tab-dashboard" aria-controls="panel-dashboard" aria-selected="true">Dashboard</button>
+    <button type="button" role="tab" id="tab-curves" aria-controls="panel-curves" aria-selected="false" tabindex="-1">Curves</button>
+    <button type="button" role="tab" id="tab-tune" aria-controls="panel-tune" aria-selected="false" tabindex="-1">Tune</button>
+    <button type="button" role="tab" id="tab-profiles" aria-controls="panel-profiles" aria-selected="false" tabindex="-1">Profiles</button>
     <button type="button" role="tab" id="tab-system" aria-controls="panel-system" aria-selected="false" tabindex="-1">System</button>
     <button type="button" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1">Audit</button>
   </nav>
   <div class="conn">
+    <label class="refresh" for="refresh-range" title="How often the sampler reads the sensors. Changing it restarts the sampler.">
+      <span class="muted">Refresh</span>
+      <input type="range" id="refresh-range" min="0" max="4" step="1" value="2" aria-valuetext="1 second" list="refresh-ticks">
+      <datalist id="refresh-ticks"><option value="0"></option><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option></datalist>
+      <output id="refresh-val" for="refresh-range">1 s</output>
+    </label>
     <span id="conn-sse" class="pill s-unknown">events: connecting</span>
     <span id="conn-helper" class="pill s-unknown">helper: n/a</span>
   </div>
@@ -40,164 +46,302 @@
 <div id="banner" class="banner" role="status" hidden></div>
 
 <main>
-  <!-- ============================== Overview ============================== -->
-  <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
-    <div class="ov-grid">
-      <article class="die-card">
+  <!-- ============================== Dashboard ============================== -->
+  <section class="panel" id="panel-dashboard" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="0">
+    <div class="toolbar dash-bar">
+      <div class="seg" id="dash-sub" role="group" aria-label="Dashboard view"></div>
+      <span class="grow"></span>
+      <span id="dash-state" class="pill s-neutral" title="The tuning words last read from the CPU this boot. Read them in Tune.">applied: unknown</span>
+      <div class="seg" id="win-seg" role="group" aria-label="Chart window"></div>
+      <button type="button" id="btn-pause" aria-pressed="false">Pause</button>
+    </div>
+
+    <div class="sub" id="dash-overview">
+      <div class="ov-grid">
+        <article class="die-card">
+          <div class="card-head">
+            <h2>Core map</h2>
+            <div class="map-tools">
+              <div class="seg" id="map-metric" role="group" aria-label="Colour the core map by"></div>
+              <div class="seg" id="map-scale" role="group" aria-label="Colour scale"></div>
+              <button type="button" id="btn-scale-lock" class="seg-solo" aria-pressed="false" title="Freeze the current automatic range">Lock</button>
+            </div>
+          </div>
+          <div class="die-wrap">
+            <svg id="die" class="die" viewBox="0 0 760 330" role="group" aria-label="Live core map: 8 P-cores and 16 E-cores, coloured by the selected reading">
+              <defs>
+                <pattern id="na-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <rect width="8" height="8" class="hatch-bg"/>
+                  <line x1="0" y1="0" x2="0" y2="8" class="hatch-line"/>
+                </pattern>
+              </defs>
+              <g id="die-cores"></g>
+            </svg>
+          </div>
+          <div class="die-foot">
+            <div class="ramp-legend">
+              <span id="ramp-lo" class="ramp-num">n/a</span>
+              <svg class="ramp" viewBox="0 0 200 10" preserveAspectRatio="none" aria-hidden="true" focusable="false"><g id="ramp-stops"></g></svg>
+              <span id="ramp-hi" class="ramp-num">n/a</span>
+              <span id="ramp-unit" class="muted"></span>
+            </div>
+            <p id="probe" class="probe" aria-live="polite">Point at a core for its readings. Click to open it in Cores.</p>
+          </div>
+        </article>
+
+        <div class="readouts" id="tiles">
+          <div class="ro"><span class="ro-label">Package power</span><span class="ro-value" id="t-pkgw">n/a</span><svg class="spark" id="sp-pkgw" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">Hottest sensor</span><span class="ro-value" id="t-temp">n/a</span><svg class="spark" id="sp-temp" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">Highest core clock</span><span class="ro-value" id="t-mhz">n/a</span><svg class="spark" id="sp-mhz" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">Vcore (board)</span><span class="ro-value" id="t-vcore">n/a</span><svg class="spark" id="sp-vcore" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">Core power</span><span class="ro-value" id="t-corew">n/a</span><svg class="spark" id="sp-corew" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro"><span class="ro-label">DRAM read / write</span><span class="ro-value" id="t-dram">n/a</span><svg class="spark" id="sp-dram" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+          <div class="ro ro-small"><span class="ro-label">Limit reasons (raw 0x6B0)</span><span class="ro-value mono" id="t-limit">n/a</span></div>
+          <p id="tele-age" class="age muted">no sample yet</p>
+        </div>
+      </div>
+      <p id="tele-note" class="note" hidden></p>
+
+      <div class="ov-lower">
+        <figure class="chart" id="ch-ov-power"></figure>
+        <figure class="chart" id="ch-ov-temp"></figure>
+        <article class="card budget-card">
+          <div class="card-head"><h2>Mailbox budget</h2><button type="button" class="link" data-goto="system">Details</button></div>
+          <div class="ring-row">
+            <svg class="ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+              <circle cx="60" cy="60" r="50" class="ring-track"/>
+              <circle cx="60" cy="60" r="50" class="ring-used" id="ring-ov" pathLength="100"/>
+            </svg>
+            <div class="ring-text">
+              <span class="ring-big" id="ov-left">n/a</span>
+              <span class="muted">ops left this boot</span>
+              <span class="muted" id="ov-state">helper n/a</span>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <article class="card mem-card" id="mem-card">
         <div class="card-head">
-          <h2>Core map</h2>
-          <div class="seg" id="map-metric" role="group" aria-label="Colour the core map by"></div>
-        </div>
-        <div class="die-wrap">
-          <svg id="die" class="die" viewBox="0 0 760 330" role="group" aria-label="Live core map: 8 P-cores and 16 E-cores, coloured by the selected reading">
-            <defs>
-              <pattern id="na-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                <rect width="8" height="8" class="hatch-bg"/>
-                <line x1="0" y1="0" x2="0" y2="8" class="hatch-line"/>
-              </pattern>
-            </defs>
-            <g id="die-cores"></g>
-          </svg>
-        </div>
-        <div class="die-foot">
-          <div class="ramp-legend">
-            <span id="ramp-lo" class="ramp-num">n/a</span>
-            <svg class="ramp" viewBox="0 0 200 10" preserveAspectRatio="none" aria-hidden="true" focusable="false"><g id="ramp-stops"></g></svg>
-            <span id="ramp-hi" class="ramp-num">n/a</span>
-            <span id="ramp-unit" class="muted"></span>
-          </div>
-          <p id="probe" class="probe" aria-live="polite">Point at a core for its readings. Click to open it in Cores.</p>
-        </div>
-      </article>
-
-      <div class="readouts" id="tiles">
-        <div class="ro"><span class="ro-label">Package power</span><span class="ro-value" id="t-pkgw">n/a</span><svg class="spark" id="sp-pkgw" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro"><span class="ro-label">Hottest sensor</span><span class="ro-value" id="t-temp">n/a</span><svg class="spark" id="sp-temp" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro"><span class="ro-label">Highest core clock</span><span class="ro-value" id="t-mhz">n/a</span><svg class="spark" id="sp-mhz" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro"><span class="ro-label">Vcore (board)</span><span class="ro-value" id="t-vcore">n/a</span><svg class="spark" id="sp-vcore" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro"><span class="ro-label">Core power</span><span class="ro-value" id="t-corew">n/a</span><svg class="spark" id="sp-corew" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro"><span class="ro-label">DRAM read / write</span><span class="ro-value" id="t-dram">n/a</span><svg class="spark" id="sp-dram" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
-        <div class="ro ro-small"><span class="ro-label">Limit reasons (raw 0x6B0)</span><span class="ro-value mono" id="t-limit">n/a</span></div>
-        <p id="tele-age" class="age muted">no sample yet</p>
-      </div>
-    </div>
-    <p id="tele-note" class="note" hidden></p>
-
-    <div class="ov-lower">
-      <figure class="chart" id="ch-ov-power"></figure>
-      <figure class="chart" id="ch-ov-temp"></figure>
-      <article class="card budget-card">
-        <div class="card-head"><h2>Mailbox budget</h2><button type="button" class="link" data-goto="system">Details</button></div>
-        <div class="ring-row">
-          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-            <circle cx="60" cy="60" r="50" class="ring-track"/>
-            <circle cx="60" cy="60" r="50" class="ring-used" id="ring-ov" pathLength="100"/>
-          </svg>
-          <div class="ring-text">
-            <span class="ring-big" id="ov-left">n/a</span>
-            <span class="muted">ops left this boot</span>
-            <span class="muted" id="ov-state">helper n/a</span>
+          <h2>Memory</h2>
+          <div class="row-tight">
+            <button type="button" id="btn-mem-all" disabled>All timings</button>
+            <button type="button" id="btn-mem-refresh">Read again</button>
           </div>
         </div>
+        <div id="mem-body" class="mem-body"><p class="muted">Reading the memory controller.</p></div>
       </article>
     </div>
-  </section>
 
-  <!-- ============================== Cores ============================== -->
-  <section class="panel" id="panel-cores" role="tabpanel" aria-labelledby="tab-cores" tabindex="0" hidden>
-    <div class="toolbar">
-      <div class="seg" id="core-filter" role="group" aria-label="Show cores"></div>
-      <p class="muted">Select a core for its last five minutes.</p>
-    </div>
-    <div class="cores-grid">
-      <div class="card scroll">
-        <table class="grid num cores" id="core-table">
-          <caption class="sr">Per-core readings, live</caption>
-          <thead><tr><th scope="col">Core</th><th scope="col" class="n">CPU</th><th scope="col">Clock (MHz)</th><th scope="col" class="n">Busy %</th><th scope="col" class="n">Ratio</th><th scope="col" class="n">VID (V)</th><th scope="col" class="n">Temp (C)</th><th scope="col">Clock, 60 s</th></tr></thead>
-          <tbody id="core-body"><tr><td colspan="8" class="na">Waiting for telemetry.</td></tr></tbody>
-        </table>
+    <div class="sub" id="dash-cores" hidden>
+      <div class="toolbar">
+        <div class="seg" id="core-filter" role="group" aria-label="Show cores"></div>
+        <div class="seg" id="core-cols" role="group" aria-label="Columns"></div>
+        <p class="muted">Select a core for its recent history. Sort with the column headers.</p>
       </div>
-      <aside class="card core-detail" id="core-detail" aria-live="polite">
-        <div class="card-head"><h2 id="cd-title">No core selected</h2><span id="cd-sub" class="muted"></span></div>
-        <p id="cd-empty" class="muted">Pick a row, or a tile on the core map.</p>
-        <div id="cd-charts" class="cd-charts" hidden>
-          <figure class="chart" id="ch-cd-mhz"></figure>
-          <figure class="chart" id="ch-cd-busy"></figure>
-          <figure class="chart" id="ch-cd-vid"></figure>
-          <figure class="chart" id="ch-cd-temp"></figure>
+      <div class="cores-grid">
+        <div class="card scroll">
+          <table class="grid num cores" id="core-table">
+            <caption class="sr">Per-core readings, live</caption>
+            <thead id="core-head"></thead>
+            <tbody id="core-body"><tr><td colspan="8" class="na">Waiting for telemetry.</td></tr></tbody>
+          </table>
         </div>
-      </aside>
-    </div>
-  </section>
-
-  <!-- ============================== Sensors ============================== -->
-  <section class="panel" id="panel-sensors" role="tabpanel" aria-labelledby="tab-sensors" tabindex="0" hidden>
-    <div class="sensors-grid">
-      <article class="card temps-card">
-        <div class="card-head"><h2>Temperatures</h2><span class="muted" id="temp-count"></span></div>
-        <ul class="temp-list" id="temp-body"><li class="na">n/a</li></ul>
-      </article>
-      <div class="chart-stack">
-        <figure class="chart" id="ch-power"></figure>
-        <figure class="chart" id="ch-hot"></figure>
-        <figure class="chart" id="ch-vcore"></figure>
-        <figure class="chart" id="ch-dram"></figure>
+        <aside class="card core-detail" id="core-detail" aria-live="polite">
+          <div class="card-head"><h2 id="cd-title">No core selected</h2><span id="cd-sub" class="muted"></span></div>
+          <p id="cd-empty" class="muted">Pick a row, or a tile on the core map.</p>
+          <div id="cd-charts" class="cd-charts" hidden>
+            <figure class="chart" id="ch-cd-mhz"></figure>
+            <figure class="chart" id="ch-cd-busy"></figure>
+            <figure class="chart" id="ch-cd-vid"></figure>
+            <figure class="chart" id="ch-cd-temp"></figure>
+          </div>
+        </aside>
       </div>
     </div>
+
+    <div class="sub" id="dash-sensors" hidden>
+      <div class="sensors-grid">
+        <article class="card temps-card">
+          <div class="card-head"><h2>Temperatures</h2><span class="muted" id="temp-count"></span></div>
+          <ul class="temp-list" id="temp-body"><li class="na">n/a</li></ul>
+        </article>
+        <div class="chart-stack">
+          <figure class="chart" id="ch-power"></figure>
+          <figure class="chart" id="ch-hot"></figure>
+          <figure class="chart" id="ch-vcore"></figure>
+          <figure class="chart" id="ch-dram"></figure>
+        </div>
+      </div>
+    </div>
   </section>
 
-  <!-- ============================== V/F ============================== -->
-  <section class="panel" id="panel-vf" role="tabpanel" aria-labelledby="tab-vf" tabindex="0" hidden>
-    <div class="vf-grid">
-      <article id="vf" class="card vf-card">
-        <div class="card-head"><h2>Read the V/F curve</h2></div>
-        <p class="vf-warn">
-          This is a guarded mailbox read session. <strong>Every mailbox request is a WRMSR</strong> and counts against the per-boot budget.
-          Estimated cost: <strong>112 to 124 operations</strong>. It never runs by itself.
-        </p>
-        <dl class="kv">
-          <dt>Ops left</dt><dd id="vf-left">n/a</dd>
-        </dl>
-        <div class="row">
-          <button type="button" id="btn-dump" class="primary" disabled>Read V/F curve</button>
-          <button type="button" id="btn-cancel" disabled>Cancel</button>
+  <!-- ============================== Curves ============================== -->
+  <section class="panel" id="panel-curves" role="tabpanel" aria-labelledby="tab-curves" tabindex="0" hidden>
+    <article class="card measure-card" id="cv-measure">
+      <div class="card-head">
+        <h2>Measure V/F curves</h2>
+        <span class="muted">12 curves (8 P-cores + 4 E-clusters). No mailbox traffic: the run only caps cpufreq limits, and restores them when it ends.</span>
+      </div>
+      <div class="measure-grid">
+        <div class="field"><span class="field-label" id="lbl-cv-mode">Resolution</span><div class="seg" id="cv-mode" role="group" aria-labelledby="lbl-cv-mode"></div></div>
+        <div class="field"><label class="field-label" for="cv-name">Name</label><input type="text" id="cv-name" maxlength="64" placeholder="optional, e.g. stock" autocomplete="off" spellcheck="false"></div>
+        <div class="field field-go">
+          <div class="row-tight">
+            <button type="button" id="btn-measure" class="primary" disabled>Measure</button>
+            <button type="button" id="btn-measure-cancel" disabled>Cancel</button>
+          </div>
         </div>
-        <p id="vf-reason" class="muted"></p>
-        <div id="vf-run" class="vf-run" hidden>
-          <progress id="vf-bar" max="1" value="0" aria-label="V/F read progress"></progress>
-          <span id="vf-progress" class="muted"></span>
+        <div class="field field-units"><span class="field-label" id="lbl-cv-units">Units</span><div class="unit-chips" id="cv-units" role="group" aria-labelledby="lbl-cv-units"></div></div>
+      </div>
+      <p id="cv-est" class="muted"></p>
+      <div id="cv-run" class="cv-run" hidden>
+        <progress id="cv-bar" max="1" value="0" aria-label="Measurement progress"></progress>
+        <span id="cv-progress" class="muted"></span>
+      </div>
+      <p id="cv-status" class="muted" role="status"></p>
+      <ul id="cv-problems" class="plan-warn" hidden></ul>
+    </article>
+
+    <article class="card cv-card" id="cv-card">
+      <div class="card-head">
+        <div class="seg" id="cv-view" role="group" aria-label="Curve view"></div>
+        <div class="cv-pick">
+          <label class="field-label" for="cv-primary">Curve</label>
+          <select id="cv-primary"></select>
         </div>
-        <p id="vf-status" class="muted" role="status"></p>
-      </article>
+      </div>
+      <div id="cv-chart-wrap">
+        <div class="toolbar cv-tools">
+          <div class="seg" id="cv-presets" role="group" aria-label="Units drawn"></div>
+          <span class="grow"></span>
+          <label class="field-label" for="cv-compare">Compare with</label>
+          <select id="cv-compare"></select>
+          <div class="seg" id="cv-opts" role="group" aria-label="Chart options"></div>
+        </div>
+        <div class="legend-chips" id="cv-legend" role="group" aria-label="Units drawn. Press to toggle; hold Shift to show only one."></div>
+        <div class="vfchart-host" id="cv-chart"></div>
+      </div>
+      <div id="cv-table-wrap" hidden>
+        <div class="toolbar">
+          <div class="seg" id="cv-table-mode" role="group" aria-label="Table values"></div>
+          <p id="cv-table-note" class="muted"></p>
+        </div>
+        <div class="scroll"><table class="grid num vf-table" id="cv-table"><caption class="sr">Measured voltage per unit and ratio</caption><thead></thead><tbody></tbody></table></div>
+      </div>
+      <div id="cv-lib-wrap" hidden>
+        <p id="cv-lib-empty" class="muted">No stored curves yet. Run a Quick measurement to keep the first one.</p>
+        <div class="scroll"><table class="grid lib-table" id="cv-lib" hidden>
+          <caption class="sr">Stored curves</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Date</th><th scope="col">Mode</th><th scope="col">Tuning at the time</th><th scope="col" class="n">Units</th><th scope="col">Actions</th></tr></thead>
+          <tbody id="cv-lib-body"></tbody>
+        </table></div>
+      </div>
+    </article>
+  </section>
 
-      <figure class="card vf-plot-card">
-        <div class="card-head"><h2>Offset by V/F point</h2><span class="muted" id="vf-plot-note">No read yet</span></div>
-        <svg id="vf-plot" class="vf-plot" viewBox="0 0 640 300" role="img" aria-label="V/F offsets in millivolts per point and core, filled after a read"></svg>
-        <figcaption id="vf-legend" class="legend"></figcaption>
-      </figure>
-    </div>
+  <!-- ============================== Tune ============================== -->
+  <section class="panel" id="panel-tune" role="tabpanel" aria-labelledby="tab-tune" tabindex="0" hidden>
+    <article class="card tune-top" id="tn-top">
+      <div class="tn-lead">
+        <div>
+          <h2>Tune</h2>
+          <p class="muted" id="tn-sub">Read the tuning words first. Everything below starts from what the CPU holds now.</p>
+        </div>
+        <div class="tn-lead-actions">
+          <span id="tn-state" class="pill s-neutral">applied: unknown</span>
+          <button type="button" id="btn-tune-read" class="primary" disabled>Read tuning words</button>
+        </div>
+      </div>
+      <ol class="tn-steps" id="tn-steps">
+        <li><strong>Read</strong> the tuning words the CPU holds now.</li>
+        <li><strong>Choose</strong> a voltage offset, an OC target voltage or an OC ratio, per unit or for all.</li>
+        <li><strong>Review</strong> the before and after, type the confirmation code, then apply. Each word is read back.</li>
+      </ol>
+      <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. About 112 to 124 operations of the <span id="tn-left">n/a</span> left this boot.</p>
+      <p id="tn-reason" class="muted"></p>
+      <div class="run-line" id="tn-run" hidden>
+        <progress id="tn-bar" max="1" value="0" aria-label="Read progress"></progress>
+        <span id="tn-progress" class="muted"></span>
+        <button type="button" id="btn-tune-cancel" disabled>Cancel</button>
+      </div>
+      <p id="tn-status" class="muted" role="status"></p>
+    </article>
 
-    <article id="accepted" class="card">
-      <div class="card-head"><h2>Applied vs accepted</h2></div>
-      <p id="acc-summary">Not read yet. Use "Read V/F curve" to compare the applied V/F words with the accepted state.</p>
-      <div class="scroll">
-        <table class="grid" id="acc-table" hidden>
-          <thead><tr><th scope="col">CPU</th><th scope="col">Result</th><th scope="col">Differences</th></tr></thead>
-          <tbody id="acc-body"></tbody>
-        </table>
+    <article class="card" id="tn-console" hidden>
+      <div class="card-head tn-console-head">
+        <div class="seg" id="tn-scope" role="group" aria-label="Scope"></div>
+        <p class="muted" id="tn-scope-note"></p>
+        <span class="grow"></span>
+        <button type="button" id="btn-tn-hex" aria-pressed="false">Show raw words</button>
+      </div>
+      <div class="tn-table" id="tn-rows" role="group" aria-label="Tuning controls"></div>
+      <div class="tn-foot">
+        <div class="tn-foot-msg" id="tn-foot-msg" role="status">No changes yet.</div>
+        <div class="row-tight">
+          <button type="button" id="btn-tn-discard" disabled>Discard changes</button>
+          <button type="button" id="btn-tn-restore">Restore accepted</button>
+          <button type="button" id="btn-tn-reset">Reset to stock</button>
+          <button type="button" id="btn-tn-plan" class="primary" disabled>Review changes</button>
+        </div>
       </div>
     </article>
 
-    <article class="card">
-      <div class="card-head"><h2>V/F words</h2></div>
-      <div class="scroll">
-        <table class="grid num" id="vf-table" hidden>
-          <thead><tr><th scope="col" class="n">CPU</th><th scope="col">Core</th><th scope="col">OC point</th><th scope="col">V/F points (ratio, offset mV)</th></tr></thead>
-          <tbody id="vf-body"></tbody>
-        </table>
+    <article class="card" id="tn-preview-card" hidden>
+      <div class="card-head">
+        <h2>Preview</h2>
+        <div class="cv-pick">
+          <label class="field-label" for="tn-curve">Measured curve</label>
+          <select id="tn-curve"></select>
+        </div>
       </div>
-      <p id="vf-table-empty" class="muted">The table fills after a read.</p>
+      <p class="muted" id="tn-preview-note"></p>
+      <div class="legend-chips" id="tn-legend" role="group" aria-label="Units drawn. Press to toggle."></div>
+      <div class="vfchart-host" id="tn-chart"></div>
     </article>
+
+    <article class="card" id="tn-words-card" hidden>
+      <div class="card-head"><h2>Tuning words</h2><span class="muted" id="tn-words-note"></span></div>
+      <div class="scroll"><table class="grid num" id="vf-table">
+        <caption class="sr">V/F words per CPU</caption>
+        <thead><tr><th scope="col" class="n">CPU</th><th scope="col">Unit</th><th scope="col">OC point</th><th scope="col">V/F points (ratio, offset mV)</th></tr></thead>
+        <tbody id="vf-body"></tbody>
+      </table></div>
+      <p id="acc-summary" class="muted"></p>
+    </article>
+  </section>
+
+  <!-- ============================== Profiles ============================== -->
+  <section class="panel" id="panel-profiles" role="tabpanel" aria-labelledby="tab-profiles" tabindex="0" hidden>
+    <div class="pr-grid">
+      <article class="card">
+        <div class="card-head"><h2>Profiles</h2><button type="button" id="btn-pr-refresh">Refresh</button></div>
+        <p id="pr-empty" class="muted">Loading profiles.</p>
+        <ul class="pr-list" id="pr-list"></ul>
+      </article>
+      <article class="card">
+        <div class="card-head"><h2>Save the current Tune settings</h2></div>
+        <p class="muted">Saves the unapplied choices from Tune as a profile. A saved profile is never overwritten.</p>
+        <div class="field"><label class="field-label" for="pr-name">Name</label><input type="text" id="pr-name" maxlength="64" placeholder="a-z 0-9 . _ -" autocomplete="off" spellcheck="false" pattern="[a-z0-9._-]{1,64}"></div>
+        <p id="pr-name-note" class="muted"></p>
+        <div class="row-tight"><button type="button" id="btn-pr-save" class="primary" disabled>Save profile</button></div>
+        <p id="pr-status" class="muted" role="status"></p>
+      </article>
+      <article class="card pr-diff">
+        <div class="card-head"><h2>Compare two profiles</h2></div>
+        <div class="diff-pick">
+          <select id="pr-a" aria-label="First profile"></select>
+          <span class="muted">against</span>
+          <select id="pr-b" aria-label="Second profile"></select>
+        </div>
+        <p id="pr-diff-note" class="muted"></p>
+        <div class="scroll"><table class="grid" id="pr-diff" hidden>
+          <caption class="sr">Differences between two profiles</caption>
+          <thead><tr><th scope="col">Unit</th><th scope="col">Setting</th><th scope="col">First</th><th scope="col">Second</th></tr></thead>
+          <tbody id="pr-diff-body"></tbody>
+        </table></div>
+      </article>
+    </div>
   </section>
 
   <!-- ============================== System ============================== -->
@@ -248,6 +392,23 @@
     </article>
   </section>
 </main>
+
+<dialog id="dlg-timings" class="dlg dlg-wide" aria-labelledby="dlg-timings-title">
+  <div class="dlg-head"><h2 id="dlg-timings-title">All memory timings</h2><button type="button" id="btn-timings-close">Close</button></div>
+  <div class="dlg-body" id="dlg-timings-body"></div>
+</dialog>
+
+<dialog id="dlg-plan" class="dlg dlg-wide" aria-labelledby="dlg-plan-title">
+  <div class="dlg-head"><h2 id="dlg-plan-title">Review changes</h2><button type="button" id="btn-plan-close">Close</button></div>
+  <div class="dlg-body" id="dlg-plan-body"></div>
+  <div class="dlg-foot" id="dlg-plan-foot"></div>
+</dialog>
+
+<dialog id="dlg-confirm" class="dlg" aria-labelledby="dlg-confirm-title">
+  <div class="dlg-head"><h2 id="dlg-confirm-title">Are you sure?</h2></div>
+  <div class="dlg-body"><p id="dlg-confirm-text"></p></div>
+  <div class="dlg-foot"><button type="button" id="btn-confirm-no">Keep it</button><button type="button" id="btn-confirm-yes" class="danger">Delete</button></div>
+</dialog>
 <script src="/app.js"></script>
 </body>
 </html>
