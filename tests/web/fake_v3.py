@@ -36,9 +36,11 @@ UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 *
 FAVORED = ("P0", "P3")
 P_QUICK = [8, 20, 30, 48, 53, 55, 56, 57]
 E_QUICK = [8, 15, 23, 30, 40, 46]
-P_POINTS_FAVORED = [8, 20, 30, 48, 53, 55, 56, 57]
-P_POINTS_OTHER = [8, 20, 30, 45, 50, 52, 54, 55]
+P_POINTS = [8, 20, 30, 48, 53, 55, 56, 57]   # F1: every P-core carries these 8 points; no per-core tables [MEASURED lnx 2026-10-02]
 E_POINTS = [8, 15, 23, 30, 40, 46]
+E_TURBO_TOP = 48                               # E 47-48x come from the turbo table, on point 6's voltage (F2/F4); not an OC point
+P_REACH = {"favored": 57, "other": 55}         # F3: non-favored P-cores top out at 55x although they carry the 56/57x points
+CPUFREQ_UNPINNABLE = {"E": (23,), "P": (52,)}  # F9: caps land on a neighbour
 RATIO_MAX = {"P": 57, "E": 49}
 V_TARGET_MAX = {"P": 1.625, "E": 1.355}
 V_TARGET_MIN = 0.900
@@ -54,21 +56,35 @@ def kind_of(unit: str) -> str:
 
 
 def unit_ratios(unit: str) -> list[int]:
-    """The V/F point ratios of a unit (tables are per core: the favored P-cores boost higher)."""
+    """The V/F point ratios of a unit: fixed per domain (F1), never per core."""
+    return list(E_POINTS if kind_of(unit) == "E" else P_POINTS)
+
+
+def reach_ratio(unit: str) -> int:
+    """The highest ratio the unit can hold under load (F3): P0/P3 57x, the other P-cores 55x, E-clusters the turbo table top."""
     if kind_of(unit) == "E":
-        return list(E_POINTS)
-    return list(P_POINTS_FAVORED if unit in FAVORED else P_POINTS_OTHER)
+        return E_TURBO_TOP
+    return P_REACH["favored"] if unit in FAVORED else P_REACH["other"]
+
+
+def unreachable_reason(unit: str, ratio: int) -> str | None:
+    """Why a measurement at ``ratio`` ends ``unreachable`` (F3/F9), or None when it can be pinned."""
+    if ratio > reach_ratio(unit):
+        return "max_turbo"
+    if ratio in CPUFREQ_UNPINNABLE[kind_of(unit)]:
+        return "cpufreq_granularity"
+    return None
 
 
 def measure_ratios(unit: str, mode: str) -> list[int]:
     """Ratios a measurement visits: Quick = the V/F point ratios of the unit kind (SPEC-v3 section 3), Dense = every ratio from 8 to the top."""
-    if mode == "quick":
-        return list(P_QUICK if kind_of(unit) == "P" else E_QUICK)
+    if mode == "quick":   # F9: the point ratios plus the unit's max turbo ratio when it lies above the top point (E 47, 48x)
+        return list(P_QUICK) if kind_of(unit) == "P" else E_QUICK + list(range(E_POINTS[-1] + 1, E_TURBO_TOP + 1))
     return list(range(8, unit_max_ratio(unit) + 1))
 
 
 def unit_max_ratio(unit: str) -> int:
-    return unit_ratios(unit)[-1]
+    return P_POINTS[-1] if kind_of(unit) == "P" else E_TURBO_TOP
 
 
 def memory_fixture(*, available: bool = True) -> dict:
@@ -114,7 +130,8 @@ def initial_tuning() -> dict:
         off = -25.0 if kind_of(u) == "P" else -50.0
         ratios = unit_ratios(u)
         # the OC word of 23 of 24 cores reads 0 in ratio and V target (unset): None; only P0 carries them (G-112, tune.read)
-        out[u] = {"points": [{"point": i + 1, "ratio": r, "offset_mv": off} for i, r in enumerate(ratios)],
+        # F8: the E 40x point is never offset (a -20 mV there gave OCCT errors on the reference machine)
+        out[u] = {"points": [{"point": i + 1, "ratio": r, "offset_mv": 0.0 if (kind_of(u) == "E" and r == 40) else off} for i, r in enumerate(ratios)],
                   "oc": {"point": 0, "ratio": ratios[-1] if u == "P0" else None, "offset_mv": off,
                          "v_target_v": round(stock_vid(u, ratios[-1]) + 0.01, 4) if u == "P0" else None}}
     return out
@@ -127,6 +144,46 @@ def _word(unit: str, point: dict) -> str:
 
 def _entry(unit: str, p: dict) -> dict:
     return {"point": p["point"], "ratio": p["ratio"], "offset_mv": p["offset_mv"], "v_target_v": p.get("v_target_v")}
+
+
+TURBO_COUNTS = {"P": [1, 2, 3, 4, 5, 6, 7, 8], "E": [1, 2, 3, 4, 6, 8, 12, 16]}   # 0x1AE / 0x651 (read-only by policy)
+VCCIA_OFFSET_V = 0.105   # F6: ~ +100-110 mV [MEASURED lnx 2026-10-03, hypothesis on 3+ points]
+RING_V = 1.20
+
+
+def fused_of(unit: str) -> dict:
+    """F7: the 0x09 P1=0x11 P2=0 fused top-point word of a unit. Synthetic: the voltage is the fake's own stock curve at the top point, so the marker
+    cross-checks the seeded baseline; word = ratio[7:0] | V/1024 [19:8] like the real one (e.g. P0 0x5B439 = 57x 1.4258 V)."""
+    ratio = unit_ratios(unit)[-1]
+    raw = round(stock_vid(unit, ratio) * 1024)
+    return {"word": "0x%X" % (ratio | raw << 8), "ratio": ratio, "v": round(raw / 1024, 4)}
+
+
+def turbo_view(tables: dict) -> dict:
+    """The ``turbo`` object of the tune.read addendum: P / E bucket ratios and counts, and the per-core favored ratio (0x1C)."""
+    return {"P": {"ratios": list(tables["p"]), "counts": list(TURBO_COUNTS["P"])}, "E": {"ratios": list(tables["e"]), "counts": list(TURBO_COUNTS["E"])},
+            "favored": {str(UNIT_CPUS[u][0]): reach_ratio(u) for u in UNITS if u.startswith("P")}}
+
+
+def predict_unit(rec: dict | None, unit: str, points: list[dict]) -> dict[int, dict]:
+    """F4: ``{point: {effective_v, clamped_by}}`` for a unit from the baseline curve ``rec`` and the offsets of ``points``: V(n) = max(base(n) + offset(n), V(n-1)).
+    ``clamped_by`` is the point index of the V(n-1) that set the floor (null when not clamped). Points with no measured baseline VID get ``effective_v`` null."""
+    base = {}
+    if rec and unit in rec["units"]:
+        base = {p["ratio"]: p["vid_v"] for p in rec["units"][unit]["points"] if p.get("status") == "ok" and p.get("vid_v") is not None}
+    out, prev = {}, None
+    for p in sorted(points, key=lambda q: q["point"]):
+        b = base.get(p["ratio"])
+        if b is None:
+            out[p["point"]] = {"effective_v": None, "clamped_by": None}
+            continue
+        v = b + p["offset_mv"] / 1000.0
+        clamped = prev is not None and v < prev[1] - 1e-9
+        if clamped:
+            v = prev[1]
+        out[p["point"]] = {"effective_v": round(v, 4), "clamped_by": prev[0] if clamped else None}
+        prev = (p["point"], v)
+    return out
 
 
 class V3Ops:
@@ -201,8 +258,9 @@ class V3Ops:
                 "units": {u: {"cpus": UNIT_CPUS[u], "points": []} for u in units}, "baseline": False}
 
     def _point(self, unit: str, ratio: int, offset_override: float | None = None) -> dict:
-        if kind_of(unit) == "P" and unit not in FAVORED and ratio > 55:
-            return {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable"}
+        why = unreachable_reason(unit, ratio)
+        if why:
+            return {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable", "reason": why}
         off = offset_override if offset_override is not None else interp_offset(self.tuning[unit]["points"], ratio)
         v = stock_vid(unit, ratio) + off / 1000.0
         return {"ratio": ratio, "mhz": ratio * 100.0 + 2.0, "vid_v": round(v, 4), "vid_min": round(v - 0.004, 4), "vid_max": round(v + 0.005, 4),
@@ -329,9 +387,10 @@ class V3Ops:
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
         self.ops_used_v3 += 112
+        fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}
         self._reply(rid, True, result={"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
                                        "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
-                                       "tables_note": self.tables_note})
+                                       "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)})
 
     # ---- plan ----
     def _refuse_range(self, rid, field: str, limit: str):
@@ -351,6 +410,7 @@ class V3Ops:
         new = copy.deepcopy(self.tuning)
         warnings: list[str] = []
         written: dict[str, set[int]] = {}   # unit -> word indexes the plan writes (0 = OC word)
+        turbo_new: dict[str, list[int]] = {}   # kind -> the 8 bucket ratios the plan writes (page assumption: intent.turbo = {P: [8], E: [8]})
         if "reset" in intent:
             if not self.tuning_read:
                 return self._err(rid, "REFUSED", "reset needs the words last read; run 'Read tuning words' (tune.read) first. Nothing was sent.", check="NO_READ")
@@ -372,7 +432,10 @@ class V3Ops:
                 return
         elif isinstance(intent.get("rows"), list):
             rows = [r for r in intent["rows"] if isinstance(r, dict) and (r.get("offset") or r.get("v_target_v") is not None or r.get("ratio") is not None)]
-            if not rows:
+            turbo = self._turbo_intent(rid, intent.get("turbo"))
+            if turbo is False:
+                return
+            if not rows and not turbo:
                 return self._err(rid, "BAD_REQUEST", "the intent changes nothing (every row is empty)", check="NOTHING_TO_DO")
             scope = intent.get("scope")
             for r in rows:
@@ -383,6 +446,7 @@ class V3Ops:
                                      "(tune.read) first. Nothing was sent.", check="NO_READ")
             if self._apply_rows(rid, new, rows, warnings, written):
                 return
+            turbo_new = turbo or {}
         else:
             return self._err(rid, "BAD_REQUEST", "intent must be {scope, rows}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
         before, after, ops, changed_units, steps = {}, {}, 0, [], []
@@ -394,27 +458,107 @@ class V3Ops:
             word = lambda state, i: _entry(u, state[u]["oc"] if i == 0 else next(p for p in state[u]["points"] if p["point"] == i))  # noqa: E731
             show = lambda e: {"ratio": e["ratio"], "offset_mv": e["offset_mv"], "v_target_v": e["v_target_v"]}  # noqa: E731
             before[u] = {str(i): (show(word(self.tuning, i)) if self.tuning_read else None) for i in idx}
-            after[u] = {str(i): show(word(new, i)) for i in idx}
+            pred = predict_unit(self._baseline(), u, new[u]["points"])
+            after[u] = {str(i): {**show(word(new, i)), **(pred.get(i, {}) if i else {})} for i in idx}
             ops += 3 * len(idx) + 1
             for i in idx:
                 steps.append({"kind": "write_vf" if i == 0 else "write_vf_point", "unit": u, "cpu": UNIT_CPUS[u][0], "point": i})
         top = {"P": self.tables["p"][0], "E": self.tables["e"][0]}
         raised = {k for u in changed_units for k in [kind_of(u)] if (new[u]["oc"]["ratio"] or 0) > top[k]}
-        steps = [{"kind": "write_percore_enable", "conditional": True}] + steps + [{"kind": "write_msr", "table": k.lower()} for k in sorted(raised)]
+        tables_written = sorted(raised | set(turbo_new))
+        steps = [{"kind": "write_percore_enable", "conditional": True}] + steps + [{"kind": "write_msr", "table": k.lower()} for k in tables_written]
+        ops += 3 * len(turbo_new)
+        warnings.extend(self._cpu_fact_warnings(new, written, before_state=self.tuning))
+        vccia = self._vccia(new, turbo_new)
         if any(new[u]["oc"]["ratio"] != self.tuning[u]["oc"]["ratio"] for u in changed_units):
             warnings.append("Raising the OC ratio or target is not validated on this machine; the hardware may ignore a ratio inside the current turbo table.")
         warnings.append("Revert: cold boot, or reapply the accepted profile.")
         plan_id = hashlib.sha256(json.dumps([after, rid], sort_keys=True).encode()).hexdigest()
         nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
         self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "written": written, "created": time.monotonic(),
-                                  "version": self.tuning_version, "bad": 0, "raised": sorted(raised)}
+                                  "version": self.tuning_version, "bad": 0, "raised": sorted(raised), "turbo": turbo_new}
         result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - 1, "reads": len(changed_units),
                   "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3, "expires_s": 600, "units": changed_units, "before": before,
                   "after": after, "warnings": warnings, "words_assumed": not self.tuning_read}
+        if vccia:
+            result["vccia"] = vccia
         if self.plan_steps_truncated:
             result["steps"] = steps[: len(steps) // 2]
             result["steps_truncated"] = True
         self._reply(rid, True, result=result)
+
+    def _baseline(self) -> dict | None:
+        """The newest curve tagged baseline: a plan's prediction is made on it (contract 9 addendum)."""
+        rows = sorted((r for r in self.curves.values() if r.get("baseline")), key=lambda r: r["created"], reverse=True)
+        return rows[0] if rows else None
+
+    def _turbo_intent(self, rid, raw):
+        """Validate ``intent.turbo``: ``{kind: [8 ratios]}``. Returns the dict, ``None`` (absent) or ``False`` after sending a refusal (F5)."""
+        if raw is None:
+            return None
+        if not isinstance(raw, dict) or not raw or not set(raw) <= {"P", "E"}:
+            self._err(rid, "BAD_REQUEST", "turbo must be {P: [8 ratios], E: [8 ratios]}")
+            return False
+        out = {}
+        for k, ratios in raw.items():
+            if not (isinstance(ratios, list) and len(ratios) == 8 and all(isinstance(x, int) and not isinstance(x, bool) for x in ratios)):
+                self._err(rid, "BAD_REQUEST", f"turbo.{k} must be 8 integer ratios")
+                return False
+            if any(not (8 <= x <= RATIO_MAX[k]) for x in ratios):
+                self._refuse_range(rid, f"turbo.{k}", f"8..{RATIO_MAX[k]}")
+                return False
+            for i in range(1, 8):
+                if ratios[i] > ratios[i - 1]:
+                    self._err(rid, "REFUSED", f"{k} turbo bucket {i} ({ratios[i]}x) is above bucket {i - 1} ({ratios[i - 1]}x): ratios must not rise with more active cores. Nothing was sent.",
+                              check="TURBO_ORDER")
+                    return False
+            if ratios != self.tables[k.lower()]:
+                out[k] = list(ratios)
+        return out
+
+    def _cpu_fact_warnings(self, new: dict, written: dict, before_state: dict) -> list[str]:
+        """F4 / F8 warnings: clamped points, E 40x offset, E target above 1.2 V."""
+        out = []
+        base = self._baseline()
+        for u, idx in written.items():
+            if kind_of(u) == "E":
+                for p in new[u]["points"]:
+                    if p["ratio"] == 40 and p["point"] in idx and abs(p["offset_mv"]) > 1e-9:
+                        out.append(f"{u} 40x: never offset the 40x point ({p['offset_mv']:+.0f} mV there gave OCCT errors on the reference machine)")
+                vt = new[u]["oc"]["v_target_v"]
+                if 0 in idx and vt is not None and vt > 1.2 + 1e-9:
+                    out.append(f"{u}: an E-core target of {vt:.3f} V is above 1.2 V; E cores report WHEA errors there")
+            pred = predict_unit(base, u, new[u]["points"])
+            by_pt = {p["point"]: p for p in new[u]["points"]}
+            for i in sorted(idx):
+                c = pred.get(i, {}).get("clamped_by")
+                if c:
+                    out.append(f"{u} {by_pt[i]['ratio']}x: {by_pt[i]['offset_mv']:+.1f} mV cannot be met; the voltage is clamped up to the {by_pt[c]['ratio']}x point (V(n) never below V(n-1))")
+        return out
+
+    def _vccia(self, new: dict, turbo_new: dict) -> dict | None:
+        """F6 on the fake: highest voltage the units may request when every core is loaded (+ ring 1.20 V) plus ~105 mV; None without a baseline curve."""
+        base = self._baseline()
+        if base is None:
+            return None
+        tabs = {"P": turbo_new.get("P", self.tables["p"]), "E": turbo_new.get("E", self.tables["e"])}
+        cands = [("ring", 40, RING_V)]
+        for u in UNITS:
+            pred = predict_unit(base, u, new[u]["points"])
+            pts = sorted((p["ratio"], pred[p["point"]]["effective_v"]) for p in new[u]["points"] if pred.get(p["point"], {}).get("effective_v") is not None)
+            if not pts:
+                continue
+            r = tabs[kind_of(u)][-1]
+            if r <= pts[0][0]:
+                v = pts[0][1]
+            elif r >= pts[-1][0]:
+                v = pts[-1][1]
+            else:
+                a, b = next((a, b) for a, b in zip(pts, pts[1:]) if a[0] <= r <= b[0])
+                v = a[1] + (b[1] - a[1]) * (r - a[0]) / (b[0] - a[0])
+            cands.append((u, r, v))
+        who = max(cands, key=lambda c: c[2])
+        return {"predicted_v": round(who[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": who[0], "ratio": who[1]}}
 
     def _apply_rows(self, rid, new: dict, rows: list, warnings: list[str], written: dict) -> bool:
         """Apply plan rows to ``new``; True (after sending the refusal) if a row is out of policy."""
@@ -495,7 +639,13 @@ class V3Ops:
                                  "actual": "0x" + format(int(exp, 16) ^ 1, "08x") if bad else exp, "match": not bad})
                 sent += 1
             self.tuning[u] = copy.deepcopy(p["new"][u])
+        for k, ratios in p["turbo"].items():
+            self.tables[k.lower()] = list(ratios)
+            readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + "".join(format(x, "02x") for x in reversed(ratios)),
+                             "actual": "0x" + "".join(format(x, "02x") for x in reversed(ratios)), "match": True})
         for k in p["raised"]:
+            if k in p["turbo"]:
+                continue
             top = max(p["new"][u]["oc"]["ratio"] or 0 for u in p["changed"] if kind_of(u) == k)
             self.tables[k.lower()] = [top] + self.tables[k.lower()][1:]
             readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
