@@ -6,17 +6,19 @@ alternative to Intel XTU for Linux, with a local web GUI, live telemetry and bui
 Keywords: Arrow Lake undervolt Linux · Core Ultra 9 285K · V/F curve · per-core voltage offset · OC mailbox (MSR 0x150) · turbo ratio limits ·
 XTU alternative · stress test · stressapptest · stress-ng.
 
-## Status (2026-10-08)
-- **Working today (CLI):** read the V/F curve of every core, apply per-point offsets through a guarded write path, restore the accepted tuning after
-  a boot with one CONFIRM — on Linux (`tools/lnx/restore_tuning.sh`) and Windows (`tools\win\restore_tuning.ps1`). 1261 offline tests.
-- **Accepted tuning on the reference machine:** `profiles/CURRENT` (p-step7) — passed OCCT Linpack 2021 60 min + SSE 60 min on both OSes.
-- **Next:** the GUI — spec `docs/SPEC.md`, phases `docs/ROADMAP.md`, live state `docs/STATE.md`.
+## Status (2026-10-12)
+- **GUI (local web app + root helper) working on the reference machine:** live dashboard with memory timings, V/F curve **measurement** and
+  storage, **tuning** (per-point / whole-curve offsets, OC point + adaptive voltage, OC ratios, turbo tables) with plan → review → apply →
+  read-back, stress/validation screens, profiles. Verified on hardware 2026-10-11/12 (`docs/knowledge/tuning-results.md`). Start with
+  **`docs/USER-GUIDE.md`**.
+- **CLI + restore scripts** (Linux and Windows) unchanged. Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).
+- **Accepted tuning on the reference machine:** `profiles/CURRENT` (p-step7 + E split3) — passed OCCT Linpack 2021 60 min + SSE 60 min on both OSes.
 
 Platform today: Core Ultra 9 285K + ASRock Z890 Steel Legend WiFi (`docs/HARDWARE.md`). Other CPUs: read-only until described in a platform file.
 
 ## Safety
-Writing CPU voltages can corrupt data or crash the machine. Every write goes through a guard with policy limits (max change per write, floor,
-per-boot operation cap), a typed confirmation, read-back and an audit log; a cold boot reverts everything. Rules: `docs/SAFETY.md`.
+Writing CPU voltages can corrupt data or crash the machine. Every write goes through a guard (allowlist, operator policy limits — D-032), one mailbox
+transaction at a time, a plan-bound review/apply, read-back and an audit log; a cold boot reverts everything. Rules: `docs/SAFETY.md`.
 
 ## Quick start (no hardware)
 ```
