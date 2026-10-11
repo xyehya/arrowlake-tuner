@@ -3,13 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 <title>arrowlake-tuner</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header class="top">
-  <h1>arrowlake-tuner <span class="sub">dashboard (read-only)</span></h1>
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="3" width="18" height="18" rx="3" class="bm-die"/>
+      <rect x="6" y="6" width="5" height="5" rx="1" class="bm-p"/>
+      <rect x="13" y="6" width="5" height="5" rx="1" class="bm-p"/>
+      <rect x="6" y="13" width="2" height="2" class="bm-e"/>
+      <rect x="9" y="13" width="2" height="2" class="bm-e"/>
+      <rect x="6" y="16" width="2" height="2" class="bm-e"/>
+      <rect x="9" y="16" width="2" height="2" class="bm-e"/>
+      <rect x="13" y="13" width="5" height="5" rx="1" class="bm-p"/>
+    </svg>
+    <span class="wordmark">arrowlake<b>tuner</b></span>
+    <span class="ro-tag" title="This page reads telemetry and can start one guarded V/F read. It has no write controls.">read-only</span>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+    <button type="button" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true">Overview</button>
+    <button type="button" role="tab" id="tab-cores" aria-controls="panel-cores" aria-selected="false" tabindex="-1">Cores</button>
+    <button type="button" role="tab" id="tab-sensors" aria-controls="panel-sensors" aria-selected="false" tabindex="-1">Sensors</button>
+    <button type="button" role="tab" id="tab-vf" aria-controls="panel-vf" aria-selected="false" tabindex="-1">V/F</button>
+    <button type="button" role="tab" id="tab-system" aria-controls="panel-system" aria-selected="false" tabindex="-1">System</button>
+    <button type="button" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1">Audit</button>
+  </nav>
   <div class="conn">
     <span id="conn-sse" class="pill s-unknown">events: connecting</span>
     <span id="conn-helper" class="pill s-unknown">helper: n/a</span>
@@ -19,108 +40,212 @@
 <div id="banner" class="banner" role="status" hidden></div>
 
 <main>
-  <section id="preflight" class="card" aria-labelledby="h-preflight">
-    <div class="card-head">
-      <h2 id="h-preflight">Preflight</h2>
-      <button type="button" id="btn-preflight">Re-run preflight</button>
-    </div>
-    <p id="pf-summary" class="muted">Preflight not read yet.</p>
-    <table class="grid" id="pf-table" hidden>
-      <thead><tr><th>Check</th><th>Status</th><th>Reason</th></tr></thead>
-      <tbody id="pf-body"></tbody>
-    </table>
-  </section>
+  <!-- ============================== Overview ============================== -->
+  <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+    <div class="ov-grid">
+      <article class="die-card">
+        <div class="card-head">
+          <h2>Core map</h2>
+          <div class="seg" id="map-metric" role="group" aria-label="Colour the core map by"></div>
+        </div>
+        <div class="die-wrap">
+          <svg id="die" class="die" viewBox="0 0 760 330" role="group" aria-label="Live core map: 8 P-cores and 16 E-cores, coloured by the selected reading">
+            <defs>
+              <pattern id="na-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="8" height="8" class="hatch-bg"/>
+                <line x1="0" y1="0" x2="0" y2="8" class="hatch-line"/>
+              </pattern>
+            </defs>
+            <g id="die-cores"></g>
+          </svg>
+        </div>
+        <div class="die-foot">
+          <div class="ramp-legend">
+            <span id="ramp-lo" class="ramp-num">n/a</span>
+            <svg class="ramp" viewBox="0 0 200 10" preserveAspectRatio="none" aria-hidden="true" focusable="false"><g id="ramp-stops"></g></svg>
+            <span id="ramp-hi" class="ramp-num">n/a</span>
+            <span id="ramp-unit" class="muted"></span>
+          </div>
+          <p id="probe" class="probe" aria-live="polite">Point at a core for its readings. Click to open it in Cores.</p>
+        </div>
+      </article>
 
-  <section id="helper" class="card" aria-labelledby="h-helper">
-    <div class="card-head"><h2 id="h-helper">Helper and mailbox budget</h2></div>
-    <dl class="kv">
-      <dt>State</dt><dd id="hb-state">n/a</dd>
-      <dt>Ops used (this boot)</dt><dd id="hb-used">n/a</dd>
-      <dt>Per-boot budget</dt><dd id="hb-budget">n/a</dd>
-      <dt>Ops left</dt><dd id="hb-left">n/a</dd>
-      <dt>Last heartbeat</dt><dd id="hb-age">n/a</dd>
-    </dl>
-    <progress id="hb-bar" max="1" value="0" aria-label="Mailbox operations used this boot" hidden></progress>
-  </section>
+      <div class="readouts" id="tiles">
+        <div class="ro"><span class="ro-label">Package power</span><span class="ro-value" id="t-pkgw">n/a</span><svg class="spark" id="sp-pkgw" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro"><span class="ro-label">Hottest sensor</span><span class="ro-value" id="t-temp">n/a</span><svg class="spark" id="sp-temp" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro"><span class="ro-label">Highest core clock</span><span class="ro-value" id="t-mhz">n/a</span><svg class="spark" id="sp-mhz" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro"><span class="ro-label">Vcore (board)</span><span class="ro-value" id="t-vcore">n/a</span><svg class="spark" id="sp-vcore" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro"><span class="ro-label">Core power</span><span class="ro-value" id="t-corew">n/a</span><svg class="spark" id="sp-corew" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro"><span class="ro-label">DRAM read / write</span><span class="ro-value" id="t-dram">n/a</span><svg class="spark" id="sp-dram" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true" focusable="false"></svg></div>
+        <div class="ro ro-small"><span class="ro-label">Limit reasons (raw 0x6B0)</span><span class="ro-value mono" id="t-limit">n/a</span></div>
+        <p id="tele-age" class="age muted">no sample yet</p>
+      </div>
+    </div>
+    <p id="tele-note" class="note" hidden></p>
 
-  <section id="tiles" class="card wide" aria-labelledby="h-tiles">
-    <div class="card-head">
-      <h2 id="h-tiles">Live telemetry</h2>
-      <span id="tele-age" class="muted">no sample yet</span>
-    </div>
-    <div class="tiles" id="tile-box">
-      <div class="tile"><div class="tile-label">Package power</div><div class="tile-value" id="t-pkgw">n/a</div></div>
-      <div class="tile"><div class="tile-label">Core power</div><div class="tile-value" id="t-corew">n/a</div></div>
-      <div class="tile"><div class="tile-label">Vcore (board)</div><div class="tile-value" id="t-vcore">n/a</div></div>
-      <div class="tile"><div class="tile-label">Hottest sensor</div><div class="tile-value" id="t-temp">n/a</div></div>
-      <div class="tile"><div class="tile-label">Highest core clock</div><div class="tile-value" id="t-mhz">n/a</div></div>
-      <div class="tile"><div class="tile-label">DRAM read / write</div><div class="tile-value" id="t-dram">n/a</div></div>
-      <div class="tile"><div class="tile-label">Limit reasons (raw 0x6B0)</div><div class="tile-value" id="t-limit">n/a</div></div>
-    </div>
-    <p id="tele-note" class="muted" hidden></p>
-    <div class="scroll">
-      <table class="grid num" id="core-table">
-        <thead><tr><th>CPU</th><th>Core</th><th>MHz</th><th>Busy %</th><th>Ratio</th><th>VID (V)</th></tr></thead>
-        <tbody id="core-body"><tr><td colspan="6" class="muted">Waiting for telemetry.</td></tr></tbody>
-      </table>
-    </div>
-    <details class="temps">
-      <summary>Temperature sensors</summary>
-      <table class="grid num">
-        <thead><tr><th>Sensor</th><th>Temp (C)</th></tr></thead>
-        <tbody id="temp-body"><tr><td colspan="2" class="muted">n/a</td></tr></tbody>
-      </table>
-    </details>
-  </section>
-
-  <section id="vf" class="card wide" aria-labelledby="h-vf">
-    <div class="card-head"><h2 id="h-vf">V/F curve read</h2></div>
-    <p>
-      Reading the V/F curve is a guarded mailbox read session. <strong>Every mailbox request is a WRMSR</strong> and counts against the per-boot budget.
-      Estimated cost: <strong>112 to 124 operations</strong>. Ops left: <strong id="vf-left">n/a</strong>.
-      It never runs by itself.
-    </p>
-    <div class="row">
-      <button type="button" id="btn-dump" disabled>Read V/F curve</button>
-      <button type="button" id="btn-cancel" disabled>Cancel</button>
-      <span id="vf-reason" class="muted"></span>
-    </div>
-    <div id="vf-run" hidden>
-      <progress id="vf-bar" max="1" value="0" aria-label="V/F read progress"></progress>
-      <span id="vf-progress" class="muted"></span>
-    </div>
-    <p id="vf-status" class="muted" role="status"></p>
-    <div class="scroll">
-      <table class="grid num" id="vf-table" hidden>
-        <thead><tr><th>CPU</th><th>Core</th><th>OC point</th><th>V/F points (ratio, offset mV)</th></tr></thead>
-        <tbody id="vf-body"></tbody>
-      </table>
+    <div class="ov-lower">
+      <figure class="chart" id="ch-ov-power"></figure>
+      <figure class="chart" id="ch-ov-temp"></figure>
+      <article class="card budget-card">
+        <div class="card-head"><h2>Mailbox budget</h2><button type="button" class="link" data-goto="system">Details</button></div>
+        <div class="ring-row">
+          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+            <circle cx="60" cy="60" r="50" class="ring-track"/>
+            <circle cx="60" cy="60" r="50" class="ring-used" id="ring-ov" pathLength="100"/>
+          </svg>
+          <div class="ring-text">
+            <span class="ring-big" id="ov-left">n/a</span>
+            <span class="muted">ops left this boot</span>
+            <span class="muted" id="ov-state">helper n/a</span>
+          </div>
+        </div>
+      </article>
     </div>
   </section>
 
-  <section id="accepted" class="card wide" aria-labelledby="h-acc">
-    <div class="card-head"><h2 id="h-acc">Applied vs accepted</h2></div>
-    <p id="acc-summary">Not read yet. Use "Read V/F curve" to compare the applied V/F words with the accepted state.</p>
-    <div class="scroll">
-      <table class="grid" id="acc-table" hidden>
-        <thead><tr><th>CPU</th><th>Result</th><th>Differences</th></tr></thead>
-        <tbody id="acc-body"></tbody>
-      </table>
+  <!-- ============================== Cores ============================== -->
+  <section class="panel" id="panel-cores" role="tabpanel" aria-labelledby="tab-cores" tabindex="0" hidden>
+    <div class="toolbar">
+      <div class="seg" id="core-filter" role="group" aria-label="Show cores"></div>
+      <p class="muted">Select a core for its last five minutes.</p>
+    </div>
+    <div class="cores-grid">
+      <div class="card scroll">
+        <table class="grid num cores" id="core-table">
+          <caption class="sr">Per-core readings, live</caption>
+          <thead><tr><th scope="col">Core</th><th scope="col" class="n">CPU</th><th scope="col">Clock (MHz)</th><th scope="col" class="n">Busy %</th><th scope="col" class="n">Ratio</th><th scope="col" class="n">VID (V)</th><th scope="col" class="n">Temp (C)</th><th scope="col">Clock, 60 s</th></tr></thead>
+          <tbody id="core-body"><tr><td colspan="8" class="na">Waiting for telemetry.</td></tr></tbody>
+        </table>
+      </div>
+      <aside class="card core-detail" id="core-detail" aria-live="polite">
+        <div class="card-head"><h2 id="cd-title">No core selected</h2><span id="cd-sub" class="muted"></span></div>
+        <p id="cd-empty" class="muted">Pick a row, or a tile on the core map.</p>
+        <div id="cd-charts" class="cd-charts" hidden>
+          <figure class="chart" id="ch-cd-mhz"></figure>
+          <figure class="chart" id="ch-cd-busy"></figure>
+          <figure class="chart" id="ch-cd-vid"></figure>
+          <figure class="chart" id="ch-cd-temp"></figure>
+        </div>
+      </aside>
     </div>
   </section>
 
-  <section id="audit" class="card wide" aria-labelledby="h-audit">
-    <div class="card-head">
-      <h2 id="h-audit">Audit log (tail)</h2>
-      <button type="button" id="btn-audit">Refresh</button>
+  <!-- ============================== Sensors ============================== -->
+  <section class="panel" id="panel-sensors" role="tabpanel" aria-labelledby="tab-sensors" tabindex="0" hidden>
+    <div class="sensors-grid">
+      <article class="card temps-card">
+        <div class="card-head"><h2>Temperatures</h2><span class="muted" id="temp-count"></span></div>
+        <ul class="temp-list" id="temp-body"><li class="na">n/a</li></ul>
+      </article>
+      <div class="chart-stack">
+        <figure class="chart" id="ch-power"></figure>
+        <figure class="chart" id="ch-hot"></figure>
+        <figure class="chart" id="ch-vcore"></figure>
+        <figure class="chart" id="ch-dram"></figure>
+      </div>
     </div>
-    <p id="audit-note" class="muted">Not read yet.</p>
-    <div class="scroll">
-      <table class="grid" id="audit-table" hidden>
-        <thead><tr><th>Time</th><th>#</th><th>Event</th><th>CPU</th><th>Cmd</th><th>Result</th><th>Reason</th></tr></thead>
-        <tbody id="audit-body"></tbody>
-      </table>
+  </section>
+
+  <!-- ============================== V/F ============================== -->
+  <section class="panel" id="panel-vf" role="tabpanel" aria-labelledby="tab-vf" tabindex="0" hidden>
+    <div class="vf-grid">
+      <article id="vf" class="card vf-card">
+        <div class="card-head"><h2>Read the V/F curve</h2></div>
+        <p class="vf-warn">
+          This is a guarded mailbox read session. <strong>Every mailbox request is a WRMSR</strong> and counts against the per-boot budget.
+          Estimated cost: <strong>112 to 124 operations</strong>. It never runs by itself.
+        </p>
+        <dl class="kv">
+          <dt>Ops left</dt><dd id="vf-left">n/a</dd>
+        </dl>
+        <div class="row">
+          <button type="button" id="btn-dump" class="primary" disabled>Read V/F curve</button>
+          <button type="button" id="btn-cancel" disabled>Cancel</button>
+        </div>
+        <p id="vf-reason" class="muted"></p>
+        <div id="vf-run" class="vf-run" hidden>
+          <progress id="vf-bar" max="1" value="0" aria-label="V/F read progress"></progress>
+          <span id="vf-progress" class="muted"></span>
+        </div>
+        <p id="vf-status" class="muted" role="status"></p>
+      </article>
+
+      <figure class="card vf-plot-card">
+        <div class="card-head"><h2>Offset by V/F point</h2><span class="muted" id="vf-plot-note">No read yet</span></div>
+        <svg id="vf-plot" class="vf-plot" viewBox="0 0 640 300" role="img" aria-label="V/F offsets in millivolts per point and core, filled after a read"></svg>
+        <figcaption id="vf-legend" class="legend"></figcaption>
+      </figure>
     </div>
+
+    <article id="accepted" class="card">
+      <div class="card-head"><h2>Applied vs accepted</h2></div>
+      <p id="acc-summary">Not read yet. Use "Read V/F curve" to compare the applied V/F words with the accepted state.</p>
+      <div class="scroll">
+        <table class="grid" id="acc-table" hidden>
+          <thead><tr><th scope="col">CPU</th><th scope="col">Result</th><th scope="col">Differences</th></tr></thead>
+          <tbody id="acc-body"></tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="card-head"><h2>V/F words</h2></div>
+      <div class="scroll">
+        <table class="grid num" id="vf-table" hidden>
+          <thead><tr><th scope="col" class="n">CPU</th><th scope="col">Core</th><th scope="col">OC point</th><th scope="col">V/F points (ratio, offset mV)</th></tr></thead>
+          <tbody id="vf-body"></tbody>
+        </table>
+      </div>
+      <p id="vf-table-empty" class="muted">The table fills after a read.</p>
+    </article>
+  </section>
+
+  <!-- ============================== System ============================== -->
+  <section class="panel" id="panel-system" role="tabpanel" aria-labelledby="tab-system" tabindex="0" hidden>
+    <div class="sys-grid">
+      <article id="helper" class="card">
+        <div class="card-head"><h2>Helper and mailbox budget</h2></div>
+        <div class="ring-row">
+          <svg class="ring big" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+            <circle cx="60" cy="60" r="50" class="ring-track"/>
+            <circle cx="60" cy="60" r="50" class="ring-used" id="ring-sys" pathLength="100"/>
+          </svg>
+          <dl class="kv">
+            <dt>State</dt><dd id="hb-state">n/a</dd>
+            <dt>Ops used (this boot)</dt><dd id="hb-used">n/a</dd>
+            <dt>Per-boot budget</dt><dd id="hb-budget">n/a</dd>
+            <dt>Ops left</dt><dd id="hb-left">n/a</dd>
+            <dt>Last heartbeat</dt><dd id="hb-age">n/a</dd>
+          </dl>
+        </div>
+      </article>
+
+      <article id="preflight" class="card">
+        <div class="card-head">
+          <h2>Preflight</h2>
+          <button type="button" id="btn-preflight">Re-run preflight</button>
+        </div>
+        <p id="pf-summary" class="muted">Preflight not read yet.</p>
+        <ul class="checks" id="pf-body"></ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============================== Audit ============================== -->
+  <section class="panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit" tabindex="0" hidden>
+    <article id="audit" class="card">
+      <div class="card-head">
+        <h2>Audit log</h2>
+        <button type="button" id="btn-audit">Refresh</button>
+      </div>
+      <p id="audit-note" class="muted">Not read yet.</p>
+      <div class="scroll">
+        <table class="grid" id="audit-table" hidden>
+          <thead><tr><th scope="col">Time</th><th scope="col" class="n">#</th><th scope="col">Event</th><th scope="col">CPU</th><th scope="col">Cmd</th><th scope="col">Result</th><th scope="col">Reason</th></tr></thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+    </article>
   </section>
 </main>
 <script src="/app.js"></script>
