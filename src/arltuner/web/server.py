@@ -46,6 +46,8 @@ _EVENT_RE = re.compile(r"[a-z0-9_.]{1,32}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _TYPED = re.compile(r"CONFIRM [A-Z2-9]{6}\Z")
 _REQ_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+_CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
+_UNITS = tuple(f"P{n}" for n in range(8)) + tuple(f"EC{n}" for n in range(4))
 
 
 # ---- /api/call allowlist (Contract 8 addendum D-027 d): op -> (args validator, long-running). Schemas mirror the G-102 helper validators (helper/ops.py).
@@ -82,6 +84,36 @@ def _apply(a: dict) -> bool:
             and isinstance(a["typed"], str) and bool(_TYPED.match(a["typed"])))
 
 
+def _unit_list(v: Any) -> bool:
+    return isinstance(v, list) and 1 <= len(v) <= len(_UNITS) and len(set(v)) == len(v) and all(isinstance(u, str) and u in _UNITS for u in v)
+
+
+def _curve_id(v: Any) -> bool:
+    return isinstance(v, str) and bool(_CURVE_ID.match(v))
+
+
+def _name(v: Any) -> bool:
+    return isinstance(v, str) and 1 <= len(v.strip()) <= 64 and v.isprintable()
+
+
+def _vf_measure(a: dict) -> bool:  # contract 9; the helper (ops_measure._validate_vf_measure) is the authority
+    return (set(a) <= {"mode", "units", "name"} and a.get("mode", "quick") in ("quick", "dense")
+            and ("units" not in a or _unit_list(a["units"])) and ("name" not in a or _name(a["name"])))
+
+
+def _curves_get(a: dict) -> bool:
+    return set(a) <= {"id", "units"} and "id" in a and _curve_id(a["id"]) and ("units" not in a or _unit_list(a["units"]))
+
+
+def _curves_update(a: dict) -> bool:
+    return (set(a) <= {"id", "name", "baseline"} and "id" in a and _curve_id(a["id"]) and bool({"name", "baseline"} & set(a))
+            and ("name" not in a or _name(a["name"])) and ("baseline" not in a or type(a["baseline"]) is bool))
+
+
+def _curves_delete(a: dict) -> bool:
+    return set(a) == {"id"} and _curve_id(a["id"])
+
+
 OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "preflight": (_empty, False),
     "audit.tail": (_audit_tail, False),
@@ -92,12 +124,18 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "vf.dump": (_vf_dump, True),
     "apply": (_apply, True),
     "restore": (_empty, True),
+    "vf.measure": (_vf_measure, True),  # G-111, contract 9
+    "curves.list": (_empty, False),
+    "curves.get": (_curves_get, False),
+    "curves.update": (_curves_update, False),
+    "curves.delete": (_curves_delete, False),
+    "mem.read": (_empty, False),
 }
 
 # HTTP status for a helper error code (Contract 8 codes; unknown codes -> 422)
 _STATUS_FOR_CODE = {"BAD_REQUEST": 400, "UNKNOWN_OP": 400, "BUSY": 409, "PLAN_STALE": 409, "CONFIRM_MISMATCH": 409, "CANCELLED": 409,
                     "REFUSED": 403, "PREFLIGHT_FAILED": 412, "INTERNAL": 500}
-_DETAIL_ALLOW = ("state", "check")  # the only error.detail keys that reach the browser
+_DETAIL_ALLOW = ("state", "check", "curve_id")  # the only error.detail keys that reach the browser
 
 
 def public_response(resp: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""The helper state machine (SPEC section 4.6): ``idle | planning | applying | capped | stressing``. One mailbox operation at a time.
+"""The helper state machine (SPEC section 4.6): ``idle | planning | applying | capped | stressing | measuring``. One mailbox operation at a time.
 
 G1 only enters ``idle`` and ``planning`` (``vf.dump`` is a read session that gathers hardware state, so it runs as ``planning``: SPEC names no
 other state for it). ``applying`` / ``capped`` / ``stressing`` belong to G2/G3. Read-only helper ops (``preflight``, ``audit.tail``,
@@ -19,6 +19,7 @@ class State(enum.Enum):
     APPLYING = "applying"
     CAPPED = "capped"
     STRESSING = "stressing"
+    MEASURING = "measuring"  # G-111 vf.measure: cpufreq sysfs only (journaled), no mailbox; still excludes every other long / write op
 
 
 @dataclass(frozen=True)

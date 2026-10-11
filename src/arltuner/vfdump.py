@@ -389,6 +389,8 @@ class RatioMeasurement:
     temp_max_c: float | None = None
     samples_kept: int = 0  # samples whose running ratio equalled the target (the VID range is over these only)
     samples_total: int = 0
+    why: str = ""  # MISMATCH / skipped only (G-111): "below" = the ratio was never reached (cap search exhausted, or the target is above the CPUs' limits) ; "above" = it ran above the target or hovered around it ; "" = ok
+    vid_mean: float | None = None  # mean VID over the kept samples (G-111, the curve record's ``vid_v``)
 
 
 def measure_groups(units: Sequence[Unit]) -> list[MeasureGroup]:
@@ -456,6 +458,7 @@ def measure_group(
     interval_s: float = SAMPLE_INTERVAL_S,
     min_valid: int = MIN_VALID,
     progress: Callable[[str], object] | None = None,
+    on_result: Callable[[RatioMeasurement], object] | None = None,
 ) -> list[RatioMeasurement]:
     """For each ratio: cap every CPU of the group, load them all, sample ``read_perf(group.rep)`` (the ``0x198`` word) ``samples`` times, stop the load.
 
@@ -463,16 +466,23 @@ def measure_group(
     result is ``ok`` if at least ``min_valid`` were kept. Cap search: ``ratio x 100 MHz`` first; if the ratio settles *below* the target, retry with
     ``(ratio + 1) x 100 MHz`` (never above the CPUs' ``cpuinfo_max_freq``); if it runs *above*, or still not enough samples match, the result is ``MISMATCH`` without
     a voltage. A ratio whose own frequency (``ratio x 100 MHz``) is above the CPUs' current ``scaling_max_freq`` is skipped with a note. **The original caps are
-    always restored** (``finally``, so also on an exception and Ctrl-C); a restore that fails is appended to ``problems`` (never swallowed)."""
+    always restored** (``finally``, so also on an exception and Ctrl-C); a restore that fails is appended to ``problems`` (never swallowed).
+    ``on_result`` (G-111) is called with every :class:`RatioMeasurement` as it is appended (the helper's live ``vf.point`` events)."""
     originals = {cpu: io.read_cap(cpu) for cpu in group.cpus}
     ceiling = min(originals.values())
     max_khz = min(io.read_max_khz(cpu) for cpu in group.cpus)
     results: list[RatioMeasurement] = []
+
+    def add(m: RatioMeasurement) -> None:
+        results.append(m)
+        if on_result is not None:
+            on_result(m)
+
     try:
         for ratio in group.ratios:
             nominal = ratio * 100_000
             if nominal > ceiling or nominal > max_khz:
-                results.append(RatioMeasurement(ratio, "skipped", None, note=f"{ratio}x ({nominal // 1000} MHz) is above the current scaling_max_freq ({min(ceiling, max_khz) // 1000} MHz)"))
+                add(RatioMeasurement(ratio, "skipped", None, note=f"{ratio}x ({nominal // 1000} MHz) is above the current scaling_max_freq ({min(ceiling, max_khz) // 1000} MHz)", why="below"))
                 continue
             attempts = caps_to_try(ratio, max_khz)
             for n, cap in enumerate(attempts):
@@ -486,7 +496,7 @@ def measure_group(
                 if len(kept) >= min_valid:
                     vids = [((w >> 32) & 0xFFFF) / 8192 for w in kept]
                     note = f"cap {cap // 1000} MHz (ratio + 1 bin)" if cap != nominal else ""
-                    results.append(RatioMeasurement(ratio, "ok", cap, min(vids), max(vids), seen, note, t_lo, t_hi, len(kept), len(words)))
+                    add(RatioMeasurement(ratio, "ok", cap, min(vids), max(vids), seen, note, t_lo, t_hi, len(kept), len(words), "", sum(vids) / len(vids)))
                     break
                 below = sum(r < ratio for r in running)
                 above = sum(r > ratio for r in running)
@@ -494,7 +504,7 @@ def measure_group(
                     continue  # settled below the target: try the next cap
                 why = "ran above the target" if above >= below and above else "settled below the target"
                 note = f"{len(kept)} of {len(words)} samples at {ratio}x (need {min_valid}), running ratio {seen[0]}..{seen[-1]}x, {why} with cap {cap // 1000} MHz: no voltage reported"
-                results.append(RatioMeasurement(ratio, "MISMATCH", cap, None, None, seen, note, t_lo, t_hi, len(kept), len(words)))
+                add(RatioMeasurement(ratio, "MISMATCH", cap, None, None, seen, note, t_lo, t_hi, len(kept), len(words), "below" if seen[-1] < ratio else "above"))
                 break
     finally:
         for cpu, khz in originals.items():
