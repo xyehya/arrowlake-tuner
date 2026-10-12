@@ -1,8 +1,8 @@
 """T-025 guard tests: per-V/F-point offsets -- ``0x11`` with ``P1=0`` and ``P2`` 1..15 under the check ``vf_point_offset_bounded``, distinct from the
 whole-curve offset (``P2 = 0``, ``vf_bounded``).
 
-Measured (``[MEASURED lnx 2026-10-02]``, docs/research/lnx-first-read.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset
-0). OCCT wrote point words as ``ratio | offset << 21`` with V target 0 (lnx-turbostat-plus-facts.md). Whether the hardware accepts a point write on
+Measured (``[MEASURED lnx 2026-10-02]``, docs/knowledge/registers.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset
+0). OCCT wrote point words as ``ratio | offset << 21`` with V target 0 (docs/knowledge/registers.md). Whether the hardware accepts a point write on
 Linux is ``[UNVERIFIED]``: these tests prove only what the *guard* lets through or refuses, against a recording transport.
 
 Same rules as test_guard.py: every refusal sends nothing, and each test is written so that removing the rule it names makes it fail.

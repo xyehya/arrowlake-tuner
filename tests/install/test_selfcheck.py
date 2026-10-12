@@ -205,7 +205,7 @@ class PolkitContent(unittest.TestCase):
         self.assertIn("allow_active", self.bad(POLKIT.replace(b"<allow_active>auth_admin<", b"<allow_active>yes<")))
 
     def test_another_exec_path_is_refused(self) -> None:
-        self.assertIn("exec.path", self.bad(POLKIT.replace(b"/usr/lib/arltuner/arltuner-helper<", b"/home/yk/AI/arrowlake-tuner/tools/arltuner-helper.py<")))
+        self.assertIn("exec.path", self.bad(POLKIT.replace(b"/usr/lib/arltuner/arltuner-helper<", b"/home/dev/arrowlake-tuner/tools/arltuner-helper.py<")))
 
     def test_a_second_action_is_refused(self) -> None:
         extra = POLKIT.replace(b"</policyconfig>", b'<action id="io.github.arrowlake-tuner.other"><defaults/></action></policyconfig>')

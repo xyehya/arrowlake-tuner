@@ -1,4 +1,4 @@
-"""G-106 path rules: the CLI's installed-detection (D-030: absent => legacy, trusted => installed paths, present-but-untrusted => named refusal,
+"""G-106 path rules: the CLI's installed-detection (D-030: absent => per-user, trusted => installed paths, present-but-untrusted => named refusal,
 never a fallback), the platform-file path order, the GUI launcher defaults, and the packaging files."""
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ from tests import test_cli
 
 from ._support import DIR, FILE, REPO, SYMLINK, fake_lstat
 
-LEGACY_HOME = {"HOME": "/home/x"}
-LEGACY_AUDIT = Path("/home/x/.local/state/linuxmon/audit.jsonl")
-LEGACY_LOCK = Path("/run/lock/linuxmon-mailbox.lock")
+USER_HOME = {"HOME": "/home/x"}
+USER_AUDIT = Path("/home/x/.local/state/arltuner/audit.jsonl")
+USER_LOCK = Path("/run/lock/arltuner-mailbox.lock")
 NO_RUN_DIR = {"/": (0, DIR), "/etc": (0, DIR), "/etc/arltuner": (0, DIR), "/etc/arltuner/policy.toml": (0, FILE)}  # installed, but tmpfiles.d never made /run/arltuner
 ROOTED = NO_RUN_DIR | {"/run": (0, DIR), "/run/arltuner": (0, DIR)}
 
@@ -55,10 +55,10 @@ class Constants(unittest.TestCase):
 
 
 class CliInstalledRule(unittest.TestCase):
-    def test_absent_policy_keeps_the_legacy_paths(self) -> None:
+    def test_absent_policy_keeps_the_per_user_paths(self) -> None:
         self.assertFalse(cli.installed_state(absent))
-        self.assertEqual(cli.default_audit_path(LEGACY_HOME, lstat_fn=absent), LEGACY_AUDIT)
-        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock", lstat_fn=absent), LEGACY_LOCK)
+        self.assertEqual(cli.default_audit_path(USER_HOME, lstat_fn=absent), USER_AUDIT)
+        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock", lstat_fn=absent), USER_LOCK)
 
     def test_a_missing_parent_directory_is_also_absent(self) -> None:
         def not_a_dir(path: str):
@@ -70,14 +70,14 @@ class CliInstalledRule(unittest.TestCase):
     def test_a_trusted_policy_switches_both_paths(self) -> None:
         lstat = fake_lstat(ROOTED)
         self.assertTrue(cli.installed_state(lstat))
-        self.assertEqual(cli.default_audit_path(LEGACY_HOME, lstat_fn=lstat), config.INSTALLED_AUDIT)
+        self.assertEqual(cli.default_audit_path(USER_HOME, lstat_fn=lstat), config.INSTALLED_AUDIT)
         self.assertEqual(cli.default_lock_path(isdir=lambda p: True, lstat_fn=lstat), config.INSTALLED_LOCK)
 
     def test_windows_never_uses_the_installed_paths(self) -> None:
         lstat = fake_lstat(ROOTED)
         env = {"LOCALAPPDATA": r"C:\L", "HOME": "/home/x"}
-        self.assertEqual(cli.default_audit_path(env, windows=True, lstat_fn=lstat), Path(r"C:\L") / "linuxmon" / "audit.jsonl")
-        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}, windows=True, lstat_fn=lstat), LEGACY_AUDIT)
+        self.assertEqual(cli.default_audit_path(env, windows=True, lstat_fn=lstat), Path(r"C:\L") / "arltuner" / "audit.jsonl")
+        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}, windows=True, lstat_fn=lstat), USER_AUDIT)
         self.assertNotEqual(cli.default_lock_path(isdir=lambda p: False, lstat_fn=lstat, windows=True), config.INSTALLED_LOCK)
 
     def test_present_but_untrusted_is_a_named_refusal_for_both_paths(self) -> None:
@@ -95,10 +95,10 @@ class CliInstalledRule(unittest.TestCase):
             lstat = fake_lstat(tree)
             with self.subTest(name):
                 with self.assertRaises(cli.InstalledStateRefused) as ctx:
-                    cli.default_audit_path(LEGACY_HOME, lstat_fn=lstat)
+                    cli.default_audit_path(USER_HOME, lstat_fn=lstat)
                 self.assertIn("/etc/arltuner/policy.toml", str(ctx.exception))
                 self.assertIn("not trusted", str(ctx.exception))
-                self.assertIn("legacy", str(ctx.exception))
+                self.assertIn("per-user", str(ctx.exception))
                 with self.assertRaises(cli.InstalledStateRefused):
                     cli.default_lock_path(lstat_fn=lstat)
 
@@ -112,7 +112,7 @@ class CliInstalledRule(unittest.TestCase):
 
 class CliEndToEnd(test_cli.CliCase):
     """The rule through ``cli.main`` (hardware runs only): untrusted => exit 2 before any port is built; explicit --audit/--lock bypass the
-    defaults; ``--sim`` never applies D-030 (legacy per-user defaults even on an installed machine)."""
+    defaults; ``--sim`` never applies D-030 (per-user defaults even on an installed machine)."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -148,7 +148,7 @@ class CliEndToEnd(test_cli.CliCase):
         code, out, err = self.run_hw(*self.args("--audit", self.audit, "--lock", self.lock), stdin=self.confirmed(), lstat_fn=lstat, device_port_factory=lambda: self.sim)
         self.assertEqual((code, err), (0, ""), out)
 
-    def test_a_missing_installed_lock_directory_is_a_named_refusal_and_never_the_legacy_lock(self) -> None:
+    def test_a_missing_installed_lock_directory_is_a_named_refusal_and_never_the_per_user_lock(self) -> None:
         for argv in (["read-vf", "--cpu", 4, "--audit", self.audit], ["read", "--cpu", 4, "--cmd", "0x10", "--audit", self.audit]):
             with self.subTest(argv=argv), mock.patch.object(cli, "WriteGuard") as guard:
                 code, out, err = self.run_hw(*argv, "--device", stdin=self.confirmed(), lstat_fn=fake_lstat(NO_RUN_DIR), device_port_factory=lambda: self.sim)
@@ -157,7 +157,7 @@ class CliEndToEnd(test_cli.CliCase):
                 self.assertIn("/run/arltuner", err)
                 self.assertIn("sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/arltuner.conf", err)
                 self.assertNotIn("Traceback", err)
-                self.assertNotIn("linuxmon", err)
+                self.assertNotIn("arltuner-mailbox", err)
                 guard.assert_not_called()
                 self.nothing_sent()
 
@@ -173,7 +173,7 @@ class CliEndToEnd(test_cli.CliCase):
     def test_sim_never_needs_the_installed_lock_directory(self) -> None:
         with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
             self.run_hw(*self.args("--audit", self.audit, device=False), stdin=self.confirmed(), lstat_fn=fake_lstat(NO_RUN_DIR))
-        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "linuxmon-mailbox.lock")
+        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "arltuner-mailbox.lock")
 
     def capture_audit_path(self, argv, **kw) -> list[Path]:
         opened: list[Path] = []
@@ -189,21 +189,21 @@ class CliEndToEnd(test_cli.CliCase):
     def test_a_trusted_install_routes_the_defaults_to_the_installed_paths(self) -> None:
         self.assertEqual(self.capture_audit_path(self.args(), lstat_fn=fake_lstat(ROOTED)), [config.INSTALLED_AUDIT])
 
-    def test_absent_install_uses_the_legacy_default_audit_path(self) -> None:
-        self.assertEqual(self.capture_audit_path(self.args(), lstat_fn=absent), [LEGACY_AUDIT])
+    def test_absent_install_uses_the_per_user_default_audit_path(self) -> None:
+        self.assertEqual(self.capture_audit_path(self.args(), lstat_fn=absent), [USER_AUDIT])
 
     def test_sim_never_applies_the_installed_paths_even_when_installed(self) -> None:
-        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=fake_lstat(ROOTED)), [LEGACY_AUDIT])
+        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=fake_lstat(ROOTED)), [USER_AUDIT])
 
     def test_sim_ignores_even_an_untrusted_install(self) -> None:
         bad = fake_lstat(ROOTED | {"/etc/arltuner/policy.toml": (1000, FILE)})
-        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=bad), [LEGACY_AUDIT])
+        self.assertEqual(self.capture_audit_path(self.args(device=False), lstat_fn=bad), [USER_AUDIT])
 
-    def test_sim_lock_default_is_the_legacy_lock(self) -> None:
+    def test_sim_lock_default_is_the_per_user_lock(self) -> None:
         with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
             self.run_hw(*self.args("--audit", self.audit, device=False), stdin=self.confirmed(), lstat_fn=fake_lstat(ROOTED))
         self.assertNotEqual(guard.call_args.kwargs["lock_path"], config.INSTALLED_LOCK)
-        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "linuxmon-mailbox.lock")
+        self.assertEqual(guard.call_args.kwargs["lock_path"].name, "arltuner-mailbox.lock")
 
     def test_the_guard_gets_the_installed_lock_when_installed_on_hardware(self) -> None:
         with mock.patch.object(cli, "WriteGuard", side_effect=RuntimeError("stop")) as guard:
@@ -213,12 +213,12 @@ class CliEndToEnd(test_cli.CliCase):
 
     def test_default_functions_accept_consider_install_false(self) -> None:
         lstat = fake_lstat(ROOTED)
-        self.assertEqual(cli.default_audit_path(LEGACY_HOME, lstat_fn=lstat, consider_install=False), LEGACY_AUDIT)
-        self.assertEqual(cli.default_lock_path(isdir=lambda p: True, lstat_fn=lstat, consider_install=False), LEGACY_LOCK)
+        self.assertEqual(cli.default_audit_path(USER_HOME, lstat_fn=lstat, consider_install=False), USER_AUDIT)
+        self.assertEqual(cli.default_lock_path(isdir=lambda p: True, lstat_fn=lstat, consider_install=False), USER_LOCK)
 
 
 class HelperLauncherPaths(unittest.TestCase):
-    """helper/main.py: root + present-but-untrusted policy.toml => named REFUSED, exit 77, no traceback; --sim keeps the legacy defaults."""
+    """helper/main.py: root + present-but-untrusted policy.toml => named REFUSED, exit 77, no traceback; --sim keeps the per-user defaults."""
 
     def run_main(self, argv, *, euid, lstat_fn):
         import io
@@ -247,7 +247,7 @@ class HelperLauncherPaths(unittest.TestCase):
         cfg = helper_main.build_config(ns, log=lambda t: None, root=True, lstat_fn=fake_lstat(ROOTED))
         self.assertEqual(cfg.lock_path, Path("/run/arltuner/mailbox.lock"))
 
-    def test_sim_defaults_stay_legacy_on_an_installed_machine(self) -> None:
+    def test_sim_defaults_stay_per_user_on_an_installed_machine(self) -> None:
         import argparse
 
         ns = argparse.Namespace(sim=True, device=False, policy=None, audit=None, lock=None, allow_taint_bit=[])
@@ -255,7 +255,7 @@ class HelperLauncherPaths(unittest.TestCase):
         self.assertNotEqual(cfg.lock_path, config.INSTALLED_LOCK)
         self.assertNotEqual(cfg.audit_path, config.INSTALLED_AUDIT)
         self.assertEqual(cfg.audit_path.name, "audit.jsonl")
-        self.assertIn("linuxmon", str(cfg.audit_path))
+        self.assertIn("arltuner", str(cfg.audit_path))
 
     def test_sim_with_an_untrusted_install_is_not_refused(self) -> None:
         import argparse
@@ -270,9 +270,9 @@ class RestoreScripts(unittest.TestCase):
             text = (REPO / rel).read_text()
             for flag in ("--audit", "--lock"):
                 self.assertNotIn(flag, text, f"{rel} must not pass {flag}: D-030's rule picks the lock/audit paths")
-            self.assertNotIn("linuxmon", text.replace("linuxmon:", ""), rel)
+            self.assertNotIn("linuxmon", text, rel)
 
-    def test_sudo_keeps_the_operators_home_so_the_legacy_default_is_unchanged_before_install(self) -> None:
+    def test_sudo_keeps_the_operators_home_so_the_per_user_default_is_unchanged_before_install(self) -> None:
         for rel in ("tools/lnx/restore_tuning.sh", "tools/lnx/reapply_current.sh"):
             for line in (REPO / rel).read_text().splitlines():
                 if "sudo env" in line and "arltuner.py" in line:

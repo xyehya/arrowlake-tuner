@@ -13,7 +13,7 @@ safety setting comes from installed constants (below) or from a root-owned, trus
 
 Packaging (G-106): the polkit action pins ``org.freedesktop.policykit.exec.path`` to ``/usr/lib/arltuner/arltuner-helper``, started as
 ``pkexec /usr/lib/arltuner/arltuner-helper --device``. A non-root run (tests, ``--sim``) keeps the argv options; ``--sim`` never applies the D-030 rule
-(simulator runs keep the per-user legacy lock / audit defaults). Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
+(simulator runs keep the per-user lock / audit defaults). Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
 77 refused to start.
 """
 from __future__ import annotations
@@ -73,8 +73,8 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--sim", action="store_true", help="simulator: no hardware")
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; needs root, a trusted code tree, --policy and --audit)")
     p.add_argument("--policy", metavar="FILE", help="reviewed policy (--sim defaults to the built-in conservative one)")
-    p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to ~/.local/state/linuxmon/audit.jsonl)")
-    p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/linuxmon-mailbox.lock; --sim: always the latter)")
+    p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to $XDG_STATE_HOME/arltuner/audit.jsonl (default ~/.local/state/arltuner/))")
+    p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/arltuner-mailbox.lock; --sim: always the latter)")
     p.add_argument("--allow-taint-bit", metavar="N", type=int, action="append", default=[], help="kernel taint bit the first write is expected to set (health gate)")
     p.add_argument("--sim-shape", metavar="P+E", help="--sim only: simulate another part, e.g. 6+8 (6 P-cores + 8 E-cores in clusters of four); default: the simulated reference CPU (8+16)")
     p.add_argument("--state-dir", metavar="DIR", help="--sim only: where the simulated curve store and measurement journal live (default: a fresh private temp directory; never /var/lib)")

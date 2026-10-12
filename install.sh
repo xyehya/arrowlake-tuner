@@ -13,7 +13,7 @@
 #                                          (--reseed-config replaces them)
 #   /etc/arltuner/accepted/                the USER's accepted state (D-036): never created, changed or removed by this script. The app writes it
 #                                          (Profiles > Set as accepted); a fresh install has none ("No accepted state yet")
-#   /var/lib/arltuner/audit.jsonl          0600; seeded once from the invoking user's legacy ~/.local/state/linuxmon/audit.jsonl
+#   /var/lib/arltuner/audit.jsonl          0600; seeded once from the invoking user's per-user ~/.local/state/arltuner/audit.jsonl
 #
 # The checkout is only ever COPIED. After the copy, the only Python that runs (compileall, the self-check) is the installed, root-owned tree, in
 # isolated mode, with cwd /. Idempotent: a second run replaces code/web/polkit/tmpfiles and leaves policy.toml, helper.toml and the audit log alone.
@@ -41,12 +41,12 @@ DESTDIR=${DESTDIR%/}
 if [ -n "$DESTDIR" ]; then
     case $DESTDIR in /*) ;; *) die "DESTDIR must be an absolute path" ;; esac
     PYTHON=${ARLTUNER_PYTHON:-/usr/bin/python3}  # test hooks are honoured only for a DESTDIR install, never for a real one
-    LEGACY_AUDIT_OVERRIDE=${ARLTUNER_LEGACY_AUDIT:-}
+    USER_AUDIT_OVERRIDE=${ARLTUNER_USER_AUDIT:-}
     PROC_ROOT=${ARLTUNER_PROC:-/proc}
 else
     [ "$(id -u)" -eq 0 ] || die "must run as root (sudo bash install.sh)"
     PYTHON=/usr/bin/python3  # the interpreter named in the launcher's shebang
-    LEGACY_AUDIT_OVERRIDE=
+    USER_AUDIT_OVERRIDE=
     PROC_ROOT=/proc
 fi
 
@@ -90,7 +90,7 @@ for f in src src/arltuner src/arltuner/__init__.py platforms web packaging polic
 done
 (cd / && "$PYTHON" -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)') || die "$PYTHON must be Python >= 3.12 (D-024)"
 
-# --- who is installing: the legacy audit log is read as that user, never as root -------------------------------------------------------
+# --- who is installing: the per-user audit log is read as that user, never as root -------------------------------------------------------
 INVOKER=""
 if [ -n "${PKEXEC_UID:-}" ]; then
     case $PKEXEC_UID in *[!0-9]*) die "PKEXEC_UID is not a number" ;; esac
@@ -100,7 +100,7 @@ if [ -n "${PKEXEC_UID:-}" ]; then
 fi
 if [ -n "${SUDO_USER:-}" ]; then
     if [ -n "$INVOKER" ] && [ "$INVOKER" != "$SUDO_USER" ]; then
-        die "PKEXEC_UID ($INVOKER) and SUDO_USER ($SUDO_USER) disagree; refusing to guess whose legacy audit log to seed"
+        die "PKEXEC_UID ($INVOKER) and SUDO_USER ($SUDO_USER) disagree; refusing to guess whose per-user audit log to seed"
     fi
     INVOKER=$SUDO_USER
 fi
@@ -217,7 +217,7 @@ fi
 # installs, or one saved in the app) is left exactly as it is; a fresh install has none until the user saves a profile as accepted.
 if [ -d "$ETC/accepted" ]; then echo "accepted/: kept (the user's accepted state is never touched)"; else echo "accepted/: none yet (created by Profiles > Set as accepted)"; fi
 
-# --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------
+# --- 5. /var/lib/arltuner: audit log, seeded once from the per-user dev log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$STATE"
 install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/curves"  # G-111: measured V/F curves (root-only, kept across upgrades); the helper refuses anything looser
@@ -225,42 +225,42 @@ install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/stress"  # G-116: stress run re
 install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/profiles"  # G-112: saved tuning intents (root-only, kept across upgrades; never overwritten by the helper)
 install -d -m 0700 ${OWN[@]+"${OWN[@]}"} "$STATE/state"  # G-123: last-read.json (this boot's tune.read, root-only; stale boots are ignored by the helper)
 
-as_user() {  # run a command as the invoking user (root only reads the legacy log THROUGH that user's permissions)
+as_user() {  # run a command as the invoking user (root only reads the per-user log THROUGH that user's permissions)
     if [ "$(id -u)" -eq 0 ]; then runuser -u "$INVOKER" -- "$@"; else "$@"; fi
 }
 
-legacy_audit_source() {  # prints the legacy log path of the invoking user, or nothing
+user_audit_source() {  # prints the per-user log path of the invoking user, or nothing
     local home=""
-    if [ -n "$LEGACY_AUDIT_OVERRIDE" ]; then printf '%s\n' "$LEGACY_AUDIT_OVERRIDE"; return 0; fi
+    if [ -n "$USER_AUDIT_OVERRIDE" ]; then printf '%s\n' "$USER_AUDIT_OVERRIDE"; return 0; fi
     if [ -n "$INVOKER" ]; then
         home=$(getent passwd "$INVOKER" | cut -d: -f6 || true)
     elif [ "$(id -u)" -ne 0 ]; then
         home=$HOME  # a non-root DESTDIR test run
     fi
     [ -n "$home" ] || return 0
-    printf '%s/.local/state/linuxmon/audit.jsonl\n' "$home"
+    printf '%s/.local/state/arltuner/audit.jsonl\n' "$home"
 }
 
 if [ -e "$AUDIT" ] || [ -L "$AUDIT" ]; then
     echo "audit.jsonl: kept (never overwritten)"
 else
-    LEGACY=""
-    if [ "$(id -u)" -ne 0 ] || [ -n "$INVOKER" ]; then LEGACY=$(legacy_audit_source || true); fi
+    USER_LOG=""
+    if [ "$(id -u)" -ne 0 ] || [ -n "$INVOKER" ]; then USER_LOG=$(user_audit_source || true); fi
     TMPAUDIT=$STATE/.audit.new.$$
     ( umask 077; : > "$TMPAUDIT" )
-    if [ "$(id -u)" -eq 0 ] && [ -n "$LEGACY" ]; then
-        command -v runuser >/dev/null 2>&1 || { rm -f "$TMPAUDIT"; die "runuser is needed to read $LEGACY safely; install util-linux"; }
+    if [ "$(id -u)" -eq 0 ] && [ -n "$USER_LOG" ]; then
+        command -v runuser >/dev/null 2>&1 || { rm -f "$TMPAUDIT"; die "runuser is needed to read $USER_LOG safely; install util-linux"; }
     fi
-    if [ -n "$LEGACY" ] && as_user test -f "$LEGACY" && as_user test ! -L "$LEGACY"; then
+    if [ -n "$USER_LOG" ] && as_user test -f "$USER_LOG" && as_user test ! -L "$USER_LOG"; then
         # Read AS THE USER (a symlinked parent directory must not let root copy some other file into a log the GUI can tail), at most 64 MiB + 1 byte.
-        as_user head -c 67108865 -- "$LEGACY" > "$TMPAUDIT" || { rm -f "$TMPAUDIT"; die "could not read the legacy audit log $LEGACY${INVOKER:+ as $INVOKER}"; }
+        as_user head -c 67108865 -- "$USER_LOG" > "$TMPAUDIT" || { rm -f "$TMPAUDIT"; die "could not read the per-user audit log $USER_LOG${INVOKER:+ as $INVOKER}"; }
         size=$(stat -c %s "$TMPAUDIT")
-        [ "$size" -le 67108864 ] || { rm -f "$TMPAUDIT"; die "legacy audit log $LEGACY is larger than 64 MiB; seed it by hand (the per-boot count must survive)"; }
-        echo "audit.jsonl: seeded from $LEGACY ($size bytes)"
+        [ "$size" -le 67108864 ] || { rm -f "$TMPAUDIT"; die "per-user audit log $USER_LOG is larger than 64 MiB; seed it by hand (the per-boot count must survive)"; }
+        echo "audit.jsonl: seeded from $USER_LOG ($size bytes)"
     else
-        echo "audit.jsonl: created empty (no legacy log found${LEGACY:+ at $LEGACY})"
-        if [ -z "$LEGACY" ] && [ -z "$DESTDIR" ]; then
-            echo "WARNING: no invoking user (PKEXEC_UID / SUDO_USER, not root) found, so no legacy audit log was seeded. If ~/.local/state/linuxmon/audit.jsonl exists" >&2
+        echo "audit.jsonl: created empty (no per-user log found${USER_LOG:+ at $USER_LOG})"
+        if [ -z "$USER_LOG" ] && [ -z "$DESTDIR" ]; then
+            echo "WARNING: no invoking user (PKEXEC_UID / SUDO_USER, not root) found, so no per-user audit log was seeded. If ~/.local/state/arltuner/audit.jsonl exists" >&2
             echo "         and this boot already spent mailbox operations, stop here: the per-boot count (cap 600) restarts from zero (D-030)." >&2
         fi
     fi

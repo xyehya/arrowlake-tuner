@@ -1,6 +1,6 @@
 """Write-guard policy: what the guard may ever send. Default deny; everything else is an explicit ``AllowEntry``.
 
-Facts used: ``docs/research/registers.md`` ("V/F data word", "Mailbox commands", "Return codes") and the operating
+Facts used: ``docs/knowledge/registers.md`` ("V/F data word", "Mailbox commands", "Return codes") and the operating
 rules of ``docs/SAFETY.md`` ("Write-session protocol (T2)", "Mailbox-session discipline"). Status of the facts: ``decomp``
 (XTU / ThrottleStop); nothing in the *default* policy has been MEASURED on this CPU, so the default policy is a
 conservative proposal the human reviews and edits, not evidence.
@@ -161,7 +161,7 @@ _U32_MAX = 0xFFFFFFFF
 _CPU_MAX = 1023  # far above any real CPU number; rejects garbage, not a hardware fact
 
 
-#: T-023 plain-MSR allowlist universe (``docs/research/registers.md`` "Not the mailbox" + MSR table; facts ``[MEASURED lnx 2026-10-01]``):
+#: T-023 plain-MSR allowlist universe (``docs/knowledge/registers.md`` "Not the mailbox" + MSR table; facts ``[MEASURED lnx 2026-10-01]``):
 #: only these may ever be read through the guard ...
 PLAIN_MSR_READABLE = frozenset({0x1AD, 0x1AE, 0x650, 0x651, 0xCE, 0x194, 0x198})  # 0x198 PERF_STATUS: running ratio [15:8], requested VID [47:32]/8192 (T-026 --measure)
 #: ... and only the two ratio tables may be written, each bounded by ``turbo_ratio_bounded``. The bucket-count MSRs ``0x1AE`` / ``0x651``
@@ -613,7 +613,7 @@ def _check_vf_point_offset_bounded(
     1. the request addresses P1 0 or 2 (the allow entry must list it) and P2 1..15 (P2 0 is the OC point and belongs to ``vf_bounded``'s ratio / V ceilings: refused here);
     2. the word equals the baseline in ratio ``[7:0]``, V target ``[19:8]`` and the mode bit ``[20]`` **exactly** -- only the offset field
        ``[31:21]`` may change (``[MEASURED lnx 2026-10-02]`` E CPU 8: point 6 reads ``0x0000002E`` = 46x, V target 0; OCCT wrote point words as
-       ``ratio | offset << 21`` with V target 0, ``lnx-turbostat-plus-facts.md``). A baseline with ratio 0 or the static bit set is refused: it
+       ``ratio | offset << 21`` with V target 0, ``docs/knowledge/registers.md``). A baseline with ratio 0 or the static bit set is refused: it
        is not a known fused point, so there is nothing to keep;
     3. the offset window of the whole-curve offset: ``max(effective floor - assumed BIOS offset, offset_raw_min) <= offset_raw <=
        min(offset_ceiling, offset_raw_max)`` (D-015 / D-016, same policy numbers);

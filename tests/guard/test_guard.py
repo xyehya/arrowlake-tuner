@@ -1,7 +1,7 @@
 """T-013 WriteGuard tests (no hardware: a recording fake transport and a fake clock).
 
 Rules under test: docs/tasks/T-013-guard.md "execute -- checks in this order", docs/SAFETY.md "Write-session protocol" and
-"Mailbox-session discipline". Facts: docs/research/registers.md ("V/F data word", "Mailbox commands", "Return codes").
+"Mailbox-session discipline". Facts: docs/knowledge/registers.md ("V/F data word", "Mailbox commands", "Return codes").
 
 Every refusal test goes through ``assert_refused``: it checks the reason, that the recording transport saw *nothing new*,
 and that the refusal was audited. Each test is written so that removing the corresponding check in ``guard.py`` or

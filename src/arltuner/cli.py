@@ -120,7 +120,7 @@ WIN_HELP = "Windows 11 as Administrator via ThrottleStop's kernel driver (hardwa
 # Defaults
 # --------------------------------------------------------------------------------------------------------------
 class InstalledStateRefused(Exception):
-    """``/etc/arltuner/policy.toml`` exists but fails the helper's trust check (D-030): refuse, never fall back to the legacy paths."""
+    """``/etc/arltuner/policy.toml`` exists but fails the helper's trust check (D-030): refuse, never fall back to the per-user paths."""
 
 
 _TMPFILES_CONF = "/usr/lib/tmpfiles.d/arltuner.conf"
@@ -128,7 +128,7 @@ _TMPFILES_CONF = "/usr/lib/tmpfiles.d/arltuner.conf"
 
 def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
     """D-030: the machine is *installed* when ``/etc/arltuner/policy.toml`` exists and passes the helper's own trust check
-    (``arltuner.helper.trust``: root-owned, not group/world-writable, no symlink, root-owned parents). Absent => ``False`` (legacy paths
+    (``arltuner.helper.trust``: root-owned, not group/world-writable, no symlink, root-owned parents). Absent => ``False`` (per-user paths
     unchanged). Present but untrusted => :class:`InstalledStateRefused` (no fallback: a planted file must not silently route the
     guard's lock and audit log elsewhere)."""
     from arltuner.helper.config import INSTALLED_POLICY  # lazy: the CLI must not import the helper package at module load
@@ -145,7 +145,7 @@ def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
     except TrustError as exc:
         raise InstalledStateRefused(
             f"{INSTALLED_POLICY} is present but not trusted ({exc.path}: {exc.reason}); the CLI will not guess between the installed and the "
-            "legacy lock/audit paths (D-030). Repair the install (re-run install.sh as root) or pass explicit --audit and --lock. "
+            "per-user lock/audit paths (D-030). Repair the install (re-run install.sh as root) or pass explicit --audit and --lock. "
         ) from None
     return True
 
@@ -153,19 +153,23 @@ def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
 def default_audit_path(
     env: Mapping[str, str], windows: bool = os.name == "nt", lstat_fn: Callable[[str], object] = os.lstat, consider_install: bool = True
 ) -> Path:
-    """Installed machine (D-030, not Windows): ``/var/lib/arltuner/audit.jsonl``. Otherwise ``~/.local/state/linuxmon/audit.jsonl`` (home from
-    ``env`` HOME / USERPROFILE, else the OS home); on Windows ``%LOCALAPPDATA%\\linuxmon\\audit.jsonl`` when LOCALAPPDATA is set.
-    ``consider_install=False`` (simulator runs, which never touch hardware) skips the rule: always the legacy per-user path.
+    """Installed machine (D-030, not Windows): ``/var/lib/arltuner/audit.jsonl``. Otherwise the per-user path
+    ``$XDG_STATE_HOME/arltuner/audit.jsonl`` (an absolute ``XDG_STATE_HOME``; default ``~/.local/state/arltuner/audit.jsonl``, home from ``env``
+    HOME / USERPROFILE, else the OS home); on Windows ``%LOCALAPPDATA%\\arltuner\\audit.jsonl`` when LOCALAPPDATA is set (D-041).
+    ``consider_install=False`` (simulator runs, which never touch hardware) skips the rule: always the per-user path.
     Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
     if windows and env.get("LOCALAPPDATA"):
-        return Path(env["LOCALAPPDATA"]) / "linuxmon" / "audit.jsonl"
+        return Path(env["LOCALAPPDATA"]) / "arltuner" / "audit.jsonl"
     if consider_install and not windows and installed_state(lstat_fn):
         from arltuner.helper.config import INSTALLED_AUDIT
 
         return INSTALLED_AUDIT
+    xdg = env.get("XDG_STATE_HOME")
+    if xdg and os.path.isabs(xdg):
+        return Path(xdg) / "arltuner" / "audit.jsonl"
     home = env.get("HOME") or env.get("USERPROFILE")
     base = Path(home) if home else Path.home()
-    return base / ".local" / "state" / "linuxmon" / "audit.jsonl"
+    return base / ".local" / "state" / "arltuner" / "audit.jsonl"
 
 
 def default_lock_path(
@@ -174,15 +178,15 @@ def default_lock_path(
     windows: bool = os.name == "nt",
     consider_install: bool = True,
 ) -> Path:
-    """Installed machine (D-030, not Windows): ``/run/arltuner/mailbox.lock``. Otherwise ``/run/lock/linuxmon-mailbox.lock`` when ``/run/lock``
-    exists, else the temp directory. ``consider_install=False`` (simulator runs): never the installed path. Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
+    """Installed machine (D-030, not Windows): ``/run/arltuner/mailbox.lock``. Otherwise ``/run/lock/arltuner-mailbox.lock`` when ``/run/lock``
+    exists, else the temp directory (D-041). ``consider_install=False`` (simulator runs): never the installed path. Raises :class:`InstalledStateRefused` when the installed policy exists but is untrusted."""
     if consider_install and not windows and installed_state(lstat_fn):
         from arltuner.helper.config import INSTALLED_LOCK
 
         return INSTALLED_LOCK
     if isdir("/run/lock"):
-        return Path("/run/lock") / "linuxmon-mailbox.lock"
-    return Path(tempfile.gettempdir()) / "linuxmon-mailbox.lock"
+        return Path("/run/lock") / "arltuner-mailbox.lock"
+    return Path(tempfile.gettempdir()) / "arltuner-mailbox.lock"
 
 
 def _default_device_health_gate_factory(taint_bits: frozenset[int]) -> HealthGate:
@@ -326,8 +330,8 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             "ratio / voltage ceilings, the offset window and step limits are this file's numbers (D-016, D-039): editable up to the CPU's own limits "
             "(cmd 0x01 ratio, cmd 0x28 voltage, read from the CPU) and the field encodings",
         )
-        p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else ~/.local/state/linuxmon/audit.jsonl, on Windows %%LOCALAPPDATA%%\\linuxmon\\audit.jsonl)")
-        p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/linuxmon-mailbox.lock, else the temp dir)")
+        p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else $XDG_STATE_HOME/arltuner/audit.jsonl (default ~/.local/state/arltuner/), on Windows %%LOCALAPPDATA%%\\arltuner\\audit.jsonl)")
+        p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/arltuner-mailbox.lock, else the temp dir)")
         p.add_argument("--operator", metavar="NAME", help="name recorded in the audit log (default: $USER)")
         p.add_argument(
             "--fingerprint",
@@ -688,7 +692,7 @@ def _default_lock(ctx: _Ctx) -> Path:
             ctx.lstat_fn(os.fspath(INSTALLED_LOCK_DIR))
         except (FileNotFoundError, NotADirectoryError):
             ctx.refuse(
-                f"the installed lock directory {INSTALLED_LOCK_DIR} does not exist (/etc/arltuner/policy.toml is present, so the CLI uses it and never falls back to the legacy lock). "
+                f"the installed lock directory {INSTALLED_LOCK_DIR} does not exist (/etc/arltuner/policy.toml is present, so the CLI uses it and never falls back to the per-user lock). "
                 f"Create it with: sudo systemd-tmpfiles --create {_TMPFILES_CONF}. Nothing was sent."
             )
         except OSError:

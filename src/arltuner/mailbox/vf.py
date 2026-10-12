@@ -1,6 +1,6 @@
 """The V/F data word carried by mailbox cmd 0x10 (read) / 0x11 (write): pure encode/decode, no I/O.
 
-Source of every fact here: ``docs/research/registers.md``, section "V/F data word -- cmd 0x10 (read) / 0x11 (write),
+Source of every fact here: ``docs/knowledge/registers.md``, section "V/F data word -- cmd 0x10 (read) / 0x11 (write),
 P1=0 P2=0, core-scoped". Status tag: ``decomp`` (XTU + ThrottleStop 9.7.3), corroborated by ``trace`` words from
 this system. Not yet MEASURED by a readback, so nothing here is a write allowlist entry.
 

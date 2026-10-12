@@ -1,6 +1,6 @@
 """Mailbox command ids, domain wire values and completion codes: pure enums, no I/O.
 
-Source of every fact here: ``docs/research/registers.md``, sections "Mailbox commands", "Domain P1 wire values"
+Source of every fact here: ``docs/knowledge/registers.md``, sections "Mailbox commands", "Domain P1 wire values"
 (inside "Mailbox commands") and "Return codes (``MailboxCompletionCode``)". Status tag: ``decomp`` (XTU code, ThrottleStop
 9.7.3). Nothing here is on any write allowlist; an entry joins the allowlist only via DECISIONS.md plus a MEASURED read.
 """

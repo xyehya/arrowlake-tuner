@@ -1,6 +1,6 @@
 """Plan-side data model of the milestone-1 controls: targets, plan steps, predicted verdicts, pre-flight errors.
 
-Pure data, no I/O. Facts: ``docs/research/registers.md`` ("V/F data word", "XTU's write procedure", "Measured via XTU's level-4 log");
+Pure data, no I/O. Facts: ``docs/knowledge/registers.md`` ("V/F data word", "XTU's write procedure", "Measured via XTU's level-4 log");
 rules: ``docs/SAFETY.md`` ("Write-session protocol (T2)", "OC mailbox rule": every request, reads included, is a WRMSR); guard
 semantics: ``docs/tasks/T-013-guard.md`` (every executed request counts toward the session limit, read-backs do not).
 

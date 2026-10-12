@@ -10,7 +10,7 @@
   Steps: checks (admin, XtuService stopped, no OCCT/XTU) -> one CONFIRM -> sc start ThrottleStop -> [-Before: vf-dump] -> apply each CURRENT profile ->
   vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> sc stop ThrottleStop. Stops at the first failure; nothing is retried. Revert = cold boot.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
-  Captures: captures\win\restore-<ts>-*.txt. Audit: %LOCALAPPDATA%\linuxmon\audit.jsonl.
+  Captures: captures\win\restore-<ts>-*.txt. Audit: %LOCALAPPDATA%\arltuner\audit.jsonl.
   One confirmation per run (operator 2026-10-05, D-020): the operator types CONFIRM once; the per-command guard tokens are then answered by
   tools\lnx\orchestrator_confirm.py, as with -Orchestrated. All guard checks (identity, policy, read-back, word compare) are unchanged.
 #>
@@ -19,7 +19,7 @@ param([switch]$Orchestrated, [switch]$Before, [string]$From = (Join-Path $env:LO
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $repo
-$lm = Join-Path $env:LOCALAPPDATA 'linuxmon'
+$lm = Join-Path $env:LOCALAPPDATA 'arltuner'
 New-Item -ItemType Directory -Force -Path $lm, 'captures\win' | Out-Null
 $audit = Join-Path $lm 'audit.jsonl'
 $ts = Get-Date -Format 'yyyyMMddTHHmmss'
