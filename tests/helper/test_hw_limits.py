@@ -158,7 +158,7 @@ class AutoCeilingsOfTheShippedPolicy(HwLimitsCase):
         res = self.read(h)
         e_reads = [(r.cpu, r.cmd) for r in self.sim.requests if r.cmd == 0x1C and r.cpu >= 8]
         self.assertEqual(e_reads, [(8, 0x1C), (12, 0x1C), (16, 0x1C), (20, 0x1C)])  # one per E cluster, one transaction each
-        self.assertEqual(res["limits"]["ratio_max"], {"P": 60, "E": 51})  # P 0x3939 -> 57 + 3; E 0x2E30 -> max(48, 46) + 3 [MEASURED win 2026-10-01 / lnx 2026-10-11: 0x1C answers on E CPUs]
+        self.assertEqual(res["limits"]["ratio_max"], {"P": 60, "E": 49})  # P 0x3939 -> fused 57 + 3; E 0x2E30 -> fused byte 46 + 3 (D-038; [7:0] 48 is the turbo setting) [MEASURED win 2026-10-01 / lnx 2026-10-11: 0x1C answers on E CPUs]
         self.assertEqual(res["limits"]["source"]["ratio_max"], {"P": "auto", "E": "auto"})
         self.assertNotIn("favored ratios", " ".join(res["extras_notes"].values()))
         self.assertEqual(sorted(res["turbo"]["favored"]), [str(c) for c in range(8)])  # the E words are not favored ratios
@@ -166,7 +166,8 @@ class AutoCeilingsOfTheShippedPolicy(HwLimitsCase):
     def test_an_e_ratio_raise_is_planned_and_applied_under_auto(self) -> None:
         h = self.boot()
         self.read(h)
-        self.apply_ok(h, self.plan(h, rows(row("EC0", ratio=50))))
+        self.assertIn("fused 46 + 3 = 49", self.plan_error(h, rows(row("EC0", ratio=50))))
+        self.apply_ok(h, self.plan(h, rows(row("EC0", ratio=49))))
 
     def test_the_v_target_ceiling_is_the_live_0x28_value_not_a_constant(self) -> None:
         h = self.boot(SimConfig.measured(max_voltage_cpu={0: 0x700, **{c: 0x560 for c in range(8, 24)}}, per_point=True, reject_zero_fields=True, point_offsets={}))

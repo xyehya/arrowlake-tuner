@@ -17,8 +17,8 @@
 #   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200); the encoding allows -1000 ... +999
 #   steps        per write: ratio 8, V target 200 mV, offset 200 mV (ratio up to 255, V and offset up to 1000 mV)
 #   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session; or a number in mV, clamped by that maximum
-#   ratio        "auto" for P and E: the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the cores of that kind read in the session
-#                + 3 bins of OC headroom (D-038: P 57 -> 60; E 0x1C reads [7:0] 48 / [15:8] 46, the highest byte counts: E 48 -> 51), clamped by the CPU's cmd 0x01 limit, no raise when either is unread. Never derived from sysfs
+#   ratio        "auto" for P and E: the fused ratio the CPU reports in 0x1C [15:8] (highest over the cores of that kind read in the session)
+#                + 3 bins of OC headroom (D-038: P 57 -> 60, E 46 -> 49; 0x1C [7:0] is not used: it follows the BIOS turbo setting, E reads 48), clamped by the CPU's cmd 0x01 limit, no raise when either is unread. Never derived from sysfs
 #                cpuinfo_max_freq: it follows OC writes and would ratchet. Or a number (e.g. E = 52), clamped by the CPU's cmd 0x01 limit.
 #   CPUs         "auto": the P and E CPUs of the live topology (P = devices/cpu_core, E = devices/cpu_atom)
 #   op caps      indicators only: 100000 per session and per boot; no dwell between operations

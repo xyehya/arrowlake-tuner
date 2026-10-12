@@ -304,9 +304,9 @@ class AutoLimitsTests(unittest.TestCase):
 
         p = load_policy(self.TOML, arl_s_285k())
         self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 60)  # P: 0x1C[15:8] = [7:0] = 57, + 3 (D-038)
-        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 51)  # E: max(48, 46) + 3
+        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 49)  # E: fused byte [15:8] 46 + 3; [7:0] 48 follows the BIOS turbo setting and is not used
         self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 58)
-        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 60)  # the larger byte
+        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 58)  # the fused byte [15:8] (55), not the larger [7:0]
         self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 60)  # per kind: the highest word read
 
     def test_fused_ratio_cap_adds_the_oc_headroom_and_clamps_to_the_cpu_limit(self) -> None:
@@ -316,7 +316,8 @@ class AutoLimitsTests(unittest.TestCase):
         self.assertEqual(AUTO_OC_HEADROOM, 3)
         self.assertEqual(fused_ratio_cap("P", [0x3939]), 60)  # P fused 57 -> 60
         self.assertEqual(fused_ratio_cap("E", [0x2E2E]), 49)  # E fused 46 -> 49
-        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 51)  # the highest word read; [7:0] 48 beats [15:8] 46
+        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 49)  # [7:0] 48 is the turbo setting, only the fused [15:8] 46 counts
+        self.assertEqual(fused_ratio_cap("E", [0x3030]), 51)  # a higher turbo byte alone changes nothing; a higher fused byte does
         self.assertEqual(fused_ratio_cap("P", [0x3D3D]), 64)  # 61 + 3: no code constant clamps it any more
         self.assertEqual(fused_ratio_cap("P", [0x3D3D], hw_max=62), 62)  # the CPU's own limit does
         self.assertEqual(fused_ratio_cap("P", [0x3939], hw_max=120), 60)
@@ -370,12 +371,12 @@ class AutoLimitsTests(unittest.TestCase):
         p = load_policy(self.TOML, arl_s_285k())
         oc = {0: self.OC, 8: self.OC}
         e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939}, oc_cap_words=oc)
-        self.assertEqual(e.ratio_max, 51)  # only the E CPUs' words count for the E table (48 + 3)
+        self.assertEqual(e.ratio_max, 49)  # only the E CPUs' words count for the E table (fused 46 + 3)
         self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}, oc_cap_words=oc).ratio_max, 60)
         self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}, oc_cap_words=oc).ratio_max)
         self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, oc_cap_words=oc).ratio_max)
         self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={0: self.OC}).ratio_max)  # the E limit was not read: no raise
-        self.assertEqual(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={9: 0x134}).ratio_max, 51)  # any CPU of the kind answers for it
+        self.assertEqual(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={9: 0x134}).ratio_max, 49)  # any CPU of the kind answers for it
 
     def test_numeric_values_keep_working_and_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
         from arltuner.topology import synthetic

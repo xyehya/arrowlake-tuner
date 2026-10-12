@@ -144,7 +144,7 @@ ENCODING_RATIO_MAX = 255  # ratio field [7:0] of the 0x11 word
 ENCODING_V_TARGET_MAX_MV = 3999  # voltage field [19:8] is S2.10 over 12 bits: 0xFFF / 1024 V = 3.999 V (the real limit is 0x28, read live)
 ENCODING_OFFSET_CEILING_MV = 999  # offset field [31:21] is 11-bit signed; XTU allows -1000...+999 mV (registers.md V/F data word)
 ENCODING_OFFSET_FLOOR_MV = -1000
-#: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
+#: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C[15:8] fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
 #: above the top fused point is reachable without a hand-written ``ratio_max``; clamped by the CPU's own ``0x01`` limit (D-039), never by a constant.
 AUTO_OC_HEADROOM = 3
 _V_TARGET_MIN_MV = 500  # XTU's voltage override range starts at 0.5 V (registers.md "Limits XTU applies"); also the profile schema's lower bound
@@ -280,14 +280,15 @@ def hw_v_max_mv(max_voltage_word: int | None) -> int | None:
 
 
 def fused_ratio_cap(kind: str, favored_words: Iterable[int | None], hw_max: int | None = None) -> int | None:
-    """The ``"auto"`` ratio ceiling of a core kind (D-038): the highest ``max(0x1C[7:0], 0x1C[15:8])`` over the ``0x1C`` words of that kind read in this session
-    (registers.md 0x1C: favored ratio and fused ratio) plus ``AUTO_OC_HEADROOM`` bins, clamped by ``hw_max`` (the CPU's own ``0x01`` limit, D-039) when given. ``None``
-    (the no-raise value) when no ``0x1C`` of the kind was read. Never a sysfs value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise
-    with every raise."""
+    """The ``"auto"`` ratio ceiling of a core kind (D-038): the highest **fused** ratio ``0x1C[15:8]`` over the ``0x1C`` words of that kind read in this session plus
+    ``AUTO_OC_HEADROOM`` bins (P 57 -> 60, E 46 -> 49), clamped by ``hw_max`` (the CPU's own ``0x01`` limit, D-039) when given. ``[7:0]`` is deliberately not used: it is
+    the favored / current ratio, it follows the BIOS turbo setting and a ``0x1D`` write (E reads 48 while its fused ratio is 46), so a cap from it would ratchet
+    ``[MEASURED win 2026-10-01]`` (``measured_baseline.FAVORED_WORD``: P ``0x3939`` / ``0x3737`` = 57 / 55, E ``0x2E30`` = fused 46). ``None`` (the no-raise value)
+    when no ``0x1C`` of the kind was read. Never a sysfs value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
     best = 0
     for word in favored_words:
         if word:
-            best = max(best, word & 0xFF, (word >> 8) & 0xFF)
+            best = max(best, (word >> 8) & 0xFF)
     if not best:
         return None
     cap = best + AUTO_OC_HEADROOM
@@ -1199,7 +1200,7 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
 
     ``topology`` (D-036): the live topology. ``cpus = "auto"`` / ``e_cpus = "auto"`` are derived from it and are a ``PolicyError`` without one (never a default); a
     policy without an ``e_cpus`` key takes the topology's E CPUs when one is given. ``ratio_max.<K> = "auto"`` and ``v_target_max_mv.<K> = "auto"`` need no topology
-    and are not numbers at load time: they are CPU data of the session, resolved per request (``build_context``). Ratio: the highest ``max(0x1C[7:0], 0x1C[15:8])`` of
+    and are not numbers at load time: they are CPU data of the session, resolved per request (``build_context``). Ratio: the highest fused byte ``0x1C[15:8]`` of
     that kind's CPUs read in the session plus 3; V target: the CPU's own ``0x28`` maximum minus one LSB; both clamped by the CPU's own limit (ratio: ``0x01 [7:0]``,
     D-039), and no raise when that word was not read. Numbers are bounded at load only by the field encodings (``ENCODING_*``); the CPU's limits apply per request. Never a sysfs value (``cpuinfo_max_freq`` follows OC writes: a ceiling from it would ratchet). Numeric values keep working unchanged."""
     text = _read_source(source)
