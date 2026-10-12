@@ -452,7 +452,7 @@ def shot_curves_table(b: Browser) -> list[str]:
 
 def shot_tune_per_core(b: Browser) -> list[str]:
     # tune.last is asked by the page on load; no stored read -> nothing to show, and the tool does not press Read
-    if not b.click("#tab-tune") or not b.wait_for("!document.getElementById('tn-console').hidden", 8):
+    if not b.click("#tab-tune") or not b.wait_for("!document.getElementById('tn-console').hidden", 20):
         raise Skip("no stored tuning read on the page (tune.last empty): read it once in Tune, then run again")
     b.click("#tn-scope button", "unit")
     b.pump(0.8)
@@ -473,6 +473,9 @@ def shot_stress(b: Browser) -> list[str]:
 
 def shot_profiles(b: Browser) -> list[str]:
     show_tab(b, "profiles", "!document.getElementById('panel-profiles').hidden")
+    # the accepted chain and the list read each profile's contents; do not shoot while one is still loading or failed to load
+    if not b.wait_for("!/reading\\.\\.\\.|contents unavailable/.test(document.getElementById('panel-profiles').textContent)", 20):
+        raise Skip("profile contents did not load (still 'reading' or 'unavailable'); run again")
     b.pump(1.0)
     return ["#panel-profiles"]
 
@@ -498,7 +501,7 @@ SHOTS = {
 }
 
 
-MAX_HEIGHT = {"tune-per-core": 1000}     # CSS px: a very tall element is cut from the top (Tune: the header, the open row and the first rows)
+MAX_HEIGHT = {"tune-per-core": 1000, "profiles": 790}     # CSS px: a very tall element is cut from the top (Tune: the header, the open row and the first rows)
 
 
 def write_png(b: Browser, name: str, selectors: list[str], out: Path, max_kb: int) -> tuple[Path, int, float]:
