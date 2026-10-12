@@ -39,5 +39,7 @@
 | G-134 | policy "auto" ratio ceiling = 0x1C fused max + 3 (D-038) | lnx | T0 | **merged** 2026-10-12 | — |
 | G-135 | user guide docs/guide/ (documenter agent, own NOTES.md memory) | lnx | T0 | **merged** 2026-10-12 (rev 1; recheck after G-133) | — |
 | G-136 | README screenshots: capture tool (sim-tested) + gallery; live capture by orchestrator | lnx | T0/T1 | in progress 2026-10-12 | G-133 for live shots |
+| G-137 | limits: policy up to the CPU's own maxima (0x01, 0x28, encoding), source named in every refusal (D-039) | lnx | T0 | in progress 2026-10-12 | G-134 |
+| G-138 | Windows restore for any ARL-S: LP map derived live + fingerprint recorded at accept | lnx/win | T0 | in progress 2026-10-12 | — |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

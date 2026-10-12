@@ -159,3 +159,12 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   `ratio_max` P 60 / E 50 (backup `policy.toml.bak-2026-10-12`); public default `"auto"` = the 0x1C fused max of the kind **+ 3**, clamped to
   the sanity bound (P 62 / E 60). Rejected: cmd 0x01 fused max OC ratio (reads 120× on P: no cap in practice). Unchanged: ≤ 8× per write,
   one transaction at a time, read-back, health gate. The page reads the limits live (G-133), never a literal.
+- **D-039 · 2026-10-12 · Every limit is the user's policy; the code keeps only the CPU's own and the encoding's limits (operator yes).** Operator:
+  "the old or new limits (regardless) are shown to be clear that they can be changed in the policy and are not hardcoded because some OCers with
+  liquid nitrogen and robust cooling and super bins can run higher than our current limits". So: the code sanity constants (ratio P 62 / E 60,
+  V target P 1625 / E 1355 mV, offset ceiling 200 mV, offset floor ≥ −1000, step ranges) stop being ceilings a policy cannot pass. A policy may
+  set any value up to the **CPU's own limit read live** (ratio: cmd 0x01 [7:0] fused max OC ratio of the domain; V target: cmd 0x28 max − 1 LSB)
+  or, where the CPU states none, the **field encoding / XTU range** (offset −1000…+999 mV; steps up to the full range). Unknown hardware limit
+  ⇒ no raise (fail closed). Defaults are unchanged (`policies/default.toml`, D-038). The page, docs and CLI say for every limit where it comes
+  from and that it is editable in `/etc/arltuner/policy.toml`. Unchanged mechanisms: adaptive mode only (D-016), one mailbox transaction at a
+  time, allowlist, read-back, health gate, audit log.
