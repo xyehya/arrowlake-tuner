@@ -1,9 +1,9 @@
-Distilled 2026-10-08 from linuxmon@b01f78a (~/AI/linuxmon); detail and raw evidence there.
+Distilled 2026-10-08 from the project's earlier research phase; the raw notes and captures are not part of this repository.
 # Mailbox recon summary: what XTU, IPF and ThrottleStop taught us
 
 Register/command tables: registers.md (copied separately, not repeated).
 
-Detail: `linuxmon@b01f78a:docs/research/` -> `linuxmon@b01f78a:docs/research/win-xtu-decompile-mailbox.md` (T-001), `linuxmon@b01f78a:docs/research/win-xtu-decompile-controls.md` (T-002), `linuxmon@b01f78a:docs/research/win-xtu-native-provider.md` (T-005), `linuxmon@b01f78a:docs/research/win-throttlestop-fivr.md` (T-006), `linuxmon@b01f78a:docs/research/access-manifest.md` (T-017, 82 access rows, 11 conflicts), `linuxmon@b01f78a:docs/research/win-xtu-live-trace.md` (T-020), `ipf-primitives.tsv` (412 rows), `linuxmon@b01f78a:docs/research/win-xtu-inventory.md`, `linuxmon@b01f78a:docs/research/win-recon-methods.md`. Raw decompiles/traces were git-ignored and are not in the source repo.
+Detail: the earlier research notes (XTU mailbox and controls analysis T-001/T-002, native provider T-005, ThrottleStop FIVR analysis T-006, access manifest T-017 with 82 access rows and 11 conflicts, live trace T-020, IPF primitives table of 412 rows, XTU inventory, recon methods) are not part of this repository. Raw decompiles and traces were never committed.
 
 ## 1. Call chain (XTU -> hardware) [DECOMPILED + MEASURED win 2026-10-01]
 XTU managed code (OcMailboxAccess -> OcMailboxService, named mutex `Global\Access_Intel_OC_Mailbox`) -> IpfService JSON `{"MailboxAction":{"version":1,"cmd","param1","param2","ocmb_affinity_data":[{"group","affinity_mask","data"}]}}` via client API "Platform.SOC.Overclocking" -> native `XtuProvider.dll` (inside `XtuService.exe`) -> IPF host `WUDFHost.exe` (`ipfsrv.dll` + `ipf_umdf2.dll`) -> `\\.\ipf_lf` IOCTL 0x120004 -> `ipf_cpu.sys` -> pin thread to the target LP (KeSetSystemGroupAffinityThread) -> RDMSR 0x150 until bit 63 = 0 -> WRMSR `1<<63|P2<<48|P1<<40|cmd<<32|data` -> poll -> data [31:0], rc [39:32].

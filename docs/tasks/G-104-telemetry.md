@@ -14,4 +14,4 @@ the orchestrator applies them to `docs/knowledge/registers.md` and the code allo
 
 ## Acceptance
 Each reader tested on fake files / fake MSR values incl. missing source → "unavailable" (never a guessed number); sampling thread never touches the
-mailbox; perf IMC via one long-lived `perf stat -I` with a parser tested on recorded output. Workers never read `~/AI/turbostat*`.
+mailbox; perf IMC via one long-lived `perf stat -I` with a parser tested on recorded output.

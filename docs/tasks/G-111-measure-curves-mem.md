@@ -41,7 +41,7 @@ New: `src/arltuner/curves/` (record schema + root store), `src/arltuner/telemetr
 ## Acceptance
 `python3 tools/run_tests.py` green. Tests: journal restore in all four paths (incl. simulated helper crash + restart), MISMATCH/unreachable,
 cancel ⇒ partial stored, store trust rules, mem decode = fixture, bad host bridge / disabled MCHBAR / short read ⇒ unavailable, telemetry restart.
-No hardware, no sudo, never `~/AI/turbostat*`.
+No hardware, no sudo.
 
 ## Report-back (≤ 300 words)
 Ops implemented + any contract deviation (exact) · files · test count · what only the real machine can show.

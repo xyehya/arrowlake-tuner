@@ -1,7 +1,7 @@
-Distilled 2026-10-08 from linuxmon@b01f78a (~/AI/linuxmon); detail and raw evidence there.
+Distilled 2026-10-08 from the project's earlier research phase; the raw notes and captures are not part of this repository.
 # Windows execution path: ThrottleStop.sys as a raw MSR port
 
-Sources: `linuxmon@b01f78a:docs/HANDOFF-windows.md`, `linuxmon@b01f78a:docs/RUNBOOK-win.md`, `linuxmon@b01f78a:docs/research/win-first-apply.md`, `linuxmon@b01f78a:docs/research/win-throttlestop-9.7.3.md`, `linuxmon@b01f78a:docs/research/win-throttlestop-fivr.md`, `linuxmon@b01f78a:tools/win/*`, `linuxmon@b01f78a:src/linuxmon/msr/winport.py`.
+Sources: earlier Windows runbooks and first-apply notes (not part of this repository); `tools/win/*`, `src/arltuner/msr/winport.py`.
 Windows is the path for the PowerShell restore (and recon). XTU cannot do per-point offsets; ThrottleStop's own GUI has no per-core voltage write and does not pin voltage writes to a core [DECOMPILED win-throttlestop-fivr.md s0], so only our code drives the mailbox through the driver.
 
 ## 1. The driver: carved from the operator's own exe, never shipped
@@ -10,11 +10,11 @@ Windows is the path for the PowerShell restore (and recon). XTU cannot do per-po
 | Source exe | ThrottleStop 9.7.3 `ThrottleStop.exe`, SHA-256 `52D86D3D0EC54D3B2F4FB7BD87DD44111EB770719AF03AED3071935A62312BA2` (zip `7B5E1A65...7098A`) [MEASURED win 2026-09-30] |
 | Carved x64 driver | 50,216 B at exe offset 0x34ea20, SHA-256 `16F83F056177C4EC24C7E99D01CA9D9D6713BD0497EEEDB777A3FFEFA99C97F0`; Authenticode valid, TechPowerUp LLC (EV) |
 | Carved x86 driver | 46,120 B at 0x3435f8, SHA-256 `7D39223E7EB902712AEAC77C90B9FA00A6E5E56A68D4C542BCC88556A57BA735` (unused) |
-| Rule | the .sys is NEVER in the repo. `carve` refuses on exe-hash or driver-hash mismatch (use the original zip, don't force). Output: `%LOCALAPPDATA%\linuxmon\ThrottleStop.sys` (legacy directory name, kept on purpose — D-022) |
+| Rule | the .sys is NEVER in the repo. `carve` refuses on exe-hash or driver-hash mismatch (use the original zip, don't force). Output: `%LOCALAPPDATA%\arltuner\ThrottleStop.sys` (D-041) |
 | Install | `sc create ThrottleStop type= kernel start= demand` + `sc start` (idempotent); `\\.\ThrottleStop` must open. Service is demand-start: `sc start ThrottleStop` after every boot |
 | Never run | the ThrottleStop GUI, XTU, HWiNFO driver features or OCCT elevated beside it (all race on the mailbox) |
-Config/security: Memory integrity (HVCI/VBS) must be OFF. Microsoft Vulnerable Driver Blocklist ON: driver loaded fine on Win11 26200/26300 [MEASURED win 2026-10-02] `linuxmon@b01f78a:docs/research/win-first-apply.md`. CONFLICT: `linuxmon@b01f78a:docs/RUNBOOK-win.md` s2 still says blocklist OFF (written before the test); `HANDOFF-windows.md` s3 says try with ON first; the measurement wins. ThrottleStop.sys was abused by malware in 2025 and may get blocklisted later: errors 1275 / 577 / "blocked" -> route closed (alternatives PawnIO, Intel IPF stack unexplored).
-Session was not elevated at first recon (`linuxmon@b01f78a:docs/HARDWARE.md`); the device ACL is SYSTEM + Administrators only (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
+Config/security: Memory integrity (HVCI/VBS) must be OFF. Microsoft Vulnerable Driver Blocklist ON: driver loaded fine on Win11 26200/26300 [MEASURED win 2026-10-02] (earlier first-apply notes). An earlier runbook note said the blocklist must be OFF (written before the test) and a handoff note said to try with it ON first; the measurement wins. ThrottleStop.sys was abused by malware in 2025 and may get blocklisted later: errors 1275 / 577 / "blocked" -> route closed (alternatives PawnIO, Intel IPF stack unexplored).
+Session was not elevated at first recon (`docs/HARDWARE.md`); the device ACL is SYSTEM + Administrators only (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
 
 ## 2. IOCTL interface [DECOMPILED win-throttlestop-fivr.md s1, driver ioctl.c]
 | IOCTL | In / out | Notes |
@@ -30,18 +30,18 @@ No CPU argument; no `__try` visible around rdmsr/wrmsr (an unimplemented MSR cou
 - Identity check: before any apply / point-offset / vf-dump read the fused word (cmd 0x09 P1=0x11, P2=0) of P-cores 0-7 and require equality with 0x5B439 0x53839 0x57439 0x59439 0x54439 0x56C39 0x56039 0x58039 (all distinct; `platform-285k.md` s4). Mismatch -> refused, nothing written ("identity check failed on cpu N"). Passed in every session [MEASURED win 2026-10-02].
 - Health gate: new WHEA-Logger events in the System log during a session = fail (Windows stand-in for taint/MCE). Baseline WHEA count was 38 (newest 2026-09-30) and unchanged through all 2026-10-0x sessions [MEASURED win].
 - XtuService must be Stopped (and set Manual: `Set-Service XtuService -StartupType Manual`); XTU's UI starts it. XTU may re-apply its own saved tuning at service start and is a second mailbox client. No OCCT / XtuUiLauncher / PerfTune / ThrottleStop GUI running.
-- Guard policy limits (reviewed TOML; the GUI/tool never widens them): <= 55 mV offset change per write, floor -100 mV, 260 ops/session, 600 ops/boot, dwell. Cumulative cross-process state lives in the audit log `%LOCALAPPDATA%\linuxmon\audit.jsonl`.
+- Guard policy limits (reviewed TOML; the GUI/tool never widens them): <= 55 mV offset change per write, floor -100 mV, 260 ops/session, 600 ops/boot, dwell. Cumulative cross-process state lives in the audit log `%LOCALAPPDATA%\arltuner\audit.jsonl`.
 - Driver is STOPPED after apply (`sc stop ThrottleStop`): applied offsets stay until reboot, but while loaded any admin process gets MSR and physical-memory access. Stopping does not undo anything; revert = cold boot (or warm reboot for CPU 0 only).
 
 ## 4. Restore flow (after ANY boot)
-- Reference scripts `linuxmon@b01f78a:tools/win/restore_tuning.ps1` (`-Orchestrated` = orchestrator answers prompts after a go-ahead; `-Before` = extra pre-apply vf-dump, ~132 ops, default off) and `linuxmon@b01f78a:tools/win/Restore-Tuning.cmd` (one-click: self-elevates via UAC, runs the .ps1 interactively, `pause`; Desktop shortcut "Restore CPU tuning"). Names below are the roles; the new repo renames them.
+- Reference scripts `tools/win/restore_tuning.ps1` (`-Orchestrated` = orchestrator answers prompts after a go-ahead; `-Before` = extra pre-apply vf-dump, ~132 ops, default off) and `tools/win/Restore-Tuning.cmd` (one-click: self-elevates via UAC, runs the .ps1 interactively, `pause`; Desktop shortcut "Restore CPU tuning").
 - Steps: checks (admin, XtuService stopped, no OCCT/XTU/ThrottleStop processes) -> single "Type CONFIRM" (case-sensitive, anything else = nothing sent; D-020) -> `sc start ThrottleStop` -> apply each profile in the CURRENT list (E split3, p-boot-ramp, p-step7) -> vf-dump -> compare every word with the inline expected-words table (= `tuning-results.md` s1) -> `sc stop ThrottleStop`. Stops at first failure, never retries.
 - Success line: `RESTORED: all 12 cores/clusters match the accepted state.` Captures: `captures\win\restore-<ts>-*.txt`.
 - Works from cold boot (all stock) and warm reboot (CPUs 1-7 + E kept, CPU 0 reset by the BIOS); the planner steps from what it reads. A cold boot is the only full reset.
 - p-boot-ramp exists because from stock the 55 mV/write limit refuses deep targets (e.g. -97); the ramp clamps offsets to >= -50, then p-step7 moves <= 41 mV [MEASURED win 2026-10-04].
 - Budget lesson: an interrupted run + rerun exhausted the 600 ops/boot on 2026-10-05 (final compare refused although all 57 writes read back equal) -> `-Before` became opt-in so two restores fit.
 - First live restore of p-step7 on Windows: cold boot 2026-10-05, RESTORED. A P0 58x test (2026-10-06) leaves CPU 0 flagged BAD (OC word != 0x39) until reboot or until accepted into EXPECTED.
-- Preflight (`linuxmon@b01f78a:tools/win/preflight.ps1`, read-only): admin, Memory integrity, blocklist, XtuService, other mailbox clients, Python, driver state; read-only.
+- Preflight (`tools/win/preflight.ps1`, read-only): admin, Memory integrity, blocklist, XtuService, other mailbox clients, Python, driver state; read-only.
 
 ## 5. Troubleshooting [HANDOFF-windows.md s5]
 | Symptom | Meaning / action |

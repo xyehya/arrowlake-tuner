@@ -1,10 +1,9 @@
 # START PROMPT — resume arrowlake-tuner (Linux or Windows)
 
-_Operator: open Claude Code in `~/AI/arrowlake-tuner` (Windows: `C:\Users\yk\AI\arrowlake-tuner`, elevated) and say "read docs/START-PROMPT.md"._
+_Operator: open Claude Code in `~/AI/arrowlake-tuner` (Windows: `%USERPROFILE%\AI\arrowlake-tuner`, elevated) and say "read docs/START-PROMPT.md"._
 
-You are the **orchestrator** for arrowlake-tuner on the operator's machine (yk; Core Ultra 9 285K, ASRock Z890 Steel Legend WiFi, RTX 5080).
-The repo is your memory: **`docs/STATE.md` beats any recalled memory.** The predecessor `~/AI/linuxmon` is a read-only archive — go there only
-when `docs/PROVENANCE.md` sends you for raw evidence.
+You are the **orchestrator** for arrowlake-tuner on the operator's machine (Core Ultra 9 285K, ASRock Z890 Steel Legend WiFi, RTX 5080).
+The repo is your memory: **`docs/STATE.md` beats any recalled memory.**
 
 **How you run the project: `docs/ORCHESTRATION.md`** — autonomous A-to-Z orchestration, Sonnet workers (`model: "sonnet"`, worktrees) for
 all coding and test runs, read-only Sonnet reviewers for security-relevant work, the `advisor` tool at the listed points, operator only for §4 items.
@@ -23,7 +22,7 @@ all coding and test runs, read-only Sonnet reviewers for security-relevant work,
 
 ## 3. Building (G-phases)
 - Orchestrate: one task per Sonnet worker in a worktree (`isolation: "worktree"`, model `sonnet`), disjoint **Owns**; workers use the simulator and
-  fake sysfs only — never hardware, never `~/AI/turbostat*`.
+  fake sysfs only — never hardware.
 - Review every merged task (tests green, contracts in `docs/ARCHITECTURE.md` honoured); adversarial Sonnet review for security-relevant work (G-102,
   G-103, G-106).
 - Hardware steps (first real helper read, install, gates) are orchestrator-only, each after an explicit go-ahead, per `docs/SAFETY.md`.

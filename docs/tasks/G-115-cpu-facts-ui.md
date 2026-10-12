@@ -28,5 +28,4 @@ Make the page teach and enforce the real V/F model (SPEC-v3 §9) using the contr
 - Keep all G-110/G-113 constraints (CSP, ops allowlist, accessibility). Typed nonce confirm stays as is (operator decision pending).
 
 ## Acceptance
-Suite green; screenshots (headless Chrome, sim/fake) of Tune per-point with a clamp, turbo editor, VccIA panel, Curves with reasons; saved as
-`/tmp/claude-1000/-home-yk-AI-arrowlake-tuner/28034395-f4d9-4ea0-adfe-a6bd07303597/scratchpad/f-*.png`.
+Suite green; screenshots (headless Chrome, sim/fake) of Tune per-point with a clamp, turbo editor, VccIA panel, Curves with reasons; saved to the session scratchpad.

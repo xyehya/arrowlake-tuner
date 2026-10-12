@@ -1,6 +1,6 @@
 # ROADMAP — phases (tasks are written just-in-time in `docs/tasks/`)
 
-Spec: `docs/SPEC.md`. Phase 0 (the CLI, research, accepted tuning) was done in the predecessor repo `linuxmon` (`docs/PROVENANCE.md`).
+Spec: `docs/SPEC.md`. Phase 0 (the CLI, research, accepted tuning) was done in the project's earlier research phase.
 
 | Phase | Host | Delivers | Exit criterion | Blocked by | State |
 |---|---|---|---|---|---|

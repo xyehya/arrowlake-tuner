@@ -270,7 +270,6 @@ class RestoreScripts(unittest.TestCase):
             text = (REPO / rel).read_text()
             for flag in ("--audit", "--lock"):
                 self.assertNotIn(flag, text, f"{rel} must not pass {flag}: D-030's rule picks the lock/audit paths")
-            self.assertNotIn("linuxmon", text, rel)
 
     def test_sudo_keeps_the_operators_home_so_the_per_user_default_is_unchanged_before_install(self) -> None:
         for rel in ("tools/lnx/restore_tuning.sh", "tools/lnx/reapply_current.sh"):

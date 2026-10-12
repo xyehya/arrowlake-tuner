@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """orchestrator_confirm.py - run ONE arltuner CLI command and answer its `CONFIRM <token>` prompt with the token it printed.
 
-    sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=yk python3 tools/lnx/orchestrator_confirm.py \
+    sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=$USER python3 tools/lnx/orchestrator_confirm.py \
         python3 tools/arltuner.py read --device --cpu 8 --cmd 0x10 --allow-taint-bit 2 --audit ~/.local/state/arltuner/audit.jsonl
 
 ORCHESTRATOR-ONLY (AGENTS.md "Hardware safety", docs/SAFETY.md). The typed confirmation exists so a human approves each sitting. This

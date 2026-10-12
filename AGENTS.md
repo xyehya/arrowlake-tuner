@@ -2,15 +2,14 @@
 
 **Goal:** a Linux app (local web GUI + CLI) that READs telemetry from, and WRITEs tuning controls to, an Intel Core Ultra 9 285K (Arrow Lake-S) on
 an ASRock Z890 Steel Legend WiFi — per-core V/F point offsets and target voltages, OC ratios, turbo ratio tables — replicating Intel XTU at runtime.
-Windows: PowerShell restore of the accepted state only. Spec: `docs/SPEC.md`. Predecessor (research, raw evidence): `~/AI/linuxmon` (`docs/PROVENANCE.md`).
+Windows: PowerShell restore of the accepted state only. Spec: `docs/SPEC.md`.
 
 **Roles and autonomy:** `docs/ORCHESTRATION.md` (orchestrator runs the project end to end with Sonnet workers; what it decides alone vs asks).
 
 ## Session start (stop as soon as you have enough)
 1. `docs/STATE.md` — done / in-flight / next / blockers / open decisions. Trust it over memory.
 2. Your task file `docs/tasks/G-NNN-*.md` (if assigned); read only what its **Read first** lists.
-3. Facts: `docs/knowledge/` (registers.md is the single source of truth for encodings). Do not re-research what is there; for raw evidence go to
-   the predecessor path named in `docs/PROVENANCE.md`, read-only.
+3. Facts: `docs/knowledge/` (registers.md is the single source of truth for encodings). Do not re-research what is there.
 
 ## Session end
 Commit · rewrite `docs/STATE.md` (≤ 80 lines) · append to `docs/DECISIONS.md` only for real decisions · findings to `docs/knowledge/<topic>.md`,
@@ -29,8 +28,7 @@ never only in chat · `git push` (remote in STATE).
   indicators) without the operator's yes. Never work around a guard refusal. One mailbox transaction at a time stays.
 - Never download or install software/drivers without naming it (name, source, size) and a yes. OCCT never elevated. The Windows ThrottleStop
   driver is carved from the operator's own exe, never committed, stopped after applying.
-- The operator's monitor repos `~/AI/turbostat` and `~/AI/turbostat+` are **orchestrator-only, read-only**; workers never get access; facts come in
-  via `docs/knowledge/`.
+- Workers use only this repository; facts come in via `docs/knowledge/`.
 - Root helper code is never run from a user-writable path (SPEC §4.4).
 
 ## Evidence rules
@@ -42,8 +40,8 @@ DOC facts become constants in code. Register/mailbox encodings live in `docs/kno
 - One task = one branch `task/G-NNN-slug` = one worktree; tasks own disjoint files (**Owns**). Commits `G-NNN: summary`. LF everywhere.
 - `python3 tools/run_tests.py` green before any merge. Raw captures go to `captures/` (only `captures/lnx|win` small text logs are tracked).
 - Don't create files speculatively; task files are written just-in-time for the next phase only.
-- Legacy names kept on purpose (shared with the predecessor CLI so the per-boot op cap and lock stay machine-wide): audit log
-  `~/.local/state/linuxmon/audit.jsonl` (Windows `%LOCALAPPDATA%\linuxmon\`), lock `/run/lock/linuxmon-mailbox.lock`. SPEC OD-1 moves them.
+- Uninstalled/dev paths (D-041): audit log `$XDG_STATE_HOME/arltuner/audit.jsonl` (default `~/.local/state/arltuner/`; Windows `%LOCALAPPDATA%\arltuner\`),
+  lock `/run/lock/arltuner-mailbox.lock`. Installed machines use `/var/lib/arltuner/audit.jsonl` + `/run/arltuner/mailbox.lock` (D-030).
 
 ## How the operator works
 Short honest status, tables, one variable at a time; "proceed"/"lets go" = start. Design work: raise the decisions that change the design, take a

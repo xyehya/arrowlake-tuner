@@ -139,6 +139,10 @@ python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --s
 | `docs/STATE.md` · `docs/SPEC.md` · `docs/ROADMAP.md` · `docs/tasks/` | live state · product spec · phases · tasks |
 | `docs/SAFETY.md` · `docs/DECISIONS.md` · `docs/ARCHITECTURE.md` | write protocol · decision log · module contracts |
 | `docs/knowledge/` | distilled facts: registers (single source of truth), platform, tuning results, Linux/Windows paths |
-| `docs/PROVENANCE.md` | where the evidence lives (predecessor repo `linuxmon`) |
 | `src/arltuner/`, `tests/`, `tools/` | library + CLI, tests, Linux/Windows scripts |
 | `policies/` · `examples/` | the generic root policy installed as the default · one chip's results, illustration only (nothing reads them) |
+
+## History and sources
+The project began as per-core tuning research on the reference machine (Core Ultra 9 285K, ASRock Z890) and became this application on 2026-10-08;
+`docs/knowledge/` holds the facts that research established. Register facts were established by measurement and by studying vendor tools for
+interoperability; no vendor code or binaries are included.

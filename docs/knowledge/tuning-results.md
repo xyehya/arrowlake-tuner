@@ -1,7 +1,7 @@
-Distilled 2026-10-08 from linuxmon@b01f78a (~/AI/linuxmon); detail and raw evidence there.
+Distilled 2026-10-08 from the project's earlier research phase; the raw notes and captures are not part of this repository.
 # Tuning results: accepted state p-step7, gate, and what failed
 
-Sources: `linuxmon@b01f78a:docs/STATE.md`, `linuxmon@b01f78a:docs/DECISIONS.md` (D-019), `linuxmon@b01f78a:docs/research/win-first-apply.md`, `linuxmon@b01f78a:docs/research/lnx-first-read.md`, `linuxmon@b01f78a:profiles/EXPECTED-words.txt`.
+Sources: earlier state notes, D-019 and the Windows/Linux first-apply notes (not part of this repository); `examples/reference-285k/profiles/EXPECTED-words.txt`.
 
 ## 1. Accepted state: p-step7 + E split3, BIOS LLC 6 (D-019, 2026-10-04) [MEASURED win 2026-10-04, lnx 2026-10-07/08]
 Offsets in mV from stock; 55x-57x on P were set as TARGET voltages (offset = target - measured stock VID, whole mV, hardware V >= target). Favored cores marked *.
@@ -20,7 +20,7 @@ Offsets in mV from stock; 55x-57x on P were set as TARGET voltages (offset = tar
 |---|---|---|
 | 0 (CPUs 8-11) | 0 (stock, never offset) | -35 |
 | 1-3 (CPUs 12-23) | 0 | -25 |
-Exact V/F words the chip must read back (OC word, then points 1..n; hex, no 0x) - `linuxmon@b01f78a:profiles/EXPECTED-words.txt` = `$Expected` in `linuxmon@b01f78a:tools/win/restore_tuning.ps1`:
+Exact V/F words the chip must read back (OC word, then points 1..n; hex, no 0x) - `examples/reference-285k/profiles/EXPECTED-words.txt` = `$Expected` in `tools/win/restore_tuning.ps1`:
 ```
 cpu0  39 8 14 1E 30 F9A00035 FC600037 FCA00038 FA800039
 cpu1  0 8 14 1E 30 F9A00035 FB600037 38 39        cpu5  0 8 14 1E 30 F9A00035 F6A00037 38 39
@@ -67,7 +67,7 @@ Linpack time-to-error is noisy (same offsets: 50 min at LLC 7, ~2 min at LLC 6):
 4. Lowering the highest VID points (55x, 56x/57x) lowers VccIA package-wide; the 53x/48x points matter for all-core heat and clocks.
 5. Voltages are targets, not offsets, at the top points (p-step7); monotonic clamp can silently absorb an offset (check read-back voltage, not just the word).
 6. Per-boot budget: STATE.md rule: restore (~400 ops incl. the post-apply vf-dump) plus one complete P profile (78) fits in 600; restore plus two more profiles does not (reboot, never raise the cap). Counts differ by source: ~400 (STATE.md), ~480 (win-first-apply.md), 167 = apply-only (65+51+51); reads count toward the cap, read-backs do not.
-7. Operator still parked: 58x P0 test outcome, newer Linpack build (Intel oneMKL Benchmarks Suite 2026.0 vs Linpack Xtreme 1.1.8) `linuxmon@b01f78a:docs/research/linpack-binaries.md`, E 48x/46x split via OC-point V target (idea only, never applied).
+7. Operator still parked: 58x P0 test outcome, newer Linpack build (Intel oneMKL Benchmarks Suite 2026.0 vs Linpack Xtreme 1.1.8), E 48x/46x split via OC-point V target (idea only, never applied).
 
 ## Stock V/F curve, measured (first v3 `vf.measure` Quick) [MEASURED lnx 2026-10-11 18:17 UTC]
 Cold boot, runtime offsets 0 (the 16:57 UTC word read showed bare ratios), BIOS LLC 6 / VccIA −100 mV unchanged; curve id `20261011T181718Z-y4c7`
@@ -115,7 +115,7 @@ for an OC target below the top fused point; `stock` tagging ignores OC words; ac
 
 ## Stress screens on hardware (v3 Stress tab backend) [MEASURED lnx 2026-10-11 ~20:30 UTC, accepted tuning applied]
 - First CPU run failed instantly: stress-ng as the user with cwd `/` ⇒ "temp-path '.' must be readable and writeable" (fixed G-121: `--temp-path
-  /run/user/<uid>`). Memory: `stressapptest -s 30 -M 1024 -W` as `yk`, 30 s, 0 errors, 59 °C, 143 W.
+  /run/user/<uid>`). Memory: `stressapptest -s 30 -M 1024 -W` as the desktop user, 30 s, 0 errors, 59 °C, 143 W.
 - CPU integer, all 24 CPUs, 60 s: 0 errors, P0–P7 55× (5494–5499 MHz), E 48× (4801 MHz), max 67 °C, 170 W, MCE 0, health clean.
 - CPU vector-math, P0–P3 capped at 50×, 30 s: all at 50× (4993–5000 MHz), `cap_valid` true, 70 °C, 85 W; caps/EPP restored (5.7 GHz, balance_performance).
 
@@ -145,7 +145,7 @@ Restore accepted from the same page: 57 words read back as written (P7 `0xF46000
   --device` from the polkit action's exec.path; preflight `writes_allowed: true`. pkexec sets `PKEXEC_UID` itself (`sudo pkexec env` ⇒ `PKEXEC_UID=0`).
 - With PKEXEC_UID=0 `stress.start` is refused: "stress children are never run as root" (`NO_INVOKER`) — the privilege-drop rule reads pkexec's value.
 - The operator's own password-authenticated pkexec run (2026-10-11 16:57 UTC, GUI "Read V/F curve") recorded `operator: gui:uid1000` in the audit log
-  ⇒ pkexec delivers PKEXEC_UID=1000 for the desktop user; with PKEXEC_UID=1000 stress-ng was measured running as `yk` (2026-10-11 ~20:30 UTC).
+  ⇒ pkexec delivers PKEXEC_UID=1000 for the desktop user; with PKEXEC_UID=1000 stress-ng was measured running as the desktop user (2026-10-11 ~20:30 UTC).
 
 ### Operator-authenticated polkit start of the final build [MEASURED lnx 2026-10-12]
-Password entered in the GNOME prompt ⇒ helper under pkexec; Stress screen (P1, 30 s) child ran as `yk`; "stopped_by": "time", "errors": 0. Recorded by the orchestrator's watcher.
+Password entered in the GNOME prompt ⇒ helper under pkexec; Stress screen (P1, 30 s) child ran as the desktop user; "stopped_by": "time", "errors": 0. Recorded by the orchestrator's watcher.

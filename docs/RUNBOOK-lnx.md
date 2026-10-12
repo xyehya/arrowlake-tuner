@@ -1,10 +1,10 @@
 # RUNBOOK — hardware sittings on Fedora (`lnx`)
 
-> Carried over 2026-10-08 from `linuxmon@b01f78a` (`~/AI/linuxmon`). Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here live in that repo (see `docs/PROVENANCE.md`); "linuxmon" = this project's former name.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
-How the orchestrator (or the operator) runs linuxmon against the real CPU, with the exact commands used on 2026-10-01/02. Rules behind it:
+How the orchestrator (or the operator) runs arltuner against the real CPU, with the exact commands used on 2026-10-01/02. Rules behind it:
 `AGENTS.md`, `docs/SAFETY.md`, D-011/D-017/D-018. Results of every sitting go to `docs/research/lnx-first-read.md` (or a new `lnx-*.md`).
-All paths are relative to `~/AI/arrowlake-tuner`. `A=--audit /home/yk/.local/state/linuxmon/audit.jsonl` (always pass it: under sudo the default would
+All paths are relative to `~/AI/arrowlake-tuner`. `A=--audit ~/.local/state/arltuner/audit.jsonl` (always pass it: under sudo the default would
 be root's home, and the per-boot cap and cross-process dwell are counted from this one log).
 
 ## 0. Before any sitting
@@ -22,14 +22,14 @@ be root's home, and the per-boot cap and cross-process dwell are counted from th
 | `health_snapshot.sh LABEL [--since FILE]` | before/after: taint, PCI, modules, new kernel lines (expected msr notices hidden) | none |
 | `read_plain_msrs.py [--cpus] [--msrs]` | plain rdmsr of 0x1AD/0x1AE/0x650/0x651/0xCE/0x194/0x198 with decodes; refuses anything else | read-only, no taint |
 | `percore_stress.py [--cpus 0-7] [--from-ratio 52] [--seconds 60]` | per-core stability sweep: stress-ng --verify pinned to one core, uncapped then capped at every ratio from 52× to the core max; VID/ratio/temp each second; stops at the first failure (stress-ng or new MCE/hardware-error kernel lines) | read-only MSRs; writes cpufreq caps, restores them |
-| `vfcurve.py --cpus 8-11 --ratios 40,46,48` | quick measured V/F curve of one group: cpufreq cap (exact, then +1 if the core settles below) + stress-ng load + VID from 0x198, only samples at the target ratio kept; `linuxmon vf-dump --measure` does the same for every core | read-only MSRs; writes cpufreq caps, restores them |
+| `vfcurve.py --cpus 8-11 --ratios 40,46,48` | quick measured V/F curve of one group: cpufreq cap (exact, then +1 if the core settles below) + stress-ng load + VID from 0x198, only samples at the target ratio kept; `arltuner vf-dump --measure` does the same for every core | read-only MSRs; writes cpufreq caps, restores them |
 | `rehearse_seeded.py PROFILE --policy P --word CPUS=HEX …` | full `apply` on a simulator seeded with the words just read on the device | none |
-| `orchestrator_confirm.py <linuxmon cmd>` | answers the CONFIRM prompt once — **orchestrator only, after a go-ahead, never unattended** | whatever the wrapped command does |
+| `orchestrator_confirm.py <arltuner cmd>` | answers the CONFIRM prompt once — **orchestrator only, after a go-ahead, never unattended** | whatever the wrapped command does |
 
 ## 2. Recipes
 **One mailbox read** (any allowlisted read; point reads need `policies/session-2026-10-02-points.toml`):
 ```
-sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=yk python3 tools/lnx/orchestrator_confirm.py \
+sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=$USER python3 tools/lnx/orchestrator_confirm.py \
   python3 tools/arltuner.py read --device --cpu 8 --cmd 0x10 [--p2 6] --policy policies/session-2026-10-02-points.toml --allow-taint-bit 2 $A
 ```
 `read-vf --device --cpu N` is the `0x10 P2=0` special case. Several reads: loop **and stop at the first non-zero exit** (`|| break`).
@@ -37,7 +37,7 @@ sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=yk python3 tools/lnx/orchestrator_confirm
 **Apply a profile** (always: read the current words → rehearse seeded → apply → measure):
 ```
 python3 tools/lnx/rehearse_seeded.py profiles/X.toml --policy policies/S.toml --word 8-11=0x… --word 12-23=0x…
-sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=yk python3 tools/lnx/orchestrator_confirm.py \
+sudo env ARLTUNER_ALLOW_MAILBOX=1 USER=$USER python3 tools/lnx/orchestrator_confirm.py \
   python3 tools/arltuner.py apply profiles/X.toml --device --policy policies/S.toml --allow-taint-bit 2 $A > captures/lnx/X-apply.txt 2>&1
 sudo python3 tools/lnx/vfcurve.py --cpus 8-11 --ratios 40,46,48 --out captures/lnx/vfcurve-X.txt
 bash tools/lnx/health_snapshot.sh after-X --since captures/lnx/health-before-X.txt
@@ -58,7 +58,7 @@ bash tools/lnx/health_snapshot.sh after-X --since captures/lnx/health-before-X.t
 - Warm reboot keeps E `0x11` words, restores `0x1D`, `0x650`, P words. Cold boot restores everything. Point offsets across reboots: not measured.
 - `0x650` is runtime-writable and package-scoped; raising E above 48× needs `0x11` + `0x1D` + `0x650`.
 
-## 5. To fold into the linuxmon CLI (the final tool) — candidates
-`linuxmon status` (plain MSRs + one guarded read per cluster/core, decoded) · `linuxmon vf-curve` (vfcurve.py) · `linuxmon msr-read` (read_plain_msrs.py
+## 5. To fold into the arltuner CLI (the final tool) — candidates
+`arltuner status` (plain MSRs + one guarded read per cluster/core, decoded) · `arltuner vf-curve` (vfcurve.py) · `arltuner msr-read` (read_plain_msrs.py
 through the guard's msr_allow) · a non-interactive confirmation mode for an approved, operator-signed boot profile (re-apply at boot; needs a
 decision — today confirmation is human-only by design) · seeded rehearsal as `apply --rehearse-from-device` (read the real words, simulate, then ask).

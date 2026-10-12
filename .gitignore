@@ -1,4 +1,4 @@
-# raw captures / dumps (commit a summary + sha256 instead); our own measurement logs (lnx/win, small text) are synced via the private repo
+# raw captures / dumps (commit a summary + sha256 instead); our own measurement logs (lnx/win, small text) are synced via the repo
 captures/*
 !captures/lnx/
 !captures/win/
