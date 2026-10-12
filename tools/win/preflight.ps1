@@ -34,9 +34,11 @@ else { Line $false 'Python' 'neither py -3 nor python found' }
 
 # Driver
 $svc = Get-Service -Name 'ThrottleStop' -ErrorAction SilentlyContinue
-$sys = Join-Path $env:LOCALAPPDATA 'arltuner\ThrottleStop.sys'
+$sys = Join-Path $env:ProgramData 'arltuner\ThrottleStop.sys'   # the admin-only directory (G-142); the restore scripts create the service per run
+$old = Join-Path $env:LOCALAPPDATA 'arltuner\ThrottleStop.sys'
 Line ([bool]$svc -and $svc.Status -eq 'Running') 'driver service ThrottleStop' $(if ($svc) { "$($svc.Status)" } else { "not installed (carved file present: $(Test-Path $sys))" })
 Line (Test-Path $sys) 'carved driver file' $sys
+Line (-not (Test-Path $old)) 'no old user-writable driver copy' $(if (Test-Path $old) { "delete $old (no longer used; a non-admin could replace it)" } else { 'none' })
 
 Write-Host ''
 Write-Host $(if ($bad -eq 0) { 'preflight: all OK' } else { "preflight: $bad item(s) to fix" })

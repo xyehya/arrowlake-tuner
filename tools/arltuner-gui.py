@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Start the local web UI:  python3 tools/arltuner-gui.py [--helper CMD ...] [--no-helper] [--launcher PATH] [--open]
 
-Writes a 0600 launcher page (token inside) and prints its file:// URL; open it once and click the button. ``--helper`` is the command that
+Writes a 0600 launcher page (token inside) and prints its file:// URL; open it once and click the button. The server listens on a random loopback
+address ``127.x.y.z`` (its own cookie jar; the line ``listening on http://127.x.y.z:PORT`` names it), never on 127.0.0.1 unless that bind fails. ``--helper`` is the command that
 speaks the helper protocol (Contract 8) on stdin/stdout. Default (G-106): when ``install.sh`` has put the helper at
 ``/usr/lib/arltuner/arltuner-helper``, ``pkexec /usr/lib/arltuner/arltuner-helper --device`` (polkit asks for the admin password: the human act,
 SPEC 4.1); otherwise no helper and API calls answer 503. ``--no-helper`` forces the no-helper mode. This script never elevates by itself: only
@@ -11,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import threading
 import webbrowser
@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from arltuner.web.helperlink import HelperLink  # noqa: E402
+from arltuner.web.helperlink import set_undumpable, spawn_helper  # noqa: E402
 from arltuner.web.launcher import LauncherDirError, check_private_dir, make_private_dir, write_launcher  # noqa: E402
 from arltuner.web.reissue import install_reissue, signal_running, write_pidfile  # noqa: E402
 from arltuner.web.server import Config, WebServer  # noqa: E402
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--web-root", type=Path, default=default_web_root(), help="default: ./web of the checkout, else /usr/share/arltuner/web")
     ap.add_argument("--open", action="store_true", help="open the launcher in the default browser")
     a = ap.parse_args(argv)
+    if not set_undumpable():  # same-user processes may not ptrace us or read /proc/<pid>/{fd,mem,environ} (G-142)
+        print("arltuner-gui: warning: could not make this process undumpable (prctl)", file=sys.stderr)
     try:
         if a.launcher is None:
             xdg = os.environ.get("XDG_RUNTIME_DIR")
@@ -72,10 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     link = None
     helper_cmd = None if a.no_helper else (a.helper or default_helper_command())
     if helper_cmd:
-        proc = subprocess.Popen(helper_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
-        assert proc.stdin and proc.stdout
-        link = HelperLink(proc.stdout, proc.stdin).start()
+        _proc, link = spawn_helper(helper_cmd)  # a socketpair, not pipes: no /proc/<pid>/fd reopen by another process of this user (G-142)
     srv = WebServer(Config(web_root=a.web_root), link)
+    if srv.bind_note:
+        print(f"arltuner-gui: warning: {srv.bind_note}", file=sys.stderr)
     path = write_launcher(a.launcher, srv.origin, srv.token)
     srv.on_bootstrap = lambda: path.unlink(missing_ok=True)
     srv.start()

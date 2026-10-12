@@ -179,3 +179,17 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   neutral ("earlier research on the reference machine"; evidence tags stay); `docs/PROVENANCE.md` is deleted. (4) Personal paths became `~`, `$HOME` or
   `%USERPROFILE%`. (5) README states that register facts came from measurement and from studying vendor tools for interoperability, with no vendor
   code or binaries included; tool-procedure lines left HARDWARE.md. No history rewrite. Meaning of every earlier decision unchanged.
+- **D-042 · 2026-10-12 · Security review fixes (G-142).** An adversarial review of the GUI, helper link and restore scripts produced 14 findings; the
+  fixes: (1) The ThrottleStop driver, the Windows accepted state, policy, audit log and read-back file live in `%ProgramData%\arltuner`, owner Administrators,
+  ACL Administrators + SYSTEM only (`ts_driver.py init-dir`, judged from the SDDL; no path component may be a reparse point); each run writes a NEW uniquely named
+  copy of the verified driver (O_EXCL), creates the service on it, holds it open (share READ) and re-verifies directory + file ACL, reparse points and the SHA-256 of the bytes
+  on disk immediately before `sc start`; the service and the copy are deleted after the run; the RESTORED verdict comes from the run's own vf-dump JSON, not the audit file. Untested on
+  Windows. (2) The web server binds a random loopback address `127.x.y.z` (fallback `127.0.0.1` with a warning only if that bind fails), so each run has its own
+  cookie jar: **cookie isolation supersedes D-028 #1's "accepted" weight, because D-033(d) returns the plan nonce to the client** (a cookie holder could
+  otherwise fetch it). Sessions have a scope fixed at `/bootstrap`: `full` (the launcher) or `read` (`scope=read`, used by `tools/screenshots.py`): a read session
+  may call only an explicit allowlist (`READ_OPS`), its event stream carries only heartbeat / state / telemetry, and every unknown / garbled scope or error in the
+  check refuses. (3) The restore scripts run Python under `-I`; restoring from the installed root-owned tree is the follow-up (ROADMAP). (4) The helper link is a
+  `socketpair` (no `/proc/<pid>/fd` reopen) and the GUI sets `PR_SET_DUMPABLE 0`. (5) Caps and hygiene: 500 saved profiles; NaN / Infinity refused (400) and
+  `allow_nan=False` towards the helper; dead `plan` / `apply` / `restore` allowlist entries removed; a duplicate session cookie is a 401; `signal_running` and
+  `install.sh` `helper_pids` match the program's argv, not a substring. (6) The health gate's window is a known limitation (SAFETY, finding 14). Policy limits
+  (D-032) unchanged.

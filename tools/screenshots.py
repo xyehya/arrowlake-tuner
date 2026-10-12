@@ -14,7 +14,7 @@ port, and runs in a throw-away 0700 profile that is deleted at exit.
 What it does to the page: opens tabs, switches display segments (chart / table, Simple / Per-Core, the per-V/F-point offsets of one row), waits for data and
 crops elements to PNG files at 1440 CSS px wide. It reads only what the page shows on its own; it never presses Read, Review, Apply, Measure,
 Stress, Save or Accept. Belt and braces: every ``/api/call`` the page makes is intercepted and any operation outside a read-only allowlist
-(READ_OPS below) is blocked and reported. The Tune shots need a stored read (``tune.last``) already on the page; without one they are skipped.
+(READ_OPS below) is blocked and reported; and the tool logs in with ``scope=read``, so the server itself refuses everything else (403). The Tune shots need a stored read (``tune.last``) already on the page; without one they are skipped.
 
 Output: one PNG per shot, device scale 2 (halved in steps when a file would exceed --max-kb). The page is dark-only today, so ``--theme light``
 only changes the emulated browser preference. Nothing is committed by this tool.
@@ -364,14 +364,16 @@ def read_launcher(path: Path) -> tuple[str, str]:
     if not m_action or not m_token:
         raise ToolError(f"{path} is not an arrowlake-tuner launcher page")
     origin = html.unescape(m_action.group(1))
-    if not re.fullmatch(r"http://127\.0\.0\.1:\d+", origin):
-        raise ToolError(f"refusing a launcher that points at {origin!r}: only a local GUI (http://127.0.0.1:PORT)")
+    m = re.fullmatch(r"http://(127\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})", origin)   # the GUI binds a random 127.x.y.z (D-042); loopback only
+    if not m or any(int(x) > 255 for x in m.group(1).split(".")) or not 0 < int(m.group(2)) < 65536:
+        raise ToolError(f"refusing a launcher that points at {origin!r}: only a local GUI (http://127.x.y.z:PORT)")
     return origin, html.unescape(m_token.group(1))
 
 
 def bootstrap(origin: str, token: str) -> tuple[str, str]:
-    """POST the token as the launcher form does (Origin: null); returns the session cookie (name, value)."""
-    req = urllib.request.Request(origin + "/bootstrap", data=urllib.parse.urlencode({"token": token}).encode(), method="POST",
+    """POST the token as the launcher form does (Origin: null) but with ``scope=read``: the server then lets this session call only its read-only
+    operations (a bug here cannot write anything). Returns the session cookie (name, value)."""
+    req = urllib.request.Request(origin + "/bootstrap", data=urllib.parse.urlencode({"token": token, "scope": "read"}).encode(), method="POST",
                                  headers={"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10) as r:   # never via an environment proxy

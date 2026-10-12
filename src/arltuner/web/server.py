@@ -5,14 +5,16 @@ Content-Type -> size -> body -> op allowlist + args schema -> helper.
 Routes (fixed): ``POST /bootstrap`` (launcher form, token swap), ``GET`` manifest pages, ``GET /api/status``, ``GET /api/events`` (SSE),
 ``POST /api/call`` (allowlisted ``op`` + schema-checked ``args``), ``POST /api/logout``.
 
-Long ops (apply, restore, vf.dump) answer ``202 {"id"}`` at once; the helper's final response arrives as SSE event ``result``.
+Long ops (tune.apply, vf.dump, vf.measure, stress.start) answer ``202 {"id"}`` at once; the helper's final response arrives as SSE event ``result``.
 
 Auth: a valid session cookie is never rate-limited. Only a *wrong credential* (bad bootstrap token, unknown cookie value) counts as a failure;
 anonymous requests (no cookie) are refused with 401 and not counted. Sessions expire (idle 30 min, absolute 12 h) and can be logged out.
 
-Residual risk (documented, accepted): cookies are not port-isolated on 127.0.0.1 - another local service on the same host name receives the
-cookie. Mitigations: session expiry, exact Host / Origin / Sec-Fetch-Site checks, the plan-bound CONFIRM nonce (SPEC §4.3), and polkit
-authentication at helper start (SPEC §4.1).
+Cookie isolation (G-142, D-042): browser cookies are scoped to the host name, not the port, so a server on a fixed ``127.0.0.1`` would hand the
+session cookie to any other local web service. The server therefore binds a random loopback address ``127.x.y.z`` (fallback ``127.0.0.1`` only when
+that bind fails): a separate cookie jar per run. Sessions have a scope: ``full`` (the launcher) or ``read`` (``scope=read`` at ``/bootstrap``;
+may call only ``READ_OPS``). Further mitigations: session expiry, exact Host / Origin / Sec-Fetch-Site checks, the plan-bound CONFIRM nonce
+(SPEC §4.3), and polkit authentication at helper start (SPEC §4.1).
 """
 from __future__ import annotations
 
@@ -75,10 +77,6 @@ def _telemetry_start(a: dict) -> bool:
 
 def _cancel(a: dict) -> bool:
     return set(a) <= {"op_id"} and (("op_id" not in a) or (isinstance(a["op_id"], str) and bool(_REQ_ID.match(a["op_id"]))))
-
-
-def _plan(a: dict) -> bool:
-    return set(a) == {"profile"} and isinstance(a["profile"], dict)
 
 
 def _apply(a: dict) -> bool:
@@ -150,10 +148,7 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "telemetry.start": (_telemetry_start, False),
     "telemetry.stop": (_empty, False),
     "cancel": (_cancel, False),
-    "plan": (_plan, False),
     "vf.dump": (_vf_dump, True),
-    "apply": (_apply, True),
-    "restore": (_empty, True),
     # contract 9 (G-112): tune.* and profiles.*; tune.read is vf.dump with decoded words
     "tune.read": (_vf_dump, True),
     "tune.plan": (_tune_plan, False),
@@ -174,6 +169,15 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "stress.stop": (_empty, False),
     "stress.list": (_empty, False),
 }
+
+# A ``scope=read`` session (tools/screenshots.py) may call only these: reads of stored data and cheap system reads; nothing that writes hardware,
+# starts a measurement or a stress run, saves, accepts, deletes or cancels. tests/web pins this set against tools/screenshots.READ_OPS.
+READ_OPS = frozenset({"preflight", "audit.tail", "telemetry.start", "profiles.list", "profiles.get", "tune.last", "curves.list", "curves.get",
+                      "mem.read", "stress.list"})
+SCOPES = ("full", "read")
+# Events a ``read`` session's stream may carry (the dashboard's feeds). An explicit allowlist: any other event name (progress / point events of a
+# measurement the operator started, anything added later) is not delivered to it. Result events are additionally per-session in HelperLink.
+READ_EVENTS = frozenset({"heartbeat", "state", "telemetry"})
 
 # HTTP status for a helper error code (Contract 8 codes; unknown codes -> 422)
 _STATUS_FOR_CODE = {"BAD_REQUEST": 400, "UNKNOWN_OP": 400, "BUSY": 409, "PLAN_STALE": 409, "CONFIRM_MISMATCH": 409, "CANCELLED": 409,
@@ -216,6 +220,11 @@ class Config:
     fail_limit: int = 10                      # wrong-credential attempts ...
     fail_window_s: float = 60.0               # ... within this window block further wrong-credential attempts
     clock: Callable[[], float] = field(default=time.monotonic)
+    bind_host: str | None = None              # None: a random loopback address 127.x.y.z (cookie isolation, D-042); tests may pin one
+
+
+def _refuse_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not JSON")
 
 
 class RateLimiter:
@@ -273,7 +282,7 @@ class WebServer:
         self._token = config.token or secrets.token_urlsafe(32)
         self._token_born = config.clock()
         self._token_used = False
-        self._sessions: dict[str, list[float]] = {}  # id -> [created, last_seen]
+        self._sessions: dict[str, list] = {}  # id -> [created, last_seen, scope]
         self._lock = threading.Lock()
         self.limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)       # wrong session cookies
         self.boot_limiter = RateLimiter(config.fail_limit, config.fail_window_s, config.clock)  # wrong bootstrap tokens (own budget)
@@ -294,11 +303,26 @@ class WebServer:
             srv = outer
             timeout = config.request_timeout_s
 
-        self.httpd = _HTTPD(("127.0.0.1", 0), Handler, config.max_connections)
+        self.bind_note: str | None = None  # set when the random loopback address could not be bound (the launcher prints it)
+        self.httpd = self._bind(Handler)
+        self.addr: str = self.httpd.server_address[0]
         self.port: int = self.httpd.server_address[1]
-        self.host_header = f"127.0.0.1:{self.port}"
+        self.host_header = f"{self.addr}:{self.port}"
         self.origin = f"http://{self.host_header}"
         self._thread: threading.Thread | None = None
+
+    def _bind(self, handler: type) -> "_HTTPD":
+        """Listen on a random loopback address 127.x.y.z, each of x, y, z in 1..254 (never 127.0.0.1, .0 or .255). Cookies are scoped to the
+        host name, so every run gets its own cookie jar and no other local service on 127.0.0.1 receives the session cookie (D-042). Only when
+        that bind fails (a platform that routes just 127.0.0.1) fall back to 127.0.0.1, and say so in ``bind_note``."""
+        if self.cfg.bind_host is not None:
+            return _HTTPD((self.cfg.bind_host, 0), handler, self.cfg.max_connections)
+        host = "127." + ".".join(str(1 + secrets.randbelow(254)) for _ in range(3))
+        try:
+            return _HTTPD((host, 0), handler, self.cfg.max_connections)
+        except OSError as e:
+            self.bind_note = f"could not bind {host} ({e.strerror or e}); falling back to 127.0.0.1 - the session cookie is then shared with other services on that host name"
+            return _HTTPD(("127.0.0.1", 0), handler, self.cfg.max_connections)
 
     @property
     def token(self) -> str:
@@ -317,8 +341,12 @@ class WebServer:
         self.httpd.server_close()
 
     # ---- auth state -----------------------------------------------------------------------------------------------------------
-    def swap_token(self, presented: str) -> str | None:
-        """Single-use, constant-time. Returns a new session id, or None. The token is burned on the first correct presentation."""
+    def swap_token(self, presented: str, scope: str = "full") -> str | None:
+        """Single-use, constant-time. Returns a new session id, or None. The token is burned on the first correct presentation.
+        ``scope`` is ``full`` or ``read`` (``READ_OPS`` only); it is fixed for the life of the session. Any other value is refused
+        (None) and does not burn the token."""
+        if scope not in SCOPES:
+            return None
         with self._lock:
             now = self.cfg.clock()
             ok = hmac.compare_digest(presented.encode("utf-8", "replace"), self._token.encode("utf-8"))
@@ -327,7 +355,7 @@ class WebServer:
                 return None
             self._token_used = True
             sid = secrets.token_urlsafe(32)
-            self._sessions[sid] = [now, now]
+            self._sessions[sid] = [now, now, scope]
         if self.on_bootstrap:
             self.on_bootstrap()
         return sid
@@ -341,7 +369,7 @@ class WebServer:
         found: str | None = None
         with self._lock:
             for sid in list(self._sessions):
-                created, last = self._sessions[sid]
+                created, last = self._sessions[sid][:2]
                 if now - created > self.cfg.session_max_s or now - last > self.cfg.session_idle_s:
                     del self._sessions[sid]
                     continue
@@ -350,6 +378,22 @@ class WebServer:
             if found and touch:
                 self._sessions[found][1] = now
         return found
+
+    def session_scope(self, sid: str) -> str | None:
+        with self._lock:
+            rec = self._sessions.get(sid)
+            return rec[2] if rec else None
+
+    def may_call(self, sid: str, op: str) -> bool:
+        """Authorization, fail closed: only a session whose recorded scope is exactly ``full`` may call any allowlisted op, exactly ``read`` only
+        ``READ_OPS``; an unknown / missing / garbled scope, an unknown session, or any error in this check refuses."""
+        try:
+            scope = self.session_scope(sid)
+            if scope == "full":
+                return True
+            return scope == "read" and op in READ_OPS
+        except Exception:
+            return False
 
     def new_bootstrap(self) -> str:
         """Mint a fresh single-use bootstrap token (the previous one stops working). Existing sessions are untouched."""
@@ -506,6 +550,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         raw = self.headers.get_all("Cookie") or []
         if len(raw) != 1:
             return None
+        # SimpleCookie keeps the last of two same-named cookies; which one a browser sent first is not ours to guess: refuse (401).
+        if sum(1 for part in raw[0].split(";") if part.split("=", 1)[0].strip() == COOKIE_NAME) > 1:
+            return None
         try:
             jar = cookies.SimpleCookie()
             jar.load(raw[0])
@@ -646,7 +693,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             fields = {}
         tokens = fields.get("token", [])
-        sid = self.srv.swap_token(tokens[0]) if len(tokens) == 1 else None
+        scopes = fields.get("scope", ["full"])
+        if len(scopes) != 1 or scopes[0] not in SCOPES:  # refused before the token is looked at, so a typo does not burn the launcher
+            return self._err(400, "bad_scope")
+        sid = self.srv.swap_token(tokens[0], scopes[0]) if len(tokens) == 1 else None
         if sid is None:  # only a wrong token is throttled (own limiter); a correct one is never refused by a limiter
             if self.srv.boot_limiter.blocked():
                 return self._err(429, "rate_limited")
@@ -672,8 +722,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            req = json.loads(body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+            req = json.loads(body.decode("utf-8"), parse_constant=_refuse_constant)
+        except (ValueError, UnicodeDecodeError, RecursionError):  # ValueError: bad syntax, or NaN / Infinity (not JSON; refused)
             return self._err(400, "bad_json")
         if not isinstance(req, dict) or not set(req) <= {"op", "args"} or not isinstance(req.get("op"), str):
             return self._err(400, "bad_request")
@@ -682,7 +732,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if spec is None:
             return self._err(400, "unknown_op")
         validate, is_long = spec
-        if not isinstance(args, dict) or not validate(args):
+        if not self.srv.may_call(sid, req["op"]):
+            return self._err(403, "read_only_session")
+        try:
+            valid = isinstance(args, dict) and validate(args)
+        except RecursionError:  # absurdly nested args (older Pythons): a refusal, not a dropped connection
+            valid = False
+        if not valid:
             return self._err(400, "bad_args")
         helper = self.srv.helper
         if helper is None:
@@ -691,6 +747,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._call_long(helper, req["op"], args, sid)
         try:
             resp = helper.call(req["op"], args, timeout=self.srv.cfg.call_timeout_s)
+        except (ValueError, RecursionError):  # not representable as strict JSON (NaN / Infinity), or nested beyond reason
+            return self._err(400, "bad_args")
         except HelperUnavailable:
             return self._err(503, "helper_unavailable")
         except HelperTimeout:
@@ -705,6 +763,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _call_long(self, helper: HelperLink, op: str, args: dict[str, Any], sid: str) -> None:
         try:
             rid = self.srv.submit_long(helper, op, args, sid)
+        except (ValueError, RecursionError):
+            return self._err(400, "bad_args")
         except HelperUnavailable:
             return self._err(503, "helper_unavailable")
         except RequestTooLarge:
@@ -734,6 +794,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if full:
             return self._err(503, "too_many_streams")
         sub = helper.subscribe(sid)
+        try:
+            full_stream = srv.session_scope(sid) == "full"
+        except Exception:  # fail closed: a stream whose scope cannot be established carries the dashboard feeds only
+            full_stream = False
         last_write = time.monotonic()
         try:
             self.connection.settimeout(srv.cfg.sse_write_timeout_s)  # a client that stops reading is dropped
@@ -756,6 +820,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     name = ev.get("event")
                     if not isinstance(name, str) or not _EVENT_RE.match(name):
+                        continue
+                    if not full_stream and name not in READ_EVENTS:  # fail closed: a non-full session sees the dashboard feeds only
                         continue
                     data = json.dumps(ev, separators=(",", ":"))
                     self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))

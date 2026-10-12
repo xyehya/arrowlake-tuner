@@ -290,6 +290,10 @@ class HostileCheckout(InstallCase):
             ["pkexec", "/usr/lib/arltuner/arltuner-helper", "--device"],
             ["/usr/bin/python3", "-I", "/usr/lib/arltuner/arltuner-helper", "--device"],
             ["python3", "/x/arltuner-helper.py"],
+            ["/usr/lib/arltuner/arltuner-helper", "--device"],
+            ["pkexec", "--user", "root", "/usr/lib/arltuner/arltuner-helper", "--device"],
+            ["sudo", "-u", "root", "python3", "-I", "/home/u/arrowlake-tuner/tools/arltuner-helper.py", "--device"],
+            ["/usr/bin/env", "python3", "/usr/lib/arltuner/arltuner-helper"],
         ):
             proc = self.fake_proc(p4242=["bash"], p4243=argv)
             r = self.install(extra_env={"ARLTUNER_PROC": str(proc)})
@@ -302,7 +306,10 @@ class HostileCheckout(InstallCase):
             shutil.rmtree(proc)
 
     def test_unrelated_processes_do_not_block_the_install(self) -> None:
-        proc = self.fake_proc(p10=["bash", "install.sh"], p11=["vim", "notes-on-arltuner.txt"], p12=["/usr/bin/python3", "-m", "http.server"])
+        proc = self.fake_proc(p10=["bash", "install.sh"], p11=["vim", "notes-on-arltuner.txt"], p12=["/usr/bin/python3", "-m", "http.server"],
+                              p13=["vim", "/usr/lib/arltuner/arltuner-helper"], p14=["grep", "-r", "x", "arltuner-helper"], p15=["less", "arltuner-helper.py"],
+                              p16=["python3", "-m", "http.server", "arltuner-helper"], p17=["python3", "-c", "x", "/x/arltuner-helper"],
+                              p18=["sh", "-c", "pkexec /usr/lib/arltuner/arltuner-helper"], p19=["tail", "-f", "arltuner-helper.log"])  # the name as DATA (G-142)
         self.assertEqual(self.install(extra_env={"ARLTUNER_PROC": str(proc)}).returncode, 0)
 
     def test_a_missing_proc_directory_is_harmless(self) -> None:

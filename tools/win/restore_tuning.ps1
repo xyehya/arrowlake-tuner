@@ -2,25 +2,31 @@
   restore_tuning.ps1 - after any Windows boot: bring the CPU back to YOUR accepted tuning and prove it by read-back.
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1                # operator: type CONFIRM once (or double-click tools\win\Restore-Tuning.cmd)
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1 -Orchestrated  # orchestrator session only, after the operator's go-ahead in chat
-    -From DIR     the accepted state: CURRENT, EXPECTED-words.txt, profiles\*.toml (default %LOCALAPPDATA%\arltuner\accepted). The app writes it on Linux
-                  (Profiles > Set as accepted, /etc/arltuner/accepted); copy that directory here. Nothing in this repo is one (D-036): absent = stop.
+    -From DIR     the accepted state: CURRENT, EXPECTED-words.txt, profiles\*.toml (default %ProgramData%\arltuner\accepted). The app writes it on Linux
+                  (Profiles > Set as accepted, /etc/arltuner/accepted); copy that directory here from an Administrator terminal. Nothing in this repo is one (D-036): absent = stop.
     -Policy FILE  the policy for the guarded writes (default DIR\policy.toml; copy /etc/arltuner/policy.toml next to the accepted state, or name another).
+  Admin-only (G-142, D-042): this script runs elevated, so everything that decides what it does - the accepted state, the policy, the driver, the audit log, the
+  read-back file the verdict is computed from - must sit in a directory only Administrators/SYSTEM can write (%ProgramData%\arltuner, locked down by
+  'py -3 tools\win\ts_driver.py init-dir'). The script refuses a -From / -Policy directory that is not (ts_driver.py check-dir) and verifies the driver's SHA-256 and
+  directory again right before 'sc start'. RESTORED is decided from the vf-dump read-back of THIS run (a JSON file in that directory), never from the audit file.
   DIR\fingerprint.json (written by 'Set as accepted' on Linux) tells this machine which cores are which: the Linux CPU -> Windows logical-processor map is derived at
   run time from Windows' own data and settled by guarded reads of the fused V/F point of every P-core. A state accepted before that existed has none: stop, re-accept on Linux.
-  Steps: checks (admin, XtuService stopped, no OCCT/XTU) -> one CONFIRM -> sc start ThrottleStop -> [-Before: vf-dump] -> apply each CURRENT profile ->
-  vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> sc stop ThrottleStop. Stops at the first failure; nothing is retried. Revert = cold boot.
+  Steps: checks (admin, XtuService stopped, no OCCT/XTU, admin-only directories) -> one CONFIRM -> ts_driver.py start (service created for this run) -> [-Before: vf-dump] ->
+  apply each CURRENT profile -> vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> ts_driver.py remove (stop + delete the service). Stops at the first
+  failure; nothing is retried. Revert = cold boot.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
-  Captures: captures\win\restore-<ts>-*.txt. Audit: %LOCALAPPDATA%\arltuner\audit.jsonl.
+  Captures: captures\win\restore-<ts>-*.txt (logs for reading, not evidence). Audit: %ProgramData%\arltuner\audit.jsonl.
+  Not yet run on Windows with these changes (written on Linux): the first run is the bring-up test; read the ts_driver.py output carefully.
   One confirmation per run (operator 2026-10-05, D-020): the operator types CONFIRM once; the per-command guard tokens are then answered by
   tools\lnx\orchestrator_confirm.py, as with -Orchestrated. All guard checks (identity, policy, read-back, word compare) are unchanged.
 #>
 # -Before: also dump the state before applying (diagnostic: warm vs cold boot; costs ~132 of the 600 ops/boot, so default off).
-param([switch]$Orchestrated, [switch]$Before, [string]$From = (Join-Path $env:LOCALAPPDATA 'arltuner\accepted'), [string]$Policy = '')
+param([switch]$Orchestrated, [switch]$Before, [string]$From = (Join-Path $env:ProgramData 'arltuner\accepted'), [string]$Policy = '')
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $repo
-$lm = Join-Path $env:LOCALAPPDATA 'arltuner'
-New-Item -ItemType Directory -Force -Path $lm, 'captures\win' | Out-Null
+$lm = Join-Path $env:ProgramData 'arltuner'   # the admin-only directory (created and locked down by ts_driver.py init-dir)
+New-Item -ItemType Directory -Force -Path 'captures\win' | Out-Null
 $audit = Join-Path $lm 'audit.jsonl'
 $ts = Get-Date -Format 'yyyyMMddTHHmmss'
 
@@ -62,7 +68,16 @@ foreach ($l in Get-Content $wordsFile) {
 }
 if ($Expected.Count -eq 0) { Fail "$wordsFile holds no words" }
 
-if (Get-Command py -ErrorAction SilentlyContinue) { $py = @('py', '-3') } else { $py = @('python') }
+# -I: isolated Python (no PYTHON* variables, no user site, no script directory or cwd on sys.path); tools\arltuner.py adds .\src from its own path
+if (Get-Command py -ErrorAction SilentlyContinue) { $py = @('py', '-3', '-I') } else { $py = @('python', '-I') }
+function Ts-Driver { & $py[0] @($py[1..9] | Where-Object { $_ }) 'tools\win\ts_driver.py' @args }
+
+# --- admin-only directories: create/lock down the data directory, then refuse any input directory a non-admin could write
+if (-not (Test-Path $lm)) { Ts-Driver init-dir; if ($LASTEXITCODE -ne 0) { Fail 'could not create the admin-only directory' } }
+foreach ($d in @($lm, $From, (Split-Path -Parent (Resolve-Path $policy)))) {
+    Ts-Driver check-dir $d | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "$d is not an admin-only directory (ts_driver.py check-dir). Copy the accepted state / policy into $lm from an Administrator terminal, or pass -From / -Policy pointing there" }
+}
 $env:ARLTUNER_ALLOW_MAILBOX = '1'
 $env:PYTHONUNBUFFERED = '1'
 
@@ -84,10 +99,10 @@ function Run-Lm([string]$tag, [string[]]$LmArgs) {
 }
 
 # --- driver
-$svc = Get-Service ThrottleStop -ErrorAction SilentlyContinue
-if (-not $svc) { Fail 'ThrottleStop driver not installed (py -3 tools\win\ts_driver.py install)' }
-if ($svc.Status -ne 'Running') { sc.exe start ThrottleStop | Out-Null }
-& $py[0] @($py[1..9] | Where-Object { $_ }) 'tools\win\ts_driver.py' 'status'
+# A service for this run only: created from the SHA-256-verified copy in the admin-only directory, deleted again in the finally block below.
+Ts-Driver start
+if ($LASTEXITCODE -ne 0) { Fail 'ThrottleStop driver not started (py -3 tools\win\ts_driver.py carve --exe ...ThrottleStop.exe, then re-run)' }
+Ts-Driver status
 if ($LASTEXITCODE -ne 0) { Fail 'driver status not OK' }
 
 try {
@@ -102,20 +117,22 @@ try {
         Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) @('apply', $prof)
     }
     Write-Host "=== 3/3 read-back"
-    $t0 = (Get-Date).ToUniversalTime()
-    Run-Lm 'after' @('vf-dump')
-
-    # last read of each (cpu, point) in this read-back session
-    $last = @{}
-    foreach ($line in Get-Content $audit) {
-        $e = $line | ConvertFrom-Json
-        if ($e.event -ne 'result' -or $e.cmd -ne '0x10' -or $e.rc_name -ne 'Pass') { continue }
-        if (([datetime]$e.ts).ToUniversalTime() -lt $t0) { continue }
-        $last["$($e.cpu)/$([Convert]::ToInt32($e.p2, 16))"] = [Convert]::ToUInt32($e.data, 16).ToString('X')
+    # The verdict comes from THIS run's live read-back: vf-dump writes its own JSON (words as read from the CPU) into the admin-only directory - not from the
+    # audit file and not from a file in the repo (both could be edited between the read and the compare).
+    $readback = Join-Path $lm "readback-$ts.json"
+    Remove-Item -LiteralPath $readback -ErrorAction SilentlyContinue
+    Run-Lm 'after' @('vf-dump', '--json', $readback)
+    if (-not (Test-Path -LiteralPath $readback)) { Fail "vf-dump wrote no read-back file ($readback)" }
+    $rb = Get-Content -LiteralPath $readback -Raw | ConvertFrom-Json
+    $last = @{}   # cpu -> "OC-word point-1 ... point-n", as on the Linux twin
+    foreach ($u in $rb.units) {
+        $cpu = $u.cpus[0]
+        $words = @($cpu.oc.word) + @($cpu.points | ForEach-Object { $_.word })
+        $last["$($cpu.cpu)"] = (($words | ForEach-Object { [Convert]::ToUInt32($_, 16).ToString('X') }) -join ' ')
     }
     $bad = 0
     foreach ($c in $Expected.Keys) {
-        $got = (0..10 | Where-Object { $last.ContainsKey("$c/$_") } | ForEach-Object { $last["$c/$_"] }) -join ' '
+        $got = if ($last.ContainsKey("$c")) { $last["$c"] } else { '<missing>' }
         $ok = $got -eq $Expected["$c"]
         if (-not $ok) { $bad++ }
         Write-Host ("  cpu{0,-2} {1} {2}" -f $c, $(if ($ok) { 'OK ' } else { 'BAD' }), $got)
@@ -125,6 +142,6 @@ try {
     Write-Host "RESTORED: all $($Expected.Count) cores/clusters match the accepted state." -ForegroundColor Green
 }
 finally {
-    sc.exe stop ThrottleStop | Out-Null
-    Write-Host "driver stopped (offsets stay until a cold boot)."
+    Ts-Driver remove | Out-Null   # stop + delete the per-run service
+    Write-Host "driver stopped and its service deleted (offsets stay until a cold boot)."
 }

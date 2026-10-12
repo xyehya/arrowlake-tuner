@@ -74,6 +74,7 @@ class FakeHelper(V3Ops):
         self.link = HelperLink(os.fdopen(resp_r, "rb"), os.fdopen(req_w, "wb", buffering=0)).start()
         self.requests: list[dict] = []
         self.plans: dict[str, dict] = {}
+        self.simple_plans = False  # True: tune.plan / tune.apply answer with the plain nonce-bound plan/apply (nonce-replay tests through the server)
         self._wlock = threading.Lock()
         self.hold = threading.Event()  # clear it to make vf.dump hang until set again
         self.hold.set()
@@ -154,14 +155,14 @@ class FakeHelper(V3Ops):
                 if "checks" in res and "topology" not in res and self.topology_enabled:   # a full report gains the live G-128 topology (the favored set can change per test)
                     res = {**res, "topology": topology_view()}
                 self._reply(rid, True, result=res)
-            elif op == "plan":
+            elif op == "plan" or (self.simple_plans and op == "tune.plan"):
                 steps = [{"step": 1, "what": "noop"}]
                 plan_id = hashlib.sha256(json.dumps(steps).encode()).hexdigest()
                 nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
                 self.plans[plan_id] = {"nonce": nonce, "used": False}
                 self._reply(rid, True, result={"plan_id": plan_id, "nonce": nonce, "steps": steps, "ops_needed": 1, "ops_left": 599,
                                                "expires_s": 600})
-            elif op == "apply":
+            elif op == "apply" or (self.simple_plans and op == "tune.apply"):
                 p = self.plans.get(args.get("plan_id"))
                 if p is None:
                     self._err(rid, "PLAN_STALE", "unknown plan")

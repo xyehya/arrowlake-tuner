@@ -16,6 +16,14 @@ Spec: `docs/SPEC.md`. Phase 0 (the CLI, research, accepted tuning) was done in t
 
 **v3 (2026-10-11/12):** SPEC-v3 (Measure → Store → Tune → Stress → Profiles) merged G-111…G-124; facts in `knowledge/tuning-results.md`.
 
+## Follow-ups from the security review (2026-10-12, D-042)
+- **Restore from the installed, root-owned tree.** `tools/lnx/restore_tuning.sh` / `reapply_current.sh` still run the checkout's `tools/arltuner.py` as root (now
+  `python3 -I`, so no user site / `PYTHON*` / cwd imports, but the checkout itself is still user-writable code run with `sudo`). The proper fix is to install the
+  CLI under `/usr/lib/arltuner/` (root-owned, the tree `install.sh` already compiles) and have the scripts run that copy; the Windows scripts likewise
+  (an installed copy under `%ProgramData%\arltuner`). Until then the operator reads the diff of `tools/` before a restore sitting after pulling.
+- **Windows admin-only directory is untested on Windows.** Written on Linux (G-142): first run of `ts_driver.py init-dir/start`, `reapply_current.ps1 -Check` and
+  `restore_tuning.ps1` is the bring-up test.
+
 ## Hard rules for every phase
 Hardware writes: human + orchestrator only (`docs/SAFETY.md`); workers test against the simulator and fake sysfs only. Nothing in G1–G7 may
 weaken the guard; new controls become writable only through their gate (SPEC §5).

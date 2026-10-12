@@ -31,14 +31,14 @@ mkdir -p captures/lnx
 
 if [ "$check" = 1 ]; then
   # full output on the terminal (the CONFIRM prompt must stay visible); look for the offsets in the point tables
-  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 tools/arltuner.py vf-dump --device --policy "$policy" --allow-taint-bit 2
+  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 -I tools/arltuner.py vf-dump --device --policy "$policy" --allow-taint-bit 2
   exit 0
 fi
 
 bash tools/lnx/health_snapshot.sh before-reapply >/dev/null
 for prof in "${profiles[@]}"; do
   echo "=== applying $from/$prof (policy $policy) ==="
-  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 tools/arltuner.py apply "$from/$prof" --device --policy "$policy" --allow-taint-bit 2 \
+  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 -I tools/arltuner.py apply "$from/$prof" --device --policy "$policy" --allow-taint-bit 2 \
     | tee "captures/lnx/reapply-$(basename "$prof" .toml)-$(date +%Y%m%dT%H%M%S).txt"  # unfiltered: the CONFIRM prompt must be visible
 done
 bash tools/lnx/health_snapshot.sh after-reapply --since captures/lnx/health-before-reapply.txt | tail -4

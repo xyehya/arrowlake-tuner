@@ -79,12 +79,13 @@ class TestOpsAllowlist(Base):  # item 3
             ("stress.start", {}), ("freq.cap", {}), ("nope", {}), ("preflight", {"x": 1}), ("telemetry.start", {"hz": 1}),
             ("audit.tail", {"n": 0}), ("audit.tail", {"n": "5"}), ("audit.tail", {"n": True}), ("audit.tail", {"m": 1}),
             ("cancel", {"op_id": "has space"}), ("cancel", {"op_id": 5}), ("cancel", {"x": 1}),
-            ("plan", {}), ("plan", {"profile": "x"}), ("plan", {"profile": {}, "x": 1}),
-            ("apply", {}), ("apply", {"plan_id": good_id}), ("apply", {"plan_id": good_id, "typed": "CONFIRM abcdef"}),
-            ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDE1"}), ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEFG"}),
-            ("apply", {"plan_id": good_id, "typed": "confirm ABCDEF"}), ("apply", {"plan_id": good_id.upper(), "typed": "CONFIRM ABCDEF"}),
-            ("apply", {"plan_id": "ab", "typed": "CONFIRM ABCDEF"}), ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEF", "x": 1}),
-            ("restore", {"x": 1}), ("vf.dump", {"cpus": [-1]}), ("vf.dump", {"cpus": []}), ("vf.dump", {"cpus": "0-7"}),
+            ("plan", {"profile": {}}), ("apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEF"}), ("restore", {}),  # G-142: dead entries, not ops any more
+            ("tune.plan", {}), ("tune.plan", {"intent": "x"}), ("tune.plan", {"intent": {}, "x": 1}),
+            ("tune.apply", {}), ("tune.apply", {"plan_id": good_id}), ("tune.apply", {"plan_id": good_id, "typed": "CONFIRM abcdef"}),
+            ("tune.apply", {"plan_id": good_id, "typed": "CONFIRM ABCDE1"}), ("tune.apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEFG"}),
+            ("tune.apply", {"plan_id": good_id, "typed": "confirm ABCDEF"}), ("tune.apply", {"plan_id": good_id.upper(), "typed": "CONFIRM ABCDEF"}),
+            ("tune.apply", {"plan_id": "ab", "typed": "CONFIRM ABCDEF"}), ("tune.apply", {"plan_id": good_id, "typed": "CONFIRM ABCDEF", "x": 1}),
+            ("vf.dump", {"cpus": [-1]}), ("vf.dump", {"cpus": []}), ("vf.dump", {"cpus": "0-7"}),
             ("vf.dump", {"all_e": 1}), ("vf.dump", {"x": 1}), ("telemetry.start", {"interval_s": 0.1}), ("telemetry.start", {"interval_s": True}),
             ("audit.tail", {"n": 201}),
         ]
@@ -96,10 +97,10 @@ class TestOpsAllowlist(Base):  # item 3
     def test_g1_ops_forwarded(self):
         ck = self.login()
         for op, args in (("preflight", {}), ("audit.tail", {"n": 10}), ("telemetry.start", {"interval_s": 1}), ("telemetry.stop", {}), ("cancel", {"op_id": "w1"}),
-                         ("plan", {"profile": {}})):
+                         ("tune.plan", {"intent": {}})):
             self.call(op, args, cookie=ck)
         self.assertEqual([r["op"] for r in self.fake.requests],
-                         ["preflight", "audit.tail", "telemetry.start", "telemetry.stop", "cancel", "plan"])
+                         ["preflight", "audit.tail", "telemetry.start", "telemetry.stop", "cancel", "tune.plan"])
 
 
 class TestLongOps(Base):  # item 4
@@ -132,7 +133,7 @@ class TestLongOps(Base):  # item 4
         deadline = time.monotonic() + 3
         while self.srv.pending_long and time.monotonic() < deadline:
             time.sleep(0.02)
-        self.assertEqual(self.call("restore", {}, cookie=ck)[0], 202)  # slot freed
+        self.assertEqual(self.call("vf.dump", {}, cookie=ck)[0], 202)  # slot freed
 
     def test_result_replayed_to_late_subscriber(self):
         ck = self.login()
@@ -163,7 +164,7 @@ class TestSlowloris(unittest.TestCase):  # item 5
 
     def test_header_dribble_hits_total_deadline(self):
         srv = self.make(header_deadline_s=0.6, request_timeout_s=30)
-        s = socket.create_connection(("127.0.0.1", srv.port), timeout=5)
+        s = socket.create_connection((srv.addr, srv.port), timeout=5)
         self.addCleanup(s.close)
         t0 = time.monotonic()
         try:
@@ -177,11 +178,11 @@ class TestSlowloris(unittest.TestCase):  # item 5
 
     def test_connection_cap(self):
         srv = self.make(max_connections=3, request_timeout_s=30, header_deadline_s=30)
-        held = [socket.create_connection(("127.0.0.1", srv.port), timeout=5) for _ in range(3)]
+        held = [socket.create_connection((srv.addr, srv.port), timeout=5) for _ in range(3)]
         for h in held:
             self.addCleanup(h.close)
         time.sleep(0.3)
-        extra = socket.create_connection(("127.0.0.1", srv.port), timeout=5)
+        extra = socket.create_connection((srv.addr, srv.port), timeout=5)
         self.addCleanup(extra.close)
         extra.settimeout(2)
         try:
@@ -191,7 +192,7 @@ class TestSlowloris(unittest.TestCase):  # item 5
         self.assertEqual(data, b"")
         held[0].close()
         time.sleep(0.4)
-        s = socket.create_connection(("127.0.0.1", srv.port), timeout=5)
+        s = socket.create_connection((srv.addr, srv.port), timeout=5)
         self.addCleanup(s.close)
         s.sendall(b"GET / HTTP/1.1\r\nHost: " + srv.host_header.encode() + b"\r\n\r\n")
         s.settimeout(3)
@@ -245,7 +246,8 @@ class TestSessions(Base):  # item 6
 
     def test_residual_risk_documented(self):
         import arltuner.web.server as m
-        self.assertIn("not port-isolated", m.__doc__)
+        self.assertIn("Cookie isolation", m.__doc__)
+        self.assertIn("127.x.y.z", m.__doc__)
 
 
 class TestLauncherDir(unittest.TestCase):  # item 7
@@ -342,7 +344,7 @@ class TestWriterNeverBlocks(unittest.TestCase):  # item 8
 
 class TestErrorPathsHeaders(Base):  # item 9
     def raw(self, data: bytes) -> bytes:
-        s = socket.create_connection(("127.0.0.1", self.srv.port), timeout=5)
+        s = socket.create_connection((self.srv.addr, self.srv.port), timeout=5)
         self.addCleanup(s.close)
         s.sendall(data)
         buf = b""
@@ -468,7 +470,7 @@ class TestPendingSlotRelease(Base):  # round 2, item 2
         read_until(sse, b"retry: 3000")
         self.fake.hold.clear()
         rid = json.loads(self.call("vf.dump", {}, cookie=ck)[2])["id"]
-        self.assertEqual(self.call("restore", {}, cookie=ck)[0], 429)  # slot is held
+        self.assertEqual(self.call("vf.dump", {}, cookie=ck)[0], 429)  # slot is held
         self.hb("idle", 2)
         self.hb("applying")  # a non-idle heartbeat resets the count: the helper may still be working
         self.hb("idle", 2)
@@ -480,7 +482,7 @@ class TestPendingSlotRelease(Base):  # round 2, item 2
         self.wait_free()
         self.fake.hold.set()  # a late real answer for the same id is ignored
         time.sleep(0.3)
-        self.assertEqual(self.call("restore", {}, cookie=ck)[0], 202)
+        self.assertEqual(self.call("vf.dump", {}, cookie=ck)[0], 202)
 
     def test_no_failure_without_idle_heartbeats(self):
         ck = self.login()
@@ -536,7 +538,10 @@ class TestSessionContinuity(Base):  # round 2, item 3
             self.assertEqual(stat.S_IMODE(pidfile.stat().st_mode), 0o600)
             uninstall = reissue.install_reissue(self.srv, lp)
             self.addCleanup(uninstall)
-            self.assertEqual(reissue.signal_running(Path(d), marker=b"python"), os.getpid())  # what a second arltuner-gui run does
+            fake = Path(d) / "proc"  # this test process wearing the server's argv
+            (fake / str(os.getpid())).mkdir(parents=True)
+            (fake / str(os.getpid()) / "cmdline").write_bytes(b"/usr/bin/python3\0-I\0/x/tools/arltuner-gui.py\0--open\0")
+            self.assertEqual(reissue.signal_running(Path(d), proc_root=fake), os.getpid())  # what a second arltuner-gui run does
             end = time.monotonic() + 3
             while time.monotonic() < end and self.srv.token == old:
                 time.sleep(0.02)
@@ -559,6 +564,18 @@ class TestSessionContinuity(Base):  # round 2, item 3
             self.assertIsNone(reissue.signal_running(Path(d)))  # a live pid that is not arltuner-gui is never signalled
             (Path(d) / reissue.PID_NAME).write_text("junk")
             self.assertIsNone(reissue.signal_running(Path(d)))
+
+    def test_signal_running_matches_the_program_exactly(self):
+        """G-142 item 10: only the process whose program is arltuner-gui(.py) is signalled, not one that merely has the name in its argv."""
+        from arltuner.web import reissue
+        ok = [["python3", "tools/arltuner-gui.py"], ["/usr/bin/python3", "-I", "-u", "/home/u/x/tools/arltuner-gui.py", "--open"],
+              ["/home/u/x/tools/arltuner-gui.py"], ["python3.13", "arltuner-gui"]]
+        bad = [["vim", "tools/arltuner-gui.py"], ["grep", "-r", "arltuner-gui", "."], ["python3", "evil.py", "arltuner-gui.py"],
+               ["python3", "-c", "x", "arltuner-gui"], ["python3", "tools/not-arltuner-gui.py"], ["sh", "-c", "python3 arltuner-gui.py"], []]
+        for argv in ok:
+            self.assertTrue(reissue._is_server_argv([a.encode() for a in argv], b"arltuner-gui"), argv)
+        for argv in bad:
+            self.assertFalse(reissue._is_server_argv([a.encode() for a in argv], b"arltuner-gui"), argv)
 
 
 class TestResultsPerSession(Base):  # round 2, item 4
