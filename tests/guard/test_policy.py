@@ -300,11 +300,25 @@ class AutoLimitsTests(unittest.TestCase):
         from arltuner.topology import arl_s_285k
 
         p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 57)  # P: 0x1C[15:8] = [7:0] = 57
-        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 48)  # E: max(48, 46)
-        self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 55)
-        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 57)  # the larger byte
-        self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 57)  # per kind: the highest word read
+        self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 60)  # P: 0x1C[15:8] = [7:0] = 57, + 3 (D-038)
+        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 51)  # E: max(48, 46) + 3
+        self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 58)
+        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 60)  # the larger byte
+        self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 60)  # per kind: the highest word read
+
+    def test_fused_ratio_cap_adds_the_oc_headroom_and_clamps_to_the_sanity_bound(self) -> None:
+        """D-038: fused max of the kind + AUTO_OC_HEADROOM (3), clamped to SANITY_RATIO_MAX (P 62 / E 60); None when no 0x1C of the kind was read."""
+        from arltuner.guard.policy import AUTO_OC_HEADROOM, SANITY_RATIO_MAX, fused_ratio_cap
+
+        self.assertEqual(AUTO_OC_HEADROOM, 3)
+        self.assertEqual(fused_ratio_cap("P", [0x3939]), 60)  # P fused 57 -> 60
+        self.assertEqual(fused_ratio_cap("E", [0x2E2E]), 49)  # E fused 46 -> 49
+        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 51)  # the highest word read; [7:0] 48 beats [15:8] 46
+        self.assertEqual(fused_ratio_cap("P", [0x3D3D]), SANITY_RATIO_MAX["P"])  # 61 + 3 = 64 -> clamped to 62
+        self.assertEqual(fused_ratio_cap("P", [0x3B3B]), 62)  # 59 + 3 = 62: exactly the bound
+        self.assertEqual(fused_ratio_cap("E", [0x3A3A]), SANITY_RATIO_MAX["E"])  # 58 + 3 = 61 -> clamped to 60
+        for words in ([], [None], [0], [None, 0]):
+            self.assertIsNone(fused_ratio_cap("P", words))  # nothing read: no raise
 
     def test_auto_ratio_unread_or_zero_allows_no_raise(self) -> None:
         from arltuner.topology import arl_s_285k
@@ -341,8 +355,8 @@ class AutoLimitsTests(unittest.TestCase):
 
         p = load_policy(self.TOML, arl_s_285k())
         e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939})
-        self.assertEqual(e.ratio_max, 48)  # only the E CPUs' words count for the E table
-        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}).ratio_max, 57)
+        self.assertEqual(e.ratio_max, 51)  # only the E CPUs' words count for the E table (48 + 3)
+        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}).ratio_max, 60)
         self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}).ratio_max)
         self.assertIsNone(build_msr_context(p, 0x650, platform_info=None).ratio_max)
 

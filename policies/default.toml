@@ -6,8 +6,8 @@
 #   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200)
 #   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV
 #   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session (never above the code sanity bound of its kind)
-#   ratio        "auto" for P and E: the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the cores of that kind read in the session,
-#                no raise when unread. Never derived from sysfs cpuinfo_max_freq: it follows OC writes and would ratchet. To allow more, put a number
+#   ratio        "auto" for P and E: the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the cores of that kind read in the session
+#                + 3 bins of OC headroom (D-038: P 57 -> 60, E 46 -> 49; clamped to the sanity bound P 62 / E 60), no raise when unread. Never derived from sysfs cpuinfo_max_freq: it follows OC writes and would ratchet. To allow more, put a number
 #                in /etc/arltuner/policy.toml (e.g. E = 49) -- the file is yours and install.sh never overwrites it.
 #   CPUs         "auto": the P and E CPUs of the live topology (P = devices/cpu_core, E = devices/cpu_atom)
 #   op caps      indicators only: 100000 per session and per boot; no dwell between operations
