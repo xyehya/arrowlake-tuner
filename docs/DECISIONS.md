@@ -168,3 +168,6 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   ⇒ no raise (fail closed). Defaults are unchanged (`policies/default.toml`, D-038). The page, docs and CLI say for every limit where it comes
   from and that it is editable in `/etc/arltuner/policy.toml`. Unchanged mechanisms: adaptive mode only (D-016), one mailbox transaction at a
   time, allowlist, read-back, health gate, audit log.
+- **D-040 · 2026-10-12 · One-off: the G-136 worker captures the README images on the live GUI (operator).** Operator: "i asked u to run an
+  agent before that for the screenshots". Scope: `tools/arltuner-gui.py` (launcher reissue) and `tools/screenshots.py` only, with its click
+  allowlist and read-only API gate unchanged (no mailbox, no writes). Other workers keep the AGENTS.md rule.
