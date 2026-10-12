@@ -29,12 +29,13 @@ class JournalFileTests(MeasureCase):
         doc = json.loads(self.journal.read_text())
         by = {(e["cpu"], e["attr"]): e["value"] for e in doc["entries"]}
         cpus = [2, 12, 13, 14, 15]
-        self.assertEqual(set(by), {(c, a) for c in cpus for a in (CAP_ATTR, EPP_ATTR)})
-        self.assertEqual({by[(c, CAP_ATTR)] for c in (2,)}, {str(self.model.max_khz(2))})  # the ORIGINAL values, not the capped ones
-        self.assertEqual({by[(c, EPP_ATTR)] for c in cpus}, {ORIGINAL_EPP})
-        self.assertEqual(doc["context"]["2"], {MIN_ATTR: "800000", "scaling_governor": "powersave"})  # recorded, never touched
-        self.assertFalse([w for w in self.cpufreq.writes if w[1] in (MIN_ATTR, "scaling_governor")])
-        self.assertNotEqual(self.read(2, EPP_ATTR), ORIGINAL_EPP)  # EPP is in force during the run
+        self.assertEqual(set(by), {(c, a) for c in cpus for a in (CAP_ATTR, MIN_ATTR)})  # G-132: max and min are journaled, EPP is not touched
+        self.assertEqual({by[(c, CAP_ATTR)] for c in (2,)}, {str(self.model.max_khz(2))})  # the ORIGINAL values, not the pinned ones
+        self.assertEqual({by[(c, MIN_ATTR)] for c in cpus}, {"800000"})
+        self.assertEqual(doc["context"]["2"], {"scaling_governor": "powersave"})  # recorded, never touched
+        self.assertFalse([w for w in self.cpufreq.writes if w[1] in (EPP_ATTR, "scaling_governor")])
+        self.assertEqual(self.read(2, EPP_ATTR), ORIGINAL_EPP)
+        self.assertEqual(self.read(2, MIN_ATTR), self.read(2, CAP_ATTR))  # pinned: min = max while the point is measured
         gate.set()
         self.assertTrue(h.response("m", 30)["ok"])
         self.assert_cpufreq_pristine()
@@ -77,7 +78,7 @@ class RecoveryTests(MeasureCase):
         h.send({"id": "m", "op": "vf.measure", "args": {"units": ["P1", "EC2"]}})
         self.assertTrue(reached.wait(10))
         journal = self.journal.read_text()
-        in_force = {(c, a): self.read(c, a) for c in [1, 16, 17, 18, 19] for a in (CAP_ATTR, EPP_ATTR)}
+        in_force = {(c, a): self.read(c, a) for c in [1, 16, 17, 18, 19] for a in (CAP_ATTR, MIN_ATTR)}
         gate.set()
         h.response("m", 30)
         h.stop()
@@ -85,12 +86,13 @@ class RecoveryTests(MeasureCase):
             self.cpufreq.write(c, a, v)
         self.journal.write_text(journal)
         os.chmod(self.journal, 0o600)
-        self.assertTrue(any(v != str(self.model.max_khz(c)) for (c, a), v in in_force.items() if a == CAP_ATTR) or self.read(1, EPP_ATTR) != ORIGINAL_EPP)
+        self.assertTrue(any(v != str(self.model.max_khz(c)) for (c, a), v in in_force.items() if a == CAP_ATTR))
+        self.assertTrue(any(v != "800000" for (c, a), v in in_force.items() if a == MIN_ATTR))
         return journal
 
     def test_a_new_helper_restores_a_stale_journal_before_it_serves_anything(self) -> None:
         self.die_mid_run()
-        self.assertNotEqual(self.read(1, EPP_ATTR), ORIGINAL_EPP)
+        self.assertNotEqual(self.read(1, MIN_ATTR), "800000")
         h = self.start_measure()
         h.call("p", "preflight")  # the dispatch loop is up, so recovery (before it) has finished
         self.assert_cpufreq_pristine()
@@ -105,13 +107,23 @@ class RecoveryTests(MeasureCase):
         self.assertEqual(self.read(5, MIN_ATTR), "1200000")
         self.assertEqual(self.read(1, EPP_ATTR), ORIGINAL_EPP)
 
+    def test_a_journal_of_the_previous_helper_version_with_epp_entries_is_still_restored(self) -> None:
+        self.cpufreq.write(3, EPP_ATTR, "balance_performance")
+        self.cpufreq.write(3, CAP_ATTR, "3000000")
+        self.journal.write_text(json.dumps({"version": 1, "pid": 1, "boot_id": None, "created": 0, "context": {}, "entries": [
+            {"cpu": 3, "attr": CAP_ATTR, "value": str(self.model.max_khz(3)), "at_max": True}, {"cpu": 3, "attr": EPP_ATTR, "value": ORIGINAL_EPP}]}))
+        os.chmod(self.journal, 0o600)
+        self.start_measure().call("p", "preflight")
+        self.assertEqual((self.read(3, CAP_ATTR), self.read(3, EPP_ATTR)), (str(self.model.max_khz(3)), ORIGINAL_EPP))
+        self.assertFalse(self.journal.exists())
+
     def test_a_journal_that_cannot_be_fully_restored_is_kept_and_logged(self) -> None:
         self.die_mid_run()
         self.cpufreq.fail = lambda cpu, attr, value: cpu == 1 and attr == CAP_ATTR
         self.start_measure().call("p", "preflight")
         self.assertTrue(self.journal.exists())
         self.assertTrue(any("could NOT restore scaling_max_freq of cpu 1 " in line for line in self.logs), self.logs)
-        self.assertEqual(self.read(1, EPP_ATTR), ORIGINAL_EPP)  # everything else was still restored
+        self.assertEqual(self.read(1, MIN_ATTR), "800000")  # everything else was still restored
 
     def test_recovery_rejects_foreign_content_in_the_journal(self) -> None:
         bad = {"version": 1, "entries": [{"cpu": 0, "attr": "scaling_governor", "value": "performance"}]}

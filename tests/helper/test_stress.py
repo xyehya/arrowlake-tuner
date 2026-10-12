@@ -2,6 +2,7 @@
 SimModel. No real stress-ng / stressapptest, no sudo, no hardware, no mailbox."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
@@ -596,6 +597,37 @@ class CapTests(StressCase):
         h.call("stop", "stress.stop")
         r = h.response("s", 30)["result"]
         self.assertEqual(r["stopped_by"], "cancel")
+        self.assert_cpufreq_pristine()
+
+    def ebusy(self) -> None:
+        real = self.cpufreq.write
+
+        def write(cpu: int, attr: str, value: str) -> None:
+            if attr == EPP_ATTR and value == "performance":
+                raise OSError(errno.EBUSY, os.strerror(errno.EBUSY))
+            real(cpu, attr, value)
+
+        self.cpufreq.write = write  # type: ignore[method-assign]
+
+    def test_g132_the_performance_governor_leaves_epp_alone_and_says_so_once(self) -> None:
+        """Under the performance governor the kernel holds EPP and refuses a write (EBUSY): not written, not journaled, one note for all CPUs."""
+        for cpu in range(24):
+            self.cpufreq.write(cpu, "scaling_governor", "performance")
+        self.cpufreq.writes.clear()
+        self.ebusy()
+        h = self.start_stress()
+        r = self.run_stress(h, {"units": ["P2", "EC0"], "ratio_cap": 40})["result"]
+        self.assertEqual([x for x in r["error_lines"] if "energy_performance_preference" in x or "EPP" in x], ["helper: governor performance: EPP already at performance"])
+        self.assertEqual({a for _, a, _ in self.cpufreq.writes}, {CAP_ATTR})  # no EPP write, neither for the run nor for the restore
+        self.assertEqual(self.read(2, EPP_ATTR), ORIGINAL_EPP)
+        self.assertFalse(self.journal.exists())
+
+    def test_g132_any_other_epp_failure_is_one_aggregated_line(self) -> None:
+        self.ebusy()  # the governor is powersave, so the write is tried and fails on every CPU of the run
+        h = self.start_stress()
+        r = self.run_stress(h, {"units": ["P2", "EC0"], "ratio_cap": 40})["result"]
+        notes = [x for x in r["error_lines"] if "energy_performance_preference" in x]
+        self.assertEqual(notes, ["helper: energy_performance_preference not set on cpus 2, 8?11 (Device or resource busy); the run continues"])  # error lines are printable ASCII: the dash of the range shows as ?
         self.assert_cpufreq_pristine()
 
     def test_cap_valid_within_one_bin(self) -> None:

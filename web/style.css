@@ -512,6 +512,7 @@ th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color:
 .vc-dot { fill: var(--u); stroke: var(--surface); stroke-width: 1.5; }
 .vc-dot.between { stroke-width: 0.8; fill-opacity: 0.55; }
 .vc-dot.fused { stroke: var(--text); stroke-width: 1.2; }
+.vc-dot.interp { fill: var(--surface); stroke: var(--u); stroke-width: 2.2; }   /* G-132: an interpolated V/F point: a hollow marker on the line */
 .vc-head { fill: var(--u); fill-opacity: 0.25; stroke: var(--u); stroke-width: 2; }
 .vc-marker circle { fill: var(--u); stroke: var(--surface); stroke-width: 2; }
 .vc-marker.hollow circle { fill: transparent; stroke: var(--u); stroke-width: 2.5; }

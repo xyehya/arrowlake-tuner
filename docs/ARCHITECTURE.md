@@ -176,7 +176,7 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
 - **`vf.measure {mode: "quick"|"dense", units?: [unit] (default all 12), name?: str ≤ 64}`** (long; state `measuring`; **not mailbox**; writes
   cpufreq only, journaled) ⇒ `{curve_id, record}`. `progress` events: `{step, of, unit, ratio, eta_s}`; per finished point an event
   `vf.point {unit, ratio, mhz, vid_v, status}` so the chart fills live. Cancel ⇒ `CANCELLED` with `detail.partial` = the record so far (also stored,
-  `complete: false`). Caps/EPP restored in every exit path and from a stale journal at helper start.
+  `complete: false`). Caps (min and max) restored in every exit path and from a stale journal at helper start (EPP is no longer touched, G-132).
 - **Curve record** `{id, name, created, boot_id, mode, complete, kernel, tuning_state: {kind: "stock"|"words"|"unknown", words?: {cpu: [hex]}},
   temps: {min_c, max_c}, units: {unit: {cpus: [int], points: [{ratio, mhz, vid_v, vid_min, vid_max, kept, total, status:
   "ok"|"mismatch"|"unreachable"}]}}, baseline: bool}`.
@@ -196,7 +196,20 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   one per E-cluster, guarded reads) and `turbo: {P: {ratios: [8], counts: [8]}, E: {...}, favored: {cpu: ratio}}` (plain rdmsr 0x1AD/0x1AE/
   0x650/0x651 + 0x1C read). `tune.plan` result gains per unit/point `effective_v` (baseline measured VID + offset, after the F4 clamp) +
   `clamped_by: point|null`, `vccia: {predicted_v, set_by: {unit, ratio}}` (F6), warnings (F4/F8); `REFUSED TURBO_ORDER` (F5). Curve points gain
-  `reason` for `unreachable`: `"max_turbo"` | `"cpufreq_granularity"` | `"active_cores"`. A plan's prediction uses the newest `baseline` curve.
+  `reason` for `unreachable`: `"max_turbo"` | `"cpufreq_granularity"` (old records) | `"cap_granularity"` | `"active_cores"` | `"turbo_off"` | `"user_cap"` (G-132, below). A plan's prediction uses the newest `baseline` curve.
+- **Addendum "G-132" (measure from R-001, `docs/knowledge/power-profile-capping.md`):** `vf.measure` **pins** every cap: `scaling_min_freq` = `scaling_max_freq` = cap on all CPUs of the
+  unit (max first when raising, min first when lowering; the kernel refuses min > max), journals and restores both (journal attrs `scaling_max_freq` + `scaling_min_freq`; a journal of the
+  previous version with an EPP entry is still restored). Profile, governor and EPP are never written. The cap order (`ratio x 100 MHz`, then `+1` bin) and the helper's settle are unchanged.
+  Curve point fields added: `cap_khz` (int, the cap that ran a point the nominal caps missed; only then), `retried` (bool, a retry or the cap search ran), `neighbours: [A|null, B|null]` (on
+  `cap_granularity`: the nearest ratios below / above that the caps did run), `fused_point` (also on unreachable V/F points), `from: [ratioA, ratioB]` and `exact: true` (on `interpolated`).
+  Point `status` gains `"interpolated"`: a V/F point (`fused_point` set) with `reason` `cap_granularity` / `cpufreq_granularity` / `active_cores` that has a measured (`ok`) V/F point on both sides gets
+  `vid_v` = the straight line between the nearest measured V/F points `from`, clamped into their voltages (`exact` when both are equal); `vid_min`/`vid_max` stay null, `kept`/`total` are those of the
+  failed attempt. Never `ok`; points above the unit's reach (`max_turbo`, `turbo_off`, `user_cap`) or without a neighbour on one side stay `unreachable`. New `reason`s: `cap_granularity` (replaces
+  `cpufreq_granularity` for new records: no cap reaches the ratio; the cap search is bounded to about 10 s per point), `turbo_off` (`intel_pstate/no_turbo` = 1: points above the unit's base ratio,
+  `base_frequency` of its first CPU else `cpuinfo_max_freq`, are not attempted; `kept = total = 0`; the result's `problems[0]` is "Turbo is off (power-saver profile?): ratios above base cannot be
+  reached — switch to Balanced or Performance"), `user_cap` (the user's own `scaling_max_freq` is below the ratio; was `max_turbo`). `curves.list` result gains `no_turbo: bool | null` (sysfs
+  read; `null` = unknown) so the Curves page shows the turbo note before a run. `stress.start`: under the `performance` governor the EPP write is skipped (one `helper:` line), any other EPP
+  failure is one aggregated `helper:` line with the CPUs as ranges.
 - **Addendum "G-116" (stress / validation; SPEC §9 R7/R10/R11/R27/R28; module `helper/ops_stress.py`, `stress/`):** no mailbox, no MSR write, not write-gated.
   - **`stress.start {kind: "cpu"|"memory", method?: "integer"|"vector-math"|"cache" (cpu; default "integer"), units?: [unit] (cpu; default all 12), ratio_cap?:
     int 8..60|null, duration_s: 30..3600 (required), memory_mb?: 256..(MemAvailable-2048) (memory; default 3/4 of that)}`** (long; state `stressing`) ⇒

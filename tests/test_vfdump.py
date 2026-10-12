@@ -21,7 +21,7 @@ from arltuner.msr.port import MsrError
 from arltuner.msr.sim import POINT_OFFSETS_ARL_S, POINT_RATIOS_P_NONFAVORED_SIM
 from arltuner.topology import arl_s_285k
 
-from .test_cli import POLICY_TOML, TOKEN, CliCase
+from .test_cli import POLICY_TOML, CliCase
 
 #: A policy that can hold the whole dump: reads of P2 0..10 (the walk's cap for a P-core), session / boot caps above the 264 of ``--all-e``.
 DUMP_POLICY = (
@@ -801,6 +801,98 @@ class MeasureGroupUnit(unittest.TestCase):
         self.assertEqual((groups[1].cpus, groups[1].rep), ((8, 9, 10, 11), 8))
 
 
+class StrictPinIO(FakeIO):
+    """G-132: a FakeIO with ``scaling_min_freq`` that refuses ``min > max`` the way the kernel does (EINVAL), and logs every pinned write in order."""
+
+    def __init__(self, **kw: int) -> None:
+        super().__init__(**kw)
+        self.mins = {c: 800_000 for c in range(24)}
+        self.log: list[tuple[int, str, int]] = []
+        self.pinned_at_sample: list[tuple[int, int]] = []
+
+    def read_min(self, cpu: int) -> int:
+        return self.mins[cpu]
+
+    def write_min(self, cpu: int, khz: int) -> None:
+        if khz > self.caps[cpu]:
+            raise OSError(22, "Invalid argument (min above max)")
+        self.log.append((cpu, "min", khz))
+        self.mins[cpu] = khz
+
+    def write_cap(self, cpu: int, khz: int) -> None:
+        if khz < self.mins[cpu]:
+            raise OSError(22, "Invalid argument (max below min)")
+        self.log.append((cpu, "max", khz))
+        super().write_cap(cpu, khz)
+
+    def word(self, cpu: int) -> int:
+        self.pinned_at_sample.append((self.mins[cpu], self.caps[cpu]))
+        return super().word(cpu)
+
+
+class PinningUnit(unittest.TestCase):
+    """G-132 (R-001 section 5): every cap is a min = max pin; the order of the two writes follows the direction; both values are restored."""
+
+    def group(self, kind: str, cpus: tuple[int, ...], ratios: tuple[int, ...]) -> vfdump.MeasureGroup:
+        return vfdump.MeasureGroup("u", kind, cpus, cpus[0], ratios)
+
+    def test_raising_writes_max_first_lowering_writes_min_first_and_both_are_restored(self) -> None:
+        io, problems = StrictPinIO(), []
+        out = vfdump.measure_group(io, self.group("P", (0,), (48, 30)), io.word, lambda s: None, problems, samples=3, min_valid=2)  # 48x raises the pin, 30x lowers it
+        self.assertEqual([m.status for m in out], ["ok", "ok"])
+        self.assertEqual(problems, [])
+        self.assertEqual([(a, k) for _, a, k in io.log[:4]], [("max", 4_800_000), ("min", 4_800_000), ("min", 3_000_000), ("max", 3_000_000)])
+        self.assertEqual([(a, k) for _, a, k in io.log[4:]], [("max", 5_700_000), ("min", 800_000)])  # restore: raising the max first, then the min
+        self.assertEqual((io.caps, io.mins), (io.original, {c: 800_000 for c in range(24)}))
+        self.assertEqual(set(io.pinned_at_sample), {(4_800_000, 4_800_000), (3_000_000, 3_000_000)})  # min = max while sampling
+
+    def test_the_restore_goes_min_first_when_the_original_max_is_below_the_pin(self) -> None:
+        io, problems = StrictPinIO(p_cap=3_000_000), []  # the user's cap is 3000 MHz
+        saved = vfdump.save_caps(io, [0])
+        vfdump.set_cap(io, 0, 3_100_000)  # above the user's cap (a "+1 bin" attempt)
+        self.assertEqual((io.caps[0], io.mins[0]), (3_100_000, 3_100_000))
+        vfdump.restore_caps(io, saved, problems)
+        self.assertEqual((problems, io.caps[0], io.mins[0]), ([], 3_000_000, 800_000))
+        self.assertEqual([(a, k) for _, a, k in io.log][-2:], [("min", 800_000), ("max", 3_000_000)])  # the new max is below the pinned min: min first
+
+    def test_an_io_without_min_still_gets_the_max_alone(self) -> None:
+        io = FakeIO()
+        vfdump.set_cap(io, 0, 4_000_000)
+        vfdump.restore_caps(io, {0: (None, 5_700_000)}, [])
+        self.assertEqual([khz for cpu, khz in io.writes if cpu == 0], [4_000_000, 5_700_000])
+
+    def test_a_failed_restore_is_reported_not_swallowed(self) -> None:
+        io, problems = StrictPinIO(), []
+        io.fail_restore_cpu = 0
+        vfdump.measure_group(io, self.group("P", (0,), (30,)), io.word, lambda s: None, problems, samples=3, min_valid=2)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("could NOT restore scaling_max_freq of cpu 0", problems[0])
+
+    def test_a_ratio_above_the_users_own_cap_is_user_cap_above_the_core_limit_is_not(self) -> None:
+        io = StrictPinIO(p_cap=4_000_000)
+        out = vfdump.measure_group(io, self.group("P", (0,), (40, 45, 60)), io.word, lambda s: None, [], samples=3, min_valid=2)
+        self.assertEqual([(m.ratio, m.status, m.why) for m in out], [(40, "ok", ""), (45, "skipped", "user_cap"), (60, "skipped", "below")])
+
+    def test_search_cap_reports_what_it_saw_and_stops_at_its_time_budget(self) -> None:
+        class Rounded(StrictPinIO):
+            def running_ratio(self, cpu: int) -> int:
+                return 22 if self.caps[cpu] < 2_400_000 else 24  # 23x is run by no cap
+
+        io, problems, seen = Rounded(), [], set()
+        self.assertIsNone(vfdump.search_cap(io, self.group("E", (8, 9, 10, 11), (23,)), 23, io.word, lambda s: None, problems, samples=3, min_valid=2, seen_out=seen))
+        self.assertEqual((seen, problems), ({22}, []))  # the nominal 23x / 24x caps are the measurement's business; the search saw what its own caps ran
+        self.assertEqual((io.caps, io.mins), (io.original, {c: 800_000 for c in range(24)}))
+        # a budget: the injected clock advances 4 s per call and an attempt is 0.3 s long, so 10 s allow a few caps, not all of them
+        ticks = iter(range(0, 1000, 4))
+        io2 = Rounded()
+        vfdump.search_cap(io2, self.group("E", (8, 9, 10, 11), (23,)), 23, io2.word, lambda s: None, [], settle_s=0.2, samples=1, interval_s=0.1, min_valid=2,
+                          budget_s=10, clock=lambda: float(next(ticks)))
+        unbounded = len({k for c, a, k in io.log if a == "max" and c == 8})
+        bounded = len({k for c, a, k in io2.log if a == "max" and c == 8})
+        self.assertLess(bounded, unbounded)
+        self.assertEqual((io2.caps, io2.mins), (io2.original, {c: 800_000 for c in range(24)}))
+
+
 class SysfsIO(unittest.TestCase):
     def test_reads_and_writes_the_scaling_max_freq_files_under_the_given_root(self) -> None:
         import tempfile
@@ -821,6 +913,22 @@ class SysfsIO(unittest.TestCase):
             load.stop()
             popen.return_value.terminate.assert_called_once()
             self.assertIn("stress-ng", vfdump.SysfsMeasureIO(root, popen=popen, which=lambda name: None).check() or "")
+
+    def test_g132_scaling_min_freq_is_read_and_written_and_a_missing_file_means_no_pin(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "cpu3" / "cpufreq").mkdir(parents=True)
+            (root / "cpu3" / "cpufreq" / "scaling_max_freq").write_text("5700000\n", encoding="ascii")
+            io = vfdump.SysfsMeasureIO(root, popen=mock.Mock(), which=lambda name: "/usr/bin/" + name)
+            self.assertIsNone(io.read_min(3))   # no scaling_min_freq file: set_cap writes the max alone
+            vfdump.set_cap(io, 3, 4_000_000)
+            self.assertEqual((root / "cpu3" / "cpufreq" / "scaling_max_freq").read_text(encoding="ascii"), "4000000")
+            (root / "cpu3" / "cpufreq" / "scaling_min_freq").write_text("800000\n", encoding="ascii")
+            vfdump.set_cap(io, 3, 4_500_000)
+            self.assertEqual([(root / "cpu3" / "cpufreq" / f).read_text(encoding="ascii") for f in ("scaling_min_freq", "scaling_max_freq")], ["4500000", "4500000"])
+            self.assertEqual(io.read_min(3), 4_500_000)
 
     def test_core_temperature_comes_from_the_coretemp_hwmon_by_core_id(self) -> None:
         import tempfile

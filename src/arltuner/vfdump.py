@@ -29,6 +29,7 @@ from __future__ import annotations
 import math
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +55,9 @@ __all__ = [
     "Unit",
     "CAP_SEARCH_OFFSETS_KHZ",
     "caps_to_try",
+    "restore_caps",
+    "save_caps",
+    "set_cap",
     "find_flags",
     "format_dump",
     "measure_group",
@@ -342,6 +346,8 @@ class MeasureIO(Protocol):
 
     def write_cap(self, cpu: int, khz: int) -> None: ...
 
+    # Optional (G-132): ``read_min(cpu) -> int | None`` / ``write_min(cpu, khz)`` = ``scaling_min_freq``; with them every cap is pinned (min = max), see :func:`set_cap`.
+
     def read_max_khz(self, cpu: int) -> int:
         """``cpuinfo_max_freq`` in kHz: a cap is never set above it."""
         ...
@@ -353,6 +359,54 @@ class MeasureIO(Protocol):
     def read_temp_c(self, cpu: int) -> float | None:
         """Core temperature (degrees C) of ``cpu`` from the coretemp hwmon, or ``None`` if there is no sensor for it. Read-only sysfs."""
         ...
+
+
+def _min_of(io: Any, cpu: int) -> int | None:
+    """``scaling_min_freq`` of ``cpu`` when the IO can pin (G-132: ``read_min`` / ``write_min``), else ``None`` (the cap alone is written, as before)."""
+    reader = getattr(io, "read_min", None)
+    if reader is None:
+        return None
+    try:
+        return reader(cpu)
+    except (OSError, ValueError):
+        return None
+
+
+def set_cap(io: Any, cpu: int, khz: int) -> None:
+    """G-132 (R-001 section 5): cap ``cpu`` at ``khz`` by pinning ``scaling_min_freq`` = ``scaling_max_freq`` = ``khz`` (profile-proof: EPP ``power`` cannot hold the core below it). The kernel
+    refuses ``min > max``, so the order follows the direction: ``khz`` at or above the current minimum -> max first, then min; below it -> min first, then max. An IO without
+    ``read_min`` / ``write_min`` (or a CPU without ``scaling_min_freq``) gets the max-only write of before."""
+    cur_min = _min_of(io, cpu)
+    if cur_min is None:
+        io.write_cap(cpu, khz)
+    elif khz >= cur_min:
+        io.write_cap(cpu, khz)
+        io.write_min(cpu, khz)
+    else:
+        io.write_min(cpu, khz)
+        io.write_cap(cpu, khz)
+
+
+def save_caps(io: Any, cpus: Sequence[int]) -> dict[int, tuple[int | None, int]]:
+    """``{cpu: (scaling_min_freq | None, scaling_max_freq)}`` to hand to :func:`restore_caps`."""
+    return {cpu: (_min_of(io, cpu), io.read_cap(cpu)) for cpu in cpus}
+
+
+def restore_caps(io: Any, saved: Mapping[int, tuple[int | None, int]], problems: list[str]) -> None:
+    """Put back what :func:`save_caps` read (both values, in the order the kernel accepts); a failure is appended to ``problems`` and never swallowed."""
+    for cpu, (mn, mx) in saved.items():
+        try:
+            cur_min = _min_of(io, cpu)
+            if mn is None or cur_min is None:
+                io.write_cap(cpu, mx)
+            elif mx >= cur_min:
+                io.write_cap(cpu, mx)
+                io.write_min(cpu, mn)
+            else:
+                io.write_min(cpu, mn)
+                io.write_cap(cpu, mx)
+        except Exception as exc:
+            problems.append(f"could NOT restore scaling_max_freq of cpu {cpu} to {mx} kHz: {type(exc).__name__}: {exc} (restore it by hand)")
 
 
 @dataclass(frozen=True)
@@ -432,7 +486,7 @@ def _sample(
     """Cap every CPU of the group at ``cap``, load them, take ``samples`` readings of ``0x198`` (and the temperature) on the rep CPU; the load is always stopped.
     ``early = (target ratio, n)``: stop as soon as ``n`` readings have that running ratio ``[15:8]``."""
     for cpu in group.cpus:
-        io.write_cap(cpu, cap)
+        set_cap(io, cpu, cap)
     load = io.start_load(group.cpus, settle_s + samples * interval_s + 2.0)
     words: list[int] = []
     temps: list[float] = []
@@ -474,8 +528,8 @@ def measure_group(
     a voltage. A ratio whose own frequency (``ratio x 100 MHz``) is above the CPUs' current ``scaling_max_freq`` is skipped with a note. **The original caps are
     always restored** (``finally``, so also on an exception and Ctrl-C); a restore that fails is appended to ``problems`` (never swallowed).
     ``on_result`` (G-111) is called with every :class:`RatioMeasurement` as it is appended (the helper's live ``vf.point`` events)."""
-    originals = {cpu: io.read_cap(cpu) for cpu in group.cpus}
-    ceiling = min(originals.values())
+    originals = save_caps(io, group.cpus)
+    ceiling = min(mx for _, mx in originals.values())
     max_khz = min(io.read_max_khz(cpu) for cpu in group.cpus)
     results: list[RatioMeasurement] = []
 
@@ -487,8 +541,11 @@ def measure_group(
     try:
         for ratio in group.ratios:
             nominal = ratio * 100_000
-            if nominal > ceiling or nominal > max_khz:
+            if nominal > max_khz:  # the core cannot run it at all (cpuinfo_max_freq)
                 add(RatioMeasurement(ratio, "skipped", None, note=f"{ratio}x ({nominal // 1000} MHz) is above the current scaling_max_freq ({min(ceiling, max_khz) // 1000} MHz)", why="below"))
+                continue
+            if nominal > ceiling:  # G-132: the user's own scaling_max_freq is below it
+                add(RatioMeasurement(ratio, "skipped", None, note=f"{ratio}x ({nominal // 1000} MHz) is above the current scaling_max_freq ({ceiling // 1000} MHz)", why="user_cap"))
                 continue
             attempts = caps_to_try(ratio, max_khz)
             for n, cap in enumerate(attempts):
@@ -516,11 +573,7 @@ def measure_group(
                 add(RatioMeasurement(ratio, "MISMATCH", cap, None, None, seen, note, t_lo, t_hi, len(kept), len(words), "below" if seen[-1] < ratio else "above"))
                 break
     finally:
-        for cpu, khz in originals.items():
-            try:
-                io.write_cap(cpu, khz)
-            except Exception as exc:
-                problems.append(f"could NOT restore scaling_max_freq of cpu {cpu} to {khz} kHz: {type(exc).__name__}: {exc} (restore it by hand)")
+        restore_caps(io, originals, problems)
     return results
 
 
@@ -542,14 +595,21 @@ def search_cap(
     interval_s: float = SAMPLE_INTERVAL_S,
     min_valid: int = MIN_VALID,
     offsets: Sequence[int] = CAP_SEARCH_OFFSETS_KHZ,
+    seen_out: set[int] | None = None,
+    budget_s: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> RatioMeasurement | None:
     """G-131: one more try for a ``ratio`` that the nominal caps (``ratio`` / ``ratio + 1`` x 100 MHz) never ran: write each cap of ``offsets`` around ``ratio x 100 MHz`` to every
     CPU of the group, read ``scaling_max_freq`` back, **skip a cap whose read-back equals one already tried** (the kernel's perf rounding makes neighbouring values the same cap),
     sample, and stop at the first cap that gives ``min_valid`` samples at the target. Returns that :class:`RatioMeasurement` (``cap_khz`` = the read-back value in force) or ``None``.
-    Never above the CPUs' ``cpuinfo_max_freq`` or their current ``scaling_max_freq``; a cap the kernel refuses is skipped. The original caps are always restored (``finally``)."""
-    originals = {cpu: io.read_cap(cpu) for cpu in group.cpus}
-    limit = min(min(originals.values()), min(io.read_max_khz(cpu) for cpu in group.cpus))
+    Never above the CPUs' ``cpuinfo_max_freq`` or their current ``scaling_max_freq``; a cap the kernel refuses is skipped. The original caps are always restored (``finally``).
+    G-132: ``seen_out`` collects every running ratio the sampled caps gave (the "nearest ratios" of a point no cap reaches); ``budget_s`` bounds the time (by ``clock``): no new
+    cap is sampled when the next attempt would end past it."""
+    originals = save_caps(io, group.cpus)
+    limit = min(min(mx for _, mx in originals.values()), min(io.read_max_khz(cpu) for cpu in group.cpus))
     nominal = ratio * 100_000
+    started = clock()
+    attempt_s = settle_s + samples * interval_s
     tried: set[int] = set()
     found: RatioMeasurement | None = None
 
@@ -557,7 +617,7 @@ def search_cap(
         """Write ``cap`` to the group and return what the rep CPU reads back (``None``: refused)."""
         try:
             for cpu in group.cpus:
-                io.write_cap(cpu, cap)
+                set_cap(io, cpu, cap)
             return io.read_cap(group.rep)
         except (OSError, ValueError):
             return None
@@ -574,9 +634,13 @@ def search_cap(
             back = put(cap)
             if back is None or back in tried or back > limit:
                 continue
+            if budget_s is not None and clock() - started + attempt_s > budget_s:
+                break
             tried.add(back)
             words, temps = _sample(io, group, back, read_perf, sleep, settle_s, samples, interval_s)
             running = [(w >> 8) & 0xFF for w in words]
+            if seen_out is not None:
+                seen_out.update(running)
             kept = [w for w, r in zip(words, running) if r == ratio]
             if len(kept) >= min_valid:
                 vids = [((w >> 32) & 0xFFFF) / 8192 for w in kept]
@@ -585,11 +649,7 @@ def search_cap(
                                          len(kept), len(words), "", sum(vids) / len(vids))
                 break
     finally:
-        for cpu, khz in originals.items():
-            try:
-                io.write_cap(cpu, khz)
-            except Exception as exc:
-                problems.append(f"could NOT restore scaling_max_freq of cpu {cpu} to {khz} kHz: {type(exc).__name__}: {exc} (restore it by hand)")
+        restore_caps(io, originals, problems)
     return found
 
 
@@ -623,8 +683,8 @@ class SysfsMeasureIO:
         self._popen = popen
         self._which = which if which is not None else shutil.which
 
-    def _path(self, cpu: int) -> Path:
-        return self._root / f"cpu{cpu}" / "cpufreq" / "scaling_max_freq"
+    def _path(self, cpu: int, attr: str = "scaling_max_freq") -> Path:
+        return self._root / f"cpu{cpu}" / "cpufreq" / attr
 
     def check(self) -> str | None:
         return None if self._which("stress-ng") else "stress-ng was not found on PATH (needed to load the cores for --measure)"
@@ -634,6 +694,16 @@ class SysfsMeasureIO:
 
     def write_cap(self, cpu: int, khz: int) -> None:
         self._path(cpu).write_text(str(int(khz)), encoding="ascii")
+
+    def read_min(self, cpu: int) -> int | None:
+        """``scaling_min_freq`` in kHz, ``None`` when the file is not there (G-132: then a cap is the max alone)."""
+        try:
+            return int(self._path(cpu, "scaling_min_freq").read_text(encoding="ascii").strip())
+        except FileNotFoundError:
+            return None
+
+    def write_min(self, cpu: int, khz: int) -> None:
+        self._path(cpu, "scaling_min_freq").write_text(str(int(khz)), encoding="ascii")
 
     def read_max_khz(self, cpu: int) -> int:
         return int((self._root / f"cpu{cpu}" / "cpufreq" / "cpuinfo_max_freq").read_text(encoding="ascii").strip())

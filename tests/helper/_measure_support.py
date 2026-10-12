@@ -47,6 +47,9 @@ def make_cpufreq(root: Path, model: SimModel | None = None) -> CpufreqFiles:
         (d / MIN_ATTR).write_text("800000\n")
         (d / GOV_ATTR).write_text(f"{ORIGINAL_GOV}\n")
         (d / EPP_ATTR).write_text(f"{ORIGINAL_EPP}\n")
+        (d / "base_frequency").write_text(f"{(32 if cpu >= 8 else 37) * 100_000}\n")  # R-001: the power-saver ceiling (P 37x, E 32x)
+    (root / "intel_pstate").mkdir()
+    (root / "intel_pstate" / "no_turbo").write_text("0\n")
     return CpufreqFiles(root)
 
 
@@ -125,6 +128,9 @@ class MeasureCase(HelperCase):
 
     def read(self, cpu: int, attr: str) -> str | None:
         return self.cpufreq.read(cpu, attr)
+
+    def set_no_turbo(self, off: bool) -> None:
+        (self.sysfs / "intel_pstate" / "no_turbo").write_text("1\n" if off else "0\n")
 
     def assert_cpufreq_pristine(self) -> None:
         for cpu in range(24):

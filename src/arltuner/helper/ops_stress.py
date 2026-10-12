@@ -24,7 +24,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ from arltuner.stress import (
 from arltuner.stress.parse import MAX_ERROR_LINES
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only, helper_topology
-from .ops_measure import CAP_ATTR, EPP_ATTR, _remove_journal, _restore, _write_journal, recover_journal
+from .ops_measure import CAP_ATTR, EPP_ATTR, _cpus_text, _remove_journal, _restore, _write_journal, epp_pinned_cpus, recover_journal
 from .protocol import BAD_REQUEST, INTERNAL, REFUSED, OpError
 from .state import State
 from .trust import TrustError, check_trusted_path
@@ -639,8 +639,10 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 boot = helper.cfg.boot_id_fn()
             except Exception:
                 boot = None
-            entries = _write_journal(mw, cpus, boot.strip() if isinstance(boot, str) and boot.strip() else None)  # before the first change
+            pinned = epp_pinned_cpus(mw, cpus)  # G-132: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
+            entries = _write_journal(mw, cpus, boot.strip() if isinstance(boot, str) and boot.strip() else None, pinned)  # before the first change
             journaled = True
+            epp_failed: dict[str, list[int]] = {}
             for cpu in cpus:
                 try:
                     mw.cpufreq.write(cpu, CAP_ATTR, str(cap * 100_000))
@@ -650,7 +652,11 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                     try:
                         mw.cpufreq.write(cpu, EPP_ATTR, STRESS_EPP)
                     except OSError as exc:
-                        notes.append(f"helper: energy_performance_preference of cpu {cpu} was not set ({exc.strerror or exc}); the run continues")
+                        epp_failed.setdefault(str(exc.strerror or exc), []).append(cpu)
+            if pinned:
+                notes.append("helper: governor performance: EPP already at performance")
+            for why, bad in epp_failed.items():  # one note per distinct error, the CPUs as ranges
+                notes.append(f"helper: energy_performance_preference not set on {_cpus_text(bad)} ({why}); the run continues")
         if cancel.is_set():
             cancelled = True
         else:
