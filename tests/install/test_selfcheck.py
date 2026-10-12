@@ -26,7 +26,7 @@ GOOD: dict[str, tuple[int, int]] = {
     "/usr/lib/arltuner": (0, DIR), "/usr/lib/arltuner/arltuner-helper": (0, EXE), "/usr/lib/arltuner/arltuner-selfcheck": (0, EXE),
     "/usr/lib/arltuner/arltuner": (0, DIR), "/usr/lib/arltuner/arltuner/__init__.py": (0, FILE),
     "/usr/lib/arltuner/arltuner/__pycache__": (0, DIR), "/usr/lib/arltuner/arltuner/__pycache__/__init__.cpython-314.pyc": (0, FILE),
-    "/usr/lib/arltuner/platforms": (0, DIR), "/usr/lib/arltuner/platforms/arl-s-285k.toml": (0, FILE),
+    "/usr/lib/arltuner/platforms": (0, DIR), "/usr/lib/arltuner/platforms/arl-s.toml": (0, FILE),
     "/etc": (0, DIR), "/etc/arltuner": (0, DIR), "/etc/arltuner/policy.toml": (0, FILE), "/etc/arltuner/helper.toml": (0, FILE),
     "/etc/arltuner/accepted": (0, DIR), "/etc/arltuner/accepted/CURRENT": (0, FILE),
     "/var": (0, DIR), "/var/lib": (0, DIR), "/var/lib/arltuner": (0, DIR), "/var/lib/arltuner/audit.jsonl": (0, PRIVATE),
@@ -77,9 +77,9 @@ class Damage(unittest.TestCase):
         self.assertIn("writable", why)
 
     def test_a_user_owned_platform_file(self) -> None:
-        label, why = self.only(GOOD | {"/usr/lib/arltuner/platforms/arl-s-285k.toml": (1000, FILE)})
+        label, why = self.only(GOOD | {"/usr/lib/arltuner/platforms/arl-s.toml": (1000, FILE)})
         self.assertIn("code tree", label)
-        self.assertIn("arl-s-285k.toml", why)
+        self.assertIn("arl-s.toml", why)
 
     def test_a_symlinked_code_directory(self) -> None:
         label, why = self.only(GOOD | {"/usr/lib/arltuner/arltuner": (0, SYMLINK)})

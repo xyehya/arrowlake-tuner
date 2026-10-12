@@ -79,7 +79,7 @@ class InstallLayout(InstallCase):
             {
                 "usr/lib/arltuner/arltuner-helper": 0o755,
                 "usr/lib/arltuner/arltuner-selfcheck": 0o755,
-                "usr/lib/arltuner/platforms/arl-s-285k.toml": 0o644,
+                "usr/lib/arltuner/platforms/arl-s.toml": 0o644,
                 "usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy": 0o644,
                 "usr/lib/tmpfiles.d/arltuner.conf": 0o644,
                 "etc/arltuner/policy.toml": 0o644,
@@ -161,7 +161,7 @@ class InstallLayout(InstallCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         main_file, platform_file = r.stdout.split("\n")[:2]
         self.assertEqual(Path(main_file), lib / "arltuner" / "helper" / "main.py")
-        self.assertEqual(Path(platform_file), lib / "platforms" / "arl-s-285k.toml")
+        self.assertEqual(Path(platform_file), lib / "platforms" / "arl-s.toml")
 
     def test_the_launcher_names_the_installed_tree_and_python_in_isolated_mode(self) -> None:
         text = self.path("/usr/lib/arltuner/arltuner-helper").read_text()

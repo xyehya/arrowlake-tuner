@@ -11,9 +11,11 @@ driver executes on whatever logical processor the calling thread is on. So every
 
 Any failure is an ``MsrError``; a read-only port refuses ``wrmsr`` before anything is opened.
 
-CPU numbering: arltuner uses LINUX CPU numbers (P 0-7, E 8-23); Windows numbers logical processors differently. The mapping is the
-MEASURED table ``measured_baseline.LP_OF_CPU``. At construction it is cross-checked against what Windows reports (CPU-set
-EfficiencyClass per LP, L2 cache sharing per LP) and the port refuses to exist if the machine does not match (fail closed).
+CPU numbering: arltuner uses LINUX CPU numbers; Windows numbers logical processors differently and cannot be asked for the Linux numbering, so the
+mapping is an input: the table ``WINDOWS_LP_OF_CPU`` below (the Windows restore's map, MEASURED once on the operator's own part) or one the caller passes.
+The P CPUs and E clusters are taken from the topology the caller gives (default: the simulated reference topology that table belongs to). At construction
+the map is cross-checked against what Windows reports (CPU-set EfficiencyClass per LP, L2 cache sharing per LP) and the port refuses to exist if the machine
+does not match (fail closed).
 **Limit of the cross-check:** it proves P vs E and the E clusters, not the order of the eight P-cores among themselves (they
 look identical to Windows); that part rests on the measured table alone.
 
@@ -30,13 +32,24 @@ from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import NamedTuple, Protocol
 
-from .measured_baseline import E_CPUS, LP_OF_CPU, P_CPUS
+from arltuner.topology.cpumap import Topology
+from arltuner.topology.reference import arl_s_285k
+
 from .port import MsrError, MsrPort, check_cpu, check_msr, check_value
 
 DEVICE_PATH = "\\\\.\\ThrottleStop"
 IOCTL_RDMSR = 0x80006448
 IOCTL_WRMSR = 0x8000644C
-E_CLUSTERS: tuple[tuple[int, ...], ...] = tuple(tuple(range(lo, lo + 4)) for lo in range(8, 24, 4))  # Linux CPUs 8-11, 12-15, 16-19, 20-23
+
+#: Linux CPU -> Windows logical processor for the Windows restore (order-preserving map, ``[MEASURED win 2026-10-01]``): P ordinal order and E ordinal order.
+#: Inherently per part (Windows cannot report Linux numbering); the construction-time cross-check below is the refusal when it does not fit.
+_P_LP = (0, 1, 10, 11, 12, 13, 22, 23)
+_E_LP = (2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21)
+WINDOWS_LP_OF_CPU: Mapping[int, int] = {**{cpu: lp for cpu, lp in zip(range(8), _P_LP)}, **{cpu: lp for cpu, lp in zip(range(8, 24), _E_LP)}}
+#: Fused V/F point word (cmd 0x09 P1=0x11 P2=0) of each P-core, in Linux P order [MEASURED win 2026-10-01 / lnx 2026-10-02]: distinct per physical P-core, so the
+#: ``--device-win`` identity check can tell the P-cores apart (Windows' own APIs cannot). It belongs to ``WINDOWS_LP_OF_CPU`` and is the check OF that map, not a
+#: statement about any other part.
+WINDOWS_P_FUSED_FINGERPRINT: tuple[int, ...] = (0x5B439, 0x53839, 0x57439, 0x59439, 0x54439, 0x56C39, 0x56039, 0x58039)
 
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
@@ -123,16 +136,22 @@ def _bits(mask: int) -> frozenset[int]:
     return frozenset(i for i in range(mask.bit_length()) if mask >> i & 1)
 
 
-def check_lp_map(cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], lp_of_cpu: Mapping[int, int] = LP_OF_CPU) -> list[str]:
+def check_lp_map(
+    cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None
+) -> list[str]:
     """Problems found when ``lp_of_cpu`` (Linux CPU -> Windows LP) is held against what Windows reports; ``[]`` means it matches.
+    ``topology`` gives the P CPUs and the E clusters (default: the simulated reference topology the default map belongs to).
 
-    * 24 LPs, one processor group (0), the map is a bijection onto them;
+    * as many LPs as the topology has CPUs, one processor group (0), the map is a bijection onto them;
     * exactly two EfficiencyClasses; every P-CPU's LP has the higher one, every E-CPU's LP the lower one;
-    * every P-CPU's LP has an L2 of its own (a mask of that one LP); each E cluster (Linux 8-11, 12-15, 16-19, 20-23) is exactly
-      the LP set of one L2 mask, i.e. the four LPs share an L2 and no other LP does.
+    * every P-CPU's LP has an L2 of its own (a mask of that one LP); each E cluster of the topology is exactly
+      the LP set of one L2 mask, i.e. its LPs share an L2 and no other LP does.
     Not provable here: the order of the P-cores among themselves (see the module docstring)."""
     problems: list[str] = []
-    cpus = P_CPUS + E_CPUS
+    topo = topology if topology is not None else arl_s_285k()
+    p_cpus, e_cpus = topo.cpus_of_kind("P"), topo.cpus_of_kind("E")
+    e_clusters = [topo.cluster_cpus(k) for k in sorted({c.cluster for c in topo.cores if c.cluster is not None})]
+    cpus = p_cpus + e_cpus
     if sorted(lp_of_cpu) != sorted(cpus):
         return [f"the LP map covers CPUs {sorted(lp_of_cpu)}, expected {list(cpus)}"]
     lps = [lp_of_cpu[c] for c in cpus]
@@ -156,19 +175,19 @@ def check_lp_map(cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], lp_of
     if len(classes) != 2:
         return [f"expected two EfficiencyClasses (P and E), Windows reports {classes}"]
     e_class, p_class = classes
-    for cpu in P_CPUS:
+    for cpu in p_cpus:
         if by_lp[lp_of_cpu[cpu]].efficiency_class != p_class:
             problems.append(f"P-CPU {cpu} -> LP {lp_of_cpu[cpu]} is not in the performance EfficiencyClass {p_class}")
-    for cpu in E_CPUS:
+    for cpu in e_cpus:
         if by_lp[lp_of_cpu[cpu]].efficiency_class != e_class:
             problems.append(f"E-CPU {cpu} -> LP {lp_of_cpu[cpu]} is not in the efficiency EfficiencyClass {e_class}")
     l2 = {c.mask for c in l2_caches if c.group == 0}
     if not l2:
         return problems + ["Windows reports no L2 cache information"]
-    for cpu in P_CPUS:
+    for cpu in p_cpus:
         if (1 << lp_of_cpu[cpu]) not in l2:
             problems.append(f"P-CPU {cpu} -> LP {lp_of_cpu[cpu]} does not have a private L2 cache")
-    for cluster in E_CLUSTERS:
+    for cluster in e_clusters:
         want = 0
         for cpu in cluster:
             want |= 1 << lp_of_cpu[cpu]
@@ -280,18 +299,18 @@ class Win32Api:
 
 
 # ------------------------------------------------------------------------------------------------------------------ port
-def verify_machine(api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = LP_OF_CPU) -> None:
+def verify_machine(api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None) -> None:
     """Hold ``lp_of_cpu`` against what Windows reports (read-only APIs, no device); raise ``MsrError(ENODEV)`` on any mismatch
     or if Windows cannot be asked."""
     try:
         api = api if api is not None else Win32Api()
-        problems = check_lp_map(api.cpu_sets(), api.l2_caches(), lp_of_cpu)
+        problems = check_lp_map(api.cpu_sets(), api.l2_caches(), lp_of_cpu, topology)
     except (OSError, ValueError) as exc:
         raise MsrError(errno.ENODEV, f"cannot verify the Linux CPU -> Windows LP map: {exc}") from exc
     if problems:
         raise MsrError(
             errno.ENODEV,
-            "the Linux CPU -> Windows logical-processor map (measured_baseline.LP_OF_CPU) does not match this machine: " + "; ".join(problems),
+            "the Linux CPU -> Windows logical-processor map (winport.WINDOWS_LP_OF_CPU) does not match what Windows reports: " + "; ".join(problems),
         )
 
 
@@ -299,13 +318,15 @@ class WinThrottleStopMsrPort(MsrPort):
     """``MsrPort`` over the ThrottleStop driver. ``cpu`` is a LINUX CPU number; it is translated to a Windows LP and the calling
     thread is pinned there for the duration of one access. The device is opened lazily (``close()`` / ``with`` releases it)."""
 
-    def __init__(self, writable: bool = False, *, api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = LP_OF_CPU) -> None:
+    def __init__(
+        self, writable: bool = False, *, api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None
+    ) -> None:
         self.writable = bool(writable)
         self._lp_of_cpu = dict(lp_of_cpu)
         self._api: Win32 = api if api is not None else Win32Api()
         self._handle: int | None = None
         self._lock = threading.Lock()  # one pinned access at a time
-        verify_machine(self._api, self._lp_of_cpu)  # fail closed: no port on a machine the map does not describe
+        verify_machine(self._api, self._lp_of_cpu, topology)  # fail closed: no port on a machine the map does not describe
 
     def _device(self) -> int:
         if self._handle is None:
@@ -319,7 +340,7 @@ class WinThrottleStopMsrPort(MsrPort):
         """Run ``op(handle)`` with this thread pinned to the LP of ``cpu``; verify the pin before and after; always restore."""
         lp = self._lp_of_cpu.get(cpu)
         if lp is None:
-            raise ValueError(f"cpu={cpu} is not a CPU of the 285K map")
+            raise ValueError(f"cpu={cpu} is not a CPU of the Linux-to-Windows logical-processor map")
         with self._lock:
             handle = self._device()
             try:

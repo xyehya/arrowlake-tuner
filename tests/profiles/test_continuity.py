@@ -50,7 +50,7 @@ class Contents(unittest.TestCase):
         self.assertEqual(contents(prof)["turbo"], {"P": [57, 57, 55, 55, 55, 55, 55, 55]})
 
     def test_saved_intent_spreads_groups(self) -> None:
-        got = intent_contents({"scope": "simple", "rows": [{"target": "E", "offset": {"kind": "curve", "mv": -30}, "v_target_v": None, "ratio": None}]})
+        got = intent_contents({"scope": "simple", "rows": [{"target": "E", "offset": {"kind": "curve", "mv": -30}, "v_target_v": None, "ratio": None}]}, TOPO.unit_ids())
         self.assertEqual([r["target"] for r in got["rows"]], ["EC0", "EC1", "EC2", "EC3"])
 
     def test_summary(self) -> None:

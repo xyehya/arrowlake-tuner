@@ -62,7 +62,7 @@ class Domain(IntEnum):
     RING = 2  # ring / cache (CLR)
     GT_UNSLICE = 3  # GT unslice
     SA = 4  # system agent (present but not exposed by XTU on ARL)
-    MEMSS = 6  # memory subsystem (seen in OCCT/HWiNFO traces on this machine, registers.md "Third confirmation")
+    MEMSS = 6  # memory subsystem (seen in OCCT/HWiNFO traces on this system, registers.md "Third confirmation")
     NGU = 7  # NGU / "SA Fabric"
 
 

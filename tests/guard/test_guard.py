@@ -68,6 +68,7 @@ class GuardCase(unittest.TestCase):
             max_ratio_step=8,
             max_v_step_mv=200,
             max_offset_step_mv=200,
+            assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
         )
         self.confirm = Confirmation(self.TOKEN, self.OPERATOR)
         self.gate_calls: list[str] = []

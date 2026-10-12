@@ -21,18 +21,13 @@ from arltuner.topology import (
     TopologyMismatch,
     UnknownCore,
     arl_s_285k,
+    contract_dict,
     detect,
+    read_live,
+    synthetic,
+    topology_problems,
 )
-
-
-def make_sysfs(root: Path, cpu_core: str | None, cpu_atom: str | None) -> Path:
-    """Write a fake sysfs tree; ``None`` leaves the file missing."""
-    for name, text in (("cpu_core", cpu_core), ("cpu_atom", cpu_atom)):
-        if text is not None:
-            d = root / "devices" / name
-            d.mkdir(parents=True, exist_ok=True)
-            (d / "cpus").write_text(text, encoding="ascii")
-    return root
+from tests.fakesys import make_sysfs, reference_like
 
 
 class StaticMapTests(unittest.TestCase):
@@ -141,44 +136,94 @@ class StaticMapTests(unittest.TestCase):
 
 
 class DetectTests(unittest.TestCase):
+    """``detect`` / ``read_live`` over fake sysfs trees (G-128, D-036): everything is derived live."""
+
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
 
-    def test_matching_sysfs_returns_static_topology(self) -> None:
-        make_sysfs(self.root, "0-7\n", "8-23\n")
-        self.assertEqual(detect(self.root), arl_s_285k())
+    def sub(self, name: str) -> Path:
+        return self.root / name
 
-    def test_cpulist_variants_that_match(self) -> None:
-        variants = [
-            ("0-7", "8-23"),  # no trailing newline
-            ("0-7\n", "8-11,12-23\n"),
-            ("0-3,4-7\n", "8-23\n"),
-            ("0,1,2,3,4,5,6,7\n", "8-10,11-23\n"),
-            ("  0-7  \n", "8-23\n"),
-        ]
-        for p, e in variants:
-            with self.subTest(cpu_core=p, cpu_atom=e):
-                root = make_sysfs(self.root / f"v{abs(hash((p, e)))}", p, e)
-                self.assertEqual(detect(root), arl_s_285k())
+    def test_8p_16e_cppc_favored_0_and_3(self) -> None:
+        reference_like(self.sub("a"))
+        live = read_live(self.sub("a"))
+        self.assertEqual(live.topology, arl_s_285k())
+        self.assertEqual(live.favored_source, "acpi_cppc")
+        self.assertEqual([u.id for u in live.units], [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])
+        self.assertEqual([u.id for u in live.units if u.favored], ["P0", "P3"])
+        ec1 = next(u for u in live.units if u.id == "EC1")
+        self.assertEqual((ec1.kind, ec1.cpus, ec1.max_ratio, ec1.perf, ec1.favored), ("E", (12, 13, 14, 15), 49, 68, False))
+        p0 = live.units[0]
+        self.assertEqual((p0.cpus, p0.max_ratio, p0.perf), ((0,), 57, 92))
 
-    def test_accepts_str_root(self) -> None:
-        make_sysfs(self.root, "0-7\n", "8-23\n")
-        self.assertEqual(detect(str(self.root)), arl_s_285k())  # type: ignore[arg-type]
+    def test_8p_12e(self) -> None:
+        reference_like(self.sub("a"), favored=(1,), e=12)
+        live = read_live(self.sub("a"))
+        self.assertEqual(len(live.topology.cores), 20)
+        self.assertEqual([u.id for u in live.units][-3:], ["EC0", "EC1", "EC2"])
+        self.assertEqual([u.id for u in live.units if u.favored], ["P1"])
+        self.assertEqual(live.topology.cluster_cpus(2), (16, 17, 18, 19))
+
+    def test_6p_8e(self) -> None:
+        reference_like(self.sub("a"), favored=(2, 4), p=6, e=8)
+        live = read_live(self.sub("a"))
+        self.assertEqual([u.id for u in live.units], [f"P{i}" for i in range(6)] + ["EC0", "EC1"])
+        self.assertEqual([u.id for u in live.units if u.favored], ["P2", "P4"])
+        self.assertEqual(live.topology.cpus_of_kind("E"), tuple(range(6, 14)))
+        self.assertEqual(live.topology.resolve("E", 3).cpu, 9)
+
+    def test_all_equal_means_no_favored(self) -> None:
+        reference_like(self.sub("a"), favored=())
+        live = read_live(self.sub("a"))
+        self.assertIsNone(live.favored_source)
+        self.assertFalse(any(u.favored for u in live.units))
+        self.assertFalse(any(c.favored for c in live.topology.cores))
+
+    def test_cppc_missing_falls_back_to_cpuinfo_max_freq(self) -> None:
+        reference_like(self.sub("a"), cppc=False)
+        live = read_live(self.sub("a"))
+        self.assertEqual(live.favored_source, "cpuinfo_max_freq")
+        self.assertEqual([u.id for u in live.units if u.favored], ["P0", "P3"])
+        self.assertTrue(all(u.perf is None for u in live.units))
+
+    def test_nothing_readable_means_no_favored_and_no_numbers(self) -> None:
+        make_sysfs(self.sub("a"), 4, 4)
+        live = read_live(self.sub("a"))
+        self.assertIsNone(live.favored_source)
+        self.assertTrue(all(u.max_ratio is None and u.perf is None and not u.favored for u in live.units))
+
+    def test_contract_shape(self) -> None:
+        reference_like(self.sub("a"))
+        contract = read_live(self.sub("a")).contract()
+        self.assertEqual(set(contract), {"units", "favored_source"})
+        self.assertEqual(contract["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92})
+        self.assertEqual(contract["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 49, "perf": 68})
+        self.assertEqual(contract_dict(arl_s_285k())["favored_source"], "acpi_cppc")
+
+    def test_detect_returns_topology_and_accepts_str_root(self) -> None:
+        reference_like(self.sub("a"))
+        self.assertEqual(detect(self.sub("a")), arl_s_285k())
+        self.assertEqual(detect(str(self.sub("a"))), arl_s_285k())  # type: ignore[arg-type]
+        self.assertEqual(detect(self.sub("a")).favored_source, "acpi_cppc")
+
+    def test_max_ratio_of_kind(self) -> None:
+        reference_like(self.sub("a"))
+        live = read_live(self.sub("a"))
+        self.assertEqual((live.max_ratio_of_kind("P"), live.max_ratio_of_kind("E")), (57, 49))
 
     def test_missing_files_raise(self) -> None:
-        cases = {
-            "both missing": (None, None),
-            "cpu_core missing": (None, "8-23\n"),
-            "cpu_atom missing": ("0-7\n", None),
-        }
-        for label, (p, e) in cases.items():
-            with self.subTest(label):
-                root = make_sysfs(self.root / label.replace(" ", "_"), p, e)
-                root.mkdir(parents=True, exist_ok=True)
+        make_sysfs(self.sub("a"), 8, 16)
+        (self.sub("a") / "devices" / "cpu_core" / "cpus").unlink()
+        make_sysfs(self.sub("b"), 8, 16)
+        (self.sub("b") / "devices" / "cpu_atom" / "cpus").unlink()
+        make_sysfs(self.sub("c"), 8, 16)
+        (self.sub("c") / "devices" / "system" / "cpu" / "cpu9" / "topology" / "cluster_cpus_list").unlink()
+        for name in "abc":
+            with self.subTest(name):
                 with self.assertRaises(TopologyMismatch):
-                    detect(root)
+                    detect(self.sub(name))
 
     def test_nonexistent_root_raises(self) -> None:
         with self.assertRaises(TopologyMismatch):
@@ -186,63 +231,78 @@ class DetectTests(unittest.TestCase):
 
     def test_malformed_cpulists_raise(self) -> None:
         bad = ["", "\n", "abc", "0-", "-7", "7-0", "0-7x", "0,,1", "0 - 7", "0-7,", ",0-7", "0-7;8", "0-7\n8-9", "0-99999"]
-        for text in bad:
-            with self.subTest(cpu_core=text):
-                root = make_sysfs(self.root / f"p{abs(hash(text))}", text, "8-23\n")
-                with self.assertRaises(TopologyMismatch):
-                    detect(root)
-            with self.subTest(cpu_atom=text):
-                root = make_sysfs(self.root / f"e{abs(hash(text))}", "0-7\n", text)
-                with self.assertRaises(TopologyMismatch):
-                    detect(root)
+        for i, text in enumerate(bad):
+            for which in ("cpu_core", "cpu_atom"):
+                with self.subTest(which=which, text=text):
+                    root = make_sysfs(self.sub(f"{which}{i}"), 8, 16)
+                    (root / "devices" / which / "cpus").write_text(text, encoding="ascii")
+                    with self.assertRaises(TopologyMismatch):
+                        detect(root)
 
-    def test_duplicate_cpus_in_list_raise(self) -> None:
-        make_sysfs(self.root, "0-7,3\n", "8-23\n")
+    def test_duplicate_and_overlapping_cpus_raise(self) -> None:
+        root = make_sysfs(self.sub("dup"), 8, 16)
+        (root / "devices" / "cpu_core" / "cpus").write_text("0-7,3\n", encoding="ascii")
         with self.assertRaises(TopologyMismatch):
-            detect(self.root)
+            detect(root)
+        root = make_sysfs(self.sub("overlap"), 8, 16)
+        (root / "devices" / "cpu_atom" / "cpus").write_text("7-23\n", encoding="ascii")
+        with self.assertRaises(TopologyMismatch):
+            detect(root)
 
     def test_non_ascii_content_raises(self) -> None:
-        d = self.root / "devices" / "cpu_core"
-        d.mkdir(parents=True)
-        (d / "cpus").write_bytes(b"\xff\xfe0-7")
-        make_sysfs(self.root, None, "8-23\n")
+        root = make_sysfs(self.sub("a"), 8, 16)
+        (root / "devices" / "cpu_core" / "cpus").write_bytes(b"\xff\xfe0-7")
         with self.assertRaises(TopologyMismatch):
-            detect(self.root)
+            detect(root)
 
-    def test_different_topologies_raise(self) -> None:
-        cases = {
-            "p short": ("0-6\n", "8-23\n"),
-            "p extra": ("0-8\n", "8-23\n"),
-            "e short": ("0-7\n", "8-22\n"),
-            "e extra": ("0-7\n", "8-24\n"),
-            "swapped": ("8-23\n", "0-7\n"),
-            "smt-like": ("0-15\n", "16-31\n"),
-            "overlap": ("0-7\n", "0-23\n"),
-            "gap": ("0-7\n", "8-11,16-23\n"),
-            "older hybrid 8p+8e": ("0-7\n", "8-15\n"),
-        }
-        for label, (p, e) in cases.items():
-            with self.subTest(label):
-                root = make_sysfs(self.root / label.replace(" ", "_"), p, e)
-                with self.assertRaises(TopologyMismatch):
-                    detect(root)
+    def test_inconsistent_cluster_lists_raise(self) -> None:
+        root = make_sysfs(self.sub("a"), 8, 16)
+        (root / "devices" / "system" / "cpu" / "cpu9" / "topology" / "cluster_cpus_list").write_text("9-12\n", encoding="ascii")
+        with self.assertRaises(TopologyMismatch):
+            detect(root)
+        root = make_sysfs(self.sub("b"), 8, 16)
+        (root / "devices" / "system" / "cpu" / "cpu8" / "topology" / "cluster_cpus_list").write_text("0-3\n", encoding="ascii")
+        with self.assertRaises(TopologyMismatch):
+            detect(root)
 
     def test_mismatch_is_topology_error_and_message_names_the_file(self) -> None:
-        make_sysfs(self.root, "0-6\n", "8-23\n")
+        root = make_sysfs(self.sub("a"), 8, 16)
+        (root / "devices" / "cpu_core" / "cpus").write_text("zz", encoding="ascii")
         with self.assertRaises(TopologyError) as cm:
-            detect(self.root)
+            detect(root)
         self.assertIn("cpu_core", str(cm.exception))
+
+    def test_problems_empty_sets_and_unequal_clusters(self) -> None:
+        self.assertEqual(topology_problems(arl_s_285k()), [])
+        self.assertEqual(topology_problems(synthetic(6, 8)), [])
+        unequal = Topology(
+            tuple(synthetic(2, 4).cores) + (Core("E", 4, 6, 1, False),) + (Core("E", 5, 7, 1, False),) + (Core("E", 6, 8, 2, False),)
+        )
+        self.assertTrue(any("unequal" in p for p in topology_problems(unequal)))
+        no_e = Topology(tuple(c for c in synthetic(4, 4).cores if c.kind == "P"))
+        self.assertTrue(any("no E-core" in p for p in topology_problems(no_e)))
 
     def test_default_root_is_real_sys_but_is_not_used_here(self) -> None:
         # Only inspects the signature; the real /sys is never read by this test suite.
         self.assertEqual(inspect.signature(detect).parameters["sysfs_root"].default, Path("/sys"))
+        self.assertEqual(inspect.signature(read_live).parameters["root"].default, Path("/sys"))
+
+    def test_unit_helpers(self) -> None:
+        topo = synthetic(6, 8)
+        self.assertEqual(topo.unit_ids(), ("P0", "P1", "P2", "P3", "P4", "P5", "EC0", "EC1"))
+        self.assertEqual(topo.unit_cpus("EC1"), (10, 11, 12, 13))
+        self.assertEqual(topo.unit_cpus("P4"), (4,))
+        self.assertEqual(topo.unit_of_cpu(7), "EC0")
+        for bad in ("P6", "EC2", "X", "P", "EC"):
+            with self.assertRaises(UnknownCore):
+                topo.unit_cpus(bad)
 
 
 class ImportTests(unittest.TestCase):
     def test_import_has_no_side_effects(self) -> None:
         # Execute a private copy of the module (the real one stays untouched in sys.modules, so class
         # identities used by other tests are not disturbed) with file access and stdout trapped.
-        path = Path(inspect.getsourcefile(topology_pkg.arl_s_285k) or "")
+        path = Path(inspect.getsourcefile(topology_pkg.Topology) or "")
         name = "_arltuner_cpumap_import_probe"
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None and spec.loader is not None

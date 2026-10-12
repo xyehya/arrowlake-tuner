@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from arltuner.platform import Sensors, default_platform
+from arltuner.platform.preflight import read_board_name
 from arltuner.topology import cpumap
 
 from . import cpu as cpumod
@@ -28,14 +29,14 @@ class Sampler:
     def __init__(self, msr: TelemetryMsr | None, topology: cpumap.Topology | None = None,
                  hwmon_root: Path = DEFAULT_HWMON_ROOT, powercap_root: Path = DEFAULT_POWERCAP_ROOT,
                  imc: ImcStat | None = None, sensors: Sensors | None = None, cpu_root: Path = DEFAULT_CPU_ROOT, clock: Callable[[], float] = time.monotonic,
-                 interval_s: float = 1.0) -> None:
+                 interval_s: float = 1.0, root: Path = Path("/")) -> None:
         self._msr = msr
-        self._topo = topology or cpumap.arl_s_285k()
+        self._topo = topology or cpumap.detect(Path(root) / "sys")  # live (D-036); the simulator passes its own
         self._cpus = sorted(c.cpu for c in self._topo.cores)
         self._hwmon, self._imc, self._interval = Path(hwmon_root), imc, interval_s
         self._cpu_root = Path(cpu_root)
         self._label_cores: dict[str, tuple[str, int]] | None = None  # coretemp label -> (dashboard name, cpu); built on first use
-        self._sensors = sensors or default_platform().sensors  # Vcore chip + label (platforms/arl-s-285k.toml [sensors])
+        self._sensors = sensors or default_platform().sensors_for(read_board_name(Path(root)))  # Vcore chip + label of this DMI board (platforms/arl-s.toml [boards]); unknown board = no Vcore
         self._freq: cpumod.FreqSampler | None = None
         self._tsc = unavailable("msr 0xCE", NO_MSR, "MHz")
         if msr is not None:

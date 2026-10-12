@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from arltuner.guard import MsrRequest, Policy, Request
-from arltuner.guard.policy import hw_v_max_raw, top_fused_ratio, turbo_bytes
+from arltuner.guard.policy import fused_top_ratio, hw_v_max_raw, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import TurboTables
 
@@ -118,10 +118,13 @@ class ApplyReport:
         """CPUs whose 0x10 baseline word read back with a zero ratio, or a zero V target next to an OC ratio (above the top fused ratio): no write restores such
         a word. G-124: a zero V target at or below the top fused ratio is the word the hardware keeps without an OC point (e.g. the cold ``0x39``) and is restorable."""
 
+        fused = {r.step.cpu: r.response_data for r in self.steps if r.step.kind is StepKind.READ_FUSED and r.response_data}  # live 0x09 words of this session
+
         def unreachable(step: PlanStep, word: VfWord) -> bool:
             if word.ratio == 0:
                 return True
-            return word.v_target_raw == 0 and step.core_kind is not None and word.ratio > top_fused_ratio(step.core_kind)
+            top = fused_top_ratio(fused.get(step.cpu))
+            return word.v_target_raw == 0 and top is not None and word.ratio > top
 
         return tuple(r.step.cpu for r in self.steps if r.step.kind is StepKind.READ_VF and r.after is not None and unreachable(r.step, r.after))
 

@@ -6,14 +6,13 @@ opens nothing. Every mailbox command is a WRMSR: the only caller of ``MailboxTra
 from __future__ import annotations
 
 from .devcpu import DevCpuMsrPort
-from .measured_baseline import FUSED_POINT
 from .port import MailboxTimeout, MsrError, MsrPort
 from .sim import SimConfig, SimCpuState, SimMsrPort, SimRequest
 from .transport import MailboxTransport
-from .winport import WinThrottleStopMsrPort, verify_machine, windows_boot_id
+from .winport import WINDOWS_P_FUSED_FINGERPRINT, WinThrottleStopMsrPort, verify_machine, windows_boot_id
 
 __all__ = [
-    "FUSED_POINT",
+    "WINDOWS_P_FUSED_FINGERPRINT",
     "DevCpuMsrPort",
     "MailboxTimeout",
     "MailboxTransport",

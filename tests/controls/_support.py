@@ -25,20 +25,21 @@ P4_BASELINE = VfWord(ratio=55, v_target_raw=0x544, static=False, offset_raw=0)
 E_BASELINE = VfWord(ratio=48, v_target_raw=0x48C, static=False, offset_raw=0)  # E clusters 1..3 (cluster 0 is 0x4A0)
 
 
-def readings_of(vf: VfWord, *, favored: int | None = None, fused: int | None = None, granular: int = 3) -> CoreReadings:
+def readings_of(vf: VfWord, *, favored: int | None = None, fused: int | None = None, granular: int = 3, top: int = 57) -> CoreReadings:
     """``CoreReadings`` for a core whose 0x10 word is ``vf``, with the 0x1C / 0x09 words the OLD SIM-ONLY defaults would give:
-    ``favored`` = fused ratio and favored ratio both ``vf.ratio``, ``fused`` = the stock V/F point (``vf.ratio`` | ``vf.v_target_raw`` << 8)."""
+    ``favored`` = fused ratio and favored ratio both ``vf.ratio``, ``fused`` = the fused V/F point (``top`` = the core's top fused ratio, a simulated P-core's 57 by
+    default, then ``vf.v_target_raw`` << 8)."""
     return CoreReadings(
         vf=vf,
         favored=(vf.ratio | vf.ratio << 8) if favored is None else favored,
-        fused=(vf.ratio | vf.v_target_raw << 8) if fused is None else fused,
+        fused=(top | vf.v_target_raw << 8) if fused is None else fused,
         granular=granular,
     )
 
 
 P4_READINGS = readings_of(P4_BASELINE)
 #: E clusters 1..3 of the old SIM-ONLY defaults: 0x1C = fused 46 << 8 | favored 48, fused point 48x / 0x48C
-E_READINGS = readings_of(E_BASELINE, favored=46 << 8 | 48)
+E_READINGS = readings_of(E_BASELINE, favored=46 << 8 | 48, top=46)
 
 
 def profile_text(*entries: str, name: str = "t") -> str:
@@ -106,9 +107,11 @@ DEFAULT_STEPS = dict(max_ratio_step=1, max_v_step_mv=20, max_offset_step_mv=25)
 def policy_with(*, max_ops: int = 400, dwell: float = 60.0, boot_ops: int = 1000, **changes: object) -> Policy:
     """The default M1 policy with higher session / per-boot limits (the defaults of 1 / 12 cannot run any plan: a plan is
     ``2 + 7 per CPU`` operations since T-021, plus one read-back per write since T-022) and **relaxed step limits** (``RELAXED_STEPS``);
-    every other D-016 bound stays at the shipped no-raise default. ``changes`` replace any ``Policy`` field."""
+    every other D-016 bound stays at the shipped no-raise default. These tests exercise the D-015 mechanism, so they state a BIOS offset (P -50 mV, E 0); the
+    shipped default is 0 for both (D-036: nothing is assumed). ``changes`` replace any ``Policy`` field."""
     base = dataclasses.replace(
-        default_m1_policy(), max_operations_per_session=max_ops, min_dwell_s=dwell, max_operations_per_boot=boot_ops, **RELAXED_STEPS
+        default_m1_policy(), max_operations_per_session=max_ops, min_dwell_s=dwell, max_operations_per_boot=boot_ops,
+        assumed_bios_offset_mv={"P": -50, "E": 0}, **RELAXED_STEPS,
     )
     return dataclasses.replace(base, **changes) if changes else base
 

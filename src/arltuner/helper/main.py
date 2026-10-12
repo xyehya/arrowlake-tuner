@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -31,7 +32,7 @@ from typing import Any, BinaryIO, TextIO
 
 from arltuner.cli import InstalledStateRefused, default_audit_path, default_lock_path
 from arltuner.platform.preflight import preflight
-from arltuner.topology import arl_s_285k
+from arltuner.topology import Topology, arl_s_285k, synthetic
 
 from .config import HelperConfig
 from .core import Helper
@@ -40,7 +41,7 @@ from .trust import TrustError, check_code_tree, check_trusted_path, open_checked
 
 __all__ = [
     "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "device_imc", "load_taint_bits",
-    "main", "measure_wiring", "process_main", "root_argv_refusal",
+    "main", "measure_wiring", "process_main", "root_argv_refusal", "sim_topology",
 ]
 
 EXIT_USAGE = 64
@@ -75,8 +76,22 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to ~/.local/state/linuxmon/audit.jsonl)")
     p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/linuxmon-mailbox.lock; --sim: always the latter)")
     p.add_argument("--allow-taint-bit", metavar="N", type=int, action="append", default=[], help="kernel taint bit the first write is expected to set (health gate)")
+    p.add_argument("--sim-shape", metavar="P+E", help="--sim only: simulate another part, e.g. 6+8 (6 P-cores + 8 E-cores in clusters of four); default: the simulated reference CPU (8+16)")
     p.add_argument("--state-dir", metavar="DIR", help="--sim only: where the simulated curve store and measurement journal live (default: a fresh private temp directory; never /var/lib)")
     return p
+
+
+def sim_topology(args: argparse.Namespace) -> Topology:
+    """The topology of a ``--sim`` helper: the simulated reference CPU, or ``--sim-shape P+E`` (P-cores, E-cores; E in clusters of four; the first P-core and, with
+    at least four, the fourth are favored). A fixture: nothing here is a statement about any machine."""
+    shape = getattr(args, "sim_shape", None)
+    if not shape:
+        return arl_s_285k()
+    m = re.fullmatch(r"([1-9][0-9]?)\+([1-9][0-9]?)", shape)
+    if m is None or int(m.group(2)) % 4:
+        raise _Usage(f"--sim-shape {shape!r}: expected P+E with E a multiple of 4, e.g. 6+8")
+    p, e = int(m.group(1)), int(m.group(2))
+    return synthetic(p, e, favored_p=(0, 3) if p > 3 else (0,))
 
 
 def root_argv_refusal(argv: Sequence[str]) -> tuple[str, str] | None:
@@ -172,19 +187,23 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
     if args.sim:
         nowhere = Path("/nonexistent-arltuner-sim")
 
+        topo = sim_topology(args)
+
         def sim_port():  # type: ignore[no-untyped-def]
             from arltuner.msr import SimConfig, SimMsrPort
 
-            return SimMsrPort(SimConfig.measured(per_point=True, reject_zero_fields=True))
+            return SimMsrPort(SimConfig.measured(per_point=True, reject_zero_fields=True, topology=topo))
 
         return HelperConfig(
             lock_path=lock,
             audit_path=Path(args.audit) if args.audit else default_audit_path(os.environ, consider_install=False),
             policy_path=Path(args.policy) if args.policy else None,
             port_factory=sim_port,
-            topology_fn=arl_s_285k,
-            preflight_fn=lambda: preflight(Path("/")),
-            sampler_factory=lambda interval: Sampler(None, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval),
+            topology_fn=lambda: topo,
+            preflight_fn=lambda: preflight(Path("/"), topology=topo),
+            sampler_factory=lambda interval: Sampler(
+                None, topo, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval
+            ),
             simulator=True,
             enforce_trust=False,
             log=log,
@@ -235,7 +254,9 @@ def measure_wiring(args: argparse.Namespace, *, lstat_fn: Callable[[str], Any] =
 
     if args.sim:
         state_dir = getattr(args, "state_dir", None)
-        return ops_measure.sim_wiring(Path(state_dir) if state_dir else Path(tempfile.gettempdir()) / f"arltuner-sim-{os.getpid()}-{secrets.token_hex(4)}")  # created lazily, 0700
+        return ops_measure.sim_wiring(
+        Path(state_dir) if state_dir else Path(tempfile.gettempdir()) / f"arltuner-sim-{os.getpid()}-{secrets.token_hex(4)}", topology=sim_topology(args)
+    )  # created lazily, 0700
     return ops_measure.device_wiring(lstat_fn=lstat_fn)
 
 

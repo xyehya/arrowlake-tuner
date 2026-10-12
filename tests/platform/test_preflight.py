@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 
 from arltuner.platform import OPTIONAL_TOOLS, Status, preflight
+from arltuner.topology import arl_s_285k, synthetic
+from tests.fakesys import add_dmi, make_sysfs, reference_like
 
 GOOD_FLAGS = "fpu vme de pse tsc msr pae mce cx8 apic sep"
 
@@ -31,6 +33,8 @@ class FakeRoot(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.write("proc/cpuinfo", cpuinfo())
         self.write("sys/kernel/security/lockdown", "[none] integrity confidentiality\n")
+        reference_like(self.root / "sys")  # 8 P + 16 E, favored P0 and P3 by CPPC: the live topology the checks derive (D-036)
+        add_dmi(self.root / "sys", "Z890 Steel Legend WiFi", "ASRock")
         for c in range(24):
             self.write(f"dev/cpu/{c}/msr", "")
         self.write("sys/module/msr/parameters/allow_writes", "default\n")
@@ -69,14 +73,32 @@ class AllGoodTests(FakeRoot):
 
     def test_check_names(self):
         names = [r.name for r in self.run_pf().results]
-        self.assertEqual(names[:9], ["cpuid", "hypervisor", "lockdown", "msr_device", "msr_allow_writes", "pkexec", "polkit", "polkit_agent", "python"])
-        self.assertEqual(names[9:], [f"tool:{t}" for t in OPTIONAL_TOOLS])
+        self.assertEqual(names[:10], ["cpuid", "hypervisor", "lockdown", "topology", "msr_device", "msr_allow_writes", "pkexec", "polkit", "polkit_agent", "python"])
+        self.assertEqual(names[10:], [f"tool:{t}" for t in OPTIONAL_TOOLS])
 
     def test_to_dict_is_json(self):
         d = json.loads(json.dumps(self.run_pf().to_dict()))
-        self.assertEqual(d["platform"], "arl-s-285k")
+        self.assertEqual(d["platform"], "arl-s")
         self.assertEqual(d["mode"], "write")
+        self.assertEqual(d["board"], "Z890 Steel Legend WiFi")
         self.assertEqual(d["checks"][0], {"name": "cpuid", "status": "pass", "reason": d["checks"][0]["reason"]})
+
+    def test_the_result_carries_the_live_topology_in_the_g127_shape(self):
+        topo = self.run_pf().to_dict()["topology"]
+        self.assertEqual(set(topo), {"units", "favored_source"})
+        self.assertEqual(topo["favored_source"], "acpi_cppc")
+        self.assertEqual([u["id"] for u in topo["units"]], [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])
+        self.assertEqual(topo["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92})
+        self.assertEqual(topo["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 49, "perf": 68})
+        self.assertEqual([u["id"] for u in topo["units"] if u["favored"]], ["P0", "P3"])
+
+    def test_a_simulated_topology_is_reported_instead_of_the_real_sysfs(self):
+        rep = self.run_pf(topology=synthetic(6, 8, favored_p=(1,)))
+        topo = rep.to_dict()["topology"]
+        self.assertEqual([u["id"] for u in topo["units"]], [f"P{i}" for i in range(6)] + ["EC0", "EC1"])
+        self.assertEqual([u["id"] for u in topo["units"] if u["favored"]], ["P1"])
+        self.assertEqual(rep.get("msr_device").status, Status.PASS)  # the device nodes are checked against the simulated CPU list (0..13)
+
 
     def test_default_root_argument_is_slash(self):
         import inspect
@@ -92,18 +114,29 @@ class CpuidTests(FakeRoot):
         self.write("proc/cpuinfo", cpuinfo(model=183))
         r = self.run_pf().get("cpuid")
         self.assertEqual(r.status, Status.READ_ONLY)
-        self.assertIn("does not match", r.reason)
+        self.assertIn("not an Arrow Lake-S CPU", r.reason)
 
-    def test_wrong_stepping(self):
+    def test_an_unknown_stepping_is_a_warning_not_a_refusal(self):
         self.write("proc/cpuinfo", cpuinfo(stepping=1))
-        self.assertEqual(self.status("cpuid"), Status.READ_ONLY)
+        rep = self.run_pf()
+        r = rep.get("cpuid")
+        self.assertEqual(r.status, Status.WARN)
+        self.assertIn("stepping 1", r.reason)
+        self.assertEqual(rep.mode, "write")  # a warning never changes the mode
+        self.assertTrue(rep.writes_allowed)
+        self.assertEqual(rep.problems(), ())
+        self.assertEqual(json.loads(json.dumps(rep.to_dict()))["checks"][0]["status"], "warn")
+
+    def test_another_sku_of_the_family_passes(self):
+        self.write("proc/cpuinfo", cpuinfo(n=14, name="Intel(R) Core(TM) Ultra 5 245K"))  # the name is not part of the identity
+        self.assertEqual(self.status("cpuid"), Status.PASS)
 
     def test_wrong_vendor(self):
         self.write("proc/cpuinfo", cpuinfo(vendor="AuthenticAMD"))
         self.assertEqual(self.status("cpuid"), Status.READ_ONLY)
 
     def test_offline_cpus_do_not_fail_cpuid(self):
-        self.write("proc/cpuinfo", cpuinfo(n=16))  # topology.detect owns the CPU count
+        self.write("proc/cpuinfo", cpuinfo(n=16))  # the topology check owns the CPU count
         self.assertEqual(self.status("cpuid"), Status.PASS)
 
     def test_one_odd_cpu_is_caught(self):
@@ -126,6 +159,74 @@ class CpuidTests(FakeRoot):
     def test_empty_cpuinfo(self):
         self.write("proc/cpuinfo", "")
         self.assertEqual(self.status("cpuid"), Status.READ_ONLY)
+
+
+class TopologyTests(FakeRoot):
+    """The identity gate is CPUID family/model plus a consistent live topology (D-036)."""
+
+    def rebuild(self, p, e, **kw):
+        shutil.rmtree(self.root / "sys/devices")
+        make_sysfs(self.root / "sys", p, e, **kw)
+
+    def test_8p_16e_passes_and_names_the_favored_cores(self):
+        r = self.run_pf().get("topology")
+        self.assertEqual(r.status, Status.PASS)
+        self.assertIn("8 P-cores + 16 E-cores in 4 clusters of 4", r.reason)
+        self.assertIn("favored by acpi_cppc: P0, P3", r.reason)
+
+    def test_other_shapes_pass(self):
+        for p, e in ((8, 12), (6, 8), (4, 8)):
+            with self.subTest(p=p, e=e):
+                self.rebuild(p, e)
+                self.assertEqual(self.status("topology"), Status.PASS)
+
+    def test_no_e_cores_is_read_only(self):
+        (self.root / "sys/devices/cpu_atom/cpus").write_text("\n")
+        r = self.run_pf().get("topology")
+        self.assertEqual(r.status, Status.READ_ONLY)
+        self.assertEqual(self.run_pf().mode, "read-only")
+
+    def test_unequal_clusters_are_read_only(self):
+        d = self.root / "sys/devices/system/cpu"
+        for cpu in (20, 21, 22, 23):
+            (d / f"cpu{cpu}/topology/cluster_cpus_list").write_text("20-21\n" if cpu < 22 else "22-23\n")
+        r = self.run_pf().get("topology")
+        self.assertEqual(r.status, Status.READ_ONLY)
+        self.assertIn("unequal", r.reason)
+
+    def test_missing_sysfs_files_are_read_only_with_the_reason(self):
+        shutil.rmtree(self.root / "sys/devices")
+        rep = self.run_pf()
+        self.assertEqual(rep.get("topology").status, Status.READ_ONLY)
+        self.assertIn("cpu_core", rep.get("topology").reason)
+        self.assertEqual(rep.get("msr_device").status, Status.READ_ONLY)  # without a CPU list there is nothing to check the device nodes against
+        self.assertEqual(rep.to_dict()["topology"], {"units": [], "favored_source": None})
+
+    def test_all_p_cores_equal_means_no_favored_core(self):
+        make_sysfs(self.root / "sys", 8, 16, perf={c: 88 for c in range(8)})
+        topo = self.run_pf().to_dict()["topology"]
+        self.assertIsNone(topo["favored_source"])
+        self.assertFalse(any(u["favored"] for u in topo["units"]))
+        self.assertIn("no favored core", self.run_pf().get("topology").reason)
+
+    def test_the_msr_device_check_follows_the_live_cpu_list(self):
+        self.rebuild(6, 8)
+        for c in range(14, 24):  # a 6P+8E part only has /dev/cpu/0..13
+            shutil.rmtree(self.root / f"dev/cpu/{c}")
+        self.assertEqual(self.status("msr_device"), Status.PASS)
+        (self.root / "dev/cpu/13/msr").unlink()
+        r = self.run_pf().get("msr_device")
+        self.assertEqual(r.status, Status.READ_ONLY)
+        self.assertIn("/dev/cpu/13/msr", r.reason)
+
+
+class BoardTests(FakeRoot):
+    def test_board_name_is_reported_when_readable(self):
+        self.assertEqual(self.run_pf().board, "Z890 Steel Legend WiFi")
+
+    def test_no_dmi_means_no_board(self):
+        shutil.rmtree(self.root / "sys/class")
+        self.assertIsNone(self.run_pf().board)
 
 
 class HypervisorTests(FakeRoot):

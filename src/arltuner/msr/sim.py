@@ -32,8 +32,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from arltuner.mailbox import MSR_OC_MAILBOX, Cmd, Domain, Rc, VfWord, is_busy, is_write
-from arltuner.platform import default_platform
-from arltuner.topology import Topology, arl_s_285k
+from arltuner.topology import Core, Topology
+from arltuner.topology.reference import arl_s_285k
 
 from . import measured_baseline
 from .port import MsrError, MsrPort, check_cpu, check_msr, check_value
@@ -45,14 +45,14 @@ _MAX_POINT = 15  # registers.md: P2 1..15 = V/F point (hidden on ARL-S)
 #: T-025 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset 0),
 #: ``0x10 P2=7`` -> rc ``0x11`` (the OC point is the ``P2 = 0`` word, not a point index). SkatterBencher ``[COMMUNITY]``: E has 6 fused points, P has 8.
 RC_NO_SUCH_POINT = 0x11  # not in ``Rc`` (``rc_name`` says ``UNKNOWN_0x11``)
-_PLATFORM = default_platform()  # V/F point ratios and turbo defaults: platforms/arl-s-285k.toml (G-101)
-POINT_COUNTS_ARL_S: dict[str, int] = {"E": len(_PLATFORM.e_point_ratios), "P": len(_PLATFORM.p_point_ratios)}
+_REF_POINTS = measured_baseline.VF_POINT_RATIOS  # the simulated reference CPU's V/F point ratios (fixture data, msr/measured_baseline.py)
+POINT_COUNTS_ARL_S: dict[str, int] = {"E": len(_REF_POINTS["E"]), "P": len(_REF_POINTS["P"])}
 #: T-026 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md "Full point layout", "E cluster 1 V/F curve"): the ratio field of every V/F point
 #: and the BIOS per-point offset (raw, /1024 V). P (CPU 0, same table assumed on every P-core): 8,20,30,48,53,55,56,57x with -49.8 mV (raw -51) at 53x
 #: and 57x and -14.6 mV (raw -15) at 55x. E: 8,15,23,30,40,46x, offset 0. Used by ``SimConfig.measured()`` only (``SimConfig()`` keeps its old defaults).
 POINT_RATIOS_ARL_S: dict[tuple[str, int], int] = {
-    **{("P", n): r for n, r in enumerate(_PLATFORM.p_point_ratios, start=1)},  # platforms/arl-s-285k.toml (G-101)
-    **{("E", n): r for n, r in enumerate(_PLATFORM.e_point_ratios, start=1)},
+    **{("P", n): r for n, r in enumerate(_REF_POINTS["P"], start=1)},
+    **{("E", n): r for n, r in enumerate(_REF_POINTS["E"], start=1)},
 }
 #: G-117: opt-in only (``measured()`` starts every point at offset 0): ``SimConfig.measured(point_offsets=dict(POINT_OFFSETS_ARL_S))``.
 POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15, ("P", 8): -51}
@@ -63,7 +63,7 @@ POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15,
 POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
 #: T-028 ``[MEASURED lnx 2026-10-02]`` (docs/research/skatterbencher-285k.md ring section, ring-community.md): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
 #: points 8,14,20,28,34,37,38,39x (V target 0), ``P2 = 9`` -> rc ``0x11``; point 8 = ``0xF6600027`` = 39x with the BIOS offset -75.2 mV (raw -77).
-RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_PLATFORM.ring_point_ratios, start=1))
+RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_REF_POINTS["ring"], start=1))
 RING_POINT_OFFSETS_ARL_S: dict[int, int] = {8: -77}
 _ZERO_VF = VfWord(ratio=0, v_target_raw=0, static=False, offset_raw=0)
 _SILENT_CMDS = (
@@ -89,7 +89,7 @@ _MODELLED_READS = frozenset(
 #: "Facts"): ``0x1AD`` P buckets 57,57,55 x6 (LSB = 1 active core), ``0x1AE`` its core counts 1..8, ``0x650`` E buckets 48 x8, ``0x651`` its core
 #: counts, ``0xCE`` PLATFORM_INFO (``[15:8]`` = 37 base ratio), ``0x194`` FLEX_RATIO. The same value was read on CPU 0 and CPU 20.
 PLAIN_MSR_DEFAULTS: dict[int, int] = {
-    **_PLATFORM.turbo_defaults,  # 0x1AD / 0x1AE / 0x650 / 0x651 from platforms/arl-s-285k.toml (G-101)
+    **measured_baseline.TURBO_DEFAULTS,  # 0x1AD / 0x1AE / 0x650 / 0x651 of the simulated reference CPU
     0xCE: 0x08040838F1812500,
     0x194: 0x000E0000,
 }
@@ -105,17 +105,17 @@ _DEFAULT_DOMAIN_VF = {
 }
 
 
-def _default_core_vf(cpu: int, kind: str, cluster: int | None) -> VfWord:
-    """SIM-ONLY per-CPU start word: P0/P3 57x 0x5B4, other P 55x 0x544, E cluster 0 48x 0x4A0, other E 48x 0x48C."""
-    if kind == "P":
-        return VfWord(57, 0x5B4, False, 0) if cpu in (0, 3) else VfWord(55, 0x544, False, 0)
-    return VfWord(48, 0x4A0 if cluster == 0 else 0x48C, False, 0)
+def _default_core_vf(core: Core) -> VfWord:
+    """SIM-ONLY per-CPU start word: favored P 57x 0x5B4, other P 55x 0x544, E cluster 0 48x 0x4A0, other E 48x 0x48C."""
+    if core.kind == "P":
+        return VfWord(57, 0x5B4, False, 0) if core.favored else VfWord(55, 0x544, False, 0)
+    return VfWord(48, 0x4A0 if core.cluster == 0 else 0x48C, False, 0)
 
 
-def _default_fused_max_ratio(cpu: int, kind: str) -> int:
-    """SIM-ONLY fused max ratio reported by cmd 0x1C ``[15:8]``: P0/P3 57, other P 55, E 46."""
-    if kind == "P":
-        return 57 if cpu in (0, 3) else 55
+def _default_fused_max_ratio(core: Core) -> int:
+    """SIM-ONLY fused max ratio reported by cmd 0x1C ``[15:8]``: favored P 57, other P 55, E 46."""
+    if core.kind == "P":
+        return 57 if core.favored else 55
     return 46
 
 
@@ -155,7 +155,7 @@ class SimConfig:
     fused_max_ratio: dict[int, int] = field(default_factory=dict)  # cpu -> 0x1C fused max override ([15:8] of the default word)
     # ---- T-021: what the measured machine needs (all default to the old SIM-ONLY behaviour) ----
     reject_zero_fields: bool = False  # a domain-0 0x11 (or 0x1D) with ratio 0 / V target 0 -> Rc.InvalidParam ([UNVERIFIED] on hardware)
-    fused_point: dict[int, int] = field(default_factory=dict)  # cpu -> 0x09 P1=0x11 P2=0 word (default: the SIM-ONLY default V/F word)
+    fused_point: dict[int, int] = field(default_factory=dict)  # cpu -> 0x09 P1=0x11 P2=0 word (default: the SIM-ONLY default V/F word with the fused max ratio)
     favored_word: dict[int, int] = field(default_factory=dict)  # cpu -> initial 0x1C word (default: fused_max << 8 | default ratio)
     granular_word: dict[int, int] = field(default_factory=dict)  # cpu -> 0x26 word (default: granular_default)
     granular_default: int = 3  # SIM-ONLY default for a CPU not in granular_word (3 is also what every core measured)
@@ -211,14 +211,15 @@ class SimConfig:
         m = measured_baseline
         topo = overrides.get("topology")
         topo = topo if isinstance(topo, Topology) else arl_s_285k()
+        t = measured_baseline.tables_for(topo)  # the reference words laid over the topology (a simulated 6P+8E works the same way)
         fields: dict[str, object] = {
             "misc_global_config": m.MISC_GLOBAL_CONFIG,
-            "initial_vf": {cpu: VfWord.from_u32(word) for cpu, word in m.VF_DOMAIN0.items()},
+            "initial_vf": {cpu: VfWord.from_u32(word) for cpu, word in t.VF_DOMAIN0.items()},
             "initial_domain_vf": {domain: VfWord.from_u32(word) for domain, word in m.DOMAIN_VF.items()},
-            "fused_point": dict(m.FUSED_POINT),
-            "favored_word": dict(m.FAVORED_WORD),
-            "granular_word": dict(m.GRANULAR_WORD),
-            "max_voltage_cpu": dict(m.MAX_VOLTAGE_RAW),
+            "fused_point": dict(t.FUSED_POINT),
+            "favored_word": dict(t.FAVORED_WORD),
+            "granular_word": dict(t.GRANULAR_WORD),
+            "max_voltage_cpu": dict(t.MAX_VOLTAGE_RAW),
             "fixed_reads": dict(m.FIXED_READS),
             "point_counts": dict(POINT_COUNTS_ARL_S),
             "point_ratios": dict(POINT_RATIOS_ARL_S),  # T-026: the real P / E tables with the BIOS offsets
@@ -304,16 +305,16 @@ class SimMsrPort(MsrPort):
         self.on_favored_write: Callable[[int, int], None] | None = None
         self._granular: dict[int, int] = {}  # cpu -> 0x26 word (0x27 replaces it)
         for core in topo.cores:
-            default = _default_core_vf(core.cpu, core.kind, core.cluster)
+            default = _default_core_vf(core)
             start = self.config.initial_vf.get(core.cpu)
             self._vf[(int(Domain.CORE), core.cpu, 0)] = default if start is None else start
             fused = self.config.fused_point.get(core.cpu)
-            self._fused[core.cpu] = default.to_u32() if fused is None else fused
+            self._fused[core.cpu] = default.with_(ratio=_default_fused_max_ratio(core)).to_u32() if fused is None else fused  # [7:0] = the core's top fused ratio
             favored = self.config.favored_word.get(core.cpu)
             if favored is None:
                 fused_max = self.config.fused_max_ratio.get(core.cpu)
                 if fused_max is None:
-                    fused_max = _default_fused_max_ratio(core.cpu, core.kind)
+                    fused_max = _default_fused_max_ratio(core)
                 favored = ((fused_max & 0xFF) << 8) | default.ratio
             self._favored[core.cpu] = favored
             self._granular[core.cpu] = self.config.granular_word.get(core.cpu, self.config.granular_default)
@@ -749,7 +750,7 @@ class SimMsrPort(MsrPort):
         if p1 == Domain.CORE and cfg.per_core_requires_enable and not self.per_core_enabled:
             return int(Rc.OCLocked), 0
         word = VfWord.from_u32(data)
-        top = (self._top_fused_ratio(cpu) or max(_PLATFORM.p_point_ratios if self._kind(cpu) == "P" else _PLATFORM.e_point_ratios)) if p1 == Domain.CORE else None
+        top = (self._top_fused_ratio(cpu) or max(_REF_POINTS[self._kind(cpu)])) if p1 == Domain.CORE else None
         zero_target = word.v_target_raw == 0 and not (top is not None and 0 < word.ratio <= top)  # G-120: no OC point (ratio <= top fused) = ratio | offset << 21, target 0 is the shape the planner writes
         if cfg.reject_zero_fields and p1 == Domain.CORE and p2 == 0 and (word.ratio == 0 or zero_target):  # T-025: a point word has V target 0 (OCCT, measured)
             return int(Rc.InvalidParam), 0  # models the UNVERIFIED acceptance: XTU never sent a zero ratio / V target

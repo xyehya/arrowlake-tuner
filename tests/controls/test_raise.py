@@ -201,7 +201,7 @@ class Ramp(RaiseCase):
             s.apply(profile(self.GOAL))
         self.assertEqual(
             ctx.exception.next_profile_text,
-            '[meta]\nname = "t (next step)"\nplatform = "arl-s-285k"\n\n[[core]]\nkind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1176\n',
+            '[meta]\nname = "t (next step)"\nplatform = "arl-s"\n\n[[core]]\nkind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1176\n',
         )
         self.assertEqual(s.write_requests(), [])  # nothing was written
         self.assertEqual(s.sim.vf(8).to_u32(), 0x0)

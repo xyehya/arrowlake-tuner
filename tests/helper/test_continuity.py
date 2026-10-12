@@ -13,6 +13,7 @@ from typing import Any
 
 from arltuner.helper import ops_tune
 
+from ._measure_support import reference_read
 from ._support import Harness, error_code
 from .test_tune import ALL_P_53, REPO, TuneCase, row, rows
 
@@ -243,11 +244,12 @@ class ProfilesGet(TuneCase):
             '[meta]\nname = "mix"\nplatform = "arl-s-285k"\n[[core]]\nkind = "P"\nindex = 2\noffset_mv = -20\noc_voltage_mv = 1300\nratio = 58\n'
             '[[point]]\nkind = "P"\nindex = 2\npoint = 5\noffset_mv = -50\n[turbo]\np = [57, 57, 55, 55, 55, 55, 55, 55]\n')
         h = self.boot(accepted_dir=acc)
+        h.helper.last_words, h.helper.fused_words = reference_read()  # this boot's read: the unit's own fused point ratios
         got = self.get(h, "mix")
         (r,) = got["contents"]["rows"]
         self.assertEqual((r["target"], r["v_target_v"], r["ratio"]), ("P2", 1.3, 58))
         mv = r["offset"]["mv"]
-        self.assertEqual(sorted(map(int, mv)), sorted(set(ops_tune._POINT_RATIOS["P"])))
+        self.assertEqual(sorted(map(int, mv)), [8, 20, 30, 48, 53, 55, 56, 57])
         self.assertEqual(mv["53"], -50)
         self.assertEqual(mv["48"], -20)
         self.assertEqual(got["contents"]["turbo"], {"P": [57, 57, 55, 55, 55, 55, 55, 55]})

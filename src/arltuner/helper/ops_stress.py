@@ -29,14 +29,15 @@ from pathlib import Path
 from typing import Any
 
 from arltuner import vfdump
-from arltuner.curves import UNITS, StoreError, unit_cpus
+from arltuner.curves import StoreError, is_unit_id, unit_order
+from arltuner.topology import Topology
 from arltuner.stress import (
     CHILD_ENV, CPU_METHODS, DURATION_RANGE, MEMORY_MB_MIN, STRESS_NG, STRESSAPPTEST, JournalLog, KernelLogWatch, KmsgLog, NullLog, StressappScanner,
     StressNgScanner, StressStore, clean_line, count_bad, cpu_command, memory_command,
 )
 from arltuner.stress.parse import MAX_ERROR_LINES
 
-from .ops import OpContext, OpSpec, _is_int, _no_args, _only
+from .ops import OpContext, OpSpec, _is_int, _no_args, _only, helper_topology
 from .ops_measure import CAP_ATTR, EPP_ATTR, _remove_journal, _restore, _write_journal, recover_journal
 from .protocol import BAD_REQUEST, INTERNAL, REFUSED, OpError
 from .state import State
@@ -59,8 +60,6 @@ TAIL_LINES = 5  # last output lines of a child that ended abnormally, shown afte
 RUNTIME_ROOT = "/run/user"
 TMP_ROOT = "/tmp"
 SIM_TIME_SCALE = 1 / 12
-_UNIT_NAMES = list(UNITS)
-_ALL_CPUS = tuple(sorted(c for u in UNITS for c in unit_cpus(u)))
 _UID_RE = re.compile(r"[0-9]{1,10}\Z")
 
 
@@ -306,6 +305,7 @@ class SimStress:
 
     def __init__(self, cpufreq: Any, model: Any, monotonic: Callable[[], float]) -> None:
         self.cpufreq, self.model, self.monotonic = cpufreq, model, monotonic
+        self.all_cpus = tuple(sorted(c.cpu for c in model.topology.cores))
         self.lock = threading.Lock()
         self.loaded: set[int] = set()
         self.children: dict[int, _SimChild] = {}
@@ -322,7 +322,7 @@ class SimStress:
     def popen(self, cmd: list[str], **kwargs: Any) -> _SimChild:
         kind = "memory" if os.path.basename(cmd[0]) == "stressapptest" else "cpu"
         if kind == "memory":
-            duration, cpus = int(cmd[cmd.index("-s") + 1]), _ALL_CPUS
+            duration, cpus = int(cmd[cmd.index("-s") + 1]), self.all_cpus
         else:
             raw = cmd[cmd.index("--timeout") + 1]
             duration, cpus = int(raw.rstrip("s")), tuple(vfdump.parse_cpu_list(cmd[cmd.index("--taskset") + 1]))
@@ -347,7 +347,7 @@ class SimStress:
         top = 8
         with self.lock:
             loaded = set(self.loaded)
-        for cpu in _ALL_CPUS:
+        for cpu in self.all_cpus:
             ratio = 8
             if cpu in loaded:
                 ratio = self.model.settled(self.model.unit_of(cpu), int(self.cpufreq.read(cpu, CAP_ATTR) or 0))
@@ -422,18 +422,17 @@ def _validate_stress_start(args: dict[str, Any]) -> dict[str, Any]:
             raise OpError(BAD_REQUEST, "'method' and 'units' belong to kind \"cpu\"")
         if memory_mb is not None and (not _is_int(memory_mb) or memory_mb < MEMORY_MB_MIN):
             raise OpError(BAD_REQUEST, f"'memory_mb' must be an integer >= {MEMORY_MB_MIN}")
-        units = list(_UNIT_NAMES)
+        units = None  # all units of the topology (resolved by the handler)
     else:
         if memory_mb is not None:
             raise OpError(BAD_REQUEST, "'memory_mb' belongs to kind \"memory\"")
         method = "integer" if method is None else method
         if method not in CPU_METHODS:
             raise OpError(BAD_REQUEST, f"'method' must be one of {', '.join(CPU_METHODS)}")
-        if units is None:
-            units = list(_UNIT_NAMES)
-        elif not isinstance(units, list) or not 1 <= len(units) <= len(UNITS) or not all(isinstance(u, str) and u in UNITS for u in units) or len(set(units)) != len(units):
-            raise OpError(BAD_REQUEST, f"'units' must be a non-empty list of distinct units from {', '.join(_UNIT_NAMES)}")
-        units = [u for u in _UNIT_NAMES if u in units]
+        if units is not None:
+            if not isinstance(units, list) or not 1 <= len(units) <= 256 or not all(is_unit_id(u) for u in units) or len(set(units)) != len(units):
+                raise OpError(BAD_REQUEST, "'units' must be a non-empty list of distinct unit ids (P<n> / EC<n>) of this system")
+            units = sorted(units, key=unit_order)
     return {"kind": kind, "method": method, "units": units, "ratio_cap": cap, "duration_s": duration, "memory_mb": memory_mb}
 
 
@@ -449,8 +448,9 @@ def _num(reading: Any) -> float | None:
 
 
 class _Collector:
-    def __init__(self, units: list[str]) -> None:
+    def __init__(self, units: list[str], topology: Topology) -> None:
         self.units = units
+        self.topology = topology
         self.mhz: dict[str, list[float]] = {u: [] for u in units}
         self.ratios: dict[str, list[int]] = {u: [] for u in units}
         self.max_temp: float | None = None
@@ -467,7 +467,7 @@ class _Collector:
         cores = snap["cores"]
         if settled:
             for unit in self.units:
-                for cpu in unit_cpus(unit):
+                for cpu in self.topology.unit_cpus(unit):
                     core = cores.get(cpu) or cores.get(str(cpu))
                     if not isinstance(core, dict):
                         continue
@@ -573,9 +573,15 @@ def _stop_child(w: StressWiring, proc: Any, reader: threading.Thread | None) -> 
 def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     w = _wiring(helper)
     cancel = ctx.cancel
-    kind, method, units, cap = args["kind"], args["method"], args["units"], args["ratio_cap"]
+    kind, method, cap = args["kind"], args["method"], args["ratio_cap"]
     duration = args["duration_s"]
-    cpus = sorted({c for u in units for c in unit_cpus(u)})
+    topo = helper_topology(helper)
+    all_units = list(topo.unit_ids())
+    units = all_units if args["units"] is None else args["units"]
+    unknown = [u for u in units if u not in all_units]
+    if unknown:
+        raise OpError(BAD_REQUEST, f"'units' names {', '.join(unknown)}, which this system does not have (units: {', '.join(all_units)})")
+    cpus = sorted({c for u in units for c in topo.unit_cpus(u)})
     # ---- everything that can refuse, before anything is changed
     try:
         w.prepare()
@@ -604,12 +610,12 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     unit_max: dict[str, int] = {}
     if cap is not None:
         for u in units:
-            raw = mw.cpufreq.read(unit_cpus(u)[0], "cpuinfo_max_freq")
+            raw = mw.cpufreq.read(topo.unit_cpus(u)[0], "cpuinfo_max_freq")
             if raw and raw.isdigit():
                 unit_max[u] = int(raw) // 100_000
     scanner = StressNgScanner() if kind == "cpu" else StressappScanner()
     tail: deque[str] = deque(maxlen=TAIL_LINES)  # the child's last non-empty output lines
-    collector = _Collector(units)
+    collector = _Collector(units, topo)
     watch = w.klog_factory()
     notes: list[str] = []
     started_wall = w.wall_clock()

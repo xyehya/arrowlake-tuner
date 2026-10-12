@@ -40,9 +40,8 @@ from arltuner.topology import Core, Topology
 
 __all__ = [
     "MSR_PERF_STATUS",
-    "POINTS_E",
-    "POINTS_P",
-    "POINT_P2_CAP",
+    "WALK_P2_CAP",
+    "walk_cap",
     "RC_NO_SUCH_POINT",
     "CpuCurve",
     "Flag",
@@ -53,12 +52,9 @@ __all__ = [
     "Stop",
     "SysfsMeasureIO",
     "Unit",
-    "cap_khz",
     "caps_to_try",
     "find_flags",
     "format_dump",
-    "known_points",
-    "p2_cap",
     "measure_group",
     "parse_cpu_list",
     "plan_requests",
@@ -68,12 +64,10 @@ __all__ = [
     "walk",
 ]
 
-#: ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md "Full point layout" / "E cluster 1 V/F curve"): fused V/F points per core kind.
-POINTS_P = 8
-POINTS_E = 6
-#: Hard cap of the walk (task spec, operator 2026-10-02): a table is never read past ``P2 = 10`` (P) / ``P2 = 8`` (E) = the known count + one extra point (an OC
-#: ratio above the top fused ratio adds one) + the rc ``0x11`` that ends it. Reaching it without an rc ``0x11`` is reported, not an error.
-POINT_P2_CAP: dict[str, int] = {"P": 10, "E": 8}
+#: Hard cap of the walk: a table is never read past ``P2 = 15``, the largest value of the ``P2`` field (registers.md "Mailbox commands": P2 1..15 = V/F point). How many points a
+#: core has is read live: the walk ends at the first rc ``0x11`` ("no such point", expected at the end of a table, not an error). Reaching the cap without an rc ``0x11`` is
+#: reported, not an error.
+WALK_P2_CAP = 15
 #: ``[MEASURED lnx 2026-10-02]``: the completion code of ``0x10 P2 = n`` past the last point (E CPU: ``P2 = 7``). Expected at the end of a table, not an error.
 RC_NO_SUCH_POINT = 0x11
 #: IA32_PERF_STATUS (plain rdmsr, no mailbox): ``[15:8]`` running ratio, ``[47:32]`` requested VID in 1/8192 V (``[MEASURED lnx 2026-10-02]``, tools/lnx/vfcurve.py).
@@ -88,20 +82,17 @@ MIN_VALID = 5
 _DWELL_MARGIN_S = 0.05
 
 
-def known_points(kind: str) -> int:
-    """Number of fused V/F points of a core kind (P 8, E 6); more is a note (an OC ratio above the top point adds one), fewer is allowed (per-core tables)."""
-    return POINTS_P if kind == "P" else POINTS_E
-
-
-def p2_cap(kind: str) -> int:
-    """Highest ``P2`` the walk may read for a core kind (:data:`POINT_P2_CAP`)."""
-    return POINT_P2_CAP[kind]
-
-
-def cap_khz(kind: str, ratio: int) -> int:
-    """The *old* fixed guess, kept for reference: P ``ratio x 100 MHz``, E ``(ratio + 1) x 100 MHz`` (intel_pstate quirk, ``[MEASURED lnx 2026-10-02]``). It is
-    ratio-dependent for E (T-027), so :func:`measure_group` uses :func:`caps_to_try` instead."""
-    return (ratio + (1 if kind == "E" else 0)) * 100_000
+def walk_cap(policy: Any) -> int:
+    """Highest ``P2`` the walk reads: as far as the reviewed policy's ``0x10 P1=0`` read entries reach without a gap from ``P2 = 1`` (at most :data:`WALK_P2_CAP`). The
+    point count is discovered (the walk ends at the first rc ``0x11``), never assumed; the policy only says how far a table may be read. A policy that allows no point
+    read at all gives :data:`WALK_P2_CAP`, so the request for ``P2 = 1`` is refused by the allowlist (default deny) instead of being skipped silently."""
+    cap = 0
+    for p2 in range(1, WALK_P2_CAP + 1):
+        entry = policy.match(int(Cmd.VOLTAGE_FREQ_READ), 0, p2)
+        if entry is None or entry.kind != "read":
+            break
+        cap = p2
+    return cap or WALK_P2_CAP
 
 
 def caps_to_try(ratio: int, max_khz: int | None = None) -> list[int]:
@@ -147,11 +138,11 @@ def select_cpus(topology: Topology, cpus: str | None, all_e: bool) -> list[Core]
     return chosen
 
 
-def plan_requests(cores: Sequence[Core], topology: Topology) -> list[Request]:
-    """The worst-case request list: per CPU ``0x10 P1=0 P2 = 0 .. p2_cap(kind)`` (the rc ``0x11`` that ends a table shortens it: P normally 10 reads, E 8). Nothing is sent."""
+def plan_requests(cores: Sequence[Core], topology: Topology, cap: int = WALK_P2_CAP) -> list[Request]:
+    """The worst-case request list: per CPU ``0x10 P1=0 P2 = 0 .. WALK_P2_CAP`` (the rc ``0x11`` that ends a table shortens it). Nothing is sent."""
     out: list[Request] = []
     for core in cores:
-        for p2 in range(p2_cap(core.kind) + 1):
+        for p2 in range(cap + 1):
             out.append(
                 Request(core.cpu, int(Cmd.VOLTAGE_FREQ_READ), 0, p2, 0, f"vf-dump: read V/F {'OC word' if p2 == 0 else f'point {p2}'} of {topology.xtu_name(core)}")
             )
@@ -212,16 +203,16 @@ def walk(
     execute: Executor,
     pacer: Pacer,
     refusal_text: Callable[[GuardRefused], str],
+    cap: int = WALK_P2_CAP,
 ) -> tuple[list[CpuCurve], Stop | None]:
     """Read every table, one guarded request at a time. Per CPU: ``P2 = 0``, then ``P2 = 1, 2, ...`` until the first rc ``0x11`` (the expected end of a table; the
-    known point count is *not* a stop: an OC ratio above the top fused ratio adds a point) or the hard cap :data:`POINT_P2_CAP` (reported as ``end``, not an error).
+    known point count is *not* a stop: an OC ratio above the top fused ratio adds a point) or the hard cap :data:`WALK_P2_CAP` (reported as ``end``, not an error).
     Any other rc (rc ``0x11`` at ``P2 = 0`` included), a guard refusal / trip, a timeout or Ctrl-C stops the **whole** dump: what was read so far is returned
     with the :class:`Stop`."""
     curves: list[CpuCurve] = []
     for core in cores:
         curve = CpuCurve(core.cpu, core.kind, core.cluster, topology.xtu_name(core))
         curves.append(curve)
-        cap = p2_cap(core.kind)
         for p2 in range(cap + 1):
             req = Request(core.cpu, int(Cmd.VOLTAGE_FREQ_READ), 0, p2, 0, f"vf-dump: read V/F {'OC word' if p2 == 0 else f'point {p2}'} of {curve.name}")
             try:
@@ -665,12 +656,6 @@ def format_dump(units: Sequence[Unit], flags: Sequence[Flag], measured: Mapping[
         if head.oc is not None:
             lines.append(f"  OC word {head.oc:#010x}: {_oc_text(head.oc)}")
         lines.append(f"  table end: {head.end}")
-        for c in cols:
-            if len(c.points) > known_points(c.kind):
-                lines.append(
-                    f"  note: cpu {c.cpu} has {len(c.points)} points (known fused count {known_points(c.kind)}): P2={len(c.points)} is the OC point "
-                    f"({'OC (point 9)' if c.kind == 'P' else 'OC (point 7)'}), which an OC ratio above the top fused ratio adds; not an error"
-                )
         for ratio, m in sorted(by_ratio.items()):
             if m.note:
                 lines.append(f"  note {ratio}x: {m.note}")

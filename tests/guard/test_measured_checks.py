@@ -202,7 +202,7 @@ class EffectiveOffsetFloor(MeasuredCase):
         self.assertEqual((self.policy.offset_floor_raw(1), self.policy.offset_floor_raw(8)), (-102, -51))
 
     def test_build_context_carries_the_floor_the_bounds_and_the_facts(self) -> None:
-        c = build_context(self.policy, 8, favored_word=1, fused_word=2, vf_word_sent=3, max_voltage_word=4)
+        c = build_context(self.policy, 8, favored_word=1, fused_word=0x4A02E, vf_word_sent=3, max_voltage_word=4)  # top fused ratio = [7:0] of the live 0x09 word
         # this fixture relaxes the step limits to their sanity maxima (8 ratio bins / 200 mV / 200 mV); every other bound is the default
         self.assertEqual(
             c,
@@ -210,7 +210,7 @@ class EffectiveOffsetFloor(MeasuredCase):
                 top_fused_ratio=46,
                 offset_floor_raw=-102,
                 favored_word=1,
-                fused_word=2,
+                fused_word=0x4A02E,
                 vf_word_sent=3,
                 max_voltage_word=4,
                 ratio_max=None,
@@ -224,8 +224,9 @@ class EffectiveOffsetFloor(MeasuredCase):
         self.assertEqual(build_context(self.policy, 1, favored_word=None, fused_word=None, vf_word_sent=None).offset_floor_raw, -51)
 
     def test_the_shipped_defaults_are_the_check_context_defaults(self) -> None:
-        shipped = build_context(default_m1_policy(), 8, favored_word=1, fused_word=2, vf_word_sent=3)
-        self.assertEqual(shipped, CheckContext(offset_floor_raw=-102, favored_word=1, fused_word=2, vf_word_sent=3, top_fused_ratio=46))
+        shipped = build_context(default_m1_policy(), 8, favored_word=1, fused_word=0x4A02E, vf_word_sent=3)
+        self.assertEqual(shipped, CheckContext(offset_floor_raw=-102, favored_word=1, fused_word=0x4A02E, vf_word_sent=3, top_fused_ratio=46))
+        self.assertIsNone(build_context(default_m1_policy(), 8, favored_word=None, fused_word=None, vf_word_sent=None).top_fused_ratio)  # 0x09 not read: unknown, never a default
         self.assertEqual((shipped.max_ratio_step, shipped.max_v_step_raw, shipped.max_offset_step_raw, shipped.offset_ceiling_raw), (1, 20, 26, 0))
 
     def test_policy_bounds_are_resolved_per_core_kind(self) -> None:
@@ -444,9 +445,9 @@ class RevertPlanIsXtuShaped(MeasuredCase):
 class PolicyFields(unittest.TestCase):
     def test_defaults_are_the_d015_values(self) -> None:
         p = default_m1_policy()
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -50, "E": 0})
+        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -50, "E": 0})  # unchanged by G-128: the default runtime floor of the M1 policy is not widened
         self.assertEqual(p.effective_offset_floor_mv, -100)
-        self.assertEqual(p.e_cpus, frozenset(range(8, 24)))
+        self.assertEqual(p.e_cpus, frozenset(range(8, 24)))  # the unbound default: the simulated reference CPU's E CPUs
         self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(7), p.offset_floor_raw(8), p.offset_floor_raw(23)), (-51, -51, -102, -102))
         self.assertEqual(p.core_kind(7), "P")
         self.assertEqual(p.core_kind(8), "E")

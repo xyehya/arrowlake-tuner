@@ -2,7 +2,7 @@
 
 Pure: no files, no hardware. A saved profile is already an intent (rows over ``P`` / ``E`` groups or units); an installed accepted profile is a
 :class:`~arltuner.profiles.schema.Profile` (TOML) whose ``[[point]]`` entries are numbered points, converted here to ``{ratio: mV}`` with the platform's
-point ratios (``[MEASURED lnx 2026-10-02]``). A unit with a whole-curve offset *and* point entries becomes ``points`` over every fused ratio (the curve
+point ratios of the last read (live; a point without a known ratio falls back to its ``expect_ratio``). A unit with a whole-curve offset *and* point entries becomes ``points`` over every fused ratio (the curve
 value first, the point entries over it), the order the planner writes them in.
 """
 from __future__ import annotations
@@ -10,12 +10,11 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from arltuner.curves.record import unit_order
+
 from .schema import Profile
 
-__all__ = ["UNIT_ORDER", "intent_contents", "profile_contents", "summarize"]
-
-UNIT_ORDER: tuple[str, ...] = tuple(f"P{i}" for i in range(8)) + tuple(f"EC{i}" for i in range(4))
-_GROUPS = {"P": UNIT_ORDER[:8], "E": UNIT_ORDER[8:]}
+__all__ = ["intent_contents", "profile_contents", "summarize"]
 
 
 def _row(unit: str, offset: dict[str, Any] | None, v: float | None, ratio: int | None) -> dict[str, Any]:
@@ -29,8 +28,9 @@ def _turbo(profile: Profile) -> dict[str, list[int]] | None:
     return out or None
 
 
-def profile_contents(profile: Profile, topology: Any, unit_of_cpu: Callable[[int], str], point_ratios: Mapping[str, Sequence[int]]) -> dict[str, Any]:
-    """``{rows: [{target: unit, offset, v_target_v, ratio}], turbo: {P?, E?} | None}`` in unit order."""
+def profile_contents(profile: Profile, topology: Any, unit_of_cpu: Callable[[int], str], point_ratios: Mapping[str, Sequence[int]] | None = None) -> dict[str, Any]:
+    """``{rows: [{target: unit, offset, v_target_v, ratio}], turbo: {P?, E?} | None}`` in unit order. ``point_ratios``: unit id (or core kind) -> its fused point ratios from the last read."""
+    point_ratios = point_ratios or {}
     curve: dict[str, int] = {}
     vt: dict[str, float] = {}
     oc: dict[str, int] = {}
@@ -48,17 +48,15 @@ def profile_contents(profile: Profile, topology: Any, unit_of_cpu: Callable[[int
     for p in profile.expand_points(topology):
         unit = unit_of_cpu(p.cpu)
         kinds[unit] = p.kind
-        table = point_ratios[p.kind]
+        table = point_ratios.get(unit) or point_ratios.get(p.kind) or ()
         ratio = table[p.point - 1] if 1 <= p.point <= len(table) else p.expect_ratio
         if ratio is not None:
             pts.setdefault(unit, {})[int(ratio)] = p.offset_mv
     rows: list[dict[str, Any]] = []
-    for unit in UNIT_ORDER:
-        if unit not in curve and unit not in vt and unit not in oc and unit not in pts:
-            continue
+    for unit in sorted({*curve, *vt, *oc, *pts}, key=unit_order):
         offset: dict[str, Any] | None = None
         if unit in pts:
-            base = {int(r): curve[unit] for r in point_ratios[kinds[unit]]} if unit in curve else {}
+            base = {int(r): curve[unit] for r in (point_ratios.get(unit) or point_ratios.get(kinds[unit]) or ())} if unit in curve else {}
             base.update(pts[unit])
             offset = {"kind": "points", "mv": {str(r): base[r] for r in sorted(base)}}
         elif unit in curve:
@@ -67,16 +65,17 @@ def profile_contents(profile: Profile, topology: Any, unit_of_cpu: Callable[[int
     return {"rows": rows, "turbo": _turbo(profile)}
 
 
-def intent_contents(intent: Mapping[str, Any]) -> dict[str, Any]:
-    """The same shape for a saved ``{scope, rows}`` intent: ``P`` / ``E`` rows are spread over their units."""
+def intent_contents(intent: Mapping[str, Any], unit_ids: Sequence[str]) -> dict[str, Any]:
+    """The same shape for a saved ``{scope, rows}`` intent: ``P`` / ``E`` rows are spread over the units of ``unit_ids`` (the live topology's) of that kind."""
+    groups = {"P": [u for u in unit_ids if u.startswith("P")], "E": [u for u in unit_ids if u.startswith("EC")]}
     by_unit: dict[str, dict[str, Any]] = {}
     for r in intent.get("rows", []) if isinstance(intent.get("rows"), list) else []:
         target = r.get("target")
-        for unit in _GROUPS.get(target, (target,)):
-            if unit in UNIT_ORDER:
+        for unit in groups.get(target, (target,)):
+            if unit in unit_ids:
                 by_unit[unit] = _row(unit, r.get("offset"), r.get("v_target_v"), r.get("ratio"))
     turbo = intent.get("turbo")
-    return {"rows": [by_unit[u] for u in UNIT_ORDER if u in by_unit], "turbo": turbo if isinstance(turbo, dict) and turbo else None}
+    return {"rows": [by_unit[u] for u in sorted(by_unit, key=unit_order)], "turbo": turbo if isinstance(turbo, dict) and turbo else None}
 
 
 def summarize(contents: Mapping[str, Any]) -> dict[str, Any]:

@@ -41,7 +41,7 @@ POLICY = policy_with()
 
 def plan_for(prof, baseline=None, *, per_core_enabled=False, policy=POLICY, misc_word=None):
     """``baseline`` maps CPU -> ``CoreReadings`` (or a bare ``VfWord``: the readings the old SIM-ONLY defaults would give)."""
-    base = {4: P4_READINGS} if baseline is None else {c: readings_of(v) if isinstance(v, VfWord) else v for c, v in baseline.items()}
+    base = {4: P4_READINGS} if baseline is None else {c: readings_of(v, top=57 if c < 8 else 46) if isinstance(v, VfWord) else v for c, v in baseline.items()}
     return build_plan(prof, TOPO, base, per_core_enabled=per_core_enabled, policy=policy, misc_word=misc_word)
 
 
@@ -71,17 +71,19 @@ class KeptWord(unittest.TestCase):
     def test_no_oc_point_drops_the_target_at_every_offset(self) -> None:
         from arltuner.controls.planner import kept_word
 
-        for kind, ratio in (("P", 57), ("P", 55), ("E", 46), ("E", 40)):
+        for top, ratio in ((57, 57), (57, 55), (46, 46), (46, 40)):  # (top fused ratio of the core, OC ratio)
             for offset in (0, -10, 5):
                 word = VfWord(ratio, 0x5B4, False, offset)
-                self.assertEqual(kept_word(kind, word), word.with_(v_target_raw=0), (kind, ratio, offset))
+                self.assertEqual(kept_word(top, word), word.with_(v_target_raw=0), (top, ratio, offset))
 
     def test_an_oc_point_keeps_its_target(self) -> None:
         from arltuner.controls.planner import kept_word
 
-        for kind, ratio in (("P", 58), ("E", 47), ("E", 48)):
+        for top, ratio in ((57, 58), (46, 47), (46, 48)):
             word = VfWord(ratio, 0x48C, False, 0)
-            self.assertEqual(kept_word(kind, word), word, (kind, ratio))
+            self.assertEqual(kept_word(top, word), word, (top, ratio))
+        word = VfWord(40, 0x48C, False, 0)
+        self.assertEqual(kept_word(None, word), word)  # the top fused ratio is unknown (0x09 not read): nothing is dropped
 
 
 class RaiseFromNoOcPoint(unittest.TestCase):
@@ -301,12 +303,12 @@ class MeasuredShapes(unittest.TestCase):
         self.assertFalse(two.allowed)
 
     def test_fill_ratio_caps_a_zero_baseline_at_the_top_fused_ratio_only(self) -> None:
-        self.assertEqual(fill_ratio(0, 0x2E30, "E"), 46)
-        self.assertEqual(fill_ratio(0, 0x3737, "P"), 55)
-        self.assertEqual(fill_ratio(0, 0x3939, "P"), 57)
-        self.assertEqual(fill_ratio(48, 0x2E30, "E"), 48)  # a real baseline ratio (an existing OC point) is left alone
-        self.assertEqual(fill_ratio(0, 0x2E30), 48)  # no kind: XTU's fill
-        self.assertEqual(fill_ratio(0, 0, "E"), 0)
+        self.assertEqual(fill_ratio(0, 0x2E30, 46), 46)
+        self.assertEqual(fill_ratio(0, 0x3737, 57), 55)
+        self.assertEqual(fill_ratio(0, 0x3939, 57), 57)
+        self.assertEqual(fill_ratio(48, 0x2E30, 46), 48)  # a real baseline ratio (an existing OC point) is left alone
+        self.assertEqual(fill_ratio(0, 0x2E30), 48)  # no top: XTU's fill
+        self.assertEqual(fill_ratio(0, 0, 46), 0)
 
     def test_xtu_word_helper(self) -> None:
         self.assertEqual(xtu_word(VfWord.from_u32(0x39), 0x3939, 0x5B439).to_u32(), 0x0005B439)
@@ -579,10 +581,10 @@ class Warnings(unittest.TestCase):
         self.assertIn("UNVERIFIED", XTU_SHAPE_CAVEAT)
         self.assertIn("0x1D/0x27", XTU_SHAPE_CAVEAT)
         self.assertIn("A V target of 0 is sent only on a word with no OC point", XTU_SHAPE_CAVEAT)  # G-122: D-035, the zero target is sent there
-        self.assertIn("[MEASURED lnx 2026-10-11, D-035]", XTU_SHAPE_CAVEAT)
+        self.assertIn("(D-035)", XTU_SHAPE_CAVEAT)
         self.assertIn("A zero ratio is never sent", XTU_SHAPE_CAVEAT)
         self.assertNotIn("this plan never does", XTU_SHAPE_CAVEAT)
-        self.assertIn("[MEASURED win 2026-10-01]", XTU_SHAPE_CAVEAT)
+        self.assertNotIn("[MEASURED", XTU_SHAPE_CAVEAT)  # D-036: no dated evidence tags in user-facing text
         self.assertTrue(XTU_SHAPE_CAVEAT.isascii())
         self.assertNotIn("not modelled", XTU_SHAPE_CAVEAT)  # the T-014 ratio caveat is gone
 

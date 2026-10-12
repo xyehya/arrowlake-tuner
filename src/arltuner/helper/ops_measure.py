@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import re
 import secrets
 import subprocess
@@ -26,14 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from arltuner import vfdump
-from arltuner.curves import UNITS, CurveStore, StoreError, fit_record, is_curve_id, new_curve_id, summary, unit_cpus, unit_kind, validate_name
-from arltuner.curves.record import QUICK_RATIOS, RECORD_BUDGET
-from arltuner.msr.measured_baseline import VF_DOMAIN0
-from arltuner.platform import default_platform
+from arltuner.curves import CurveStore, StoreError, fit_record, is_curve_id, is_unit_id, new_curve_id, summary, unit_kind, unit_order, validate_name
+from arltuner.curves.record import RECORD_BUDGET
+from arltuner.guard.policy import fused_top_ratio
 from arltuner.mailbox.vf import VfWord
-from arltuner.vfmodel import complete_baseline, effective_curve, voltage_at
+from arltuner.topology import Topology
 
-from .ops import OpContext, OpSpec, _is_int, _no_args, _only, _trust
+from .ops import OpContext, OpSpec, _is_int, _no_args, _only, _trust, helper_topology
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, OpError
 from .state import State
 from .trust import TrustError, check_trusted_path, open_checked
@@ -41,6 +39,17 @@ from .trust import TrustError, check_trusted_path, open_checked
 __all__ = [
     "HelperMeasureIO", "MeasureWiring", "RunEnv", "SimCpufreq", "SimMeasureIO", "SimModel", "CpufreqFiles", "device_wiring", "measure_ops", "recover_journal", "sim_wiring",
 ]
+
+#: Names that live in :mod:`arltuner.helper.measure_sim` (the simulated reference CPU, D-036) and are re-exported lazily, so no runtime path imports the fixture.
+_SIM_NAMES = frozenset({"STOCK_VID", "SimCpufreq", "SimMeasureIO", "SimModel", "sim_memory"})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _SIM_NAMES:
+        from . import measure_sim
+
+        return getattr(measure_sim, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ---- measurement constants (SPEC-v3 section 3; the T-027 defaults are 2.5 s settle / 30 samples, the helper's run is shorter on purpose) -------------------------
 SETTLE_S = 0.3
@@ -69,7 +78,6 @@ SPINNER = (
 )
 PYTHON = "/usr/bin/python3"
 SIM_TIME_SCALE = 1 / 12  # --sim: a quick run takes about ten seconds instead of two minutes
-_NAME_UNITS = list(UNITS)
 
 
 # =============================================================================================================================================
@@ -92,31 +100,6 @@ class CpufreqFiles:
 
     def write(self, cpu: int, attr: str, value: str) -> None:
         self.path(cpu, attr).write_text(str(value), encoding="ascii")
-
-
-class SimCpufreq:
-    """In-memory stand-in for :class:`CpufreqFiles` (the ``--sim`` helper): same ``read`` / ``write`` / ``path``-less surface."""
-
-    def __init__(self, model: "SimModel | None" = None) -> None:
-        self.model = model or SimModel()
-        self.values: dict[tuple[int, str], str] = {}
-        self.lock = threading.Lock()
-        for cpu in range(24):
-            self.values[(cpu, CAP_ATTR)] = str(self.model.max_khz(cpu))
-            self.values[(cpu, "cpuinfo_max_freq")] = str(self.model.max_khz(cpu))
-            self.values[(cpu, MIN_ATTR)] = "800000"
-            self.values[(cpu, GOV_ATTR)] = "powersave"
-            self.values[(cpu, EPP_ATTR)] = "balance_power"
-
-    def read(self, cpu: int, attr: str) -> str | None:
-        with self.lock:
-            return self.values.get((cpu, attr))
-
-    def write(self, cpu: int, attr: str, value: str) -> None:
-        with self.lock:
-            if (cpu, attr) not in self.values:
-                raise FileNotFoundError(attr)
-            self.values[(cpu, attr)] = str(value)
 
 
 # =============================================================================================================================================
@@ -192,171 +175,12 @@ class HelperMeasureIO(vfdump.SysfsMeasureIO):
         return _Spinners(procs)
 
 
-# =============================================================================================================================================
-# the simulator model
-# =============================================================================================================================================
-#: First-run STOCK V/F curve, requested VID in volts per fused point ``[MEASURED lnx 2026-10-11 18:17 UTC]`` (``tuning-results.md`` "Stock V/F curve, measured";
-#: ``None`` = never settled: P0/P3 57x intermittent, E 23x not pinnable, non-favored P 56/57x unreachable). P0 57x 1.4288 V and P3 57x 1.3964 V are the
-#: orchestrator's longer single-core samples of the same day (fused ``0x09``: 1.4258 / 1.3945). The simulator's ``vid`` is this curve through
-#: :mod:`arltuner.vfmodel` (offsets, F4 clamp, interpolation), not an invented formula.
-STOCK_VID: dict[str, dict[int, float | None]] = {
-    "P0": {8: 0.693, 20: 0.721, 30: 0.811, 48: 1.041, 53: 1.216, 55: 1.299, 56: 1.386, 57: 1.4288},
-    "P1": {8: 0.691, 20: 0.723, 30: 0.806, 48: 1.041, 53: 1.221, 55: 1.306},
-    "P2": {8: 0.691, 20: 0.721, 30: 0.821, 48: 1.073, 53: 1.271, 55: 1.366},
-    "P3": {8: 0.691, 20: 0.721, 30: 0.821, 48: 1.061, 53: 1.221, 55: 1.299, 56: 1.359, 57: 1.3964},
-    "P4": {8: 0.688, 20: 0.713, 30: 0.804, 48: 1.033, 53: 1.226, 55: 1.319},
-    "P5": {8: 0.690, 20: 0.721, 30: 0.811, 48: 1.054, 53: 1.261, 55: 1.359},
-    "P6": {8: 0.691, 20: 0.721, 30: 0.805, 48: 1.033, 53: 1.249, 55: 1.346},
-    "P7": {8: 0.690, 20: 0.719, 30: 0.811, 48: 1.041, 53: 1.271, 55: 1.376},
-    "EC0": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.970, 46: 1.157},
-    "EC1": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.970, 46: 1.137},
-    "EC2": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.963, 46: 1.137},
-    "EC3": {8: 0.775, 15: 0.775, 30: 0.775, 40: 0.963, 46: 1.137},
-}
-_FAVORED_UNITS = frozenset(f"P{i}" for i in default_platform().topology.favored_p)  # platforms/arl-s-285k.toml: P0, P3
-_P_ALL_CORE_RATIO = (default_platform().turbo_defaults[0x1AD] >> 56) & 0xFF  # 55: the 0x1AD bucket for 8 active cores [MEASURED lnx 2026-09-29]
-
-
-def intermittent_ratios(unit: str, points: Sequence[int]) -> tuple[int, ...]:
-    """Ratios of ``unit`` that only a few active cores allow (F3): the favored P-cores above the all-core bucket (56, 57x)."""
-    return tuple(r for r in points if unit in _FAVORED_UNITS and r > _P_ALL_CORE_RATIO)
-
-
-class SimModel:
-    """A 285K for the simulator: ``vid(unit, ratio)`` = the measured stock curve (:data:`STOCK_VID`) through the F4 clamp / interpolation of
-    :mod:`arltuner.vfmodel` (``offsets_mv[unit] = {point ratio: mV}`` moves it), what ratio a cap settles at, jitter. Deterministic (seeded per unit / ratio / sample).
-
-    Reach (F3): favored P-cores 57x, other P-cores 55x (``cpuinfo_max_freq`` 5.5 GHz, ``[MEASURED lnx 2026-10-11]``), E-clusters 48x (turbo table ``0x650``) while
-    their ``cpuinfo_max_freq`` says 4.9 GHz (intel_pstate N -> N-1 mapping, ``[MEASURED lnx 2026-10-11 19:06 UTC]``): the 49x it implies is not real (G-118). **A favored core only holds 56/57x while at most one other CPU is busy** (measured: a pinned
-    spinner on CPU 0 spent 31 of 40 samples at 57x, the rest at 55/51/56x as soon as a 3rd core woke): about 70 % of the samples at 57x when quiet, none when
-    ``busy_others >= 2``. cpufreq granularity (F9): E 23x and P 52x are not pinnable (the caps land on the neighbours). E-cores also settle one bin low when the cap is in
-    16..29 (the intel_pstate quirk of T-027, so the cap search retries ``ratio + 1``)."""
-
-    P_REACH_FAVORED, P_REACH, E_REACH = 57, 55, 48
-    E_CPUINFO = 49  # cpuinfo_max_freq / 100 MHz of an E-core [MEASURED lnx 2026-10-11 19:06 UTC]
-    E_QUIRK = range(16, 30)
-    QUIET_SHARE = 0.7  # share of samples a favored core spends at 56/57x when no other core is busy (measured 31/40 at 57x on CPU 0)
-
-    def __init__(self, seed: int = 285, background_busy: int = 0) -> None:
-        self.seed = seed
-        self.background_busy = background_busy  # busy CPUs outside the run (a desktop session, the helper): >= 2 takes the favored 57x away
-        spread = random.Random(seed)
-        self.spread = {u: round(spread.uniform(-0.025, 0.025), 4) for u in UNITS}
-        self.offsets_mv: dict[str, dict[int, float]] = {}
-        self._base: dict[str, dict[int, float | None]] = {}
-
-    @staticmethod
-    def unit_of(cpu: int) -> str:
-        return f"P{cpu}" if cpu < 8 else f"EC{(cpu - 8) // 4}"
-
-    def max_khz(self, cpu: int) -> int:
-        if cpu >= 8:
-            return self.E_CPUINFO * 100_000
-        return (self.P_REACH_FAVORED if cpu in (0, 3) else self.P_REACH) * 100_000
-
-    def reach(self, unit: str) -> int:
-        return self.E_REACH if unit.startswith("E") else (self.P_REACH_FAVORED if unit in _FAVORED_UNITS else self.P_REACH)
-
-    def points(self, unit: str) -> tuple[int, ...]:
-        return QUICK_RATIOS[unit_kind(unit)]
-
-    def _baseline(self, unit: str) -> dict[int, float | None]:
-        if unit not in self._base:
-            fused_top = None
-            if unit.startswith("P"):  # the unmeasured 57x of a non-favored core: its fused 0x09 voltage (F7)
-                word = default_platform().fused_point[int(unit[1:])]
-                fused_top = ((word >> 8) & 0xFFF) / 1024
-            self._base[unit] = complete_baseline(self.points(unit), STOCK_VID[unit], fused_top)
-        return self._base[unit]
-
-    def vid(self, unit: str, ratio: int) -> float:
-        curve = effective_curve(self.points(unit), self._baseline(unit), self.offsets_mv.get(unit, {}))
-        v = voltage_at(curve, ratio)
-        assert v is not None
-        return v
-
-    def temp_c(self, unit: str, ratio: int) -> float:
-        return round(34 + 30 * min(1.0, (ratio - 8) / 49) + self.spread[unit] * 60, 1)
-
-    def settled(self, unit: str, cap_khz: int) -> int:
-        """The ratio the unit settles at under load with ``scaling_max_freq = cap_khz`` (quiet system)."""
-        cap_ratio = cap_khz // 100_000
-        if unit.startswith("E") and cap_ratio in self.E_QUIRK and cap_ratio != 24:  # 24 is not low: with 23 it makes 23x unpinnable
-            cap_ratio -= 1
-        if unit.startswith("P") and cap_ratio == 52:  # P 52x is not pinnable either: the cap lands on 51 (cap 53 gives 53)
-            cap_ratio = 51
-        return max(8, min(cap_ratio, self.reach(unit)))
-
-    def word(self, cpu: int, cap_khz: int, loaded: bool, n: int, busy_others: int = 0) -> int:
-        """The ``0x198`` word of sample ``n``: running ratio ``[15:8]`` (one bin low now and then, as the real ratio wavers; a favored core at 56/57x
-        falls to 55x/51x for most samples when other cores are busy), VID ``[47:32]`` in 1/8192 V."""
-        unit = self.unit_of(cpu)
-        ratio = self.settled(unit, cap_khz) if loaded else 8
-        rng = random.Random(f"{self.seed}/{unit}/{ratio}/{n}")
-        if loaded and unit in _FAVORED_UNITS and ratio > _P_ALL_CORE_RATIO:
-            share = 0.0 if busy_others + self.background_busy >= 2 else self.QUIET_SHARE
-            if rng.random() >= share:
-                ratio = _P_ALL_CORE_RATIO if rng.random() < 0.8 else 51
-        elif rng.random() < 0.08 and ratio > 8:
-            ratio -= 1
-        vid = self.vid(unit, ratio) + rng.uniform(-0.0015, 0.0015)
-        return (round(vid * 8192) << 32) | (ratio << 8)
-
-
-class _SimLoad:
-    def __init__(self, io: "SimMeasureIO", cpus: Sequence[int]) -> None:
-        self._io, self._cpus = io, tuple(cpus)
-        with io.lock:
-            io.loaded.update(self._cpus)
-
-    def stop(self) -> None:
-        with self._io.lock:
-            self._io.loaded.difference_update(self._cpus)
-
-
-class SimMeasureIO:
-    """:class:`~arltuner.vfdump.MeasureIO` over a cpufreq store (:class:`SimCpufreq` or a fake-sysfs :class:`CpufreqFiles`) and the :class:`SimModel` instead of
-    hardware: ``read_perf`` gives the model's ``0x198`` word for the cap currently set and whether the CPU is loaded."""
-
-    def __init__(self, cpufreq: Any, model: SimModel | None = None) -> None:
-        self.cpufreq, self.model = cpufreq, model or SimModel()
-        self.loaded: set[int] = set()
-        self.lock = threading.Lock()
-        self._n: dict[int, int] = {}
-
-    def check(self) -> str | None:
-        return None
-
-    def read_cap(self, cpu: int) -> int:
-        return int(self.cpufreq.read(cpu, CAP_ATTR))
-
-    def write_cap(self, cpu: int, khz: int) -> None:
-        self.cpufreq.write(cpu, CAP_ATTR, str(int(khz)))
-
-    def read_max_khz(self, cpu: int) -> int:
-        return self.model.max_khz(cpu)
-
-    def start_load(self, cpus: Sequence[int], seconds: float) -> _SimLoad:
-        return _SimLoad(self, cpus)
-
-    def read_temp_c(self, cpu: int) -> float | None:
-        unit = self.model.unit_of(cpu)
-        ratio = self.model.settled(unit, self.read_cap(cpu)) if cpu in self.loaded else 8
-        return self.model.temp_c(unit, ratio)
-
-    def read_msr(self, cpu: int, msr: int) -> int:
-        """Plain ``rdmsr`` of the turbo ratio tables (``0x1AD`` P, ``0x650`` E): the stock values of the platform file ``[MEASURED lnx 2026-09-29]``."""
-        if msr not in (0x1AD, 0x650):
-            raise OSError(5, f"MSR {msr:#x} is not simulated")
-        return default_platform().turbo_defaults[msr]
-
-    def read_perf(self, cpu: int) -> int:
-        unit_cpus_ = set(unit_cpus(self.model.unit_of(cpu)))
-        with self.lock:
-            n = self._n[cpu] = self._n.get(cpu, 0) + 1
-            loaded = cpu in self.loaded
-            busy_others = len(self.loaded - unit_cpus_)
-        return self.model.word(cpu, self.read_cap(cpu), loaded, n, busy_others)
+def intermittent_ratios(points: Sequence[int], favored: bool, all_core_ratio: int | None) -> tuple[int, ...]:
+    """Ratios of a unit that only a few active cores allow (F3): those of a favored P-core above the all-core bucket of the P turbo table (live ``0x1AD``). Unknown
+    table or an unfavored unit: none."""
+    if not favored or all_core_ratio is None:
+        return ()
+    return tuple(r for r in points if r > all_core_ratio)
 
 
 # =============================================================================================================================================
@@ -391,28 +215,12 @@ class MeasureWiring:
     prepare: Callable[[], None] = lambda: None  # called before a run writes anything: --sim creates its scratch state directory here, lazily (a killed sim helper leaves nothing)
 
 
-def sim_memory() -> dict[str, Any]:
-    """The ``--sim`` ``mem.read``: the knowledge fixture (``memory-mchbar.md``, the reference machine's BIOS DDR5-7200) with two obviously simulated DIMMs."""
-    ta = {"tCL": 36, "tRCD": 44, "tRP": 44, "tRAS": 96, "tRC": 140, "tRFC": 574, "tRFCpb": 467, "tREFI": 32767, "tFAW": 32, "tRRD_L": 12, "tRRD_S": 8, "tCWL": 34,
-          "tRTP": 23, "tWR": 110, "tWTP": 152, "tRCDW": 44, "tRPab": 44, "tREFSBRD": 40}
-    turn = {"RDRD": (18, 8, 16, 16), "RDWR": (23, 23, 23, 23), "WRRD": (68, 48, 13, 13), "WRWR": (72, 8, 18, 18)}
+def sim_wiring(state_dir: Path | str, *, time_scale: float = SIM_TIME_SCALE, topology: Topology | None = None) -> MeasureWiring:
+    """``--sim``: the model of the simulated part, an in-memory cpufreq, the store and the journal under ``state_dir`` (never ``/var/lib``)."""
+    from .measure_sim import SimCpufreq, SimMeasureIO, SimModel, sim_memory
 
-    def dimm(n: int, temp: float) -> dict[str, Any]:
-        return {"locator": f"DIMM_{'AB'[n]}1", "size": 16384, "part": "SIM-DDR5-7200", "manufacturer": "SIMULATED", "speed": 7200, "configured_speed": 7200, "voltage": 1.4,
-                "rank": 1, "temp_c": {"value": temp, "unit": "C", "source": "sim", "status": "ok"}}
-
-    return {
-        "available": True, "mts": 7200, "qclk_mhz": 3600.0, "gear": 2, "cmd_rate": "2T", "bclk_mhz": 100.0, "timings": ta,
-        "turnaround": {k: dict(zip(("SG", "DG", "SD", "DD"), v)) for k, v in turn.items()},
-        "instances_ok": 6, "cross_check": {"agree": True, "mhz_a": 3600.0, "mhz_b": 3600.0}, "max_bandwidth_mbs": 115200,
-        "dimms": [dimm(0, 38.5), dimm(1, 39.0)],
-    }
-
-
-def sim_wiring(state_dir: Path | str, *, time_scale: float = SIM_TIME_SCALE) -> MeasureWiring:
-    """``--sim``: the model, an in-memory cpufreq, the store and the journal under ``state_dir`` (never ``/var/lib``)."""
     state = Path(state_dir)
-    cpufreq = SimCpufreq()
+    cpufreq = SimCpufreq(SimModel(topology=topology))
     io = SimMeasureIO(cpufreq, cpufreq.model)
     return MeasureWiring(
         cpufreq=cpufreq,
@@ -576,10 +384,8 @@ def _validate_vf_measure(args: dict[str, Any]) -> dict[str, Any]:
     if mode not in ("quick", "dense"):
         raise OpError(BAD_REQUEST, "'mode' must be \"quick\" or \"dense\"")
     units = args.get("units")
-    if units is None:
-        units = _NAME_UNITS
-    if not isinstance(units, list) or not 1 <= len(units) <= len(UNITS) or not all(isinstance(u, str) and u in UNITS for u in units) or len(set(units)) != len(units):
-        raise OpError(BAD_REQUEST, f"'units' must be a non-empty list of distinct units from {', '.join(_NAME_UNITS)}")
+    if units is not None and (not isinstance(units, list) or not 1 <= len(units) <= 256 or not all(is_unit_id(u) for u in units) or len(set(units)) != len(units)):
+        raise OpError(BAD_REQUEST, "'units' must be a non-empty list of distinct unit ids (P<n> / EC<n>) of this system")
     name = args.get("name")
     if name is not None:
         try:
@@ -589,7 +395,7 @@ def _validate_vf_measure(args: dict[str, Any]) -> dict[str, Any]:
     baseline = args.get("baseline", False)
     if not isinstance(baseline, bool):
         raise OpError(BAD_REQUEST, "'baseline' must be a boolean")
-    return {"mode": mode, "units": [u for u in _NAME_UNITS if u in units], "name": name, "baseline": baseline}
+    return {"mode": mode, "units": None if units is None else sorted(units, key=unit_order), "name": name, "baseline": baseline}
 
 
 def _wiring(helper: Any) -> MeasureWiring:
@@ -603,14 +409,14 @@ def _store_error(exc: StoreError) -> OpError:
     return OpError(exc.code, exc.message, exc.detail)
 
 
-def _max_ratio(io: Any, unit: str) -> int:
-    """The unit's ``cpuinfo_max_freq`` (the lowest of its CPUs) in 100 MHz bins. **Last resort only**: an E-core reports 4.9 GHz while its table stops at 48x
+def _max_ratio(io: Any, topo: Topology, unit: str) -> int:
+    """The unit's ``cpuinfo_max_freq`` (the lowest of its CPUs) in 100 MHz bins. **Last resort only**: an E-core reports one bin more than its table
     (intel_pstate N -> N-1 mapping), see :func:`_unit_maxima`."""
-    return min(io.read_max_khz(cpu) for cpu in unit_cpus(unit)) // 100_000
+    return min(io.read_max_khz(cpu) for cpu in topo.unit_cpus(unit)) // 100_000
 
 
-def _turbo_tables(helper: Any, run: RunEnv, problems: list[str]) -> tuple[dict[str, list[int]] | None, dict[int, int]]:
-    """``({"P": [8 ratios], "E": [8 ratios]} | None, {cpu: favored ratio})``. The tables come from a live plain ``rdmsr`` of ``0x1AD`` / ``0x650`` on CPU 0 (read-only,
+def _turbo_tables(helper: Any, run: RunEnv, topo: Topology, problems: list[str]) -> tuple[dict[str, list[int]] | None, dict[int, int]]:
+    """``({"P": [8 ratios], "E": [8 ratios]} | None, {cpu: favored ratio})``. The tables come from a live plain ``rdmsr`` of ``0x1AD`` / ``0x650`` on the first P CPU (read-only,
     no mailbox), else from the last ``tune.read`` of this helper session; the favored ratios (``0x1C``, a mailbox read the measurement never does) only from that
     ``tune.read`` (``helper._tune_state``)."""
     from arltuner.guard.policy import turbo_bytes
@@ -629,7 +435,8 @@ def _turbo_tables(helper: Any, run: RunEnv, problems: list[str]) -> tuple[dict[s
     live: dict[str, list[int]] | None = None
     if rdmsr is not None:
         try:
-            live = {"P": list(turbo_bytes(rdmsr(0, 0x1AD))), "E": list(turbo_bytes(rdmsr(0, 0x650)))}
+            cpu0 = topo.cpus_of_kind("P")[0]
+            live = {"P": list(turbo_bytes(rdmsr(cpu0, 0x1AD))), "E": list(turbo_bytes(rdmsr(cpu0, 0x650)))}
         except Exception as exc:
             problems.append(f"the turbo tables (0x1AD / 0x650) could not be read ({type(exc).__name__}: {exc})")
     tables_out = live or cached
@@ -639,28 +446,44 @@ def _turbo_tables(helper: Any, run: RunEnv, problems: list[str]) -> tuple[dict[s
     return tables_out, favored
 
 
-def _unit_maxima(io: Any, units: Sequence[str], tables: dict[str, list[int]] | None, favored: dict[int, int]) -> dict[str, int]:
-    """Max ratio per unit. **E** = the highest bucket of ``0x650`` (48 on the 285K; ``cpuinfo_max_freq`` says 4.9 GHz, ``[MEASURED lnx 2026-10-11 19:06 UTC]``).
-    **P** = the core's favored ratio from ``tune.read`` (``0x1C`` low byte: 57 for P0/P3, 55 for the others), else ``cpuinfo_max_freq`` (5.7 / 5.5 GHz, correct for
-    P-cores); never above the top bucket of ``0x1AD``. Without tables: ``cpuinfo_max_freq``."""
+def _unit_maxima(io: Any, topo: Topology, units: Sequence[str], tables: dict[str, list[int]] | None, favored: dict[int, int]) -> dict[str, int]:
+    """Max ratio per unit. **E** = the highest bucket of ``0x650`` (``cpuinfo_max_freq`` of an E-core says one bin more, ``[MEASURED lnx 2026-10-11]``).
+    **P** = the core's favored ratio from ``tune.read`` (``0x1C`` low byte), else ``cpuinfo_max_freq`` (correct for P-cores); never above the top bucket of
+    ``0x1AD``. Without tables: ``cpuinfo_max_freq``."""
     out: dict[str, int] = {}
     for unit in units:
-        cpuinfo = _max_ratio(io, unit)
+        cpuinfo = _max_ratio(io, topo, unit)
         if unit_kind(unit) == "E":
             out[unit] = max(tables["E"]) if tables else cpuinfo
             continue
-        top = favored.get(unit_cpus(unit)[0]) or cpuinfo
+        top = favored.get(topo.unit_cpus(unit)[0]) or cpuinfo
         out[unit] = min(top, max(tables["P"])) if tables else top
     return out
 
 
-def _plan_ratios(top: int, unit: str, mode: str) -> tuple[int, ...]:
-    """Quick = the fused point ratios (F1) plus every ratio above the top point up to the unit's max turbo ``top`` (F9: E 47, 48x); dense = every ratio 8..``top``."""
+def _kept_points(helper: Any, topo: Topology, unit: str) -> tuple[int, ...]:
+    """The fused V/F point ratios of ``unit`` from this boot's kept read (``helper.last_words`` of its first CPU: the ratios of the point words, without the OC point when
+    the fused ``0x09`` word of this session says which ratio is the top fused one); empty when there is no read."""
+    words = getattr(helper, "last_words", None)
+    ws = words.get(topo.unit_cpus(unit)[0]) if isinstance(words, dict) else None
+    if not ws or len(ws) < 2:
+        return ()
+    ratios = [VfWord.from_u32(int(w) & 0xFFFFFFFF).ratio for w in ws[1:]]
+    top = fused_top_ratio((getattr(helper, "fused_words", None) or {}).get(topo.unit_cpus(unit)[0]))
+    ratios = [r for r in ratios if r and (top is None or r <= top)]
+    return tuple(ratios) if ratios and all(b > a for a, b in zip(ratios, ratios[1:])) else ()
+
+
+def _plan_ratios(top: int, points: Sequence[int], mode: str) -> tuple[tuple[int, ...], str]:
+    """``(ratios, plan)``. Quick = the unit's own fused point ratios from the kept read of this boot (``plan`` "kept read") plus every ratio above the top point up to the
+    unit's max turbo ``top`` (F9); without a kept read: every 5th ratio from 8 to ``top`` plus ``top`` itself (``plan`` "generic"). Dense = every ratio 8..``top``
+    (``plan`` "dense")."""
     top = max(top, 8)
-    if mode == "quick":
-        points = QUICK_RATIOS[unit_kind(unit)]
-        return points + tuple(range(points[-1] + 1, top + 1))
-    return tuple(range(8, top + 1))
+    if mode == "dense":
+        return tuple(range(8, top + 1)), "dense"
+    if points:
+        return tuple(points) + tuple(range(points[-1] + 1, top + 1)), "kept read"
+    return tuple(sorted({*range(8, top + 1, 5), top})), "generic"
 
 
 def _classify(m: vfdump.RatioMeasurement, max_ratio: int, intermittent: Sequence[int]) -> tuple[str, str | None]:
@@ -678,19 +501,19 @@ def _classify(m: vfdump.RatioMeasurement, max_ratio: int, intermittent: Sequence
     return "mismatch", None
 
 
-def _fused_point(unit: str, ratio: int, oc_ratio: int | None) -> int | str | None:
-    """1-based index of ``ratio`` in the unit's fused point table (the Quick ratios), else ``"oc"`` for the OC ratio, else ``None`` (an in-between ratio). Where the OC
-    ratio is also a fused point (P0: 57x is point 8 and the OC word's ratio) the fused index wins."""
-    fused = QUICK_RATIOS[unit_kind(unit)]
+def _fused_point(points: Sequence[int], ratio: int, oc_ratio: int | None) -> int | str | None:
+    """1-based index of ``ratio`` in the unit's fused point table (``points``, from the kept read), else ``"oc"`` for the OC ratio, else ``None`` (an in-between ratio).
+    Where the OC ratio is also a fused point (a core whose OC ratio is its top point) the fused index wins."""
+    fused = tuple(points)
     if ratio in fused:
         return fused.index(ratio) + 1
     return "oc" if oc_ratio is not None and ratio == oc_ratio else None
 
 
-def _oc_ratio(helper: Any, unit: str, top: int) -> int | None:
+def _oc_ratio(helper: Any, topo: Topology, unit: str, top: int, points: Sequence[int]) -> int | None:
     """The unit's OC ratio: the ratio of the OC word of its first CPU in ``helper.last_words`` when non-zero, else its max ratio when that is above the top fused point."""
     words = getattr(helper, "last_words", None)
-    ws = words.get(unit_cpus(unit)[0]) if isinstance(words, dict) else None
+    ws = words.get(topo.unit_cpus(unit)[0]) if isinstance(words, dict) else None
     if ws:
         try:
             ratio = int(ws[0]) & 0xFF
@@ -698,7 +521,7 @@ def _oc_ratio(helper: Any, unit: str, top: int) -> int | None:
             ratio = 0
         if ratio:
             return ratio
-    return top if top > QUICK_RATIOS[unit_kind(unit)][-1] else None
+    return top if points and top > points[-1] else None
 
 
 def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequence[int] = ()) -> dict[str, Any]:
@@ -714,11 +537,6 @@ def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequ
     if reason is not None:
         point["reason"] = reason  # contract 9 addendum: only on unreachable
     return point
-
-
-#: G-120 fix 4: the cold-boot OC words (``0x10 P1=0 P2=0``): P0 = ``0x39`` (OC ratio 57 = the top fused ratio, no OC point), every other core ``0x0``
-#: ``[MEASURED win 2026-10-01]`` (S-03d) and ``[MEASURED lnx 2026-10-11]`` (first tune.read of the boot; the platform file's fused point of P0 is 57x).
-_COLD_OC_WORD = dict(VF_DOMAIN0)
 
 
 _AUDIT_LINE_MAX = 1024 * 1024  # a longer line is not a record this helper's guard wrote: nothing can be proven from it
@@ -776,10 +594,11 @@ def audit_shows_tuning(helper: Any) -> bool:
         return True
 
 
-def _tuning_state(helper: Any) -> dict[str, Any]:
+def _tuning_state(helper: Any, topo: Topology) -> dict[str, Any]:
     """From the words G-112's ``tune.read`` / ``vf.dump`` read this helper session (``helper.last_words``: cpu -> list of u32 words), else ``unknown``. ``kind`` is
-    ``stock`` (G-118, contract 9) when the words cover the first CPU of all 12 units (a complete read), **every** OC word is the cold-boot one (P0 ``0x39``, all others
-    ``0x0``) and every word has offset 0 (G-120: an OC ratio or voltage raised in the OC word is not stock), and no ``tune.apply`` wrote anything this boot
+    ``stock`` (G-118, contract 9) when the words cover the first CPU of every unit (a complete read), **every** OC word is a neutral one (D-036: no OC point -- ratio
+    at or below the core's top fused ratio from this session's ``0x09`` read, V target 0, adaptive; a core whose fused word was not read cannot be proven neutral),
+    every word has offset 0 (G-120: an OC ratio or voltage raised in the OC word is not stock), and no ``tune.apply`` wrote anything this boot
     (``helper.tuned_this_boot``: a restored state is not proven stock; G-122: set at helper start from the audit log's ``0x11`` attempts of this boot, so a
     restart keeps it), else ``words``. The words travel with ``words`` only."""
     words = getattr(helper, "last_words", None)
@@ -787,12 +606,19 @@ def _tuning_state(helper: Any) -> dict[str, Any]:
         return {"kind": "unknown"}
     state: dict[str, Any] = {"kind": "words", "words": {str(cpu): [f"0x{int(w) & 0xFFFFFFFF:08x}" for w in ws] for cpu, ws in sorted(words.items())}}
     try:
-        complete = all(words.get(unit_cpus(u)[0]) for u in UNITS)
-        cold = all(int(ws[0]) & 0xFFFFFFFF == _COLD_OC_WORD.get(int(cpu)) for cpu, ws in words.items() if ws)
+        fused = getattr(helper, "fused_words", None) or {}
+        complete = all(words.get(topo.unit_cpus(u)[0]) for u in topo.unit_ids())
+
+        def neutral(cpu: int, word: int) -> bool:
+            top = fused_top_ratio(fused.get(cpu))
+            w = VfWord.from_u32(word & 0xFFFFFFFF)
+            return top is not None and not w.static and w.ratio <= top and w.v_target_raw == 0
+
+        cold = all(neutral(int(cpu), int(ws[0])) for cpu, ws in words.items() if ws)
         zero_offsets = all(VfWord.from_u32(int(w) & 0xFFFFFFFF).offset_raw == 0 for ws in words.values() for w in ws)
         if complete and cold and zero_offsets and not getattr(helper, "tuned_this_boot", False):
             state = {"kind": "stock"}  # contract 9: ``words`` only accompany kind "words"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, KeyError):
         pass
     return state
 
@@ -810,7 +636,13 @@ def _better(new: dict[str, Any], old: dict[str, Any]) -> bool:
 
 def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     w = _wiring(helper)
-    mode, units, name, want_baseline = args["mode"], args["units"], args["name"], args["baseline"]
+    topo = helper_topology(helper)
+    mode, name, want_baseline = args["mode"], args["name"], args["baseline"]
+    all_units = list(topo.unit_ids())
+    units = all_units if args["units"] is None else args["units"]
+    unknown = [u for u in units if u not in all_units]
+    if unknown:
+        raise OpError(BAD_REQUEST, f"'units' names {', '.join(unknown)}, which this system does not have (units: {', '.join(all_units)})")
     cancel = ctx.cancel
     try:
         w.prepare()
@@ -829,14 +661,21 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             raise OpError(REFUSED, why_not, {"check": "LOAD_GENERATOR"})
         if cancel.is_set():
             raise _Cancelled()
-        cpus = [cpu for u in units for cpu in unit_cpus(u)]
-        tables, favored = _turbo_tables(helper, run, problems)
+        cpus = [cpu for u in units for cpu in topo.unit_cpus(u)]
+        tables, favored = _turbo_tables(helper, run, topo, problems)
         try:
-            top_of = _unit_maxima(run.io, units, tables, favored)  # reads cpuinfo_max_freq (also when the tables are known) before anything else
+            top_of = _unit_maxima(run.io, topo, units, tables, favored)  # reads cpuinfo_max_freq (also when the tables are known) before anything else
         except (OSError, ValueError) as exc:
             raise OpError(REFUSED, f"cpufreq is not available for the selected CPUs: {exc}", {"check": "NO_CPUFREQ"}) from None
-        plan = {u: _plan_ratios(top_of[u], u, mode) for u in units}
-        oc_of = {u: _oc_ratio(helper, u, top_of[u]) for u in units}
+        kept = {u: _kept_points(helper, topo, u) for u in units}
+        planned = {u: _plan_ratios(top_of[u], kept[u], mode) for u in units}
+        plan = {u: planned[u][0] for u in units}
+        sources = {planned[u][1] for u in units}
+        plan_source = sources.pop() if len(sources) == 1 else "generic"  # one word for the run; mixed sources (a unit without a kept read) say so conservatively
+        oc_of = {u: _oc_ratio(helper, topo, u, top_of[u], kept[u]) for u in units}
+        all_core = min(tables["P"]) if tables else None  # the P table is non-increasing: its last bucket is the all-core ratio
+        favored_units = {u for u in units if topo.by_cpu(topo.unit_cpus(u)[0]).favored}
+        intermittent = {u: intermittent_ratios(plan[u], u in favored_units, all_core) for u in units}
         total = sum(len(r) for r in plan.values())
         try:
             boot = helper.cfg.boot_id_fn()
@@ -846,8 +685,8 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
         record = {
             "id": new_curve_id(now), "name": name or f"{mode.capitalize()} {stamp[:16].replace('T', ' ')}", "created": stamp,
-            "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "complete": False, "kernel": w.kernel_fn(),
-            "tuning_state": _tuning_state(helper), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
+            "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "plan": plan_source, "complete": False, "kernel": w.kernel_fn(),
+            "tuning_state": _tuning_state(helper, topo), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
         }
         entries = _write_journal(w, cpus, record["boot_id"])  # before the first change
         journaled = True
@@ -881,13 +720,13 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
 
         ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": 0, "of": total, "unit": None, "ratio": None, "eta_s": eta()})
         for unit in units:
-            cpus_u = unit_cpus(unit)
+            cpus_u = topo.unit_cpus(unit)
             entry = record["units"].setdefault(unit, {"cpus": list(cpus_u), "points": []})
 
             def on_result(m: vfdump.RatioMeasurement, unit: str = unit, entry: dict[str, Any] = entry) -> None:
                 nonlocal done
-                point = _point(m, top_of[unit], intermittent_ratios(unit, plan[unit]))
-                label = _fused_point(unit, m.ratio, oc_of[unit])
+                point = _point(m, top_of[unit], intermittent[unit])
+                label = _fused_point(kept[unit], m.ratio, oc_of[unit])
                 if label is not None:  # omitted when null: a dense run of 12 units must still fit one response line
                     point["fused_point"] = label
                 entry["points"].append(point)
@@ -898,7 +737,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
                 ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": m.ratio, "mhz": point["mhz"], "vid_v": point["vid_v"], "status": point["status"], **({"reason": point["reason"]} if "reason" in point else {})})
                 ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": m.ratio, "eta_s": eta()})
 
-            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], tuple(plan[unit]), intermittent_ratios(unit, plan[unit]))
+            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], tuple(plan[unit]), intermittent[unit])
             vfdump.measure_group(
                 run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=on_result,
             )
@@ -907,7 +746,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         retry = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if _retryable(p)]
         total += len(retry)
         for unit, ratio in retry:
-            cpus_u = unit_cpus(unit)
+            cpus_u = topo.unit_cpus(unit)
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
             second: list[vfdump.RatioMeasurement] = []
             group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], (ratio,), (ratio,))  # intermittent: the long window (40 x 50 ms, early stop)
@@ -918,8 +757,8 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             old = pts[at]
             old["retried"] = True
             if second:
-                new = _point(second[0], top_of[unit], intermittent_ratios(unit, plan[unit]))
-                label = _fused_point(unit, ratio, oc_of[unit])
+                new = _point(second[0], top_of[unit], intermittent[unit])
+                label = _fused_point(kept[unit], ratio, oc_of[unit])
                 if label is not None:
                     new["fused_point"] = label
                 new["retried"] = True
@@ -980,7 +819,7 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
         raise OpError(INTERNAL, f"the measurement finished but:{note}", detail or None)
     assert stored is not None
     extra = {"problems": problems[:10]} if problems else {}
-    return {"curve_id": stored["id"], "record": fit_record(stored, RECORD_BUDGET - len(json.dumps(extra))), **extra}
+    return {"curve_id": stored["id"], "record": fit_record(stored, RECORD_BUDGET - len(json.dumps(extra))), "plan": stored.get("plan"), **extra}
 
 
 # =============================================================================================================================================
@@ -996,7 +835,7 @@ def _id_arg(args: dict[str, Any]) -> str:
 def _validate_curves_get(args: dict[str, Any]) -> dict[str, Any]:
     _only(args, {"id", "units"})
     units = args.get("units")
-    if units is not None and (not isinstance(units, list) or not units or not all(isinstance(u, str) and u in UNITS for u in units)):
+    if units is not None and (not isinstance(units, list) or not units or not all(is_unit_id(u) for u in units)):
         raise OpError(BAD_REQUEST, "'units' must be a non-empty list of unit names")
     return {"id": _id_arg(args), "units": units}
 

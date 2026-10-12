@@ -13,6 +13,7 @@ from typing import Any
 from arltuner.guard import AuditUnreadable, read_state
 from arltuner.helper import Helper
 from arltuner.helper.ops import ACCEPTED_FILE, BudgetMeter, accepted_match
+from arltuner.msr.measured_baseline import FUSED_POINT as REF_FUSED  # the live 0x09 words a tune.read of the simulated reference CPU would have left
 
 from ._support import HelperCase
 
@@ -298,24 +299,24 @@ class AcceptedMatchTests(HelperCase):
             return {"units": [{"cpus": [{"cpu": 0, "oc": {"word": f"{oc:#010x}"}, "points": [{"word": "0x00000008"}], "end": "x"}]}]}
 
         self.write("0 39 8\n")
-        result, note = accepted_match(self.helper(), doc(0x5B439))
+        result, note = accepted_match(self.helper(), doc(0x5B439), REF_FUSED)
         self.assertIsNone(note)
         self.assertEqual(
             result, [{"cpu": 0, "match": True, "diffs": [], "equivalent": True, "equivalents": [{"point": 0, "expected": "0x00000039", "actual": "0x0005b439"}]}]
         )
         self.write("0 5B439 8\n")  # the other direction is as equivalent
-        result, _ = accepted_match(self.helper(), doc(0x39))
+        result, _ = accepted_match(self.helper(), doc(0x39), REF_FUSED)
         assert result is not None
         self.assertEqual((result[0]["match"], result[0]["equivalent"]), (True, True))
         for label, actual in (("a runtime offset", 0xFEC5B439), ("another voltage", 0x5B539), ("another ratio", 0x5B438), ("the dropped-target word", 0xFEC00039)):
             with self.subTest(label):
                 self.write("0 39 8\n")
-                result, _ = accepted_match(self.helper(), doc(actual))
+                result, _ = accepted_match(self.helper(), doc(actual), REF_FUSED)
                 assert result is not None
                 self.assertFalse(result[0]["match"])
                 self.assertNotIn("equivalent", result[0])
         self.write("0 39 8\n")  # an identical word is a plain match, not an equivalence
-        result, _ = accepted_match(self.helper(), doc(0x39))
+        result, _ = accepted_match(self.helper(), doc(0x39), REF_FUSED)
         self.assertEqual(result, [{"cpu": 0, "match": True, "diffs": []}])
 
     def test_absent_is_null_with_a_note(self) -> None:
@@ -517,7 +518,11 @@ class NeutralOcWordTests(unittest.TestCase):
     """G-124: every neutral OC word (no OC point, offset 0) is equivalent; an offset or an OC point is not [MEASURED lnx 2026-10-12]."""
 
     def test_neutral_words(self) -> None:
-        from arltuner.helper.ops import _equivalent_oc_words as eq
+        from arltuner.helper.ops import _equivalent_oc_words as equivalent
+
+        def eq(cpu: int, expected: int, actual: int) -> bool:
+            return equivalent(REF_FUSED.get(cpu), expected, actual)
+
         self.assertTrue(eq(16, 0x0, 0x2E))          # E cold word vs E after an offset-0 whole-curve write
         self.assertTrue(eq(0, 0x39, 0x5B439))       # P0 cold vs XTU shape
         self.assertTrue(eq(1, 0x0, 0x39))           # P1 cold vs bare top ratio, offset 0
@@ -526,3 +531,4 @@ class NeutralOcWordTests(unittest.TestCase):
         self.assertFalse(eq(16, 0x0, 0xFEC0002E))   # whole-curve offset -10 mV
         self.assertFalse(eq(12, 0x0, 0x48C30))      # an OC point at 48x (above the fused 46x)
         self.assertFalse(eq(0, 0x39, 0xFEC00039))   # offset on P0
+        self.assertFalse(equivalent(None, 0x39, 0x5B439))  # the core's 0x09 word was not read: nothing is judged equivalent

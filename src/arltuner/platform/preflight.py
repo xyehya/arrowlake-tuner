@@ -2,19 +2,22 @@
 
 ``preflight(root)`` reads a handful of small files under ``root`` (``/proc/cpuinfo``, ``/sys/kernel/security/lockdown``, ``/dev/cpu/*/msr``,
 ``/sys/module/msr/parameters/allow_writes``, ``/proc/<pid>/comm``, executables in the usual bin directories) and returns one named ``CheckResult``
-per check. A failed check is a named refusal, never a workaround. The fused-word identity half of "recognised platform" is a mailbox read and
-belongs to ``vf.dump`` (G-102); this module only covers CPUID (vendor, family, model,
-stepping on every online CPU); the CPU count is ``topology.detect``'s job.
+per check. A failed check is a named refusal, never a workaround. "Recognised platform" is CPUID (vendor, family, model on every CPU; an unknown stepping is a
+WARN) plus a live topology check (P and E CPU sets non-empty, E clusters of equal size, derived from sysfs, D-036). The result also carries the live
+``topology`` (units, favored cores) for the GUI.
 """
 from __future__ import annotations
 
 import os
 import re
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Any
+
+from arltuner.topology import Topology, TopologyError, contract_dict, read_live, topology_problems
 
 from .schema import Platform, default_platform
 
@@ -51,6 +54,7 @@ class Status(Enum):
     REFUSE = "refuse"  # the app cannot run at all
     UNKNOWN = "unknown"  # not determinable from here (unprivileged); the root helper's re-run is authoritative; never changes the mode
     MISSING = "missing"  # an optional feature's tool is absent (the feature shows "missing: install <pkg>")
+    WARN = "warn"  # worth knowing, never blocks (e.g. an unknown stepping of the recognised family); does not change the mode
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,8 @@ class CheckResult:
 class PreflightReport:
     platform_id: str
     results: tuple[CheckResult, ...]
+    topology: Mapping[str, Any] | None = None  # contract: {units: [{id, kind, cpus, favored, max_ratio, perf}], favored_source}; None = not derived
+    board: str | None = None  # DMI board_name, if readable
 
     def get(self, name: str) -> CheckResult:
         for r in self.results:
@@ -99,6 +105,8 @@ class PreflightReport:
             "platform": self.platform_id,
             "mode": self.mode,
             "checks": [{"name": r.name, "status": r.status.value, "reason": r.reason} for r in self.results],
+            "topology": dict(self.topology) if self.topology is not None else {"units": [], "favored_source": None},
+            "board": self.board,
         }
 
 
@@ -126,23 +134,35 @@ def _cpuinfo_blocks(text: str) -> list[dict[str, str]]:
 
 
 def check_cpuid(blocks: Sequence[dict[str, str]] | None, plat: Platform) -> CheckResult:
+    """Vendor, family and model must match the platform on every CPU (else READ_ONLY); a stepping the platform file does not list is a WARN, not a refusal."""
     name = "cpuid"
     if not blocks:
         return CheckResult(name, Status.READ_ONLY, "/proc/cpuinfo is unreadable or has no processor entries: CPU not recognised")
     want = plat.cpuid
+    seen_steppings: set[int] = set()
     for b in blocks:
         try:
             got = (b.get("vendor_id", ""), int(b.get("cpu family", "")), int(b.get("model", "")), int(b.get("stepping", "")))
         except ValueError:
             return CheckResult(name, Status.READ_ONLY, f"processor {b.get('processor', '?')}: cpu family/model/stepping missing or not numeric")
-        if got != (want.vendor, want.family, want.model, want.stepping):
+        if got[:3] != (want.vendor, want.family, want.model):
             return CheckResult(
                 name,
                 Status.READ_ONLY,
-                f"processor {b.get('processor', '?')}: {got[0]!r} family {got[1]} model {got[2]} stepping {got[3]} does not match platform "
-                f"{plat.id} ({want.vendor!r} family {want.family} model {want.model} stepping {want.stepping}, CPUID {want.signature:#x})",
+                f"processor {b.get('processor', '?')}: {got[0]!r} family {got[1]} model {got[2]} stepping {got[3]} is not an Arrow Lake-S CPU "
+                f"(platform {plat.id}: {want.vendor!r} family {want.family} model {want.model})",
             )
-    return CheckResult(name, Status.PASS, f"CPUID {want.signature:#x} matches platform {plat.id} on all {len(blocks)} CPUs (fused-word identity: checked at vf.dump)")
+        seen_steppings.add(got[3])
+    unknown = sorted(seen_steppings - set(want.steppings))
+    steppings = ", ".join(map(str, sorted(seen_steppings)))
+    if unknown:
+        return CheckResult(
+            name,
+            Status.WARN,
+            f"stepping {steppings} of this Arrow Lake-S CPU is not among the platform file's known steppings {list(want.steppings)}: the family and model match, "
+            "so nothing is blocked",
+        )
+    return CheckResult(name, Status.PASS, f"family {want.family} model {want.model} stepping {steppings} matches platform {plat.id} on all {len(blocks)} CPUs")
 
 
 def check_hypervisor(blocks: Sequence[dict[str, str]] | None) -> CheckResult:
@@ -193,13 +213,15 @@ def _msr_loadable(root: Path) -> bool:
     return False
 
 
-def check_msr_device(root: Path, plat: Platform) -> CheckResult:
+def check_msr_device(root: Path, cpus: Sequence[int] | None) -> CheckResult:
+    """``/dev/cpu/<n>/msr`` must exist for every CPU of the live topology (``cpus``); without a topology the CPUs are not known."""
     name = "msr_device"
-    cpus = range(plat.topology.cpu_count)
+    if not cpus:
+        return CheckResult(name, Status.READ_ONLY, "the CPU list is not known (see the topology check): /dev/cpu/*/msr cannot be checked")
     missing = [c for c in cpus if not (root / "dev" / "cpu" / str(c) / "msr").exists()]
     if not missing:
-        return CheckResult(name, Status.PASS, f"/dev/cpu/0..{plat.topology.cpu_count - 1}/msr present")
-    where = f"/dev/cpu/{missing[0]}/msr" if len(missing) == 1 else f"/dev/cpu/*/msr for {len(missing)} of {plat.topology.cpu_count} CPUs (first: {missing[0]})"
+        return CheckResult(name, Status.PASS, f"/dev/cpu/<n>/msr present for all {len(cpus)} CPUs ({min(cpus)}..{max(cpus)})")
+    where = f"/dev/cpu/{missing[0]}/msr" if len(missing) == 1 else f"/dev/cpu/*/msr for {len(missing)} of {len(cpus)} CPUs (first: {missing[0]})"
     if (root / "sys" / "module" / "msr").exists():
         hint = "the msr module is loaded or built in but the device nodes are absent (devtmpfs/udev problem)"
     elif _msr_loadable(root):
@@ -207,6 +229,30 @@ def check_msr_device(root: Path, plat: Platform) -> CheckResult:
     else:
         hint = "the msr module is neither loaded, built in nor found under /lib/modules"
     return CheckResult(name, Status.READ_ONLY, f"{where} missing: {hint}")
+
+
+def check_topology(topology: Topology | None, why: str | None) -> CheckResult:
+    """The live topology is usable: P and E CPU sets non-empty, E clusters of equal size (the Arrow Lake-S layout)."""
+    name = "topology"
+    if topology is None:
+        return CheckResult(name, Status.READ_ONLY, f"the CPU topology could not be derived from sysfs: {why}")
+    problems = topology_problems(topology)
+    if problems:
+        return CheckResult(name, Status.READ_ONLY, "the CPU topology is not an Arrow Lake-S layout: " + "; ".join(problems))
+    p, e = len(topology.cpus_of_kind("P")), len(topology.cpus_of_kind("E"))
+    clusters = len({c.cluster for c in topology.cores if c.cluster is not None})
+    favored = [f"P{c.index}" for c in topology.cores if c.favored]
+    fav = f"; favored by {topology.favored_source}: {', '.join(favored)}" if favored else "; no favored core (all P-cores report the same performance)"
+    return CheckResult(name, Status.PASS, f"{p} P-cores + {e} E-cores in {clusters} clusters of {e // clusters}{fav}")
+
+
+def read_board_name(root: Path) -> str | None:
+    """DMI ``board_name`` (``/sys/class/dmi/id/board_name``), or None."""
+    try:
+        text = _read(root, "sys/class/dmi/id/board_name").strip()
+    except OSError:
+        return None
+    return text or None
 
 
 def check_msr_allow_writes(root: Path) -> CheckResult:
@@ -312,13 +358,22 @@ def preflight(
     root: Path = Path("/"),
     *,
     platform: Platform | None = None,
+    topology: Topology | None = None,
     python_version: Sequence[int] | None = None,
     path_dirs: Sequence[str] | None = None,
     tools: dict[str, str] | None = None,
 ) -> PreflightReport:
-    """Run every SPEC section 3 check against the filesystem under ``root`` and return the named results (never raises on a missing file)."""
+    """Run every SPEC section 3 check against the filesystem under ``root`` and return the named results (never raises on a missing file).
+    ``topology``: the topology to report instead of deriving it from ``root/sys`` (the simulator's)."""
     root = Path(root)
     plat = platform if platform is not None else default_platform()
+    topo, topo_why = topology, None
+    if topo is None:
+        try:
+            topo = read_live(root / "sys").topology
+        except (TopologyError, OSError) as exc:
+            topo, topo_why = None, str(exc)
+    cpus = None if topo is None else sorted(c.cpu for c in topo.cores)
     dirs = tuple(path_dirs) if path_dirs is not None else tuple(DEFAULT_PATH.split(":"))
     version = tuple(python_version) if python_version is not None else tuple(sys.version_info[:3])
 
@@ -331,7 +386,8 @@ def preflight(
         lambda: check_cpuid(blocks, plat),
         lambda: check_hypervisor(blocks),
         lambda: check_lockdown(root),
-        lambda: check_msr_device(root, plat),
+        lambda: check_topology(topo, topo_why),
+        lambda: check_msr_device(root, cpus),
         lambda: check_msr_allow_writes(root),
         lambda: check_pkexec(root, dirs),
         lambda: check_polkit(root),
@@ -343,4 +399,4 @@ def preflight(
     for run in checks:
         r = run()
         results.extend(r if isinstance(r, list) else [r])
-    return PreflightReport(plat.id, tuple(results))
+    return PreflightReport(plat.id, tuple(results), None if topo is None else contract_dict(topo), read_board_name(root))

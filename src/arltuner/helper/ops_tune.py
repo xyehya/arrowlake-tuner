@@ -65,10 +65,10 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.controls.planner import POINT_CAVEAT, kept_word
-from arltuner.guard.policy import top_fused_ratio, turbo_bytes
+from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV, fused_ratio_cap, fused_top_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
-from arltuner.platform import default_platform
+from arltuner.curves import is_unit_id
 from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
 from arltuner.profiles.contents import intent_contents, profile_contents, summarize
 from arltuner.profiles.lastread import LastReadError, LastReadStore
@@ -87,6 +87,7 @@ from .ops import (
     _trust_refusal,
     _VirtualClock,
     accepted_match,
+    helper_topology,
     op_vf_dump,
 )
 from .protocol import BAD_REQUEST, CANCELLED, CONFIRM_MISMATCH, INTERNAL, MAX_LINE, PLAN_STALE, REFUSED, OpError
@@ -108,14 +109,19 @@ _ACCEPTED_PATH_RE = re.compile(r"profiles/[A-Za-z0-9._-]{1,80}\Z")
 _NONCE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"  # contract 8: [A-Z2-9]
 _RATIO_RANGE = (1, 100)  # the profile schema's unit sanity range (the policy's ratio_max is the bound)
 
-UNITS: tuple[str, ...] = tuple(f"P{i}" for i in range(8)) + tuple(f"EC{i}" for i in range(4))
-GROUPS: dict[str, tuple[str, ...]] = {"P": UNITS[:8], "E": UNITS[8:]}
+
+def groups_of(topology: Topology) -> dict[str, tuple[str, ...]]:
+    """The ``P`` / ``E`` groups of a topology's units (a ``simple`` row addresses a whole group)."""
+    ids = topology.unit_ids()
+    return {"P": tuple(u for u in ids if u.startswith("P")), "E": tuple(u for u in ids if u.startswith("EC"))}
+
+
 #: ``tune.plan`` echoes at most this many predicted write steps (the full count is ``writes``): the response line is capped at 64 KiB.
 _MAX_STEPS_LISTED = 300
 
 
 # --------------------------------------------------------------------------------------------------------------
-# Units (contract 9): P0..P7 = CPU n, EC0..EC3 = the four CPUs of an E-cluster
+# Units (contract 9): P<n> = the n-th P CPU, EC<n> = the CPUs of the n-th E-cluster (live topology)
 # --------------------------------------------------------------------------------------------------------------
 class Warn(str):
     """A plan warning with a machine-readable ``code`` (contract 9 addendum: the result carries ``{code, text}``). Everything untagged is ``NOTE``."""
@@ -133,14 +139,11 @@ def warning_objects(items: Sequence[str]) -> list[dict[str, str]]:
 
 
 def unit_cpus(topology: Topology, unit: str) -> tuple[int, ...]:
-    if unit.startswith("EC"):
-        return topology.cluster_cpus(int(unit[2:]))
-    return (topology.resolve("P", int(unit[1:])).cpu,)
+    return topology.unit_cpus(unit)
 
 
 def unit_of_cpu(topology: Topology, cpu: int) -> str:
-    core = topology.by_cpu(cpu)
-    return f"P{core.index}" if core.cluster is None else f"EC{core.cluster}"
+    return topology.unit_of_cpu(cpu)
 
 
 def _kind_of(unit: str) -> str:
@@ -208,6 +211,7 @@ class TuneState:
     plans: PlanStore
     tables: dict[str, tuple[int, ...]] | None = None  # {"e": 8 buckets, "p": 8 buckets} from the last tune.read (plain rdmsr), or None
     tables_note: str | None = None
+    favored_words: dict[int, int] | None = None  # cpu -> the whole 0x1C word of the last tune.read (P-cores): the data an "auto" ratio ceiling is derived from
     fused: dict[int, dict[str, Any]] | None = None  # G-114 F7: cpu -> {word, ratio, v} of the last tune.read (cmd 0x09 P1=0x11 P2=0)
     turbo: dict[str, Any] | None = None  # G-114 F5: {"P": {ratios, counts}, "E": {...}, "favored": {cpu: ratio}} of the last tune.read
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -240,20 +244,19 @@ def _set_last_words(helper: Helper, words: Mapping[int, Sequence[int]]) -> None:
 # Policy and topology (trusted inputs only, SPEC 4.4)
 # --------------------------------------------------------------------------------------------------------------
 def _load_policy(helper: Helper) -> Policy:
+    """The root policy, bound to the live topology (``cpus`` / ``e_cpus`` / ``"auto"`` ceilings are derived from it, D-036)."""
     cfg = helper.cfg
+    topology = helper_topology(helper)
     if cfg.policy_path is not None:
         _trust(helper, cfg.policy_path, want="file", must_exist=True)
     try:
-        return default_m1_policy() if cfg.policy_path is None else load_policy(cfg.policy_path)
+        return default_m1_policy(topology) if cfg.policy_path is None else load_policy(cfg.policy_path, topology)
     except (PolicyError, OSError) as exc:
         raise _refuse(f"policy error: {exc}.", "POLICY_INVALID") from None
 
 
 def _topology(helper: Helper) -> Topology:
-    try:
-        return helper.cfg.topology_fn()
-    except TopologyError as exc:
-        raise _refuse(f"this machine does not match the Core Ultra 9 285K map: {exc}.", "TOPOLOGY") from None
+    return helper_topology(helper)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -280,8 +283,10 @@ def _words_of_document(doc: Mapping[str, Any]) -> dict[int, list[int]]:
     return out
 
 
-def _decode_document(doc: dict[str, Any], topology: Topology) -> dict[str, Any]:
-    """Add ``units[*].id`` and ``tune`` (``{unit: {cpus: [{cpu, points: [{point, ratio, offset_mv, v_target_v, mode}]}]}}``; point 0 = the OC word)."""
+def _decode_document(doc: dict[str, Any], topology: Topology, fused: Mapping[int, int] | None = None) -> dict[str, Any]:
+    """Add ``units[*].id`` and ``tune`` (``{unit: {cpus: [{cpu, points: [{point, ratio, offset_mv, v_target_v, mode}]}]}}``; point 0 = the OC word). ``fused``: cpu ->
+    its live ``0x09`` word; a point whose ratio is above the core's top fused ratio ``[7:0]`` IS the OC point (the OC ratio is above the top fused ratio)."""
+    fused = fused or {}
     tune: dict[str, Any] = {}
     for unit in doc.get("units", []):
         first = unit["cpus"][0]["cpu"] if unit.get("cpus") else None
@@ -290,14 +295,16 @@ def _decode_document(doc: dict[str, Any], topology: Topology) -> dict[str, Any]:
         uid = unit_of_cpu(topology, first)
         unit["id"] = uid
         rows = []
-        kind = _kind_of(uid)
-        fused_n, oc_n = len(_POINT_RATIOS[kind]), len(_POINT_RATIOS[kind]) + 1  # P: fused 1..8, OC = point 9; E: fused 1..6, OC = point 7 (community naming)
         for cpu in unit["cpus"]:
+            top = fused_top_ratio(fused.get(cpu["cpu"]))
+            ratios = [VfWord.from_u32(int(p["word"], 16)).ratio for p in cpu.get("points", [])]
+            fused_n = sum(1 for r in ratios if top is None or r <= top)  # fused points of this core; with no 0x09 read nothing is called the OC point
+            oc_n = fused_n + 1  # community naming: the OC point follows the last fused point
             pts = []
             if cpu.get("oc") is not None:
                 pts.append({"point": 0, "point_label": f"OC (point {oc_n})", **_decode(VfWord.from_u32(int(cpu["oc"]["word"], 16)))})
             for p in cpu.get("points", []):
-                is_oc = p["point"] > fused_n  # a read that returns P2 = 9 (P) / 7 (E): the OC ratio is above the top fused ratio, so this IS the OC point
+                is_oc = top is not None and ratios[p["point"] - 1] > top  # the OC ratio is above the top fused ratio, so this point IS the OC point
                 label = f"OC (point {oc_n})" if is_oc else f"point {p['point']}"
                 pts.append({"point": p["point"], "point_label": label, **({"oc_point": True} if is_oc else {}), **_decode(VfWord.from_u32(int(p["word"], 16)))})
             rows.append({"cpu": cpu["cpu"], "points": pts})
@@ -421,6 +428,7 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
             wall_clock=wall,
             boot_id_fn=cfg.boot_id_fn,
             msr_port=port,
+            session_favored_words=_state(helper).favored_words,
         )
         yield _Session(guard, Confirmation(token, cfg.operator), policy, clock, sleep, used)
     finally:
@@ -448,17 +456,17 @@ _FUSED_CMD, _FUSED_P1 = 0x09, 0x11  # VoltageFloorRead P1 = 0x11 (domain floors)
 
 
 def _fused_entry(word: int) -> dict[str, Any]:
-    """Contract 9 addendum ``{word, ratio, v}``: ratio ``[7:0]``, voltage ``[19:8]`` S2.10 (platform-285k.md section 4)."""
-    return {"word": f"0x{word & 0xFFFFFFFF:08x}", "ratio": word & 0xFF, "v": round(((word >> 8) & 0xFFF) / 1024 + 1e-9, 4)}  # half up: 0x4A0 = 1.15625 V -> 1.1563 as in platform-285k.md
+    """Contract 9 addendum ``{word, ratio, v}``: ratio ``[7:0]``, voltage ``[19:8]`` S2.10 (registers.md 0x09)."""
+    return {"word": f"0x{word & 0xFFFFFFFF:08x}", "ratio": word & 0xFF, "v": round(((word >> 8) & 0xFFF) / 1024 + 1e-9, 4)}  # half up: 0x4A0 = 1.15625 V -> 1.1563
 
 
 def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topology) -> dict[str, Any]:
-    """G-114: the guarded reads that make ``tune.read`` respect SPEC-v3 section 9, in ONE session of exactly ``12 + 8 + 4 = 24`` guard-counted requests (20 of them
-    mailbox reads = WRMSR to 0x150, 4 plain rdmsr), one at a time:
+    """G-114: the guarded reads that make ``tune.read`` respect SPEC-v3 section 9, in ONE session of exactly ``units + P-cores + 4`` guard-counted requests (the
+    last four are plain rdmsr, the rest mailbox reads = WRMSR to 0x150), one at a time:
 
-    * ``fused`` (F7): cmd ``0x09 P1=0x11 P2=0`` on every P-core and on the first CPU of every E-cluster (12),
-    * ``favored`` (F5): cmd ``0x1C`` on the 8 P-cores (low byte = the favored ratio; E clusters read ``0x2E30`` and follow ``0x650``) (8),
-    * ``turbo`` (F5): plain ``rdmsr`` ``0x1AD`` / ``0x1AE`` / ``0x650`` / ``0x651`` on CPU 0 (4).
+    * ``fused`` (F7): cmd ``0x09 P1=0x11 P2=0`` on every P-core and on the first CPU of every E-cluster (one per unit),
+    * ``favored`` (F5): cmd ``0x1C`` on every P-core (low byte = the favored ratio; E clusters follow ``0x650``),
+    * ``turbo`` (F5): plain ``rdmsr`` ``0x1AD`` / ``0x1AE`` / ``0x650`` / ``0x651`` on the first P CPU (4).
 
     Each group degrades alone (a refusal leaves that group ``None`` with a note); a guard trip or a cancel ends the session. Returns
     ``{fused, turbo, tables, notes}``."""
@@ -485,10 +493,12 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 out["fused"] = {cpu: _fused_entry(mailbox(cpu, _FUSED_CMD, _FUSED_P1, "read the fused V/F point (0x09)")) for cpu in p_cpus + e_cpus}
 
             favored: dict[int, int] = {}
+            favored_full: dict[int, int] = {}
 
             def do_favored() -> None:
                 for cpu in p_cpus:
-                    favored[cpu] = mailbox(cpu, int(Cmd.FAVORED_CORE_READ), 0, "read the favored ratio (0x1C)") & 0xFF
+                    word = mailbox(cpu, int(Cmd.FAVORED_CORE_READ), 0, "read the favored ratio (0x1C)")
+                    favored[cpu], favored_full[cpu] = word & 0xFF, word
 
             def do_turbo() -> None:
                 ratios = {msr: plain(msr) for msr in (0x1AD, 0x650)}
@@ -523,6 +533,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 out["turbo"]["favored"] = {cpu: r for cpu, r in favored.items()}
             elif favored:
                 out["turbo"] = {"P": None, "E": None, "favored": dict(favored)}
+            out["favored_words"] = favored_full
     except OpError as exc:
         if exc.code == CANCELLED:
             raise
@@ -537,12 +548,51 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
     return out
 
 
+def _read_at(epoch: float) -> str:
+    """ISO-8601 UTC, second resolution (``2026-10-12T09:49:05Z``): the time a read was taken, as the page shows it."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _fused_map(topology: Topology, fused: Mapping[int, Mapping[str, Any]] | None) -> dict[int, int]:
+    """cpu -> live ``0x09`` word for every CPU of every unit read (an E cluster is read on its first CPU; the other CPUs share its word)."""
+    out: dict[int, int] = {}
+    for cpu, entry in (fused or {}).items():
+        try:
+            word = int(entry["word"], 16)
+            cpus = topology.unit_cpus(topology.unit_of_cpu(int(cpu)))
+        except (KeyError, TypeError, ValueError, UnknownCore):
+            continue
+        for c in cpus:
+            out[c] = word
+    return out
+
+
+def _favored_crosscheck(topology: Topology, turbo: Mapping[str, Any] | None) -> str | None:
+    """After a read: the P-cores whose ``0x1C[7:0]`` ratio is the highest (none when all are equal) against the favored set sysfs reported. A note when they differ;
+    nothing when ``0x1C`` was not read."""
+    favored = (turbo or {}).get("favored") if isinstance(turbo, Mapping) else None
+    if not isinstance(favored, Mapping) or not favored:
+        return None
+    ratios = {int(c): int(r) for c, r in favored.items()}
+    by_1c = {c for c, r in ratios.items() if r == max(ratios.values())} if len(set(ratios.values())) > 1 else set()
+    by_sysfs = {c.cpu for c in topology.cores if c.favored}
+    if by_1c == by_sysfs:
+        return None
+
+    def names(cpus: set[int]) -> str:
+        return ", ".join(sorted((topology.unit_of_cpu(c) for c in cpus), key=lambda u: int(u[1:]))) or "none"
+
+    return (
+        f"favored cores differ: sysfs ({topology.favored_source or 'no source'}) says {names(by_sysfs)}; the 0x1C favored ratios say {names(by_1c)}. "
+        "Both are shown as read; nothing was changed."
+    )
+
+
 def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     doc = vf_dump_tracked(helper, ctx, args)
     topology = _topology(helper)
     result = dict(doc)
     result["units"] = [dict(u) for u in doc.get("units", [])]
-    result["tune"] = _decode_document(result, topology)
     st = _state(helper)
     try:
         policy = _load_policy(helper)
@@ -557,14 +607,25 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     with st.lock:
         st.tables, st.tables_note = tables, note
         st.fused, st.turbo = extras["fused"], extras["turbo"]
+        st.favored_words = extras.get("favored_words") or None
+    fused_words = _fused_map(topology, extras["fused"])
+    if fused_words:
+        helper.fused_words = fused_words
+    result["tune"] = _decode_document(result, topology, helper.fused_words)
+    matched, accepted_note = accepted_match(helper, result, helper.fused_words)  # redone with the fused words just read (the dump's own compare ran before them)
+    result["accepted_match"], result["accepted_note"] = matched, accepted_note
     result["tables"] = None if tables is None else {k: list(v) for k, v in tables.items()}
     result["tables_note"] = None if tables is not None else (note or "turbo tables not read")
     fused, turbo = extras["fused"], extras["turbo"]
     result["fused"] = None if fused is None else {str(c): v for c, v in fused.items()}  # contract 9 addendum: {first cpu of the unit (string): {word, ratio, v}}
     result["turbo"] = None if turbo is None else {**turbo, "favored": {str(c): r for c, r in turbo["favored"].items()}}  # {P: {ratios, counts}, E: {...}, favored: {cpu (string): ratio}}
     result["extras_notes"] = notes
+    cross = _favored_crosscheck(topology, turbo)
+    if cross:
+        result["problems"] = [*result.get("problems", []), cross]
+    result["read_at"] = _read_at(helper.cfg.wall_clock())
     result = _fit(result)
-    _save_last_read(helper, result)
+    _save_last_read(helper, result, topology)
     return result
 
 
@@ -595,12 +656,12 @@ def _log(helper: Helper, text: str) -> None:
         pass
 
 
-def _save_last_read(helper: Helper, result: dict[str, Any]) -> None:
-    """Store a *complete* read (all 12 units) with the boot id. Best effort: a store problem is logged, never an error of the read that succeeded."""
+def _save_last_read(helper: Helper, result: dict[str, Any], topology: Topology) -> None:
+    """Store a *complete* read (every unit of the topology) with the boot id. Best effort: a store problem is logged, never an error of the read that succeeded."""
     try:
         boot = _current_boot(helper)
         ids = {u.get("id") for u in result.get("units", []) if isinstance(u, dict)}
-        if boot is None or result.get("complete") is False or not set(UNITS) <= ids:
+        if boot is None or result.get("complete") is False or not set(topology.unit_ids()) <= ids:
             return
         words = _words_of_document(result)
         if not words:
@@ -662,6 +723,7 @@ def _restore_last(helper: Helper) -> None:
                 fused = result.get("fused")
                 if st.fused is None and isinstance(fused, dict):
                     st.fused = {int(c): dict(v) for c, v in fused.items() if isinstance(v, dict)}
+                    helper.fused_words = _fused_map(_topology(helper), st.fused)
                 turbo = result.get("turbo")
                 if st.turbo is None and isinstance(turbo, dict):
                     st.turbo = {**turbo, "favored": {int(c): int(r) for c, r in (turbo.get("favored") or {}).items()}}
@@ -710,9 +772,11 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                         p.update(_word_json(ws[p["point"]]))
         result["differences"] = []
         result["differences_stale"] = True
-        matched, note = accepted_match(helper, result)
+        matched, note = accepted_match(helper, result, helper.fused_words)
         result["accepted_match"], result["accepted_note"] = matched, note
-    result["tune"] = _decode_document(result, topology)
+    result["tune"] = _decode_document(result, topology, helper.fused_words)
+    if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
+        result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored
     return {"available": True, "boot_id": record["boot_id"], "at": record.get("at"), "applied_at": applied_at, "result": _fit(result)}
 
 
@@ -739,9 +803,8 @@ def _canonical_row(raw: object, scope: str) -> dict[str, Any] | None:
     if extra:
         raise _bad(f"unknown row key(s): {', '.join(map(repr, extra))}")
     target = raw.get("target")
-    allowed = ("P", "E") if scope == "simple" else UNITS
-    if not isinstance(target, str) or target not in allowed:
-        raise _bad(f"row target {target!r} is not one of {', '.join(allowed)} (scope {scope!r})")
+    if not isinstance(target, str) or not (target in ("P", "E") if scope == "simple" else is_unit_id(target)):
+        raise _bad(f"row target {target!r} is not {'P or E' if scope == 'simple' else 'a unit (P<n> / EC<n>)'} (scope {scope!r})")
     offset = raw.get("offset")
     canon_offset: dict[str, Any] | None = None
     if offset is not None:
@@ -940,7 +1003,18 @@ def _no_read(unit: str, why: str) -> OpError:
     return OpError(REFUSED, f"{unit}: {why}; run 'Read tuning words' (tune.read) first. Nothing was sent.", {"check": "NO_READ"})
 
 
-def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any]) -> None:
+def _ratio_cap(helper: Helper, policy: Policy, kind: str) -> int | None:
+    """The ratio ceiling of a kind at plan time: the policy's number; for ``"auto"`` the fused ``0x1C`` values of that kind read by this boot's ``tune.read`` (None = not
+    read: the guard judges it when the plan is applied, from the session's own reads)."""
+    if kind in policy.ratio_auto:
+        st = _state(helper)
+        with st.lock:
+            words = dict(st.favored_words or {})
+        return fused_ratio_cap(kind, [w for cpu, w in words.items() if policy.core_kind(cpu) == kind])
+    return policy.ratio_max[kind]
+
+
+def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any], ratio_cap: int | None = None) -> None:
     """``REFUSED POLICY_RANGE`` naming the field and the limit, before anything else is computed."""
     kind = _kind_of(unit)
 
@@ -963,11 +1037,13 @@ def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[st
     if v is not None:
         mv = round(v * 1000)
         cap = policy.v_target_max_mv[kind]
+        if cap is None and kind in policy.v_target_auto:
+            cap = SANITY_V_TARGET_MAX_MV[kind]  # "auto": at plan time the code sanity bound; the guard judges the CPU's own 0x28 maximum when the plan is applied
         if cap is not None and VfWord.v_to_raw(mv / 1000) > VfWord.v_to_raw(cap / 1000):
             raise refuse(f"{unit}: OC-point voltage {mv} mV is above the policy v_target_max_mv[{kind}] = {cap} mV")
     ratio = row["ratio"]
     if ratio is not None:
-        cap = policy.ratio_max[kind]
+        cap = ratio_cap if kind in policy.ratio_auto else policy.ratio_max[kind]
         if cap is not None and ratio > cap:
             raise refuse(f"{unit}: ratio {ratio} is above the policy ratio_max[{kind}] = {cap}")
 
@@ -980,11 +1056,15 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
     refs: dict[tuple[int, int], int] = {}
     units: list[str] = []
     asked_ratio: dict[str, int] = {}
+    groups = groups_of(topology)
     for row in intent.get("rows", ()):
-        targets = GROUPS[row["target"]] if row["target"] in GROUPS else (row["target"],)
+        targets = groups[row["target"]] if row["target"] in groups else (row["target"],)
         for unit in targets:
-            cpus = unit_cpus(topology, unit)
-            _check_range(policy, unit, cpus, row)
+            try:
+                cpus = unit_cpus(topology, unit)
+            except UnknownCore:
+                raise OpError(BAD_REQUEST, f"{unit} is not a unit of this system (units: {', '.join(topology.unit_ids())})") from None
+            _check_range(policy, unit, cpus, row, _ratio_cap(helper, policy, _kind_of(unit)))
             core = topology.by_cpu(cpus[0])
             known = {c: last[c] for c in cpus if last and c in last and last[c]}
             vals: dict[str, int | None] = {"ratio": row["ratio"], "oc_voltage_mv": None if row["v_target_v"] is None else round(row["v_target_v"] * 1000), "offset_mv": None}
@@ -1002,8 +1082,12 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
             if offset is not None and offset["kind"] == "points":
                 if not known:
                     raise _no_read(unit, "per-point offsets are addressed by ratio and no words of this unit were read")
-                words = known[next(iter(known))]
-                by_ratio = {VfWord.from_u32(w).ratio: n for n, w in enumerate(words[1 : len(_POINT_RATIOS[core.kind]) + 1], start=1)}  # the OC point (P2 9 / 7) is not a fused point
+                first = next(iter(known))
+                words = known[first]
+                top = fused_top_ratio(helper.fused_words.get(first))
+                by_ratio = {
+                    VfWord.from_u32(w).ratio: n for n, w in enumerate(words[1:], start=1) if top is None or VfWord.from_u32(w).ratio <= top
+                }  # the OC point (a ratio above the top fused ratio) is not a fused point
                 missing = [r for r in offset["mv"] if int(r) not in by_ratio]
                 for r, mv in offset["mv"].items():
                     n = by_ratio.get(int(r))
@@ -1062,7 +1146,7 @@ def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], derived:
         tables = st.tables
     out = {"e": None if derived is None else derived.e, "p": None if derived is None else derived.p}
     for kind, ratios in asked.items():
-        cap = policy.ratio_max[kind]
+        cap = _ratio_cap(helper, policy, kind)
         if cap is not None and max(ratios) > cap:
             raise OpError(REFUSED, f"turbo.{kind}: ratio {max(ratios)} is above the policy ratio_max[{kind}] = {cap}. Nothing was sent.", {"check": "POLICY_RANGE"})
         msr = "0x650" if kind == "E" else "0x1AD"
@@ -1083,7 +1167,7 @@ def _reset_profile(helper: Helper, topology: Topology) -> Resolved:
     refs: dict[tuple[int, int], int] = {}
     units: list[str] = []
     warnings: list[str] = []
-    for unit in UNITS:
+    for unit in topology.unit_ids():
         cpus = unit_cpus(topology, unit)
         ref = _unit_reference(last, cpus)
         if ref is None:
@@ -1161,7 +1245,23 @@ def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topol
 # --------------------------------------------------------------------------------------------------------------
 # before / after, predicted steps
 # --------------------------------------------------------------------------------------------------------------
-def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _fill_ratio(turbo: Mapping[str, Any] | None, kind: str, cpu: int) -> int | None:
+    """The ratio the planner's XTU fill takes for a cold OC word (``0x1C[7:0]``): a P-core's own favored ratio; an E core follows the first bucket of the E table."""
+    if not turbo:
+        return None
+    if kind == "P":
+        return (turbo.get("favored") or {}).get(cpu) or None
+    ratios = (turbo.get("E") or {}).get("ratios")
+    return ratios[0] if ratios else None
+
+
+def _before_after(
+    profile: Profile,
+    topology: Topology,
+    last: Mapping[int, Sequence[int]] | None,
+    fused: Mapping[int, int] | None = None,
+    turbo: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """``{unit: {point: {ratio, offset_mv, v_target_v}}}`` for the words the plan writes; point ``"0"`` is the OC word. ``before`` is ``null`` for a
     word that was not read; a field that reads 0 (unset) is ``null``."""
     before: dict[str, Any] = {}
@@ -1184,13 +1284,15 @@ def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Seque
             changes["offset_raw"] = VfWord.mv_to_offset_raw(setting.offset_mv)
         goal = (cur or VfWord(0, 0, False, 0)).with_(**changes)
         kind = _kind_of(unit)
+        top = fused_top_ratio((fused or {}).get(setting.cpu))  # the core's own top fused ratio, from this boot's 0x09 read (None = not read: nothing is dropped)
         if goal.ratio:
-            goal = kept_word(kind, goal)  # G-124: no OC point (ratio <= the top fused ratio) = the hardware keeps no V target, whatever the offset
+            goal = kept_word(top, goal)  # G-124: no OC point (ratio <= the top fused ratio) = the hardware keeps no V target, whatever the offset
         elif goal.v_target_raw:
-            # a cold word (ratio field 0): the planner fills the ratio from 0x1C[7:0] when the plan sets an OC voltage (P 55/57 <= 57: no OC point; E 48 > 46: an OC
-            # point) and caps it at the top fused ratio otherwise -- decide the target on that filled ratio, show the field as read (0 = unset)
-            fill = top_fused_ratio(kind) + (1 if kind == "E" and setting.oc_voltage_mv is not None else 0)
-            goal = kept_word(kind, goal.with_(ratio=fill)).with_(ratio=0)
+            # a cold word (ratio field 0): the planner fills the ratio from 0x1C[7:0] (the plan sets an OC voltage, so the fill is not capped) -- decide the target on
+            # that filled ratio, show the field as read (0 = unset). The fill comes from this boot's read (P: 0x1C of the core; E: the first bucket of the E table).
+            fill = _fill_ratio(turbo, kind, setting.cpu)
+            if fill is not None:
+                goal = kept_word(top, goal.with_(ratio=fill)).with_(ratio=0)
         before.setdefault(unit, {})["0"] = None if cur is None else show(cur)
         after.setdefault(unit, {})["0"] = show(goal)
     for setting in profile.expand_points(topology):
@@ -1206,13 +1308,23 @@ def _before_after(profile: Profile, topology: Topology, last: Mapping[int, Seque
 # --------------------------------------------------------------------------------------------------------------
 # SPEC-v3 section 9: predictions (F4 clamp, F6 VccIA, F8 warnings) from the newest baseline curve
 # --------------------------------------------------------------------------------------------------------------
-_PLATFORM = default_platform()
-_POINT_RATIOS = {"P": tuple(_PLATFORM.p_point_ratios), "E": tuple(_PLATFORM.e_point_ratios)}  # F1 [MEASURED lnx 2026-10-02]
-_PLATFORM_TURBO = {  # stock tables [MEASURED lnx 2026-09-29], used only when tune.read could not read the live ones
-    "P": list(turbo_bytes(_PLATFORM.turbo_defaults[0x1AD])),
-    "E": list(turbo_bytes(_PLATFORM.turbo_defaults[0x650])),
-}
-_P_FAVORED_STOCK = 55  # the 0x1C low byte of a non-favored P-core [MEASURED win 2026-10-01] (0x3737); favored cores read 57 (0x3939)
+def _fused_ratios(words: Sequence[int], top: int | None) -> tuple[int, ...]:
+    """The fused V/F point ratios of a core from its words (``words[0]`` = the OC word, ``words[n]`` = point ``n``): every point, without the one that sits above the
+    core's top fused ratio ``top`` (live ``0x09`` ``[7:0]``) -- that one is the OC point. With ``top`` unknown (``0x09`` not read) every point counts."""
+    ratios = [VfWord.from_u32(w).ratio for w in words[1:]]
+    return tuple(r for r in ratios if r and (top is None or r <= top))
+
+
+def _unit_point_ratios(helper: Helper, topology: Topology) -> dict[str, tuple[int, ...]]:
+    """unit -> its fused point ratios from this boot's kept read (units not read are absent)."""
+    last = _last_words(helper) or {}
+    out: dict[str, tuple[int, ...]] = {}
+    for unit in topology.unit_ids():
+        ref = _unit_reference(last, topology.unit_cpus(unit))
+        if ref is not None:
+            out[unit] = _fused_ratios(ref[1], fused_top_ratio(helper.fused_words.get(ref[0])))
+    return out
+
 
 
 def _baseline_record(helper: Helper) -> tuple[dict[str, Any] | None, str | None]:
@@ -1236,7 +1348,7 @@ class _UnitModel:
     unit: str
     kind: str
     cpus: tuple[int, ...]
-    ratios: tuple[int, ...]  # the fused point ratios (index n-1 = point n)
+    ratios: tuple[int, ...]  # the fused point ratios (index n-1 = point n); empty = the unit was not read, nothing can be predicted
     cur_offsets: dict[int, float]  # ratio -> mV of the words last read (0 where nothing was read)
     new_offsets: dict[int, float]  # ... after the plan
     baseline: dict[int, float | None] | None
@@ -1247,24 +1359,29 @@ class _UnitModel:
 
 
 def _unit_models(
-    profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]] | None, record: dict[str, Any] | None, fused: Mapping[int, Mapping[str, Any]] | None
+    profile: Profile,
+    topology: Topology,
+    last: Mapping[int, Sequence[int]] | None,
+    record: dict[str, Any] | None,
+    fused: Mapping[int, Mapping[str, Any]] | None,
+    fused_words: Mapping[int, int] | None = None,
 ) -> dict[str, _UnitModel]:
     settings = {unit_of_cpu(topology, s.cpu): s for s in profile.expand(topology)}
     point_settings: dict[str, dict[int, Any]] = {}
     for ps in profile.expand_points(topology):
         point_settings.setdefault(unit_of_cpu(topology, ps.cpu), {})[ps.point] = ps
     models: dict[str, _UnitModel] = {}
-    for unit in UNITS:
+    for unit in topology.unit_ids():
         kind = _kind_of(unit)
         cpus = unit_cpus(topology, unit)
         ref = _unit_reference(last, cpus)
-        known = len(_POINT_RATIOS[kind])
         if ref is not None:
-            words = [VfWord.from_u32(w) for w in ref[1][1 : known + 1]]  # past the table = the OC point (P2 9 / 7), not a fused point
+            top = fused_top_ratio((fused_words or {}).get(ref[0]))
+            words = [VfWord.from_u32(w) for w in ref[1][1:] if VfWord.from_u32(w).ratio and (top is None or VfWord.from_u32(w).ratio <= top)]  # past the table = the OC point
             ratios = tuple(w.ratio for w in words)
             cur = {w.ratio: w.offset_mv for w in words}
         else:
-            ratios, cur = _POINT_RATIOS[kind], {r: 0.0 for r in _POINT_RATIOS[kind]}
+            ratios, cur = (), {}
         new = dict(cur)
         st = settings.get(unit)
         explicit = point_settings.get(unit, {})
@@ -1280,7 +1397,7 @@ def _unit_models(
             pts = ((record.get("units") or {}).get(unit) or {}).get("points") or []
             measured = {p["ratio"]: p["vid_v"] for p in pts if p.get("status") == "ok" and p.get("vid_v") is not None}
             fused_v = ((fused or {}).get(cpus[0]) or {}).get("v")
-            if measured:
+            if measured and ratios:
                 baseline = complete_baseline(ratios, measured, fused_v)
         m = _UnitModel(unit, kind, cpus, ratios, cur, new, baseline, touched=st is not None or bool(explicit))
         if ref is not None:
@@ -1292,14 +1409,18 @@ def _unit_models(
     return models
 
 
-def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None, plan: bool) -> tuple[int, int]:
+def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None, plan: bool) -> tuple[int, int] | None:
     """(1-2 active cores, all cores): the highest ratio the unit is allowed at, from the live turbo tables (``0x1AD`` / ``0x650``) and the favored word (``0x1C``);
-    with ``plan`` the plan's OC ratio raises both (a ratio above the table raises the table, ``_turbo_tables``). Stock tables when none were read."""
-    ratios = ((turbo or {}).get(m.kind) or {}).get("ratios") or _PLATFORM_TURBO[m.kind]
+    with ``plan`` the plan's OC ratio raises both (a ratio above the table raises the table, ``_turbo_tables``). ``None`` when the tables were not read this boot
+    (nothing is assumed)."""
+    ratios = ((turbo or {}).get(m.kind) or {}).get("ratios")
+    if not ratios:
+        return None
     light, full = ratios[0], ratios[-1]
     if m.kind == "P":
         fav = ((turbo or {}).get("favored") or {}).get(m.cpus[0])
-        light = min(light, fav if fav else (57 if m.unit in ("P0", "P3") else _P_FAVORED_STOCK))
+        if fav:
+            light = min(light, fav)
     if plan and m.oc_ratio is not None:
         light, full = max(light, m.oc_ratio), max(full, m.oc_ratio)
     return light, full
@@ -1324,7 +1445,7 @@ def _predict(
     with st.lock:
         fused, turbo = st.fused, st.turbo
     record, why = _baseline_record(helper)
-    models = _unit_models(profile, topology, last, record, fused)
+    models = _unit_models(profile, topology, last, record, fused, helper.fused_words)
     if record is None:
         warnings.append(Warn("NO_BASELINE", "measure a stock baseline for predictions" + (f" (the baseline curve could not be loaded: {why})" if why else " (no curve is flagged baseline)")))
     elif last is None:
@@ -1374,7 +1495,7 @@ def _predict(
                     warnings.append(Warn(
                         "CLAMPED",
                         f"{unit} point {p.index} ({p.ratio}x): offset {p.offset_mv:+.1f} mV is clamped up to the voltage of point {p.clamped_by} "
-                        f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V [MEASURED lnx 2026-10-02, F4]",
+                        f"(the hardware keeps V(n) >= V(n-1)): effective {landed:+.1f} mV = {p.effective_v:.3f} V",
                     ))
         oc_ratio = m.oc_ratio or m.cur_oc_ratio
         if new is not None and m.oc_v is not None and oc_ratio and oc_ratio > max(m.ratios):  # G-120 fix 2: an OC-point target below the top fused point is held up to it
@@ -1384,24 +1505,23 @@ def _predict(
                 warnings.append(Warn(
                     "CLAMPED",
                     f"{unit} OC point ({oc_ratio}x): the adaptive target {m.oc_v:.4f} V is below the voltage of the top fused point ({top.ratio}x, point {top.index}) "
-                    f"{held[0]:.4f} V and is held up to it (the hardware keeps V(n) >= V(n-1)): effective {held[0]:.4f} V [MEASURED lnx 2026-10-11, F4]",
+                    f"{held[0]:.4f} V and is held up to it (the hardware keeps V(n) >= V(n-1)): effective {held[0]:.4f} V",
                 ))
         if m.kind == "E":
             at40 = m.new_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0)
             if at40 != 0.0 and at40 != m.cur_offsets.get(vfmodel.E_NO_OFFSET_RATIO, 0.0):
-                warnings.append(Warn("E40_OFFSET", f"{unit}: an offset of {at40:+.1f} mV on the 40x point (point 5): never offset E point 5, -20 mV there caused OCCT errors [MEASURED lnx 2026-10-02, F8]"))
+                warnings.append(Warn("E40_OFFSET", f"{unit}: an offset of {at40:+.1f} mV on the 40x point. Community report: a negative offset on an E-core 40x point has caused OCCT errors"))
             if m.oc_v is not None and m.oc_v > vfmodel.E_WHEA_V:
-                warnings.append(Warn("E_TARGET_WHEA", f"{unit}: E-core voltage target {m.oc_v:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY skatterbencher.com/2025/02/14, F8]"))
+                warnings.append(Warn("E_TARGET_WHEA", f"{unit}: E-core voltage target {m.oc_v:.3f} V is above ~1.2 V. Community report: WHEA errors have been seen above it"))
             elif new is not None:
                 hi = max((p.effective_v for p in new if p.effective_v is not None), default=None)
                 if hi is not None and hi > vfmodel.E_WHEA_V:
-                    warnings.append(Warn("E_TARGET_WHEA", f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V: WHEA reports are known above it [COMMUNITY, F8]"))
+                    warnings.append(Warn("E_TARGET_WHEA", f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V. Community report: WHEA errors have been seen above it"))
     # ---- F6: VccIA ----
     vccia = _predict_vccia(models, curves_new, curves_cur, turbo)
     if vccia is not None:
         warnings.append(
-            "VccIA is a prediction (highest allowed VID of any unit or the ring + ~0.105 V; a hypothesis on 3+ points [MEASURED lnx 2026-10-03]): "
-            "lowering a unit that does not set the maximum does not lower Vcore"
+            "VccIA is a prediction: the highest requested VID among the units. Lowering a unit that does not set the maximum does not lower Vcore"
         )
     return {"predicted": predicted if record is not None else None, "vccia": vccia}
 
@@ -1410,9 +1530,10 @@ def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[
     rows: list[tuple[str, int, float | None]] = []
     for unit, m in models.items():
         curve = curves.get(unit)
-        if curve is None:
+        allowed = _allowed_ratios(m, turbo, plan)
+        if curve is None or allowed is None:
             continue
-        ratio = _allowed_ratios(m, turbo, plan)[which]
+        ratio = allowed[which]
         oc = (m.oc_ratio, m.oc_v) if plan and m.oc_ratio is not None and m.oc_v is not None else None
         rows.append((unit, ratio, voltage_at(curve, ratio, oc)))
     out = predict_vccia(rows)
@@ -1421,21 +1542,21 @@ def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[
     best = {k: max((r for r in rows if r[0].startswith(k) and r[2] is not None), key=lambda r: r[2], default=None) for k in ("P", "E")}  # type: ignore[arg-type,return-value]
     out["contributors"] = {  # the unit of each group with the highest allowed VID, and the ring floor
         **{k: (None if r is None else {"unit": r[0], "ratio": r[1], "v": round(r[2], 4)}) for k, r in best.items()},
-        "ring": {"unit": "ring", "ratio": 40, "v": vfmodel.RING_V},
+        "ring": None,  # the ring ratio is not read by tune.read: no number is shown for it
     }
     return out
 
 
 def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[CurvePoint]], cur: Mapping[str, list[CurvePoint]], turbo: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """F6 for the all-core bucket (the one that matters for sustained load: 55x points set VccIA for every multi-core load, 57x only for 1-2 active cores), plus the
-    1-2 core case as ``light_load`` and the current state as ``before_v``."""
+    """F6 for the all-core bucket (the one that matters for sustained load: the top points of the favored cores only count for 1-2 active cores), plus the
+    1-2 core case as ``light_load`` and the current state as ``before_v``. The value is the highest requested VID among the units (no ring, no margin)."""
     full = _vccia_scenario(models, new, turbo, 1, True)
     if full is None:
         return None
     light = _vccia_scenario(models, new, turbo, 0, True)
     was = _vccia_scenario(models, cur, turbo, 1, False)
     return {
-        "predicted_v": full["predicted_v"], "set_by": full["set_by"], "label": "prediction", "active_cores": "all", "margin_v": full["margin_v"],
+        "predicted_v": full["predicted_v"], "set_by": full["set_by"], "label": "highest requested VID among units", "active_cores": "all", "margin_v": None,
         "contributors": full["contributors"], "before_v": None if was is None else was["predicted_v"],
         "light_load": None if light is None else {"predicted_v": light["predicted_v"], "set_by": light["set_by"], "active_cores": "1-2"},
     }
@@ -1504,20 +1625,19 @@ def _check_turbo_order(profile: Profile) -> None:
         if bad is not None:
             raise OpError(
                 REFUSED,
-                f"the {label} turbo table is not non-increasing: bucket {bad + 1} ({table[bad]}x) is above bucket {bad} ({table[bad - 1]}x); more active cores must never raise the ratio "
-                f"[MEASURED lnx 2026-10-01, F5]. Nothing was sent.",
+                f"the {label} turbo table is not non-increasing: bucket {bad + 1} ({table[bad]}x) is above bucket {bad} ({table[bad - 1]}x); more active cores must never raise the ratio. "
+                f"Nothing was sent.",
                 {"check": "TURBO_ORDER", "table": key.upper(), "bucket": bad, "ratios": list(table)},
             )
 
 
 # G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
 _RAISE_NOTE = (
-    "this plan RAISES a ratio, V target or offset: OC ratio 48 and an adaptive target above the fused curve were accepted and read back on this machine "
-    "[MEASURED lnx 2026-10-11]; the numbers come from the reviewed policy (D-016); take a stability check between steps"
+    "this plan RAISES a ratio, V target or offset; the numbers come from the reviewed policy (D-016); take a stability check between steps"
 )
 _POINT_NOTE = (
-    "per-point offsets change one V/F point (0x11 with P2 = the point) and read back as written [MEASURED lnx 2026-10-11]; the hardware keeps V(n) >= V(n-1) "
-    "[MEASURED lnx 2026-10-11, F4]: arltuner models it (CLAMPED warnings) but cannot read the lower fused voltages"
+    "per-point offsets change one V/F point (0x11 with P2 = the point); the hardware keeps V(n) >= V(n-1): arltuner models it (CLAMPED warnings) but cannot read the "
+    "lower fused voltages"
 )
 
 
@@ -1548,7 +1668,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
     ops_needed = count_operations(targets, None, tables, len(points)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
     last = _last_words(helper)
-    before, after = _before_after(profile, topology, last)
+    before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
     steps, writes, reads = _predicted_steps(profile, topology)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
@@ -1931,7 +2051,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     topology = _topology(helper)
 
     def contents_of(profile: Profile) -> dict[str, Any]:
-        return profile_contents(profile, topology, lambda cpu: unit_of_cpu(topology, cpu), _POINT_RATIOS)
+        return profile_contents(profile, topology, lambda cpu: unit_of_cpu(topology, cpu), _unit_point_ratios(helper, topology))
 
     try:
         chain = _accepted_chain(helper)
@@ -1947,7 +2067,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
         record = _profile_store(helper).load(name)
     except ProfileStoreError as exc:
         raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
-    own = intent_contents(canonical_intent(record["intent"], rows_only=True))
+    own = intent_contents(canonical_intent(record["intent"], rows_only=True), topology.unit_ids())
     created = record.get("created")
     return {"name": name, "source": "saved", "created": created if isinstance(created, str) else None, "contents": own, "summary": summarize(own)}
 

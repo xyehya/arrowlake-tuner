@@ -1,24 +1,20 @@
-"""Platform file loader/validator tests (G-101). Reads only the repo's platforms/ file and tmp files."""
+"""Platform file loader/validator tests (G-101, G-128). Reads only the repo's platforms/ file and tmp files."""
 from __future__ import annotations
 
+import ast
 import copy
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
 
-from arltuner.msr import FUSED_POINT, SimConfig, measured_baseline
-from arltuner.msr.sim import PLAIN_MSR_DEFAULTS, POINT_RATIOS_ARL_S, RING_POINT_RATIOS_ARL_S
+from arltuner.msr import SimConfig
+from arltuner.msr.sim import PLAIN_MSR_DEFAULTS, POINT_COUNTS_ARL_S, POINT_RATIOS_ARL_S, RING_POINT_RATIOS_ARL_S
 from arltuner.platform import PlatformError, default_platform, load_platform, parse_platform
 from arltuner.platform.schema import default_platform_path
 from arltuner.topology import arl_s_285k
 
-# The literals the code carried before G-101 (no-behaviour-change pin).
-_OLD_FUSED = {
-    0: 0x5B439, 1: 0x53839, 2: 0x57439, 3: 0x59439, 4: 0x54439, 5: 0x56C39, 6: 0x56039, 7: 0x58039,
-    **{c: 0x4A02E for c in range(8, 12)},
-    **{c: 0x48C2E for c in range(12, 24)},
-}
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _doc() -> dict:
@@ -27,19 +23,19 @@ def _doc() -> dict:
 
 
 class DefaultPlatformTests(unittest.TestCase):
-    def test_file_loads(self):
+    def test_file_loads_as_a_family_file(self):
         p = default_platform()
-        self.assertEqual(p.id, "arl-s-285k")
-        self.assertEqual(p.cpuid.signature, 0xC0662)
-        self.assertEqual(p.topology.cpu_count, 24)
-        self.assertEqual(p.sensors.temp_hwmon_name, "coretemp")
+        self.assertEqual((p.id, p.name), ("arl-s", "Intel Core Ultra (Arrow Lake-S)"))
+        self.assertEqual((p.cpuid.vendor, p.cpuid.family, p.cpuid.model, p.cpuid.steppings), ("GenuineIntel", 6, 198, (2,)))
+        self.assertEqual(default_platform_path().name, "arl-s.toml")
 
-    def test_values_unchanged_from_old_constants(self):
-        self.assertEqual(dict(FUSED_POINT), _OLD_FUSED)
-        self.assertEqual(measured_baseline.CPU_COUNT, 24)
-        self.assertEqual(measured_baseline.P_CPUS, tuple(range(8)))
-        self.assertEqual(measured_baseline.E_CPUS, tuple(range(8, 24)))
-        self.assertEqual([measured_baseline.LP_OF_CPU[c] for c in range(24)], [0, 1, 10, 11, 12, 13, 22, 23, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21])
+    def test_the_file_holds_no_sku_specific_tables(self):
+        # D-036: no topology, favored cores, fused words, V/F point ratios or turbo defaults in the platform file
+        self.assertEqual(set(_doc()), {"schema", "platform", "cpuid", "sensors", "boards"})
+        self.assertFalse(hasattr(default_platform(), "topology"))
+        self.assertFalse(hasattr(default_platform(), "fused_point"))
+
+    def test_the_simulated_reference_cpu_keeps_its_fixture_tables(self):
         self.assertEqual([POINT_RATIOS_ARL_S[("P", n)] for n in range(1, 9)], [8, 20, 30, 48, 53, 55, 56, 57])
         self.assertEqual([POINT_RATIOS_ARL_S[("E", n)] for n in range(1, 7)], [8, 15, 23, 30, 40, 46])
         self.assertEqual(list(RING_POINT_RATIOS_ARL_S.values()), [8, 14, 20, 28, 34, 37, 38, 39])
@@ -47,28 +43,19 @@ class DefaultPlatformTests(unittest.TestCase):
         self.assertEqual(PLAIN_MSR_DEFAULTS[0x1AE], 0x0807060504030201)
         self.assertEqual(PLAIN_MSR_DEFAULTS[0x650], 0x3030303030303030)
         self.assertEqual(PLAIN_MSR_DEFAULTS[0x651], 0x100C080604030201)
+        self.assertEqual(POINT_COUNTS_ARL_S, {"E": 6, "P": 8})
         self.assertEqual(SimConfig.measured().topology, arl_s_285k())
 
-    def test_topology_from_file(self):
-        topo = arl_s_285k()
-        self.assertEqual([c.cpu for c in topo.cores if c.favored], [0, 3])
-        self.assertEqual(topo.cluster_cpus(3), (20, 21, 22, 23))
+    def test_board_table_keyed_by_dmi_board_name(self):
+        s = default_platform().sensors_for("Z890 Steel Legend WiFi")
+        self.assertEqual((s.temp_hwmon_name, s.vcore_hwmon_vendor, s.vcore_hwmon_name, s.vcore_hwmon_label), ("coretemp", "Nuvoton", "nct6686", "VIN16"))
 
-    def test_cpulist_must_match_counts(self):
-        d = _doc()
-        d["topology"]["cpu_atom_cpus"] = "8-22"
-        with self.assertRaisesRegex(PlatformError, "cpu_atom_cpus"):
-            parse_platform(d)
-
-    def test_point_counts_from_file(self):
-        from arltuner.msr.sim import POINT_COUNTS_ARL_S
-        self.assertEqual(POINT_COUNTS_ARL_S, {"E": 6, "P": 8})
-
-    def test_signature_consistent(self):
-        d = _doc()
-        d["cpuid"]["signature"] = 0xC0663
-        with self.assertRaisesRegex(PlatformError, "signature"):
-            parse_platform(d)
+    def test_unknown_board_has_temperatures_but_no_vcore_never_a_guess(self):
+        p = default_platform()
+        for board in ("Some Other Board", "", None, "z890 steel legend wifi"):
+            with self.subTest(board=board):
+                s = p.sensors_for(board)
+                self.assertEqual((s.temp_hwmon_name, s.vcore_hwmon_name, s.vcore_hwmon_label), ("coretemp", "", ""))
 
 
 class ValidationTests(unittest.TestCase):
@@ -79,10 +66,15 @@ class ValidationTests(unittest.TestCase):
             parse_platform(d)
 
     def test_schema_version(self):
-        self.bad(lambda d: d.update(schema=2), "schema")
+        self.bad(lambda d: d.update(schema=1), "schema")
+
+    def test_the_old_sku_tables_are_refused(self):
+        for key in ("topology", "vf_points", "fused_point", "turbo"):
+            with self.subTest(key=key):
+                self.bad(lambda d, key=key: d.update({key: {}}), "unknown key")
 
     def test_missing_table(self):
-        self.bad(lambda d: d.pop("turbo"), r"\[turbo\]")
+        self.bad(lambda d: d.pop("cpuid"), r"\[cpuid\]")
 
     def test_missing_key(self):
         self.bad(lambda d: d["cpuid"].pop("vendor"), "vendor")
@@ -90,56 +82,37 @@ class ValidationTests(unittest.TestCase):
     def test_unknown_key(self):
         self.bad(lambda d: d["cpuid"].update(extra=1), "unknown key")
 
-    def test_wrong_type(self):
-        self.bad(lambda d: d["topology"].update(p_count="8"), "p_count")
+    def test_steppings_must_be_a_list_of_distinct_ints_in_range(self):
+        self.bad(lambda d: d["cpuid"].update(steppings=2), "steppings")
+        self.bad(lambda d: d["cpuid"].update(steppings=[]), "steppings")
+        self.bad(lambda d: d["cpuid"].update(steppings=[2, 2]), "steppings")
+        self.bad(lambda d: d["cpuid"].update(steppings=[99]), "steppings")
+        d = _doc()
+        d["cpuid"]["steppings"] = [1, 2, 3]
+        self.assertEqual(parse_platform(d).cpuid.steppings, (1, 2, 3))
 
     def test_range(self):
-        self.bad(lambda d: d["cpuid"].update(stepping=99), "stepping")
+        self.bad(lambda d: d["cpuid"].update(model=999), "model")
 
-    def test_ratios_not_ascending(self):
-        self.bad(lambda d: d["vf_points"].update(p=[8, 30, 20, 48, 53, 55, 56, 57]), "ascending")
-
-    def test_fused_words_not_distinct(self):
-        def m(d):
-            d["fused_point"]["p"][1] = d["fused_point"]["p"][0]
-        self.bad(m, "distinct")
-
-    def test_fused_word_wrong_length(self):
-        self.bad(lambda d: d["fused_point"].update(p=[0x5B439]), "entries")
-
-    def test_fused_word_ratio_mismatch(self):
-        self.bad(lambda d: d["fused_point"].update(e_first_cluster=0x4A02F), "top point")
-
-    def test_lp_map_length(self):
-        self.bad(lambda d: d["topology"].update(lp_p=[0, 1]), "lengths")
-
-    def test_lp_map_duplicates(self):
-        def m(d):
-            d["topology"]["lp_e"][0] = 0
-        self.bad(m, "distinct")
-
-    def test_favored_out_of_range(self):
-        self.bad(lambda d: d["topology"].update(favored_p=[0, 9]), "favored_p")
-
-    def test_turbo_missing_msr(self):
-        self.bad(lambda d: d["turbo"].pop("msr_0x650"), "msr_0x650")
-
-    def test_empty_sensor_name_allowed_only_for_vcore_name_and_label(self):
+    def test_empty_temp_sensor_name_refused_but_empty_vcore_name_and_label_allowed(self):
         self.bad(lambda d: d["sensors"].update(temp_hwmon_name=""), "temp_hwmon_name")
         d = _doc()
-        d["sensors"]["vcore_hwmon_name"] = ""
-        d["sensors"]["vcore_hwmon_label"] = ""
-        s = parse_platform(d).sensors
+        d["boards"]["Z890 Steel Legend WiFi"]["vcore_hwmon_name"] = ""
+        d["boards"]["Z890 Steel Legend WiFi"]["vcore_hwmon_label"] = ""
+        s = parse_platform(d).sensors_for("Z890 Steel Legend WiFi")
         self.assertEqual((s.vcore_hwmon_name, s.vcore_hwmon_label), ("", ""))
 
-    def test_vcore_chip_and_label_are_parsed(self):
-        s = parse_platform(_doc()).sensors
-        self.assertEqual((s.vcore_hwmon_name, s.vcore_hwmon_label), ("nct6686", "VIN16"))  # [MEASURED lnx 2026-10-11]
+    def test_board_entries_are_validated(self):
+        self.bad(lambda d: d["boards"]["Z890 Steel Legend WiFi"].update(vcore_hwmon_label=16), "vcore_hwmon_label")
+        self.bad(lambda d: d["boards"]["Z890 Steel Legend WiFi"].pop("vcore_hwmon_label"), "vcore_hwmon_label")
+        self.bad(lambda d: d["boards"]["Z890 Steel Legend WiFi"].update(vcore_in="in0"), "vcore_in")
+        self.bad(lambda d: d.update(boards=[]), "boards")
+        self.bad(lambda d: d["boards"].update(Broken="x"), "must be a table")
 
-    def test_vcore_label_must_be_a_string_and_unknown_sensor_keys_refused(self):
-        self.bad(lambda d: d["sensors"].update(vcore_hwmon_label=16), "vcore_hwmon_label")
-        self.bad(lambda d: d["sensors"].pop("vcore_hwmon_label"), "vcore_hwmon_label")
-        self.bad(lambda d: d["sensors"].update(vcore_in="in0"), "vcore_in")
+    def test_a_platform_without_boards_is_valid(self):
+        d = _doc()
+        del d["boards"]
+        self.assertEqual(parse_platform(d).sensors_for("Z890 Steel Legend WiFi").vcore_hwmon_name, "")
 
 
 class LoadErrorTests(unittest.TestCase):
@@ -157,6 +130,51 @@ class LoadErrorTests(unittest.TestCase):
 
     def test_explicit_path_loads(self):
         self.assertEqual(load_platform(default_platform_path()), default_platform())
+
+
+class FixtureConfinementTests(unittest.TestCase):
+    """D-036: the simulated reference CPU's tables are a fixture. ``msr/measured_baseline.py`` may be imported by ``msr/sim.py`` and by tests only, and no 285K /
+    "this machine" lore is left outside the simulator and the fixtures."""
+
+    SRC = REPO / "src" / "arltuner"
+    FIXTURES = {"msr/sim.py", "msr/measured_baseline.py", "topology/reference.py"}
+
+    def imports_of(self, path: Path) -> set[str]:
+        out: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                out.add(node.module or "")
+                out.update(a.name for a in node.names)
+            elif isinstance(node, ast.Import):
+                out.update(a.name for a in node.names)
+        return out
+
+    def test_measured_baseline_is_imported_only_by_the_simulator(self):
+        users = []
+        for path in sorted(self.SRC.rglob("*.py")):
+            if path.name == "measured_baseline.py":
+                continue
+            if any(name == "measured_baseline" or name.endswith(".measured_baseline") for name in self.imports_of(path)):
+                users.append(path.relative_to(self.SRC).as_posix())
+        self.assertEqual(users, ["msr/sim.py"])
+
+    def test_no_reference_machine_lore_outside_the_fixtures(self):
+        bad = []
+        for path in sorted(self.SRC.rglob("*.py")):
+            rel = path.relative_to(self.SRC).as_posix()
+            if rel in self.FIXTURES:
+                continue
+            text = path.read_text()
+            for needle in ("285K", "this machine"):
+                if needle in text:
+                    bad.append(f"{rel}: {needle}")
+        self.assertEqual(bad, [])
+
+    def test_the_old_platform_tables_are_gone_from_the_runtime_code(self):
+        for path in sorted(self.SRC.rglob("*.py")):
+            text = path.read_text()
+            for old in ("platform.fused_point", ".turbo_defaults", ".p_point_ratios", ".e_point_ratios", "topology.favored_p", "QUICK_RATIOS", "_PLATFORM_TURBO", "_P_FAVORED_STOCK"):
+                self.assertNotIn(old, text, f"{path.name} still uses {old}")
 
 
 if __name__ == "__main__":

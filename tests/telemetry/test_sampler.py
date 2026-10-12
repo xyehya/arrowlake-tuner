@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from arltuner.telemetry import Sampler, TelemetryMsr
+from arltuner.topology import arl_s_285k
 
 from ._support import Clock, FakeMsrPort
 
@@ -12,7 +13,7 @@ from ._support import Clock, FakeMsrPort
 class SamplerTests(unittest.TestCase):
     def test_no_msr_no_sysfs_everything_unavailable(self):
         with tempfile.TemporaryDirectory() as td:
-            s = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p")
+            s = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", topology=arl_s_285k())
             snap = s.collect()
         json.dumps(snap)
         self.assertEqual(len(snap["cores"]), 24)
@@ -30,7 +31,7 @@ class SamplerTests(unittest.TestCase):
                                     0x1A2: 0x80691400, 0x19C: (1 << 31) | (20 << 16), 0x1B1: (1 << 31) | (25 << 16),
                                     0x606: 0xE0E03, 0x611: 0, 0x6B0: 0})
         with tempfile.TemporaryDirectory() as td:
-            s = Sampler(TelemetryMsr(port), hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", clock=clk)
+            s = Sampler(TelemetryMsr(port), hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", clock=clk, topology=arl_s_285k())
             s.collect()
             clk.t += 1
             port.default.update({0xE7: 3_700_000_000, 0xE8: 3_700_000_000, 0x611: 16384 * 50})
@@ -62,7 +63,7 @@ class SamplerTests(unittest.TestCase):
             for i, lab in enumerate(labels, start=1):
                 (hw / f"temp{i}_label").write_text(lab + "\n")
                 (hw / f"temp{i}_input").write_text(f"{40000 + i * 100}\n")
-            s = Sampler(None, hwmon_root=root / "h", powercap_root=root / "p", cpu_root=root / "cpu")
+            s = Sampler(None, hwmon_root=root / "h", powercap_root=root / "p", cpu_root=root / "cpu", topology=arl_s_285k())
             temps = s.collect()["temps"]
         self.assertEqual(len(temps), 26)
         self.assertEqual(temps["Core 4"]["name"], "P-Core 1")  # keys stay the raw labels; name/cpu are additive
@@ -86,12 +87,12 @@ class SamplerTests(unittest.TestCase):
             (hw / "name").write_text("coretemp\n")
             (hw / "temp1_label").write_text("Core 4\n")
             (hw / "temp1_input").write_text("41000\n")
-            t = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", cpu_root=Path(td) / "none").collect()["temps"]
+            t = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", cpu_root=Path(td) / "none", topology=arl_s_285k()).collect()["temps"]
         self.assertEqual((t["Core 4"]["name"], t["Core 4"]["cpu"]), ("Core 4", None))
 
     def test_thread_start_stop(self):
         with tempfile.TemporaryDirectory() as td:
-            s = Sampler(None, hwmon_root=Path(td), powercap_root=Path(td), interval_s=0.01)
+            s = Sampler(None, hwmon_root=Path(td), powercap_root=Path(td), interval_s=0.01, topology=arl_s_285k())
             s.start()
             for _ in range(200):
                 if s.snapshot().get("cores"):

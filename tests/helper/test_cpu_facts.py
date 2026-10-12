@@ -217,33 +217,34 @@ class PlanFactsTests(FactsCase):
         self.assertTrue(texts(p)[[w["code"] for w in p["warnings"]].index("NO_BASELINE")].startswith("measure a stock baseline for predictions"))
 
     def test_vccia_is_set_by_the_unit_with_the_highest_allowed_vid(self) -> None:
-        """F6: stock, all-core: P7 at 55x (1.376 V) + 0.105 V. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
+        """F6 (D-036): stock, all-core: the highest requested VID is P7 at 55x (1.376 V); no ring floor and no margin are assumed. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("P0", points={"55": -40})))
         v = p["vccia"]
         self.assertEqual(v["set_by"], {"unit": "P7", "ratio": 55})
-        self.assertAlmostEqual(v["predicted_v"], 1.481, places=3)
-        self.assertEqual(v["label"], "prediction")
-        self.assertAlmostEqual(v["before_v"], 1.481, places=3)  # P0 does not set VccIA: nothing changes
+        self.assertAlmostEqual(v["predicted_v"], 1.376, places=3)
+        self.assertEqual((v["label"], v["margin_v"]), ("highest requested VID among units", None))
+        self.assertAlmostEqual(v["before_v"], 1.376, places=3)  # P0 does not set VccIA: nothing changes
         self.assertEqual(v["light_load"]["set_by"], {"unit": "P0", "ratio": 57})  # 1-2 active cores: the favored 57x points count
         p2 = self.plan(h, rows(row("P7", points={"55": -100})))
         self.assertEqual(p2["vccia"]["set_by"], {"unit": "P2", "ratio": 55})
-        self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366 + 0.105, places=3)
-        self.assertAlmostEqual(p2["vccia"]["before_v"], 1.481, places=3)
+        self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366, places=3)
+        self.assertAlmostEqual(p2["vccia"]["before_v"], 1.376, places=3)
         self.assertTrue(any("VccIA is a prediction" in w for w in texts(p)))
         c = p2["vccia"]["contributors"]
         self.assertEqual(set(c), {"P", "E", "ring"})
-        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]["v"]), ("P2", 55, "EC0", 48, 1.201))
+        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]), ("P2", 55, "EC0", 48, None))  # the ring ratio is not read: no figure
 
     def test_e_40x_offset_and_e_target_above_1_2_v_are_warned_about(self) -> None:
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("EC1", points={"40": -20}), row("EC2", v=1.25)))
-        self.assertTrue(any("EC1" in w and "40x" in w and "never offset E point 5" in w for w in texts(p)), p["warnings"])
-        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC1" in w and "40x" in w and "Community report" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w and "Community report" in w for w in texts(p)), p["warnings"])
+        self.assertFalse(any("this machine" in w or "MEASURED" in w for w in texts(p)), p["warnings"])  # D-036: no reference-machine lore in user-facing text
         quiet = self.plan(h, rows(row("EC1", points={"46": -25})))
-        self.assertFalse(any("point 5" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
+        self.assertFalse(any("40x" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
 
     def test_positive_offsets_still_warn(self) -> None:
         h = self.boot_with()
@@ -288,8 +289,15 @@ class TurboOrderTests(FactsCase):
 
     def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
         h = self.boot_with(baseline=False)
+        self.read(h)  # "auto": the cap is the fused 0x1C value the read reported
         r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
+
+    def test_an_intent_turbo_table_before_any_read_is_left_to_the_guard(self) -> None:
+        """Unread 0x1C = no raise: the plan-time range check has no number, the apply refuses (fail closed) -- nothing is sent above an unread cap."""
+        h = self.boot_with(baseline=False)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
+        self.assertTrue(r["ok"], r)
 
     def test_a_turbo_only_p_plan_applies_and_reads_back_without_any_mailbox_word(self) -> None:
         """G-117: ``{turbo: {P}}`` alone is a real plan: plain-MSR writes of 0x1AD, counts (0x1AE) untouched, no 0x14 / 0x15, no mailbox request."""
@@ -310,12 +318,20 @@ class TurboOrderTests(FactsCase):
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
         self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)  # no per-core word was written
 
+    def test_a_turbo_raise_without_any_read_0x1c_is_refused_by_the_guard(self) -> None:
+        """Fail closed: no 0x1C read in the session (tune.read never ran) = no raise above the table's current bytes."""
+        h = self.boot_with(baseline=False)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        r = self.apply(h, p)
+        self.assertEqual(error_code(r), "REFUSED", r)
+        self.assertEqual(self.table(), [57, 57, 55, 55, 55, 55, 55, 55])
+
     def test_a_turbo_only_plan_still_predicts_vccia_from_the_new_table(self) -> None:
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
         v = p["vccia"]
-        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("prediction", "all", 0.105))
+        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("highest requested VID among units", "all", None))
         self.assertIsNotNone(v["before_v"])
         self.assertEqual(set(v["light_load"]), {"predicted_v", "set_by", "active_cores"})
 

@@ -48,7 +48,8 @@ _TYPED = re.compile(r"CONFIRM [A-Z2-9]{6}\Z")
 _REQ_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 _PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
 _CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
-_UNITS = tuple(f"P{n}" for n in range(8)) + tuple(f"EC{n}" for n in range(4))
+_UNIT = re.compile(r"(P|EC)[0-9]{1,3}\Z")  # a unit id of the live topology; the helper judges whether that unit exists (D-036)
+_MAX_UNITS = 256
 
 
 # ---- /api/call allowlist (Contract 8 addendum D-027 d): op -> (args validator, long-running). Schemas mirror the G-102 helper validators (helper/ops.py).
@@ -97,7 +98,7 @@ def _profiles_get(a: dict) -> bool:  # contract 9 (G-123)
 
 
 def _unit_list(v: Any) -> bool:
-    return isinstance(v, list) and 1 <= len(v) <= len(_UNITS) and len(set(v)) == len(v) and all(isinstance(u, str) and u in _UNITS for u in v)
+    return isinstance(v, list) and 1 <= len(v) <= _MAX_UNITS and len(set(v)) == len(v) and all(isinstance(u, str) and bool(_UNIT.match(u)) for u in v)
 
 
 def _curve_id(v: Any) -> bool:

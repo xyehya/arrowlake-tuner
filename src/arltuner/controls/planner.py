@@ -1,11 +1,11 @@
 """Pure planner: profile + topology + words read from the core -> ordered, pre-checked mailbox request sequence. No I/O.
 
-XTU's per-core Apply, as **measured** on this machine (``[MEASURED win 2026-10-01]``, ``docs/research/win-xtu-live-trace.md`` S-03d,
+XTU's per-core Apply, as **measured** on this system (``[MEASURED win 2026-10-01]``, ``docs/research/win-xtu-live-trace.md`` S-03d,
 S-04...S-07; registers.md "Measured via XTU's level-4 log"), is reproduced here:
 
 1. read cmd ``0x14`` (P1=0, P2=0) once, on the first target CPU;
 2. if bit 3 (PerCore Voltage Enable) is clear, write cmd ``0x15`` with ``old | 0x8`` (XTU skips it when the bit is set; ``0x14`` is
-   ``0x8`` on this machine);
+   ``0x8`` on this system);
 3. per target CPU read ``0x10`` (the baseline, ``0x0`` on 23 of 24 cores), ``0x1C`` (favored word), ``0x09 P1=0x11 P2=0`` (the fused V/F
    point) and ``0x26``; then write ``0x11`` (P1=0, P2=0; the full word), ``0x1D`` (data = that word's ratio) and ``0x27`` (data = the
    ``0x26`` word read).
@@ -63,7 +63,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from arltuner.guard import CHECKS, MSR_CHECKS, AllowEntry, MsrAllowEntry, MsrRequest, Policy, Refusal, Request
-from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, top_fused_ratio, turbo_bytes
+from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, fused_top_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import PLATFORM, Profile
 from arltuner.topology import Topology
@@ -118,14 +118,13 @@ _FUSED_P1 = 0x11  # cmd 0x09: P1 0x11 = domain floors / fused points, P2 = domai
 
 _CLUSTER_WARNING = (
     "E-core entries apply to all 4 CPUs of their cluster (XTU writes every E-core); whether one write is "
-    "cluster-wide is UNVERIFIED on this machine"
+    "cluster-wide is UNVERIFIED"
 )
 
 #: Warning on a plan that raises the ratio, the V target or the offset (D-016). ASCII only.
 RAISE_CAVEAT = (
     "this plan RAISES a ratio, V target or offset: the numbers come from the reviewed policy (D-016), but that the hardware accepts a raise at "
-    "all is UNVERIFIED (XTU has only written stock-equivalent values on this machine); take a stability check between steps; a reboot "
-    "restores the BIOS-programmed state"
+    "all is UNVERIFIED; take a stability check between steps; a reboot restores the BIOS-programmed state"
 )
 
 
@@ -305,7 +304,9 @@ def predict(policy: Policy, req: Request, baseline_word: int | None, ctx: CheckC
     return OK_VERDICT
 
 
-def predict_msr(policy: Policy, req: MsrRequest, baseline_word: int | None, platform_info: int | None = None) -> Verdict:
+def predict_msr(
+    policy: Policy, req: MsrRequest, baseline_word: int | None, platform_info: int | None = None, favored_words: Mapping[int, int | None] | None = None
+) -> Verdict:
     """What the guard will answer for the plain-MSR ``req`` (the plain twin of :func:`predict`): CPU set, ``msr_allow`` entry (and its CPUs), then
     for a write the verify CPU (other core kind, covered by a read entry) and ``turbo_ratio_bounded`` on the word read earlier (``baseline_word``)
     with ``platform_info`` = the ``0xCE`` word read this session. Limits / dwell / lock / gates are not predictable here."""
@@ -328,7 +329,7 @@ def predict_msr(policy: Policy, req: MsrRequest, baseline_word: int | None, plat
     if check is None or baseline_word is None:
         return Verdict(False, Refusal.CHECK_FAILED.value, f"write entry {entry.name!r} has no evaluable check")
     try:
-        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr, platform_info=platform_info))
+        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr, platform_info=platform_info, favored_words=favored_words))
     except Exception as exc:
         ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
     if ok is not True:
@@ -438,7 +439,7 @@ def read_steps(
 POINT_CAVEAT = (
     "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across "
     "the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether "
-    "the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT wrote such words on this machine); a reboot restores the BIOS-programmed state"
+    "the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state"
 )
 
 
@@ -456,59 +457,59 @@ def plan_warnings(
     if policy is not None and (point_targets or any(t.offset_mv is not None for t in targets)):
         bios = policy.assumed_bios_offset_mv
         warnings.append(
-            f"effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV: operator-stated, not readable through the "
-            f"mailbox) + runtime offset (the runtime offset adds to the BIOS one, [MEASURED win 2026-10-01]); the policy floors the "
+            f"effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV; not readable through the "
+            f"mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the "
             f"effective offset at {policy.effective_offset_floor_mv} mV (D-015)"
         )
     return tuple(warnings)
 
 
-def fill_ratio(base_ratio: int, favored_word: int, kind: str | None = None) -> int:
-    """The ratio of a core's current OC word: the baseline's non-zero ratio, else ``0x1C[7:0]``; with a ``kind`` (G-122) that fill is capped at the top fused
-    ratio of the kind (P 57, E 46), so a zero baseline never creates an OC point -- E's ``0x1C[7:0]`` is 48 (E turbo), above its top fused point 46, and an OC
-    ratio above it adds a point (``P2 = 7``, ``[MEASURED lnx 2026-10-11]``). A non-zero baseline ratio is an existing word and is left alone."""
+def fill_ratio(base_ratio: int, favored_word: int, top: int | None = None) -> int:
+    """The ratio of a core's current OC word: the baseline's non-zero ratio, else ``0x1C[7:0]``; with ``top`` (G-122: the core's top fused ratio, live from its
+    ``0x09`` word) that fill is capped at it, so a zero baseline never creates an OC point -- an E core's ``0x1C[7:0]`` can sit above its top fused point, and an OC
+    ratio above it adds a point (``[MEASURED lnx 2026-10-11]``). A non-zero baseline ratio is an existing word and is left alone."""
     if base_ratio:
         return base_ratio
     favored = favored_word & 0xFF
-    return favored if kind is None or not favored else min(favored, top_fused_ratio(kind))
+    return favored if top is None or not favored else min(favored, top)
 
 
-def xtu_word(base: VfWord, favored_word: int, fused_word: int, kind: str | None = None) -> VfWord:
+def xtu_word(base: VfWord, favored_word: int, fused_word: int, cap: bool = False) -> VfWord:
     """The word XTU writes for a core before any change ``[MEASURED win 2026-10-01]``: the baseline word with ratio = its non-zero ratio,
     else ``0x1C[7:0]``, and V target = its non-zero V target, else the fused ``0x09`` voltage ``[19:8]``; mode and offset are the baseline's.
     (A baseline of ``0x0`` therefore becomes ``ratio | fused V << 8``, e.g. CPU 1: ``0x00053837``.) This is also the *current state* the
     step limits are measured from. D-016: a V target the core already carries is kept -- it is no longer reset to the fused voltage, which
     would silently undo an earlier step of a ramp (``[MEASURED]`` XTU only ever met baselines without a V target).
-    G-122: with a ``kind`` the filled ratio is capped at the top fused ratio of the kind (``fill_ratio``): a whole-curve offset on E must not write
-    ratio 48 and create an OC point."""
-    ratio = fill_ratio(base.ratio, favored_word, kind)
+    G-122: with ``cap`` the filled ratio is capped at the core's top fused ratio (``[7:0]`` of ``fused_word``, ``fill_ratio``): a whole-curve offset on an E core
+    must not write its turbo ratio and create an OC point."""
+    ratio = fill_ratio(base.ratio, favored_word, fused_top_ratio(fused_word) if cap else None)
     v_target = base.v_target_raw or ((fused_word >> 8) & 0xFFF)
     return base.with_(ratio=ratio, v_target_raw=v_target)
 
 
-def current_word(readings: CoreReadings, kind: str, sets_oc: bool = False) -> VfWord:
-    """The current OC word of a core (``xtu_word``) for the planner. G-122: ``fill_ratio`` caps a zero baseline's ratio at the top fused ratio of the kind (E 46, not
-    ``0x1C[7:0]`` = 48), so an offset-only write never creates an OC point ([MEASURED lnx 2026-10-11]: ``P2 = 7`` appears); the guard's ratio-step rule (``vf_bounded``)
-    measures that cold word from the same cap. A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point and keeps the XTU fill."""
-    return xtu_word(readings.vf, readings.favored, readings.fused, None if sets_oc else kind)
+def current_word(readings: CoreReadings, sets_oc: bool = False) -> VfWord:
+    """The current OC word of a core (``xtu_word``) for the planner. G-122: ``fill_ratio`` caps a zero baseline's ratio at the core's top fused ratio (an E core's
+    ``0x1C[7:0]`` can be above it), so an offset-only write never creates an OC point ([MEASURED lnx 2026-10-11]: an extra point appears); the guard's ratio-step rule
+    (``vf_bounded``) measures that cold word from the same cap. A profile that sets an OC ratio or an OC voltage (``sets_oc``) wants the OC point and keeps the XTU fill."""
+    return xtu_word(readings.vf, readings.favored, readings.fused, not sets_oc)
 
 
-def has_oc_point(kind: str, ratio: int) -> bool:
-    """G-120: an OC ratio (the ``P2 = 0`` word) above the top fused ratio of the core kind (P 57, E 46) creates the OC point; at or below it there is none
-    ``[MEASURED lnx 2026-10-11]`` (docs/knowledge/tuning-results.md "First write sittings")."""
-    return ratio > top_fused_ratio(kind)
+def has_oc_point(top: int | None, ratio: int) -> bool:
+    """G-120: an OC ratio (the ``P2 = 0`` word) above the core's top fused ratio ``top`` (live, ``[7:0]`` of its ``0x09`` word) creates the OC point; at or below it there is
+    none ``[MEASURED lnx 2026-10-11]`` (docs/knowledge/tuning-results.md "First write sittings"). ``top`` unknown (``0x09`` not read): assume there is one (nothing is dropped)."""
+    return top is None or ratio > top
 
 
-def kept_word(kind: str, word: VfWord) -> VfWord:
-    """The word the hardware keeps for ``word`` on a core of ``kind`` (G-124, ``[MEASURED lnx 2026-10-11/12]``): with no OC point (ratio <= the top fused ratio)
+def kept_word(top: int | None, word: VfWord) -> VfWord:
+    """The word the hardware keeps for ``word`` on a core whose top fused ratio is ``top`` (G-124, ``[MEASURED lnx 2026-10-11/12]``): with no OC point (ratio <= the top fused ratio)
     the V target is always 0, whatever the offset (0xFEC5B439 read back 0xFEC00039; offset 0: 0x0005B439 was kept once, but 0x00000039 when only the 0x11 was
     sent). The planner writes the kept word, so the guard's whole-word read-back compares equal. Only an OC point (ratio above the top fused ratio) carries a target."""
-    if word.v_target_raw and not has_oc_point(kind, word.ratio):
+    if word.v_target_raw and not has_oc_point(top, word.ratio):
         return word.with_(v_target_raw=0)
     return word
 
 
-def _goal_word(target: Target, current: VfWord) -> VfWord:
+def _goal_word(target: Target, current: VfWord, top: int | None) -> VfWord:
     """``current`` with the profile's fields applied (``static`` is never in the changes); the V target is 0 when the ratio leaves no OC point (``kept_word``)."""
     try:
         changes: dict[str, int] = {}
@@ -518,12 +519,12 @@ def _goal_word(target: Target, current: VfWord) -> VfWord:
             changes["v_target_raw"] = VfWord.v_to_raw(target.oc_voltage_mv / 1000)
         if target.offset_mv is not None:
             changes["offset_raw"] = VfWord.mv_to_offset_raw(target.offset_mv)
-        return kept_word(target.kind, current.with_(**changes))
+        return kept_word(top, current.with_(**changes))
     except ValueError as exc:
         raise PlanError(f"{target.label}: requested value does not fit the V/F word: {exc}") from exc
 
 
-def _vf_words(current: VfWord, goal: VfWord, kind: str = "P", label: str = "") -> tuple[tuple[VfWord, str], ...]:
+def _vf_words(current: VfWord, goal: VfWord, top: int | None = None, label: str = "") -> tuple[tuple[VfWord, str], ...]:
     """The 0x11 words to send, in order, with their stage label. Ratio and V target moving the same way take two words (registers.md
     "Ordering"): rising -> V target first (the old ratio stays), falling -> ratio first (the old V target stays); the offset moves in the
     second word. Otherwise one word. A goal without an OC point (V target 0, ``kept_word``) is always one word: there is no target to order.
@@ -534,7 +535,7 @@ def _vf_words(current: VfWord, goal: VfWord, kind: str = "P", label: str = "") -
     d_ratio = goal.ratio - current.ratio
     d_v = goal.v_target_raw - current.v_target_raw
     if d_ratio > 0 and d_v > 0:
-        if not has_oc_point(kind, current.ratio):
+        if not has_oc_point(top, current.ratio):
             raise PlanError(
                 f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
                 f"V target (G-124: a word without an OC point always keeps target 0), so the voltage-first word cannot be verified; raise the ratio alone first "
@@ -659,11 +660,15 @@ def build_plan(
     misc_word: int | None = None,
     msr_words: Mapping[int, int] | None = None,
     point_words: Mapping[tuple[int, int], int] | None = None,
+    favored_words: Mapping[int, int] | None = None,
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
 
     ``msr_words`` (T-023): the plain MSR words read on the write CPU (``0xCE``, ``0x650``, ``0x1AD``); every ``[turbo]`` table of the profile needs
     its MSR here (else ``PlanError``). The turbo writes are ordered by direction (module docstring).
+
+    ``favored_words`` (cpu -> raw ``0x1C`` word): the CPU's own fused ratios known to the session beyond the ``baseline`` rows (a turbo-table-only plan has none);
+    an ``"auto"`` ``ratio_max`` is derived from them and from the baseline rows' words, nothing else.
 
     ``point_words`` (T-025): the ``0x10 P2=point`` word read for every ``[[point]]`` target, keyed ``(cpu, point)`` (else ``PlanError``).
 
@@ -739,7 +744,7 @@ def build_plan(
         down = any(n < o for n, o in zip(turbo_bytes(new), turbo_bytes(old)))
         purpose = f"apply: write {_TURBO_LABEL[msr]} (plain wrmsr, cpu {write_cpu}): {_bytes_text(old)} -> {_bytes_text(new)}"
         mreq = MsrRequest(write_cpu, msr, new, purpose, "write", verify_cpu)
-        verdict = predict_msr(policy, mreq, old, msr_words.get(PLATFORM_INFO_MSR))
+        verdict = predict_msr(policy, mreq, old, msr_words.get(PLATFORM_INFO_MSR), {**(favored_words or {}), **{c: r.favored for c, r in baseline.items()}})
         if up and down and verdict.allowed:
             verdict = Verdict(
                 False,
@@ -800,17 +805,18 @@ def build_plan(
         )
     for t in targets:
         readings = baseline[t.cpu]
-        current = current_word(readings, t.kind, t.ratio is not None or t.oc_voltage_mv is not None)
+        top = fused_top_ratio(readings.fused)
+        current = current_word(readings, t.ratio is not None or t.oc_voltage_mv is not None)
         currents[t.cpu] = current
-        goal = _goal_word(t, current)
+        goal = _goal_word(t, current, top)
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
             oc_notes.append(
-                f"{t.label}: OC-point voltage {t.oc_voltage_mv} mV is not written: ratio {goal.ratio} is at or below the top fused ratio {top_fused_ratio(t.kind)}, so there is "
-                f"no OC point and the hardware keeps no V target (the word is ratio | offset << 21) [MEASURED lnx 2026-10-11]"
+                f"{t.label}: OC-point voltage {t.oc_voltage_mv} mV is not written: ratio {goal.ratio} is at or below the top fused ratio {top}, so there is "
+                f"no OC point and the hardware keeps no V target (the word is ratio | offset << 21)"
             )
         raises = raises or goal.ratio > current.ratio or goal.v_target_raw > current.v_target_raw or goal.offset_raw > current.offset_raw
         facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax)
-        words = _vf_words(current, goal, t.kind, t.label)
+        words = _vf_words(current, goal, top, t.label)
         sent: int | None = None
         for word, stage in words:
             ctx = build_context(policy, t.cpu, vf_word_sent=sent, **facts)

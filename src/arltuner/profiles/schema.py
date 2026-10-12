@@ -50,11 +50,11 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from arltuner.topology import KIND_E, KINDS, Topology, UnknownCore, arl_s_285k
+from arltuner.topology import KIND_E, KINDS, Topology, UnknownCore
 
 __all__ = [
     "PLATFORM",
-    "POINT_COUNT",
+    "POINT_RANGE",
     "TURBO_BUCKETS",
     "TurboTables",
     "CoreSetting",
@@ -66,7 +66,9 @@ __all__ = [
     "load_profile",
 ]
 
-PLATFORM = "arl-s-285k"
+PLATFORM = "arl-s"
+#: Profiles written before the platform file became a family file (D-036) carry the old id; they are the same format (the installed accepted profiles do).
+LEGACY_PLATFORMS = ("arl-s-285k",)
 
 # Unit/type sanity ranges from docs/tasks/T-012-topology-profiles.md (NOT safety bounds).
 RATIO_RANGE = (1, 100)  # multiplier
@@ -77,9 +79,9 @@ _MAX_PROFILE_BYTES = 1 << 20
 TURBO_BUCKETS = 8  # buckets of MSR 0x1AD / 0x650, bucket 0 (LSB) = one active core
 TURBO_RATIO_RANGE = (1, 255)  # one byte per bucket
 
-#: T-025: fused V/F points per core kind (the OC point is not counted): E 6, P 8 ``[COMMUNITY https://skatterbencher.com/2024/10/24/arrow-lake-e-core-overclocking/]``;
-#: ``[MEASURED lnx 2026-10-02]`` E CPU 8: ``0x10 P2=6`` reads, ``P2=7`` -> rc 0x11. Unit/type sanity here, like every range in this file.
-POINT_COUNT = {"E": 6, "P": 8}
+#: T-025: a ``[[point]]`` names a V/F point by its ``P2`` (1..15, registers.md "Mailbox commands"); how many points a core has is read live (``tune.read``) and judged
+#: where the profile meets a CPU (``expect_ratio`` guards the write). Unit/type sanity here, like every range in this file.
+POINT_RANGE = (1, 15)
 EXPECT_RATIO_RANGE = RATIO_RANGE
 
 _TOP_KEYS = ("meta", "core", "point", "turbo")
@@ -89,9 +91,8 @@ _CORE_KEYS = ("kind", "index", "ratio", "oc_voltage_mv", "offset_mv")
 _SETTING_KEYS = ("ratio", "oc_voltage_mv", "offset_mv")
 _POINT_KEYS = ("kind", "index", "point", "offset_mv", "expect_ratio")
 
-# Core index limits and E-cluster membership come from the one static map (single source of truth).
-_STATIC = arl_s_285k()
-_MAX_INDEX = {kind: max(c.index for c in _STATIC.cores if c.kind == kind) for kind in KINDS}
+# Core index limits and E-cluster membership depend on the part: a profile is only unit-sane here (index 0..255); the topology it is expanded against decides the rest.
+_MAX_INDEX = {kind: 255 for kind in KINDS}
 
 
 class ProfileError(ValueError):
@@ -129,10 +130,7 @@ class PointSetting:
         if self.kind not in KINDS:
             raise ProfileError(f"{where}.kind: unknown kind {self.kind!r} (expected 'P' or 'E')")
         _check_int(where, "index", self.index, 0, _MAX_INDEX[self.kind], f" for kind {self.kind!r}")
-        _check_int(
-            where, "point", self.point, 1, POINT_COUNT[self.kind],
-            f" (fused points of a {self.kind} core; the OC point is [[core]] oc_voltage_mv)",
-        )
+        _check_int(where, "point", self.point, *POINT_RANGE, " (the OC point is [[core]] oc_voltage_mv)")
         _check_int(where, "offset_mv", self.offset_mv, *OFFSET_MV_RANGE)
         if self.expect_ratio is not None:
             _check_int(where, "expect_ratio", self.expect_ratio, *EXPECT_RATIO_RANGE)
@@ -214,8 +212,14 @@ class Profile:
         if self.turbo is not None and not isinstance(self.turbo, TurboTables):
             raise ProfileError(f"turbo: expected a TurboTables, got {type(self.turbo).__name__}")
 
+    def check_clusters(self, topology: Topology) -> None:
+        """The cluster rule (E entries of one cluster of ``topology`` are identical); ``ProfileError`` otherwise. Done where a profile meets a topology."""
+        _check_clusters(self.entries, "entries", topology)
+        _check_point_clusters(self.points, "points", topology)
+
     def expand_points(self, topology: Topology) -> tuple[PointCpuSetting, ...]:
         """Resolve each ``[[point]]`` against ``topology`` (profile order); an E entry applies to its whole cluster like a ``[[core]]`` one."""
+        _check_point_clusters(self.points, "points", topology)
         out: list[PointCpuSetting] = []
         for i, e in enumerate(self.points):
             try:
@@ -233,6 +237,7 @@ class Profile:
         P entries apply to their one CPU; every E entry applies to its whole cluster (``cluster_wide=True``,
         four CPUs), because the regulator is per cluster ``[UNVERIFIED whether a write is cluster-wide]``.
         """
+        _check_clusters(self.entries, "entries", topology)
         out: list[CpuSetting] = []
         for i, e in enumerate(self.entries):
             try:
@@ -310,11 +315,18 @@ def _check_entries(entries: tuple[CoreSetting, ...], label: str, points: tuple[P
                 f"{label}[{i}]: duplicate {e.kind}-Core {e.index} (already defined at {label}[{seen[key]}])"
             )
         seen[key] = i
+
+
+def _check_clusters(entries: tuple[CoreSetting, ...], label: str, topology: Topology) -> None:
+    """E entries agree within a cluster of ``topology``."""
     first_in_cluster: dict[int, tuple[int, CoreSetting]] = {}
     for i, e in enumerate(entries):
         if e.kind != KIND_E:
             continue
-        cluster = _STATIC.resolve(KIND_E, e.index).cluster
+        try:
+            cluster = topology.resolve(KIND_E, e.index).cluster
+        except UnknownCore as exc:
+            raise ProfileError(f"{label}[{i}]: E-Core {e.index} is not in this topology ({exc})") from None
         assert cluster is not None
         j, first = first_in_cluster.setdefault(cluster, (i, e))
         if _values(first) != _values(e):
@@ -335,11 +347,18 @@ def _check_points(points: tuple[PointSetting, ...], label: str) -> None:
         if key in seen:
             raise ProfileError(f"{label}[{i}]: duplicate {e.kind}-Core {e.index} point {e.point} (already defined at {label}[{seen[key]}])")
         seen[key] = i
+
+
+def _check_point_clusters(points: tuple[PointSetting, ...], label: str, topology: Topology) -> None:
+    """E point entries of one (cluster, point) agree in ``offset_mv`` / ``expect_ratio``."""
     first: dict[tuple[int, int], tuple[int, PointSetting]] = {}
     for i, e in enumerate(points):
         if e.kind != KIND_E:
             continue
-        cluster = _STATIC.resolve(KIND_E, e.index).cluster
+        try:
+            cluster = topology.resolve(KIND_E, e.index).cluster
+        except UnknownCore as exc:
+            raise ProfileError(f"{label}[{i}]: E-Core {e.index} is not in this topology ({exc})") from None
         assert cluster is not None
         j, ref = first.setdefault((cluster, e.point), (i, e))
         if (ref.offset_mv, ref.expect_ratio) != (e.offset_mv, e.expect_ratio):
@@ -396,7 +415,7 @@ def _parse_turbo(table: object) -> TurboTables | None:
     return TurboTables(e=table.get("e"), p=table.get("p"))  # type: ignore[arg-type]
 
 
-def _parse(text: str) -> Profile:
+def _parse(text: str, topology: Topology | None = None) -> Profile:
     if len(text.encode("utf-8", errors="replace")) > _MAX_PROFILE_BYTES:
         raise ProfileError(f"profile is larger than {_MAX_PROFILE_BYTES} bytes")
     try:
@@ -417,7 +436,7 @@ def _parse(text: str) -> Profile:
     name = meta["name"]
     if not isinstance(name, str) or not name.strip():
         raise ProfileError(f"meta.name: must be a non-empty string, got {name!r}")
-    if meta["platform"] != PLATFORM:
+    if meta["platform"] != PLATFORM and meta["platform"] not in LEGACY_PLATFORMS:
         raise ProfileError(f"meta.platform: {meta['platform']!r} is not supported (only {PLATFORM!r})")
 
     cores = doc.get("core")
@@ -435,18 +454,22 @@ def _parse(text: str) -> Profile:
     turbo = _parse_turbo(doc.get("turbo"))
     _check_entries(entries, "core", points, turbo_only_ok=turbo is not None)
     _check_points(points, "point")
-    return Profile(name=name, entries=entries, turbo=turbo, points=points)
+    profile = Profile(name=name, entries=entries, turbo=turbo, points=points)
+    if topology is not None:
+        profile.check_clusters(topology)
+    return profile
 
 
-def load_profile(text_or_path: str | os.PathLike[str]) -> Profile:
+def load_profile(text_or_path: str | os.PathLike[str], topology: Topology | None = None) -> Profile:
     """Load and validate a profile.
 
     A ``str`` containing a newline is TOML text (every valid profile spans several lines); a single-line
     ``str`` or any ``os.PathLike`` (e.g. ``pathlib.Path``) is a file path, read as UTF-8.
+    With a ``topology`` the cluster rule is checked at load; without one it is checked when the profile is expanded against a topology.
     Raises ``ProfileError`` for anything invalid; ``TypeError`` for any other argument type.
     """
     if isinstance(text_or_path, str) and "\n" in text_or_path:
-        return _parse(text_or_path)
+        return _parse(text_or_path, topology)
     if isinstance(text_or_path, (str, os.PathLike)):
         path = Path(text_or_path)
         try:
@@ -458,5 +481,5 @@ def load_profile(text_or_path: str | os.PathLike[str]) -> Profile:
                 f"cannot read profile file {str(path)!r}: {exc} "
                 "(a str without a newline is treated as a path; pass a pathlib.Path or TOML text)"
             ) from exc
-        return _parse(text)
+        return _parse(text, topology)
     raise TypeError(f"load_profile expects TOML text or a path, got {type(text_or_path).__name__}")

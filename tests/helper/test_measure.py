@@ -9,7 +9,7 @@ from arltuner import vfdump
 from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, SimModel
 from arltuner.helper.protocol import MAX_LINE, encode
 
-from ._measure_support import ORIGINAL_EPP, MeasureCase
+from ._measure_support import ORIGINAL_EPP, MeasureCase, reference_read
 from ._support import error_code
 
 
@@ -19,13 +19,14 @@ def points(record: dict, unit: str) -> dict[int, dict]:
 
 class QuickRunTests(MeasureCase):
     def test_a_quick_run_of_all_twelve_units(self) -> None:
-        h = self.start_measure()
+        h = self.start_measure(kept_read=True)
         reply = h.call("m", "vf.measure", {"mode": "quick"}, timeout=60)
         self.assertTrue(reply["ok"], reply)
         rec = reply["result"]["record"]
         self.assertEqual(reply["result"]["curve_id"], rec["id"])
         self.assertEqual((rec["mode"], rec["complete"], rec["kernel"], rec["baseline"]), ("quick", True, "6.99-test", False))
-        self.assertEqual(rec["tuning_state"], {"kind": "unknown"})
+        self.assertEqual((rec["plan"], reply["result"]["plan"]), ("kept read", "kept read"))  # the ratios are the unit's own points from this boot's read
+        self.assertEqual(rec["tuning_state"], {"kind": "stock"})  # a complete read of neutral words, nothing written this boot
         self.assertEqual(list(rec["units"]), [f"P{n}" for n in range(8)] + [f"EC{n}" for n in range(4)])
         self.assertEqual(rec["units"]["EC2"]["cpus"], [16, 17, 18, 19])
         self.assertEqual([p["ratio"] for p in rec["units"]["P1"]["points"]], [8, 20, 30, 48, 53, 55, 56, 57])
@@ -55,8 +56,16 @@ class QuickRunTests(MeasureCase):
         self.assert_cpufreq_pristine()
         self.assertEqual(self.closed, 1)
 
+    def test_without_a_kept_read_the_quick_plan_is_generic(self) -> None:
+        rec = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P1", "EC0"]}, timeout=60)["result"]["record"]
+        self.assertEqual(rec["plan"], "generic")
+        self.assertEqual(rec["tuning_state"], {"kind": "unknown"})
+        self.assertEqual([p["ratio"] for p in rec["units"]["P1"]["points"]], [8, 13, 18, 23, 28, 33, 38, 43, 48, 53, 55])  # every 5th ratio from 8, plus the unit's max
+        self.assertEqual([p["ratio"] for p in rec["units"]["EC0"]["points"]], [8, 13, 18, 23, 28, 33, 38, 43, 48])
+        self.assertTrue(all("fused_point" not in p for p in rec["units"]["P1"]["points"]))  # no read, no point labels
+
     def test_events_progress_and_state(self) -> None:
-        h = self.start_measure()
+        h = self.start_measure(kept_read=True)
         reply = h.call("m", "vf.measure", {"mode": "quick", "units": ["EC3", "P2"], "name": "mine"}, timeout=60)
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["result"]["record"]["name"], "mine")
@@ -109,7 +118,7 @@ class QuickRunTests(MeasureCase):
     def test_favored_57x_needs_few_active_cores_and_is_sampled_longer(self) -> None:
         """F3 [MEASURED lnx 2026-10-11]: quiet system => P0/P3 reach 56/57x on ~70 % of the samples (ok, early stop at min_valid, kept < total); with 2+ other busy
         cores the samples never reach it => unreachable, reason active_cores (never an error)."""
-        rec = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P0", "P3"]}, timeout=60)["result"]["record"]
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["P0", "P3"]}, timeout=60)["result"]["record"]
         for unit in ("P0", "P3"):
             for ratio in (56, 57):
                 p = points(rec, unit)[ratio]
@@ -122,7 +131,7 @@ class QuickRunTests(MeasureCase):
 
     def test_favored_57x_with_two_other_busy_cores_is_unreachable_for_active_cores(self) -> None:
         self.model.background_busy = 2  # a desktop session keeps two more cores awake
-        rec = self.start_measure().call("m2", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        rec = self.start_measure(kept_read=True).call("m2", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
         for ratio in (56, 57):
             p = points(rec, "P0")[ratio]
             self.assertEqual((p["status"], p["reason"], p["vid_v"], p["total"]), ("unreachable", "active_cores", None, 40), p)
@@ -164,7 +173,7 @@ class QuickRunTests(MeasureCase):
             return real(*args, **kwargs)
 
         self.model.background_busy = 2
-        h = self.start_measure()
+        h = self.start_measure(kept_read=True)
         with mock.patch.object(vfdump, "measure_group", spy):
             reply = h.call("m", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)
         self.assertTrue(reply["ok"], reply)
@@ -181,7 +190,7 @@ class QuickRunTests(MeasureCase):
 
     def test_a_retry_that_misses_again_leaves_the_first_result(self) -> None:
         self.model.background_busy = 2
-        h = self.start_measure()
+        h = self.start_measure(kept_read=True)
         rec = h.call("m", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
         for ratio in (56, 57):
             p = points(rec, "P0")[ratio]
@@ -202,35 +211,39 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(error_code(h.call("d", "vf.measure", {"baseline": "yes"})), "BAD_REQUEST")
 
     def test_stock_tuning_state_needs_a_complete_read_with_all_offsets_zero(self) -> None:
-        zero = {cpu: [0x39 if cpu == 0 else 0, 0x08, 0x14, 0x1E] for cpu in range(24)}  # the cold-boot OC words (P0 0x39, others 0) and ratios only: every offset field 0
-        h = self.start_measure(last_words=zero)
+        zero, fused = reference_read()  # the OC words of a cold boot (neutral: no OC point) and every point at offset 0
+        h = self.start_measure(last_words=zero, fused_words=fused)
         rec = h.call("s", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"], {"kind": "stock"})
-        h.helper.last_words = {**zero, 9: [0x39, 0x08 | (0x7F0 << 21)]}  # a raw offset on one point of a non-first E CPU
-        rec = h.call("t","vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        h.helper.last_words = {**zero, 9: [zero[9][0], zero[9][1] | (0x7F0 << 21)]}  # a raw offset on one point of a non-first E CPU
+        rec = h.call("t", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"]["kind"], "words")
         h.helper.last_words = {cpu: ws for cpu, ws in zero.items() if cpu < 8}  # P-cores only: not a complete read
-        rec = h.call("u","vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        rec = h.call("u", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
+        self.assertEqual(rec["tuning_state"]["kind"], "words")
+        h.helper.last_words = dict(zero)
+        h.helper.fused_words = {}  # the 0x09 words were not read: neutral cannot be proven
+        rec = h.call("v", "vf.measure", {"mode": "quick", "units": ["P0"]}, timeout=60)["result"]["record"]
         self.assertEqual(rec["tuning_state"]["kind"], "words")
 
     def test_a_raised_oc_word_or_any_apply_this_boot_is_not_stock(self) -> None:
-        """G-120 fix 4 [MEASURED lnx 2026-10-11]: offsets all 0 is not enough; the OC words must be the cold-boot ones and nothing may have been applied."""
-        zero = {cpu: [0x39 if cpu == 0 else 0, 0x08, 0x14, 0x1E] for cpu in range(24)}
-        h = self.start_measure(last_words=zero)
+        """G-120 fix 4: offsets all 0 is not enough; the OC words must carry no OC point (live 0x09 top ratio) and nothing may have been applied."""
+        zero, fused = reference_read()
+        h = self.start_measure(last_words=zero, fused_words=fused)
         run = lambda tag: h.call(tag, "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]["tuning_state"]["kind"]
         self.assertEqual(run("a"), "stock")
-        h.helper.last_words = {**zero, 12: [0x00048C30, 0x08]}  # EC1's OC point (ratio 48, adaptive 1.1367 V): offset 0 but not stock
+        h.helper.last_words = {**zero, 12: [0x00048C30, *zero[12][1:]]}  # EC1's OC point (ratio 48 above its top fused ratio, adaptive 1.1367 V): offset 0 but not stock
         self.assertEqual(run("b"), "words")
-        h.helper.last_words = {**zero, 0: [0x0005B439, 0x08]}  # P0 in the XTU shape: the same state, but not the cold-boot word
+        h.helper.last_words = {**zero, 0: [0x0005B439, *zero[0][1:]]}  # P0 in the XTU shape: a V target next to the ratio is not the cold word
         self.assertEqual(run("c"), "words")
-        h.helper.last_words = {**zero, 3: [0x39, 0x08]}  # P3 with an OC ratio 57
+        h.helper.last_words = {**zero, 3: [0x3A, *zero[3][1:]]}  # P3 with an OC ratio 58, above its top fused ratio
         self.assertEqual(run("d"), "words")
         h.helper.last_words = dict(zero)
         h.helper.tuned_this_boot = True  # a tune.apply wrote this boot, even a restore
         self.assertEqual(run("e"), "words")
 
     def test_fused_point_labels(self) -> None:
-        rec = self.start_measure(last_words={0: [0x39]}).call("f", "vf.measure", {"mode": "dense", "units": ["P0", "P1", "EC0"]}, timeout=60)["result"]["record"]
+        rec = self.start_measure(kept_read=True).call("f", "vf.measure", {"mode": "dense", "units": ["P0", "P1", "EC0"]}, timeout=60)["result"]["record"]
         p0, p1, ec0 = points(rec, "P0"), points(rec, "P1"), points(rec, "EC0")
         self.assertEqual([p0[r]["fused_point"] for r in (8, 20, 30, 48, 53, 55, 56, 57)], [1, 2, 3, 4, 5, 6, 7, 8])  # P0's OC ratio 57 is also point 8: the index wins
         self.assertNotIn("fused_point", p0[54])  # an in-between ratio carries no label
@@ -240,7 +253,8 @@ class QuickRunTests(MeasureCase):
         self.assertNotIn("fused_point", p1[54])
         from arltuner.helper.ops_measure import _fused_point
 
-        self.assertEqual((_fused_point("P1", 58, 58), _fused_point("P1", 58, None), _fused_point("EC3", 23, None)), ("oc", None, 3))
+        p_points, e_points = (8, 20, 30, 48, 53, 55, 56, 57), (8, 15, 23, 30, 40, 46)
+        self.assertEqual((_fused_point(p_points, 58, 58), _fused_point(p_points, 58, None), _fused_point(e_points, 23, None)), ("oc", None, 3))
 
     def test_other_units_stay_idle_while_one_is_measured(self) -> None:
         seen: list[set[int]] = []
