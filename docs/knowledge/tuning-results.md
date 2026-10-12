@@ -146,3 +146,6 @@ Restore accepted from the same page: 57 words read back as written (P7 `0xF46000
 - With PKEXEC_UID=0 `stress.start` is refused: "stress children are never run as root" (`NO_INVOKER`) — the privilege-drop rule reads pkexec's value.
 - The operator's own password-authenticated pkexec run (2026-10-11 16:57 UTC, GUI "Read V/F curve") recorded `operator: gui:uid1000` in the audit log
   ⇒ pkexec delivers PKEXEC_UID=1000 for the desktop user; with PKEXEC_UID=1000 stress-ng was measured running as `yk` (2026-10-11 ~20:30 UTC).
+
+### Operator-authenticated polkit start of the final build [MEASURED lnx 2026-10-12]
+Password entered in the GNOME prompt ⇒ helper under pkexec; Stress screen (P1, 30 s) child ran as `yk`; "stopped_by": "time", "errors": 0. Recorded by the orchestrator's watcher.
