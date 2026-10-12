@@ -46,7 +46,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 | `STALE_JOURNAL`, `RESTORE_FAILED` | cpufreq limits from an earlier run could not be put back | check `scaling_max_freq` / `scaling_min_freq` in System before anything else; restarting the helper applies a stale journal |
 
 ## 4. Mailbox return codes (Audit tab, `rc` / `rc_name`)
-From `registers.md` "Return codes" [DECOMPILED win-xtu-decompile-mailbox.md]:
+From `registers.md` "Return codes" [DECOMPILED registers.md]:
 
 | rc | Name | Typical cause |
 |---|---|---|

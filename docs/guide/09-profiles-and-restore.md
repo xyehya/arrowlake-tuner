@@ -19,7 +19,7 @@ illustration in `examples/reference-285k/`, and the app never reads that directo
 ## 2. The Profiles tab
 | Card | What it does |
 |---|---|
-| **Accepted state** | shows the chain of accepted profiles in the order **Restore accepted** applies them. Button **Set the current state as accepted** records what the CPU holds now (the last read) as the accepted state; nothing is written to the CPU |
+| **Accepted state** | shows the chain of accepted profiles in the order **Restore accepted** applies them. Button **Set the current state as accepted** records what the CPU holds now (the last read) as the accepted state; nothing is written to the CPU. Button **Record CPU fingerprint for Windows** adds `fingerprint.json` to an existing accepted state (section 4) |
 | **Profiles** | the list of saved profiles with a short summary. Per profile: **Load into Tune** (fills the Tune editor; nothing is sent), **Review and apply** (plan flow), **Set as accepted** |
 | **Save the current Tune settings** | saves the unapplied choices from Tune as a profile. Name: lowercase letters, digits, `.`, `_`, `-`, 1 to 64 characters. A saved profile is never overwritten (an existing name is refused: `EXISTS`) |
 | **Compare two profiles** | a diff table; the toggle chooses **As applied** (an accepted profile counts as the state after its step of the chain) or **This file only** |
@@ -38,6 +38,7 @@ Refusals you may meet:
 |---|---|
 | `NOT_APPLIED` | the saved profile is not what the CPU holds now: apply it first, then set it as accepted. A profile that was never applied cannot be recorded as the state the chip was verified to hold |
 | `NO_READ` | nothing was read this boot: use **Read ratios & voltages** in Tune first |
+| `STALE_READ` | a mailbox or plain MSR write happened after the read: read again first, then accept |
 | `NOT_REPRESENTABLE` | a word of the current state cannot be expressed exactly in a profile file (profiles hold whole millivolts); the tool refuses rather than round, because the restore would write a different word |
 
 Layout of the accepted state (readable by the restore scripts and the Dashboard comparison):
@@ -45,6 +46,7 @@ Layout of the accepted state (readable by the restore scripts and the Dashboard 
 /etc/arltuner/accepted/CURRENT                 one line per profile, applied in order:  profile = profiles/<name>.toml
 /etc/arltuner/accepted/EXPECTED-words.txt      one line per core / E-cluster:  <cpu> <OC word> <point 1> ... <point n>   (hex, no 0x)
 /etc/arltuner/accepted/profiles/<name>.toml    the profiles
+/etc/arltuner/accepted/fingerprint.json        which core is which (kind, cluster, favored, fused top-point word) and the CPU model; used by the Windows restore
 ```
 Back it up if you value it (`sudo cp -a /etc/arltuner/accepted ~/accepted-backup`).
 
@@ -108,7 +110,7 @@ failure and retries nothing. A good run ends:
 RESTORED: all cores/clusters match the accepted state.
 ```
 and a bad one with `STOP: N core(s)/cluster(s) differ`. It refuses to start when no accepted state exists, the policy is missing, or OCCT is running as root.
-Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, as the operator command-line path (D-031), and sets
+Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, in isolated mode (`python3 -I`), as the operator command-line path (D-031), and sets
 `ARLTUNER_ALLOW_MAILBOX=1` itself for the guarded commands.
 
 `bash tools/lnx/reapply_current.sh [--check] [--from DIR] [--policy FILE]` is the older, simpler script: it applies each profile in `CURRENT` with one `CONFIRM <token>` per
@@ -116,40 +118,63 @@ profile; `--check` dumps the words read-only and compares them.
 
 Operation counts depend on how much differs; the planner budgets the whole plan before sending the first request.
 
-## 4. Windows restore (reference-chip path; untested from this repository)
-Windows has no GUI. `tools\win\restore_tuning.ps1` restores the accepted state through a signed third-party driver. **Status: the scripts were used on the
-reference machine in the predecessor repository (October 2026); the first run from this repository is still pending, so treat this section as
-untested here** (STATE.md).
+## 4. Windows restore (any Arrow Lake-S through the fingerprint; untested on Windows)
+Windows has no GUI. `tools\win\restore_tuning.ps1` restores the accepted state through a signed third-party driver. **Status: the scripts were used on the reference
+machine in earlier research (October 2026), before the changes of G-138 (any chip, via `fingerprint.json`) and G-142 (admin-only directory, per-run driver copy). The new code
+was written and tested on Linux only; the first run on Windows is the bring-up test. Treat this section as untested.**
 
-Important limits:
+### How it finds your cores: `fingerprint.json`
+Linux CPU numbers mean nothing on Windows, and Windows cannot tell the P-cores apart. So **Set as accepted** on Linux also writes `fingerprint.json` into
+`/etc/arltuner/accepted/`: for every Linux CPU its kind, E-cluster, favored flag and its **fused top V/F point word** (mailbox command `0x09`; distinct per physical P-core,
+shared inside an E-cluster), plus the CPU's vendor, family, model and name. On Windows the tool derives the Linux-CPU-to-logical-processor map at run time from
+Windows' own data and settles it with guarded reads of those fused words before any write. A mismatch refuses the whole session and nothing is written. No constants of a
+particular chip are built in, so the Windows restore is meant to work on any Arrow Lake-S, but only for the machine the accepted state was recorded on.
 
-- The Windows port uses a Linux-to-Windows CPU map and a P-core identity fingerprint **measured on the reference 285K**
-  (`src/arltuner/msr/winport.py`: `WINDOWS_LP_OF_CPU`, `WINDOWS_P_FUSED_FINGERPRINT`, the check at `cli.py` `IDENTITY_CPUS`). On any other chip the
-  identity check will not match and the tool **refuses and writes nothing**. That is by design (nothing is written to a core it cannot identify), and it means
-  the Windows restore is currently usable on the reference chip only.
-- It restores; it does not tune. The accepted state comes from Linux: copy `/etc/arltuner/accepted` to `%LOCALAPPDATA%\arltuner\accepted` (or pass `-From DIR`)
-  and put a `policy.toml` next to it (copy `/etc/arltuner/policy.toml`, or pass `-Policy FILE`).
-- It needs an elevated PowerShell, Python (`py -3`), the repository checkout, Windows **Memory integrity (HVCI/VBS) off**, the Intel XTU service stopped
-  (`Stop-Service XtuService`), and OCCT, XTU, ThrottleStop, HWiNFO not running.
-- It needs the ThrottleStop kernel driver, which this project **never ships**: you carve it from your own `ThrottleStop.exe` (version 9.7.3; the `carve` command
-  checks the exe's SHA-256 `52D86D3D...2BA2` and the driver's `16F83F05...97F0` and refuses on a mismatch). The script starts the driver service for the run
-  and stops it afterwards. Obtain ThrottleStop yourself; this project downloads nothing.
+- A state accepted **before** this existed has no `fingerprint.json`: the Windows scripts stop with "re-accept on Linux". You do not have to re-accept the tuning: in
+  **Profiles** press **Record CPU fingerprint for Windows** (helper op `profiles.fingerprint`). It needs a **read this boot** (Tune, Read ratios & voltages), writes only
+  `fingerprint.json` next to the existing accepted state (the accepted tuning and its words are not touched, nothing is written to the CPU) and reports `complete` or
+  `incomplete: <why>`. An incomplete fingerprint is written all the same, and the Windows restore refuses it.
+- **Set as accepted** also refuses `STALE_READ` ("read again first") when the audit log shows a mailbox or plain MSR write after the read it would record, so the accepted
+  words are what the CPU really holds.
+
+### Prerequisites
+- Windows 11, an **elevated** PowerShell, Python (`py -3`), the repository checkout.
+- Windows **Memory integrity (HVCI/VBS) off**. Check with `tools\win\preflight.ps1`, which also looks at the driver blocklist, the Intel XTU service (stop it:
+  `Stop-Service XtuService`) and other mailbox clients. OCCT, XTU, ThrottleStop and HWiNFO must not run.
+- The ThrottleStop kernel driver, which this project **never ships**. You carve it from your own `ThrottleStop.exe` (version 9.7.3; `carve` checks the exe's SHA-256 `52D86D3D...2BA2`
+  and the driver's `16F83F05...97F0` and refuses on a mismatch). Obtain ThrottleStop yourself; this project downloads nothing.
+- The accepted state copied from Linux into the **admin-only directory** `%ProgramData%\arltuner` (below).
+
+### The admin-only directory (G-142, D-042)
+The script runs elevated, so everything that decides what it does must be writable only by Administrators and SYSTEM. That is `%ProgramData%\arltuner` (owner
+Administrators, ACL Administrators + SYSTEM; no path component may be a junction or symlink). It holds the driver, `accepted\` (the copy of `/etc/arltuner/accepted`,
+including `fingerprint.json`), `policy.toml`, the audit log `audit.jsonl` and the run's read-back file. The scripts refuse a `-From` or `-Policy` outside such a directory.
 
 ```
 # once per Windows install (elevated PowerShell, in the repository)
-py -3 tools\win\ts_driver.py carve --exe C:\path\to\ThrottleStop.exe
-py -3 tools\win\ts_driver.py install
-powershell -ExecutionPolicy Bypass -File tools\win\preflight.ps1       # read-only checks; fix every FIX line
+py -3 tools\win\ts_driver.py init-dir                                  # create and lock down %ProgramData%\arltuner (carve also does it)
+py -3 tools\win\ts_driver.py carve --exe C:\path\to\ThrottleStop.exe     # -> %ProgramData%\arltuner\ThrottleStop.sys (hash-checked)
+powershell -ExecutionPolicy Bypass -File tools\win\preflight.ps1        # read-only checks; fix every FIX line
+# from an Administrator terminal, copy the Linux files in:
+#   /etc/arltuner/accepted/*   ->  %ProgramData%\arltuner\accepted\   (CURRENT, EXPECTED-words.txt, profiles\, fingerprint.json)
+#   /etc/arltuner/policy.toml  ->  %ProgramData%\arltuner\accepted\policy.toml   (or pass -Policy FILE)
 
 # after every boot
-powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1  # type CONFIRM once; or double-click tools\win\Restore-Tuning.cmd
+powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1   # type CONFIRM once; or double-click tools\win\Restore-Tuning.cmd
 ```
-Options: `-From DIR`, `-Policy FILE`, `-Before` (also dump the state before applying; about 132 extra mailbox reads), `-Orchestrated`. Success prints
-`RESTORED: all <n> cores/clusters match the accepted state.`; any mismatch stops it. The audit log is `%LOCALAPPDATA%\linuxmon\audit.jsonl` (legacy name kept on
-purpose). The Windows health check counts new WHEA events in the System log.
+What a run does: checks (administrator, XTU service stopped, no OCCT/XTU, admin-only directories, `fingerprint.json` present), then one `CONFIRM`, then `ts_driver.py start`
+(verifies the directory, its ACL, reparse points and the driver's SHA-256, writes a **new uniquely named copy** of the driver for this run, creates the service on it, re-verifies, starts it),
+then the guarded identity reads, each profile of `CURRENT` applied, every V/F word read back and compared with `EXPECTED-words.txt`, and finally `ts_driver.py remove` (stops and deletes the
+service and the copy). The verdict `RESTORED: all <n> cores/clusters match the accepted state.` comes from this run's own read-back file, never from the audit log. Any mismatch stops
+it; nothing is retried.
 
-The predecessor's notes record a conflict about the Microsoft Vulnerable Driver Blocklist: the driver loaded with it on, on Windows 11 build 26200/26300
-[MEASURED win 2026-10-02], while an older runbook says to switch it off. `preflight.ps1` reports what it finds (`windows-path.md` §1).
+Options of `restore_tuning.ps1`: `-From DIR`, `-Policy FILE`, `-Before` (also dump the state before applying; about 132 extra mailbox reads), `-Orchestrated`. `reapply_current.ps1 [-Check]
+[-From DIR] [-Policy FILE]` is the simpler twin (one confirmation per profile; `-Check` is a read-only dump). The Windows health check counts new WHEA events in the System log.
+Applied offsets stay until a cold boot even after the driver service is removed.
+
+Driver blocklist: on the reference machine the driver loaded with Windows' Microsoft Vulnerable Driver Blocklist **on** (Windows 11 build 26200/26300) [MEASURED win 2026-10-02],
+while `preflight.ps1` flags the blocklist as something to turn off. Start with the blocklist as it is; if `ts_driver.py start` fails with 1275, 577 or "blocked", follow the
+preflight advice (Memory integrity off and reboot; then the blocklist). If the driver is still blocked the route is closed for that Windows build (`docs/knowledge/windows-path.md`).
 
 ## 5. Per-boot routine
 1. Boot (cold if you changed BIOS settings or had a crash).

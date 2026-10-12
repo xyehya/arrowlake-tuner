@@ -14,7 +14,7 @@ will see.
 ## 1. How the tool talks to the CPU
 The CPU exposes a voltage/frequency control interface, the **OC mailbox**, through model-specific register `0x150`. A request is a 64-bit value
 `1<<63 | P2<<48 | P1<<40 | cmd<<32 | data`; the CPU clears bit 63 when it has answered, the status is in bits 39:32 and the result in bits 31:0
-[DECOMPILED win-xtu-decompile-mailbox.md; matches kernel and published sources, registers.md "OC mailbox"].
+[DECOMPILED registers.md "OC mailbox"; matches kernel and published sources].
 
 - **Every mailbox request, including a read, is a write (WRMSR) to MSR `0x150`.** There is no memory-mapped alternative [DECOMPILED registers.md]. This
   is why "Read ratios & voltages" in the Tune tab needs the same write permission as Apply.
@@ -60,7 +60,7 @@ Facts about the points:
   voltage, and no delivered-voltage telemetry exists for the DLVRs [MEASURED lnx 2026-09-29 / 2026-10-01, registers.md, platform-285k.md §5].
 
 ## 4. The V/F word
-The word for core-scoped commands `0x10` (read) and `0x11` (write) has these fields [DECOMPILED win-xtu-decompile-mailbox.md, registers.md "V/F data word"]:
+The word for core-scoped commands `0x10` (read) and `0x11` (write) has these fields [DECOMPILED registers.md "V/F data word"]:
 
 | Bits | Field | Encoding |
 |---|---|---|
@@ -224,7 +224,7 @@ runtime because the lock bit was 0 [MEASURED lnx 2026-10-08, platform-285k.md].
 ## 14. Key facts at a glance
 | Fact | Tag and source |
 |---|---|
-| Every mailbox request, reads included, is a WRMSR to MSR `0x150` | [DECOMPILED win-xtu-decompile-mailbox.md] registers.md "OC mailbox" |
+| Every mailbox request, reads included, is a WRMSR to MSR `0x150` | [DECOMPILED registers.md] registers.md "OC mailbox" |
 | P-core and E-cluster have fixed fused V/F points that accept offsets only (reference: P 8, E 6) | [MEASURED lnx 2026-10-02] platform-285k.md §3 |
 | Adaptive target voltage is active on the OC point only; it needs an OC ratio above the top fused ratio | [MEASURED lnx 2026-10-11] tuning-results.md |
 | `P2 = 0` offset = whole-curve offset; without an OC point a written target is dropped | [MEASURED lnx 2026-10-11] tuning-results.md |

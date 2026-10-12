@@ -9,7 +9,7 @@ git clone https://github.com/xyehya/arrowlake-tuner
 cd arrowlake-tuner
 ```
 The checkout is only ever **copied** by the installer. The installed copy is what the GUI's root helper runs; the helper refuses to run from a
-user-writable path (SPEC §4.4). The restore script `tools/lnx/restore_tuning.sh` is the exception: it runs the checkout's Python with `sudo`, as the
+user-writable path (SPEC §4.4). The restore script `tools/lnx/restore_tuning.sh` is the exception: it runs the checkout's Python with `sudo`, in isolated mode (`python3 -I`, G-142), as the
 operator's command-line path (D-031), so keep your checkout writable only by you.
 
 ## 2. Optional: run the offline test suite
@@ -36,7 +36,7 @@ What it does, in order:
 | Seeds the configuration **only if absent** | `/etc/arltuner/policy.toml` from `policies/default.toml`; `/etc/arltuner/helper.toml` with `allow_taint_bits = [2]` |
 | Leaves your accepted state alone | `/etc/arltuner/accepted/` is never created, changed or removed by the installer. A fresh install has none: you create it in the app ([09](09-profiles-and-restore.md)) |
 | Creates the state directory | `/var/lib/arltuner/` with the audit log `audit.jsonl` (0600) and private (0700) directories `curves/`, `stress/`, `profiles/`, `state/` |
-| Seeds the audit log once | from the invoking user's old `~/.local/state/linuxmon/audit.jsonl` if it exists (so the per-boot operation count survives); otherwise an empty log. An existing log is never overwritten |
+| Seeds the audit log once | from the invoking user's own `~/.local/state/arltuner/audit.jsonl` if it exists (so the per-boot operation count survives a mid-boot install; this is the log the command line writes before the install); otherwise an empty log. An existing log is never overwritten |
 | Runs a self-check | prints `arltuner self-check: all N checks passed.` The helper refuses to start if any check fails |
 
 The installer **never applies any tuning and sends no mailbox traffic.** Everything installed is root-owned; the installer only runs Python from the
@@ -47,19 +47,24 @@ Your edited policy is never overwritten (except with `--reseed-config`, below).
 
 If the self-check fails, run `sudo bash uninstall.sh` or repair the files it names; do not start the GUI.
 
-### What the default policy allows
-`policies/default.toml` is generic: nothing in it names a particular CPU. It is the D-032 "advanced user" policy.
+### Limits: the defaults are yours to change
+**Every limit is your policy, not the program's.** The table shows the *defaults* that `policies/default.toml` puts into `/etc/arltuner/policy.toml` on first install.
+That file belongs to you: root-owned, edit it as root, `install.sh` never overwrites it, `--reseed-config` restores the defaults. The program hard-codes none of these
+numbers (D-039). It refuses a value only when **your CPU** or the **register field** cannot take it (the right-hand column). Extreme-cooling users (liquid nitrogen, delidded
+and binned chips) can therefore raise every default, up to what their CPU reports, at their own risk. Full table and the exact refusal texts: [12 §4](12-safety-and-internals.md).
 
-| Item | Default |
-|---|---|
-| Voltage offsets | -200 ... +200 mV |
-| Adaptive (OC point) voltage target | `"auto"`: the CPU's own maximum from mailbox command `0x28`, minus one step, read in the session |
-| Ratio ceiling, P and E | `"auto"`: the fused maximum the CPU reports in command `0x1C`. D-038 (2026-10-12) widens this to that value **+ 3**, clamped to a code limit of P 62 / E 60; task G-134 implements it, so a build older than G-134 still uses the plain fused value |
-| Per-write steps | at the code maxima (ratio 8, V target 200 mV, offset 200 mV) |
-| Operation counters | indicators only (100000 per boot and per session); no dwell between operations |
-| Always on | allowlist (default deny), one mailbox transaction at a time, health check, audit log, plan nonce, read-back |
+| Item | Default in `policy.toml` | Hard ceiling (not editable, because it is not ours) |
+|---|---|---|
+| Voltage offset | -200 ... +200 mV | the 11-bit offset field: -1000 ... +999 mV |
+| Adaptive (OC point) voltage target | `"auto"`: the CPU's own maximum from mailbox command `0x28`, minus one step, read live | the same `0x28` value; the 12-bit field (0.5 ... 3.999 V). Unread = no raise |
+| OC ratio ceiling, P and E | `"auto"`: the fused ratio the CPU reports in command `0x1C` bits 15:8, **+ 3** (D-038: P 57 to 60, E 46 to 49) | the CPU's own OC-ratio limit from mailbox command `0x01` bits 7:0, read live; the field allows 1 ... 255. Unread = no raise |
+| Per-write steps | ratio 8, voltage target 200 mV, offset 200 mV | ratio up to 255, voltage and offset up to 1000 mV |
+| Assumed BIOS offset | 0 (P and E) | none |
+| Operation counters | indicators only (100000 per boot and per session); no dwell | none |
+| Always on, not limits | allowlist (default deny), one mailbox transaction at a time, health check, audit log, plan nonce, read-back | |
 
-To change a limit, edit `/etc/arltuner/policy.toml` as root (for example put `E = 49` under `[ratio_max]`). See [12](12-safety-and-internals.md).
+To change a limit, edit `/etc/arltuner/policy.toml` as root (for example put `E = 52` under `[ratio_max]`). A change applies from the next read or plan; no restart. The
+Tune page and **System → Tuning limits** show, for each limit, your policy value next to what your CPU allows.
 
 ## 4. Update
 ```
@@ -99,6 +104,6 @@ exists the command line still counts as "installed" and keeps using the shared a
 | `... must be Python >= 3.12` | the system `/usr/bin/python3` is too old |
 | `incomplete checkout` / `is a symlink; refusing` | the checkout is damaged or contains symlinks where the installer expects files |
 | `post-install self-check FAILED` | the installed tree does not satisfy the helper's trust rules; uninstall and re-install |
-| `WARNING: no invoking user ... so no legacy audit log was seeded` | you ran `install.sh` as a plain root login, not via `sudo`; only matters if you already used the old linuxmon CLI this boot |
+| `WARNING: no invoking user ... so no per-user audit log was seeded` | you ran `install.sh` as a plain root login, not via `sudo`; only matters if you already used the command line this boot (the per-boot operation count restarts from zero) |
 
 Next: [03 First run](03-first-run.md) · Previous: [01 Requirements](01-requirements.md)

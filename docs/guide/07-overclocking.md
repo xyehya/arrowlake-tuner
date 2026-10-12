@@ -58,7 +58,7 @@ operator set `ratio_max` to P 60 / E 50 in `/etc/arltuner/policy.toml` (D-038). 
 6. **Apply**, check the read-back, then **Validate with a stress screen** with the unit capped to its new ratio.
 7. Measure the new curve (**Measure again**), then run your gate.
 
-What the tool writes for a ratio raise: the voltage first, then the frequency (XTU's own ordering for a raise [DECOMPILED win-xtu-decompile-mailbox.md]);
+What the tool writes for a ratio raise: the voltage first, then the frequency (XTU's own ordering for a raise [DECOMPILED registers.md]);
 the guard refuses one request that moves both the same way. For an E-cluster raise, one plan writes the cluster's OC word on its four CPUs, the
 favored-ratio word `0x1D`, the granular-ratio word `0x27`, and the E turbo table `0x650`, and then lifts cpufreq's `scaling_max_freq` so
 the kernel actually uses the new ratio (G-126). Review shows all of them.

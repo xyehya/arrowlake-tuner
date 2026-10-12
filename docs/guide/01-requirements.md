@@ -20,7 +20,7 @@ The CPU's overclocking mailbox accepts runtime changes only if the firmware allo
 
 | Setting | Value | Why |
 |---|---|---|
-| **Undervolt Protection (UVP)** | Disabled | With UVP on, the CPU refuses offsets below the fused floor (mailbox return code `0x13 UndervoltProtection`) [DECOMPILED win-xtu-decompile-mailbox.md, registers.md "Return codes"] |
+| **Undervolt Protection (UVP)** | Disabled | With UVP on, the CPU refuses offsets below the fused floor (mailbox return code `0x13 UndervoltProtection`) [DECOMPILED registers.md "Return codes"] |
 | **OC Lock** | Disabled | With OC Lock on, every OC-mailbox write is refused (return code `0x01 OCLocked`) [DECOMPILED, registers.md "Return codes"] |
 | Overclocking support (some boards) | Enabled | The firmware flag `OcSupport` defaults to off in Intel's reference firmware [DOC FSP FspmUpd.h, registers.md "BIOS/FSP gating flags"] |
 | Secure Boot | Disabled, or a kernel with lockdown `none` | Secure Boot normally turns on kernel lockdown, which blocks MSR writes (section 4) |
@@ -39,7 +39,7 @@ absence of an error.
 | polkit | `pkexec` and `polkitd` installed, and a **polkit authentication agent** running in your desktop session (GNOME, KDE and similar have one). The root helper starts through `pkexec` and asks for your password | checks `pkexec`, `polkit`, `polkit_agent` |
 | A desktop session | The GUI is a local web page; a browser must open on the same machine | |
 | Python 3.12 or newer | Standard library only; nothing to `pip install`. `install.sh` uses `/usr/bin/python3` and refuses if it is older than 3.12 | `python` |
-| A current browser | Chromium or Firefox. The GUI is served on `127.0.0.1` only | |
+| A current browser | Chromium or Firefox. The GUI is served on a random loopback address (`127.x.y.z`, see [03](03-first-run.md)); it is not reachable from the network | |
 | Root (sudo) | Only to run `install.sh` / `uninstall.sh` and the restore script | |
 
 Check: `python3 --version`, `command -v pkexec`.
