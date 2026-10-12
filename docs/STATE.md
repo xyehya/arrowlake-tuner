@@ -26,18 +26,20 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
 
 ## Machine state (reference 285K)
 - Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV.
-- Warm reboot this morning ⇒ P0 at stock offsets, CPUs 1–7 + E tuned, EC1 leftover OC point 48× + 1.137 V (clears at cold boot).
-  **Restore accepted not run yet.** `fingerprint.json` recorded into `/etc/arltuner/accepted` (accepted tuning untouched).
+- Warm reboot this morning; **restore run by the orchestrator 2026-10-12 19:0x** (`restore_tuning.sh --orchestrated`, new code under `-I`, live
+  0x01 binding): 3 profiles applied (65 + 51 + 51 ops), all P-cores + EC0/EC3 match; **EC1 (OC word 48× + 1.137 V) and EC2 (OC word 46× +
+  1.137 V) differ only in the OC word** — cannot be zeroed at runtime, a cold boot clears them. `fingerprint.json` recorded (tuning untouched).
+- Tune controls exercised in Chrome on live data (OC ratio 58× on P0 → adaptive voltage enabled + prefilled 1.4248 V → Review 17 ops → discarded).
 - GUI started by the orchestrator with `--helper sudo -n PKEXEC_UID=1000 …` (no polkit prompt; **no system change was made for this**).
 - MCE count 0 all session.
 
 ## Operator to-do
-1. Cold boot → Tune → Restore accepted (or `bash tools/lnx/restore_tuning.sh`) → 12/12 match.
+1. Cold boot when convenient (clears the EC1/EC2 OC words) → Tune → Restore accepted (or `bash tools/lnx/restore_tuning.sh`) → 12/12 match.
 2. Choose a LICENSE (public repo has none).
 3. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
 ## Next / open
-- Windows restore path entirely untested on Windows (scripts, ACL checks, identity read, `vf-dump --json`).
+- Windows restore path entirely untested on Windows (scripts, ACL checks, identity read, `vf-dump --json`); driver blocklist: `windows-path.md` [MEASURED] says it loaded with the blocklist on, `preflight.ps1` flags it FIX — decide after the first Windows run.
 - Restore scripts still run from the checkout (under `-I`); move them onto the installed tree (ROADMAP).
 - Health gate checks right after each op only (D-042 (6), SAFETY.md).
 - Open question from 2026-10-12: does a non-favored P-core run 56/57× with an OC ratio (needs a write sitting).
