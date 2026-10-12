@@ -62,15 +62,33 @@ FINAL_PKG=/usr/lib/arltuner/arltuner  # recorded in the .pyc files (compileall -
 if [ "$(id -u)" -eq 0 ]; then OWN=(-o root -g root); else OWN=(); fi
 
 # --- a running helper keeps lazily importing from the tree we are about to replace: refuse until it is stopped ---------------------------
-helper_pids() {  # PIDs whose command line has an argument named arltuner-helper (pkexec <path>, python <path>, the launcher itself)
-    local c arg pid
+helper_pids() {  # PIDs running the helper: argv[0] is the helper itself, or a wrapper (python*, pkexec, sudo, env) whose first non-option argument is it
+    local c pid i base a skip
+    local -a argv
     for c in "$PROC_ROOT"/[0-9]*/cmdline; do
         [ -r "$c" ] || continue
         pid=${c%/cmdline}; pid=${pid##*/}
         [ "$pid" != "$$" ] || continue
-        while IFS= read -r -d '' arg || [ -n "$arg" ]; do
-            case ${arg##*/} in arltuner-helper|arltuner-helper.py) echo "$pid"; break ;; esac
-        done < "$c" 2>/dev/null || true
+        argv=()
+        while IFS= read -r -d '' a || [ -n "$a" ]; do argv+=("$a"); done < "$c" 2>/dev/null || true
+        [ "${#argv[@]}" -gt 0 ] || continue
+        base=${argv[0]##*/}
+        case $base in
+            arltuner-helper|arltuner-helper.py) echo "$pid"; continue ;;
+            python|python3|python3.*|pkexec|sudo|env) ;;
+            *) continue ;;   # vim/grep/less ... with the helper's name as an argument is not the helper
+        esac
+        skip=0
+        for ((i = 1; i < ${#argv[@]}; i++)); do
+            a=${argv[i]}
+            if [ "$skip" = 1 ]; then skip=0; continue; fi
+            case $a in
+                -u|--user|-g|--group) skip=1; continue ;;   # an option value (pkexec --user root PATH) is not the program
+                -*) continue ;;
+            esac
+            case ${a##*/} in arltuner-helper|arltuner-helper.py) echo "$pid" ;; esac
+            break   # the first non-option argument is the program; later ones are its data
+        done
     done
 }
 RUNNING=$(helper_pids | tr '\n' ' ')

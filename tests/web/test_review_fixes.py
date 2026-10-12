@@ -536,7 +536,10 @@ class TestSessionContinuity(Base):  # round 2, item 3
             self.assertEqual(stat.S_IMODE(pidfile.stat().st_mode), 0o600)
             uninstall = reissue.install_reissue(self.srv, lp)
             self.addCleanup(uninstall)
-            self.assertEqual(reissue.signal_running(Path(d), marker=b"python"), os.getpid())  # what a second arltuner-gui run does
+            fake = Path(d) / "proc"  # this test process wearing the server's argv
+            (fake / str(os.getpid())).mkdir(parents=True)
+            (fake / str(os.getpid()) / "cmdline").write_bytes(b"/usr/bin/python3\0-I\0/x/tools/arltuner-gui.py\0--open\0")
+            self.assertEqual(reissue.signal_running(Path(d), proc_root=fake), os.getpid())  # what a second arltuner-gui run does
             end = time.monotonic() + 3
             while time.monotonic() < end and self.srv.token == old:
                 time.sleep(0.02)
@@ -559,6 +562,18 @@ class TestSessionContinuity(Base):  # round 2, item 3
             self.assertIsNone(reissue.signal_running(Path(d)))  # a live pid that is not arltuner-gui is never signalled
             (Path(d) / reissue.PID_NAME).write_text("junk")
             self.assertIsNone(reissue.signal_running(Path(d)))
+
+    def test_signal_running_matches_the_program_exactly(self):
+        """G-142 item 10: only the process whose program is arltuner-gui(.py) is signalled, not one that merely has the name in its argv."""
+        from arltuner.web import reissue
+        ok = [["python3", "tools/arltuner-gui.py"], ["/usr/bin/python3", "-I", "-u", "/home/u/x/tools/arltuner-gui.py", "--open"],
+              ["/home/u/x/tools/arltuner-gui.py"], ["python3.13", "arltuner-gui"]]
+        bad = [["vim", "tools/arltuner-gui.py"], ["grep", "-r", "arltuner-gui", "."], ["python3", "evil.py", "arltuner-gui.py"],
+               ["python3", "-c", "x", "arltuner-gui"], ["python3", "tools/not-arltuner-gui.py"], ["sh", "-c", "python3 arltuner-gui.py"], []]
+        for argv in ok:
+            self.assertTrue(reissue._is_server_argv([a.encode() for a in argv], b"arltuner-gui"), argv)
+        for argv in bad:
+            self.assertFalse(reissue._is_server_argv([a.encode() for a in argv], b"arltuner-gui"), argv)
 
 
 class TestResultsPerSession(Base):  # round 2, item 4

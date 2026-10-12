@@ -10,8 +10,11 @@ Writes never block a caller: requests go through a bounded queue to one writer t
 from __future__ import annotations
 
 import collections
+import ctypes
 import json
 import queue
+import socket
+import subprocess
 import threading
 from typing import Any, BinaryIO, Callable
 
@@ -77,13 +80,14 @@ class HelperLink:
 
     # ---- requests -------------------------------------------------------------------------------------------------------------
     def submit(self, op: str, args: dict[str, Any] | None, callback: Callable[[str, dict[str, Any] | None], None]) -> str:
-        """Queue a request and return its id. ``callback(id, response)`` runs on the reader thread; ``response`` is None if the pipe died."""
+        """Queue a request and return its id. ``callback(id, response)`` runs on the reader thread; ``response`` is None if the pipe died.
+        ``ValueError`` if ``args`` is not strict JSON (NaN / Infinity)."""
         with self._lock:
             if not self._alive:
                 raise HelperUnavailable()
             self._seq += 1
             rid = f"w{self._seq}"
-            line = json.dumps({"id": rid, "op": op, "args": args if args is not None else {}}, separators=(",", ":")).encode("utf-8") + b"\n"
+            line = json.dumps({"id": rid, "op": op, "args": args if args is not None else {}}, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
             if len(line) > MAX_LINE:
                 raise RequestTooLarge()
             self._pending[rid] = callback
@@ -224,3 +228,50 @@ class HelperLink:
         except queue.Full:
             pass
         self._fail_all()
+
+
+# ---- the process link (G-142 item 5) ------------------------------------------------------------------------------------------------
+class SocketWriter:
+    """Write side of a socket as the helper link wants it: whole-buffer writes, and ``close`` half-closes (the helper then reads EOF)."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._s = sock
+
+    def write(self, data: bytes) -> int:
+        self._s.sendall(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        try:
+            self._s.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+def spawn_helper(cmd: list[str]) -> tuple[subprocess.Popen, HelperLink]:
+    """Start the helper process with a ``socketpair`` as its stdin and stdout instead of two pipes. A same-user process can reopen a pipe through
+    ``/proc/<pid>/fd/N`` and speak to the helper as the GUI; a socket cannot be opened that way (ENXIO). Works for pkexec and ``sudo``: they pass
+    fds 0/1 on unchanged."""
+    mine, theirs = socket.socketpair()
+    try:
+        proc = subprocess.Popen(cmd, stdin=theirs.fileno(), stdout=theirs.fileno(), bufsize=0)
+    except BaseException:
+        mine.close()
+        raise
+    finally:
+        theirs.close()
+    rfile = mine.makefile("rb")  # buffered: readline(limit) without a recv per byte; ``mine`` itself stays open for the writer
+    return proc, HelperLink(rfile, SocketWriter(mine)).start()
+
+
+def set_undumpable() -> bool:
+    """``prctl(PR_SET_DUMPABLE, 0)``: other processes of the same user can no longer ptrace this one or read its /proc/<pid>/fd, /mem, /environ
+    (those files become root-owned). Returns False where that is not available (non-Linux, no libc)."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(4, 0, 0, 0, 0) == 0   # PR_SET_DUMPABLE = 4
+    except (OSError, AttributeError):
+        return False

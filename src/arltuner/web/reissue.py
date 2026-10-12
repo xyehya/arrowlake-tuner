@@ -25,14 +25,35 @@ def write_pidfile(directory: Path) -> Path:
     return p
 
 
-def signal_running(directory: Path, marker: bytes = b"arltuner-gui") -> int | None:
-    """Pid of a live server recorded in ``directory`` that was sent SIGUSR1, else None (no file, stale pid, or the pid is some other program)."""
+def _is_server_argv(argv: list[bytes], marker: bytes) -> bool:
+    """True for ``[python*, option..., <path>/<marker>.py, ...]`` or ``[<path>/<marker>.py, ...]``: the script is the program, not a data
+    argument of some other command (``vim tools/arltuner-gui.py`` must not receive our SIGUSR1)."""
+    if not argv:
+        return False
+    names = (marker, marker + b".py")
+    base = argv[0].rsplit(b"/", 1)[-1]
+    if base in names:
+        return True
+    if not (base == b"python" or base.startswith(b"python3")):
+        return False
+    for a in argv[1:]:
+        if a.startswith(b"-"):
+            continue
+        return a.rsplit(b"/", 1)[-1] in names
+    return False
+
+
+def signal_running(directory: Path, marker: bytes = b"arltuner-gui", proc_root: Path = Path("/proc")) -> int | None:
+    """Pid of a live server recorded in ``directory`` that was sent SIGUSR1, else None (no file, stale pid, or the pid is some other program;
+    the recorded pid's argv must name ``marker`` as the program, an exact match, not a substring)."""
     try:
         pid = int((Path(directory) / PID_NAME).read_text().strip())
         if pid <= 1:
             return None
-        cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
-        if marker not in cmd:
+        argv = Path(proc_root) / str(pid) / "cmdline".read_bytes().split(b"\0")
+        if argv and argv[-1] == b"":
+            argv.pop()
+        if not _is_server_argv(argv, marker):
             return None
         os.kill(pid, signal.SIGUSR1)
         return pid
