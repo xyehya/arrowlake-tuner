@@ -292,6 +292,7 @@ class V3Ops:
         self.last_read_at: float | None = None        # G-123: when the stored read (tune.last) was made, epoch seconds
         self.last_applied_at: float | None = None     # G-123: set when an apply changed the words after that read
         self.last_read_refused = False                # G-123: tune.last answers available:false although a read happened (another boot)
+        self.last_busy_first = 0                      # G-139: the first N tune.last calls are refused BUSY (the real helper runs at most 4 read-only ops at once; the page asks 6 on load)
         self.measure_delay = 0.0          # seconds between vf.point events
         self.measure_gate = threading.Event()
         self.measure_gate.set()
@@ -599,6 +600,9 @@ class V3Ops:
         self.last_applied_at = None
 
     def _op_tune_last(self, rid, args):
+        if self.last_busy_first > 0:
+            self.last_busy_first -= 1
+            return self._err(rid, "BUSY", "4 read-only operations are already running; try again", state="idle")
         if not self.tuning_read or self.last_read_refused or self.last_read_at is None:
             return self._reply(rid, True, result={"available": False})
         self._reply(rid, True, result={"available": True, "boot_id": "fake-boot-0001", "at": self.last_read_at, "applied_at": self.last_applied_at,

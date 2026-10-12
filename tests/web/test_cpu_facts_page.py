@@ -90,7 +90,7 @@ class TestStatic(unittest.TestCase):
         body = body_of("reachOf")
         self.assertIn("turbo.favored", body)
         self.assertNotRegex(body, r"\bFAVORED\b")   # P0 / P3 are not named: they reach 57x because the read says so
-        self.assertIn("above this core\\u2019s ", JS)   # G-133: the tag on a point above the core's own 0x1C ratio
+        self.assertIn("this core\\u2019s", JS)   # G-133: the tag on a point above the core's own 0x1C ratio (G-139: its tooltip)
 
     def test_clamp_is_the_monotonic_rule(self):
         self.assertIn("want < prev.v", body_of("predictUnit"))   # V(n) = max(base + offset, V(n-1))
@@ -205,7 +205,7 @@ class TestBrowser(unittest.TestCase):
                 # F3: 56x / 57x on P1 are dimmed; the same points on P0 (favored) are not
                 self.assertEqual(page.locator("#tn-pts-P1 .tn-pt.unreach").count(), 2)
                 self.assertEqual(page.locator("#tn-pts-P0 .tn-pt.unreach").count(), 0)
-                self.assertIn("fused · offset only · above this core’s 55× limit", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
+                self.assertIn("above 55× limit", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
                 for i in range(2):   # 56x and 57x alike: the tag only, never a predicted voltage
                     self.assertNotIn("→", page.locator("#tn-pts-P1 .tn-pt.unreach").nth(i).inner_text())
                 # F4: a deep offset on 57x with a milder one on 56x is clamped; the badge shows
