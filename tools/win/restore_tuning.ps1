@@ -5,6 +5,8 @@
     -From DIR     the accepted state: CURRENT, EXPECTED-words.txt, profiles\*.toml (default %LOCALAPPDATA%\arltuner\accepted). The app writes it on Linux
                   (Profiles > Set as accepted, /etc/arltuner/accepted); copy that directory here. Nothing in this repo is one (D-036): absent = stop.
     -Policy FILE  the policy for the guarded writes (default DIR\policy.toml; copy /etc/arltuner/policy.toml next to the accepted state, or name another).
+  DIR\fingerprint.json (written by 'Set as accepted' on Linux) tells this machine which cores are which: the Linux CPU -> Windows logical-processor map is derived at
+  run time from Windows' own data and settled by guarded reads of the fused V/F point of every P-core. A state accepted before that existed has none: stop, re-accept on Linux.
   Steps: checks (admin, XtuService stopped, no OCCT/XTU) -> one CONFIRM -> sc start ThrottleStop -> [-Before: vf-dump] -> apply each CURRENT profile ->
   vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> sc stop ThrottleStop. Stops at the first failure; nothing is retried. Revert = cold boot.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
@@ -39,6 +41,8 @@ $wordsFile = Join-Path $From 'EXPECTED-words.txt'
 if (-not (Test-Path (Join-Path $From 'CURRENT')) -or -not (Test-Path $wordsFile)) {
     Fail "no accepted state in $From. Save a profile as accepted in the app (Linux: Profiles > Set as accepted) and copy /etc/arltuner/accepted there, or pass -From DIR"
 }
+$fingerprint = Join-Path $From 'fingerprint.json'
+if (-not (Test-Path $fingerprint)) { Fail "no fingerprint.json in $From. Re-accept on Linux to record the fingerprint (Tune > Read, then Profiles > Set as accepted) and copy /etc/arltuner/accepted here, or pass -From DIR" }
 $policy = if ($Policy) { $Policy } else { Join-Path $From 'policy.toml' }
 if (-not (Test-Path $policy)) { Fail "policy $policy not found: copy /etc/arltuner/policy.toml next to the accepted state or pass -Policy FILE" }
 $profiles = @()
@@ -72,7 +76,7 @@ if (-not $Orchestrated) {
 # One arltuner command; the confirm wrapper answers its guard token (the run was confirmed above / in chat). Full output: the capture file.
 function Run-Lm([string]$tag, [string[]]$LmArgs) {
     $f = "captures\win\restore-$ts-$tag.txt"
-    $cmd = @($py[1..9] | Where-Object { $_ }) + @('tools\arltuner.py') + $LmArgs + @('--device-win', '--policy', $policy, '--audit', $audit)
+    $cmd = @($py[1..9] | Where-Object { $_ }) + @('tools\arltuner.py') + $LmArgs + @('--device-win', '--fingerprint', $fingerprint, '--policy', $policy, '--audit', $audit)
     & $py[0] @($py[1..9] | Where-Object { $_ }) 'tools\lnx\orchestrator_confirm.py' $py[0] @cmd *> $f
     $rc = $LASTEXITCODE
     Get-Content $f | Select-String 'identity check passed|Result:|refus|REFUS|mismatch|WHEA' | ForEach-Object { '  ' + $_.Line.Trim() }

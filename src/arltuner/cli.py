@@ -7,8 +7,9 @@ type ``CONFIRM <token>``.
 
 ``--device`` uses ``DevCpuMsrPort(writable=True)`` (``/dev/cpu/N/msr``). Every refusal - env flag missing, wrong confirmation,
 policy / CPU / topology refusal, pre-flight failure - happens **before** that port is constructed.
-``--device-win`` is the same on Windows 11 (Administrator): ``WinThrottleStopMsrPort`` (ThrottleStop's driver, thread pinned per access,
-Linux CPU -> Windows LP map verified first) with the WHEA-Logger event-log health gate; every guard step is unchanged.
+``--device-win`` is the same on Windows 11 (Administrator): ``WinThrottleStopMsrPort`` (ThrottleStop's driver, thread pinned per access) with the
+WHEA-Logger event-log health gate; every guard step is unchanged. It needs the accepted state's ``fingerprint.json`` (``--fingerprint``, G-138): the Linux CPU ->
+Windows LP map is derived at run time from Windows' own data and settled by the guarded identity reads (cmd 0x09) that precede every write.
 
 Exit codes: 0 ok - 1 usage / parse errors - 2 refused, plan not allowed, needs a higher limit - 3 hardware error, timeout,
 non-zero completion code, unverified read-back or tripped guard.
@@ -75,8 +76,22 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.mailbox import Cmd, VfWord, rc_name
-from arltuner.msr import WINDOWS_P_FUSED_FINGERPRINT, DevCpuMsrPort, MailboxTransport, MsrPort, SimConfig, SimMsrPort, WinThrottleStopMsrPort, verify_machine, windows_boot_id
+from arltuner.msr import (
+    DevCpuMsrPort,
+    IdentityError,
+    MailboxTransport,
+    MsrError,
+    MsrPort,
+    SimConfig,
+    SimMsrPort,
+    WinThrottleStopMsrPort,
+    identity_cpus,
+    resolve_identity,
+    verify_machine,
+    windows_boot_id,
+)
 from arltuner.profiles import Profile, ProfileError, load_profile
+from arltuner.profiles.fingerprint import FINGERPRINT_FILE, Fingerprint, FingerprintError, load_fingerprint
 from arltuner.topology import Topology, TopologyError, TopologyMismatch, UnknownCore, detect
 from arltuner.topology.reference import arl_s_285k
 
@@ -192,18 +207,18 @@ def _default_win_health_gate_factory(taint_bits: frozenset[int]) -> HealthGate:
     return make_whea_health_gate(run_wevtutil)
 
 
-def _default_win_port() -> MsrPort:
-    """The only place a ThrottleStop port is built (writable, like the /dev/cpu one). It verifies the LP map before it exists."""
-    return WinThrottleStopMsrPort(writable=True)
+def _default_win_port(fingerprint: Fingerprint) -> MsrPort:
+    """The only place a ThrottleStop port is built (writable, like the /dev/cpu one). It derives and verifies the LP map before it exists."""
+    return WinThrottleStopMsrPort(writable=True, fingerprint=fingerprint)
 
 
-def _default_win_detect() -> Topology:
-    """Windows' stand-in for ``detect``: the reference topology the Windows LP map belongs to, provided that map matches what Windows reports."""
+def _default_win_detect(fingerprint: Fingerprint) -> Topology:
+    """Windows' stand-in for ``detect``: the Linux topology the accepted state was recorded on, provided Windows' CPU and layout match it."""
     try:
-        verify_machine()
+        verify_machine(None, fingerprint)
     except OSError as exc:
         raise TopologyMismatch(str(exc)) from exc
-    return arl_s_285k()
+    return fingerprint.topology()
 
 
 def _default_sim_port() -> MsrPort:
@@ -314,6 +329,11 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
         p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/linuxmon-mailbox.lock, else the temp dir)")
         p.add_argument("--operator", metavar="NAME", help="name recorded in the audit log (default: $USER)")
         p.add_argument(
+            "--fingerprint",
+            metavar="FILE",
+            help="--device-win only: the accepted state's fingerprint.json (written by 'Set as accepted' on Linux; default: %%LOCALAPPDATA%%\\arltuner\\accepted\\fingerprint.json)",
+        )
+        p.add_argument(
             "--allow-taint-bit",
             metavar="N",
             type=_taint_bit,
@@ -415,9 +435,12 @@ class _Ctx:
     device_port_factory: Callable[[], MsrPort]
     detect_fn: Callable[[], Topology]
     win: bool = False  # --device-win: the ThrottleStop port / WHEA gate / Windows LP-map check replace the /dev/cpu + /proc ones
-    win_port_factory: Callable[[], MsrPort] = _default_win_port
+    win_port_factory: Callable[[Fingerprint], MsrPort] = _default_win_port
     win_health_gate_factory: Callable[[frozenset[int]], HealthGate | None] = _default_win_health_gate_factory
-    win_detect_fn: Callable[[], Topology] = _default_win_detect
+    win_detect_fn: Callable[[Fingerprint], Topology] = _default_win_detect
+    fingerprint_path: str | None = None  # --fingerprint (default: %LOCALAPPDATA%\\arltuner\\accepted\\fingerprint.json)
+    fingerprint: Fingerprint | None = None  # loaded by _topology_for on --device-win
+    identity_cpus: tuple[int, ...] = ()  # the CPUs of the identity reads (--device-win): every P CPU + the first CPU of each E cluster
     measure_io_factory: Callable[[], vfdump.MeasureIO] | None = None  # T-026: None -> the real cpufreq/stress-ng I/O for --device, a refusal for --sim
     hardware: bool = False  # --device / --device-win: only hardware runs apply the D-030 installed paths (a simulator keeps the per-user defaults)
     lstat_fn: Callable[[str], Any] = os.lstat  # D-030 installed-detection (tests inject fake stat results)
@@ -465,12 +488,34 @@ def _require_env_flag(ctx: _Ctx) -> None:
         )
 
 
+def _load_fingerprint(ctx: _Ctx) -> Fingerprint:
+    """--device-win: the accepted state's ``fingerprint.json`` (nothing is read from Windows or sent before it is judged restorable); refuses otherwise."""
+    path = ctx.fingerprint_path
+    if path is None:
+        base = ctx.env.get("LOCALAPPDATA")
+        if not base:
+            ctx.refuse(f"--device-win needs the accepted state's {FINGERPRINT_FILE}: pass --fingerprint FILE (%LOCALAPPDATA% is not set). Nothing was sent.")
+        path = str(Path(base) / "arltuner" / "accepted" / FINGERPRINT_FILE)
+    try:
+        fingerprint = load_fingerprint(path)
+        fingerprint.require_restorable()
+    except FingerprintError as exc:
+        ctx.refuse(f"{exc}. Nothing was sent.")
+    ctx.fingerprint = fingerprint
+    return fingerprint
+
+
 def _topology_for(ctx: _Ctx, device: bool) -> Topology:
     """The simulated reference CPU for ``--sim``; on hardware the topology derived live from sysfs (D-036), refusing when it cannot be."""
     if not device:
         return arl_s_285k()
     try:
-        return (ctx.win_detect_fn if ctx.win else ctx.detect_fn)()
+        if ctx.win:
+            fingerprint = _load_fingerprint(ctx)
+            topology = ctx.win_detect_fn(fingerprint)
+            ctx.identity_cpus = identity_cpus(topology)
+            return topology
+        return ctx.detect_fn()
     except TopologyError as exc:
         ctx.refuse(f"this system's CPU topology could not be derived or is not an Arrow Lake-S layout: {exc}. Nothing was sent.")
 
@@ -510,6 +555,14 @@ def _clock_sleep(ctx: _Ctx, device: bool) -> tuple[Callable[[], float], Callable
     return ctx.clock or time.monotonic, ctx.sleep or time.sleep
 
 
+def _device_port(ctx: _Ctx) -> MsrPort:
+    """The hardware port of this run: the ThrottleStop port built from the accepted state's fingerprint (--device-win) or the /dev/cpu one."""
+    if ctx.win:
+        assert ctx.fingerprint is not None  # _topology_for loaded it before any port is built
+        return ctx.win_port_factory(ctx.fingerprint)
+    return ctx.device_port_factory()
+
+
 def _health_gate(ctx: _Ctx, taint_bits: Sequence[int], device: bool) -> HealthGate | None:
     gate = ctx.health_gate
     if gate is None and ctx.health_gate_factory is not None:
@@ -522,48 +575,79 @@ def _health_gate(ctx: _Ctx, taint_bits: Sequence[int], device: bool) -> HealthGa
     return gate
 
 
-# --device-win: the Linux CPU -> Windows LP map cannot tell the P-cores apart through Windows' own APIs, but the fused V/F point
-# (cmd 0x09 P1=0x11 P2=0) is distinct per physical P-core ([MEASURED lnx 2026-10-02]); the expected words belong to the LP map (winport).
-IDENTITY_CPUS = tuple(range(len(WINDOWS_P_FUSED_FINGERPRINT)))
-IDENTITY_OPS = len(IDENTITY_CPUS)
-IDENTITY_NOTE = (
-    f"Identity check first (--device-win): {IDENTITY_OPS} guarded reads of cmd 0x09 P1=0x11 P2=0 on the P-cores, each compared with the fused V/F point "
-    "recorded for the Windows LP map; any mismatch refuses the whole session before a write."
+# --device-win: Windows cannot be asked for the Linux CPU numbering and cannot tell the P-cores apart, but the fused V/F point (cmd 0x09 P1=0x11 P2=0) is
+# distinct per physical P-core ([MEASURED lnx 2026-10-02]) and shared inside an E cluster. The accepted state's fingerprint.json records it per Linux CPU; the
+# identity check reads it through the guard on every P LP of the provisional map (and the first LP of each E cluster), matches the words and settles the map.
+def _identity_ops(ctx: _Ctx) -> int:
+    """Guard operations the identity check spends (0 without --device-win)."""
+    return len(ctx.identity_cpus) if ctx.win else 0
+
+
+def _identity_note(ctx: _Ctx) -> str:
+    n = _identity_ops(ctx)
+    return (
+        f"Identity check first (--device-win): {n} guarded reads of cmd 0x09 P1=0x11 P2=0 (every P-core and the first CPU of each E cluster), matched with the fused V/F "
+        "words recorded in the accepted state's fingerprint.json; any mismatch refuses the whole session before a write."
+    )
+
+
+_NO_IDENTITY_NOTE = (
+    "note: --device-win read-vf / read send exactly one request and run no identity check: a P-core CPU number is the first guess of the Linux CPU -> Windows LP "
+    "map and may be another physical P-core (E clusters and the P/E split are verified). apply, point-offset and vf-dump settle it first."
 )
 
 
 def _identity_policy_check(ctx: _Ctx, policy: Policy) -> None:
-    """Refuse (nothing sent) unless the policy allows the 0x09 identity reads on every P-core and has room for them."""
-    for cpu in IDENTITY_CPUS:
+    """Refuse (nothing sent) unless the policy allows the 0x09 identity reads on every identity CPU and has room for them."""
+    for cpu in ctx.identity_cpus:
         req = Request(cpu, int(Cmd.VOLTAGE_FLOOR_READ), 0x11, 0, 0, "identity check")
         entry = policy.match(req.cmd, req.p1, req.p2)
         if entry is None or entry.kind != "read":
-            ctx.refuse("--device-win needs the identity check (cmd 0x09 P1=0x11 P2=0 on the P-cores) and no read allow entry of the policy matches it "
+            ctx.refuse("--device-win needs the identity check (cmd 0x09 P1=0x11 P2=0 on the P-cores and E clusters) and no read allow entry of the policy matches it "
                        "(default deny; see policies/default.toml 'voltage_floor_read'). Nothing was sent.")
         verdict = predict(policy, req, None)
         if not verdict.allowed:
             ctx.refuse(f"identity check: {verdict.reason}: {verdict.detail} (cpu {cpu}). Nothing was sent.")
-    if policy.max_operations_per_session <= IDENTITY_OPS:
-        ctx.refuse(f"--device-win spends {IDENTITY_OPS} guard operations on the identity check but the policy allows {policy.max_operations_per_session} per session. Nothing was sent.")
+    if policy.max_operations_per_session <= _identity_ops(ctx):
+        ctx.refuse(f"--device-win spends {_identity_ops(ctx)} guard operations on the identity check but the policy allows {policy.max_operations_per_session} per session. Nothing was sent.")
 
 
-def _identity_check(ctx: _Ctx, guard: WriteGuard, confirm: Confirmation, sleep: Callable[[float], object], dwell: float, audit_path: Path) -> None:
-    """Read the fused V/F point of the P-cores through the guard and refuse unless each equals ``WINDOWS_P_FUSED_FINGERPRINT`` (the LP map is then right)."""
-    for cpu in IDENTITY_CPUS:
-        req = Request(cpu, int(Cmd.VOLTAGE_FLOOR_READ), 0x11, 0, 0, f"identity check: fused V/F point of cpu {cpu} (Windows LP map)")
+def _identity_check(ctx: _Ctx, guard: WriteGuard, confirm: Confirmation, sleep: Callable[[float], object], dwell: float, audit_path: Path, port: MsrPort) -> None:
+    """Read the fused V/F word of every identity CPU through the guard, one request at a time, then settle the Linux CPU -> Windows LP map from the recorded words
+    (``resolve_identity``) and rebind the port's P order. Refuses (no write sent) unless every P word is distinct and matches exactly one recorded P-core and every
+    E cluster reads its recorded word. The reads go to the provisional slots, so ``cpu`` in these audit records is a slot, not yet a verified Linux CPU."""
+    fingerprint = ctx.fingerprint
+    assert fingerprint is not None
+    lps = getattr(port, "lp_of_cpu", None)
+    read: dict[int, int] = {}
+    for cpu in ctx.identity_cpus:
+        where = f", provisional Windows LP {lps[cpu]}" if lps is not None and cpu in lps else ""
+        req = Request(cpu, int(Cmd.VOLTAGE_FLOOR_READ), 0x11, 0, 0, f"identity check: fused V/F point of slot cpu {cpu}{where} (Windows LP map, provisional until matched)")
         try:
             result = guard.execute(req, confirm)
         except GuardRefused as exc:
             ctx.fail(EXIT_HARDWARE if exc.reason is Refusal.TRIPPED else EXIT_REFUSED, _refusal_text(exc, audit_path))
         except Exception as exc:  # MailboxTimeout / MsrError: the guard has audited it and tripped
             ctx.fail(EXIT_HARDWARE, f"identity check: hardware error: {type(exc).__name__}: {exc}")
-        got = result.response.data
-        if result.response.rc != 0 or got != WINDOWS_P_FUSED_FINGERPRINT[cpu]:
-            what = f"completion code {result.response.rc} ({rc_name(result.response.rc)})" if result.response.rc != 0 else f"read {got:#010x}, expected {WINDOWS_P_FUSED_FINGERPRINT[cpu]:#010x}"
-            ctx.refuse(f"identity check failed on cpu {cpu}: {what}. The Linux CPU -> Windows LP map does not match what the CPU reports. No write was sent.")
+        if result.response.rc != 0:
+            ctx.refuse(f"identity check failed on slot cpu {cpu}: completion code {result.response.rc} ({rc_name(result.response.rc)}). No write was sent.")
+        read[cpu] = result.response.data
         if dwell > 0:
             sleep(dwell)  # the guard enforces the dwell between operations; waiting is ours
-    ctx.say(f"identity check passed: fused V/F points of the P-cores match ({IDENTITY_OPS} guarded reads).")
+    try:
+        permutation = resolve_identity(fingerprint, read)
+    except IdentityError as exc:
+        ctx.refuse(f"identity check failed: {exc}. The Linux CPU -> Windows LP map cannot be established from what the CPU reports. No write was sent.")
+    moved = {cpu: slot for cpu, slot in permutation.items() if cpu != slot}
+    rebind = getattr(port, "apply_identity", None)
+    if moved and rebind is None:
+        ctx.refuse("identity check: the P-cores read in a different order than the accepted state recorded and this port cannot rebind its map. No write was sent.")
+    if rebind is not None:
+        try:
+            rebind(permutation)
+        except MsrError as exc:
+            ctx.refuse(f"identity check: {exc}. No write was sent.")
+    ctx.say(f"identity check passed: {len(read)} guarded reads matched the accepted state's fused V/F words ({len(moved)} P-cores were in a different order than the first guess).")
 
 
 def _build_guard(
@@ -767,12 +851,12 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
     profile = _load_profile_or_exit(ctx, args.profile)
     topology = _topology_for(ctx, device)
     policy = _load_policy_or_exit(ctx, args.policy, topology)
-    plan_policy = policy  # what the profile may spend: --device-win keeps IDENTITY_OPS of the session / boot budget for the identity check
+    plan_policy = policy  # what the profile may spend: --device-win keeps the identity reads' share of the session / boot budget
     extra_ops = 0
     if ctx.win:
         _identity_policy_check(ctx, policy)
-        plan_policy = dataclasses.replace(policy, max_operations_per_session=policy.max_operations_per_session - IDENTITY_OPS)
-        extra_ops = IDENTITY_OPS
+        plan_policy = dataclasses.replace(policy, max_operations_per_session=policy.max_operations_per_session - _identity_ops(ctx))
+        extra_ops = _identity_ops(ctx)
     try:
         preflight(profile, topology, plan_policy, boot_ops_used=_boot_ops_used(ctx, args.audit) + extra_ops)
     except PreflightError as exc:
@@ -793,10 +877,10 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
                 ctx.refuse("the plan would not be allowed (see above). Nothing was sent.")
     except (ProfileError, PlanError) as exc:
         ctx.fail(EXIT_USAGE, f"plan error: {exc}")
-    token, typed = _confirm(ctx, "About to apply the plan above through the write guard." + (f"\n{IDENTITY_NOTE}" if ctx.win else ""))
+    token, typed = _confirm(ctx, "About to apply the plan above through the write guard." + (f"\n{_identity_note(ctx)}" if ctx.win else ""))
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
-    port = (ctx.win_port_factory if ctx.win else ctx.device_port_factory)() if device else sim  # the only place a real port is constructed; every refusal is above
+    port = _device_port(ctx) if device else sim  # the only place a real port is constructed; every refusal is above
     assert port is not None
     try:
         try:
@@ -805,7 +889,7 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
             ctx.fail(EXIT_USAGE, f"cannot build the guard: {exc}")
         confirm = Confirmation(typed, _operator(ctx, args.operator))
         if ctx.win:
-            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path)
+            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path, port)
         try:
             report = apply_profile(
                 profile,
@@ -846,6 +930,8 @@ def _cmd_read_vf(ctx: _Ctx, args: argparse.Namespace) -> int:
         core = topology.by_cpu(cpu)
     except UnknownCore:
         ctx.refuse(f"cpu {cpu} is not a CPU of this system (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
+    if ctx.win:
+        ctx.warn(_NO_IDENTITY_NOTE)
     req = Request(cpu, int(Cmd.VOLTAGE_FREQ_READ), 0, 0, 0, f"read-vf: single V/F read of {topology.xtu_name(core)} (T-007 instrument)")
     verdict = predict(policy, req, None)
     if not verdict.allowed:
@@ -859,7 +945,7 @@ def _cmd_read_vf(ctx: _Ctx, args: argparse.Namespace) -> int:
     )
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
-    port = (ctx.win_port_factory if ctx.win else ctx.device_port_factory)() if device else ctx.sim_factory()  # every refusal is above
+    port = _device_port(ctx) if device else ctx.sim_factory()  # every refusal is above
     try:
         try:
             guard, _, _ = _build_guard(ctx, port, policy, audit, token, gate, args.lock, device)
@@ -922,6 +1008,8 @@ def _cmd_read(ctx: _Ctx, args: argparse.Namespace) -> int:
         core = topology.by_cpu(cpu)
     except UnknownCore:
         ctx.refuse(f"cpu {cpu} is not a CPU of this system (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
+    if ctx.win:
+        ctx.warn(_NO_IDENTITY_NOTE)
     shape = f"cmd {cmd:#04x} P1={p1:#x} P2={p2:#x}"
     entry = policy.match(cmd, p1, p2)
     if entry is None:
@@ -941,7 +1029,7 @@ def _cmd_read(ctx: _Ctx, args: argparse.Namespace) -> int:
     )
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
-    port = (ctx.win_port_factory if ctx.win else ctx.device_port_factory)() if device else ctx.sim_factory()  # every refusal is above
+    port = _device_port(ctx) if device else ctx.sim_factory()  # every refusal is above
     try:
         try:
             guard, _, _ = _build_guard(ctx, port, policy, audit, token, gate, args.lock, device)
@@ -979,7 +1067,7 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
     policy = _load_policy_or_exit(ctx, args.policy, topology)
     if ctx.win:
         _identity_policy_check(ctx, policy)
-    ops = 2 + (IDENTITY_OPS if ctx.win else 0)
+    ops = 2 + _identity_ops(ctx)
     policy = dataclasses.replace(policy, max_operations_per_session=min(policy.max_operations_per_session, ops))  # [identity reads +] read + write; a policy can only lower it
     try:
         core = topology.by_cpu(cpu)
@@ -1008,11 +1096,11 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
         ctx,
         f"point-offset: ONE guarded session on {where}: cpu {cpu} ({topology.xtu_name(core)}), V/F point {shape}: read cmd 0x10, then write cmd 0x11 "
         f"with only the offset field set to {args.offset_mv:+g} mV (raw {offset_raw}), then a read-back (2 operations).\n"
-        "A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md)." + (f"\n{IDENTITY_NOTE}" if ctx.win else ""),
+        "A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md)." + (f"\n{_identity_note(ctx)}" if ctx.win else ""),
     )
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
-    port = (ctx.win_port_factory if ctx.win else ctx.device_port_factory)() if device else ctx.sim_factory()  # every refusal is above
+    port = _device_port(ctx) if device else ctx.sim_factory()  # every refusal is above
     try:
         try:
             guard, _, sleep = _build_guard(ctx, port, policy, audit, token, gate, args.lock, device)
@@ -1031,7 +1119,7 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
                 ctx.fail(EXIT_HARDWARE, f"hardware error: {type(exc).__name__}: {exc}{extra}")
 
         if ctx.win:
-            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path)
+            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path, port)
         before = send(read_req)
         if before.response.rc != 0:
             ctx.fail(EXIT_HARDWARE, f"baseline read: mailbox completion code {before.response.rc} ({rc_name(before.response.rc)}). Nothing was written.")
@@ -1104,7 +1192,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
             ctx.refuse(f"{verdict.reason}: {verdict.detail} (cpu {req.cpu}, {shape}). Nothing was sent.")
     if ctx.win:
         _identity_policy_check(ctx, policy)
-    needed = len(requests) + (IDENTITY_OPS if ctx.win else 0)  # --device-win: + the identity reads
+    needed = len(requests) + _identity_ops(ctx)  # --device-win: + the identity reads
     # The guard refuses a plain rdmsr (SESSION_LIMIT / BOOT_LIMIT) once the caps are *full*, although a plain read does not count: --measure needs one spare.
     spare = 1 if measure else 0
     why = " (+1 spare: the guard refuses even a plain 0x198 read once the cap is full)" if measure else ""
@@ -1152,11 +1240,11 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     token, typed = _confirm(
         ctx,
         f"vf-dump: up to {needed} guard-mediated mailbox READ requests on {where}, CPUs {', '.join(str(c.cpu) for c in cores)} (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11), "
-        f"one at a time, {policy.min_dwell_s:g} s apart; normally one per point of each CPU (the budget is the worst case: P2 <= {cap}, as far as the policy allows).\nA mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.{extra}" + (f"\n{IDENTITY_NOTE}" if ctx.win else ""),
+        f"one at a time, {policy.min_dwell_s:g} s apart; normally one per point of each CPU (the budget is the worst case: P2 <= {cap}, as far as the policy allows).\nA mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.{extra}" + (f"\n{_identity_note(ctx)}" if ctx.win else ""),
     )
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
-    port = (ctx.win_port_factory if ctx.win else ctx.device_port_factory)() if device else ctx.sim_factory()  # every refusal is above
+    port = _device_port(ctx) if device else ctx.sim_factory()  # every refusal is above
     policy = dataclasses.replace(policy, max_operations_per_session=needed + spare)  # exactly the budget (+ the spare a --measure needs); a policy can only lower it
     curves: list[vfdump.CpuCurve] = []
     stop: vfdump.Stop | None = None
@@ -1169,7 +1257,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
             ctx.fail(EXIT_USAGE, f"cannot build the guard: {exc}")
         confirm = Confirmation(typed, _operator(ctx, args.operator))
         if ctx.win:
-            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path)
+            _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path, port)
         pacer = vfdump.Pacer(policy.min_dwell_s, clock, sleep)
         curves, stop = vfdump.walk(cores, topology, lambda req: guard.execute(req, confirm), pacer, lambda exc: _refusal_text(exc, audit.path), cap)
         units = vfdump.units_of(curves, topology)
@@ -1293,6 +1381,11 @@ def main(
         parser.print_usage()
         err.write(f"error: {exc}\n")
         return EXIT_USAGE
+    if getattr(args, "fingerprint", None) is not None and not getattr(args, "device_win", False):
+        parser.print_usage()
+        err.write("error: --fingerprint only applies with --device-win\n")
+        return EXIT_USAGE
+    ctx.fingerprint_path = getattr(args, "fingerprint", None)
     if getattr(args, "device_win", False):
         args.device = True  # every command treats it as --device; ctx.win swaps the port, gate, topology check and boot id
         ctx.win = True

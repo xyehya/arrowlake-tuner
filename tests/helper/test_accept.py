@@ -10,6 +10,8 @@ from typing import Any
 from arltuner.helper.ops import _parse_expected
 from arltuner.mailbox import VfWord
 from arltuner.profiles import load_profile
+from arltuner.profiles.fingerprint import parse_fingerprint
+from arltuner.topology import arl_s_285k
 
 from ._support import error_code
 from .test_tune import ALL_P_53, TuneCase, row, rows
@@ -47,7 +49,7 @@ class AcceptSaved(AcceptCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual((r["result"]["name"], r["result"]["from"], r["result"]["replaced"]), ("mine", "saved", []))
         files = self.accepted_files()
-        self.assertEqual(sorted(files), ["CURRENT", "EXPECTED-words.txt", "profiles/mine.toml"])
+        self.assertEqual(sorted(files), ["CURRENT", "EXPECTED-words.txt", "fingerprint.json", "profiles/mine.toml"])
         self.assertIn("profile = profiles/mine.toml\n", files["CURRENT"])
         self.assertFalse([line for line in files["CURRENT"].splitlines() if line.startswith("policy")])  # no policy line: the restore uses the installed policy
         profile = load_profile(files["profiles/mine.toml"])
@@ -152,7 +154,7 @@ class AcceptFromRead(AcceptCase):
         self.assertTrue(second["ok"], second)
         self.assertEqual(second["result"]["replaced"], [first])
         files = self.accepted_files()
-        self.assertEqual(sorted(files), ["CURRENT", "EXPECTED-words.txt", f"profiles/{second['result']['name']}.toml"])
+        self.assertEqual(sorted(files), ["CURRENT", "EXPECTED-words.txt", "fingerprint.json", f"profiles/{second['result']['name']}.toml"])
         self.assertEqual(sorted(p.name for p in self.acc.parent.iterdir()), ["accepted"], "no staging leftovers")
         table = _parse_expected(files["EXPECTED-words.txt"])
         self.assertEqual(VfWord.from_u32(table[3][5]).offset_raw, VfWord.mv_to_offset_raw(-61))
@@ -231,3 +233,54 @@ class AcceptRefusals(AcceptCase):
         self.assertTrue(self.accept(h, **{"from": "read"})["ok"])
         self.assertEqual(len(self.sim.requests), sent)
         self.assertEqual(sorted(p.name for p in self.acc.parent.iterdir()), ["accepted"])
+
+
+CPUINFO = """processor\t: 0
+vendor_id\t: GenuineIntel
+cpu family\t: 6
+model\t\t: 198
+model name\t: Intel(R) Core(TM) Ultra 9 285K
+stepping\t: 2
+
+processor\t: 1
+vendor_id\t: GenuineIntel
+cpu family\t: 6
+model\t\t: 198
+model name\t: Intel(R) Core(TM) Ultra 9 285K
+"""
+
+
+class AcceptFingerprint(AcceptCase):
+    """G-138: ``fingerprint.json`` next to the accepted words: per Linux CPU its kind / cluster / fused 0x09 word, plus the CPU's identity."""
+
+    def test_the_fingerprint_records_every_cpu_with_its_fused_word_and_the_cpu_identity(self) -> None:
+        cpuinfo = self.tmp / "cpuinfo"
+        cpuinfo.write_text(CPUINFO)
+        h = self.boot_accepting(cpuinfo_path=cpuinfo)
+        self.tune(h, rows(row("P3", points={"53": -60})))
+        r = self.accept(h, **{"from": "read"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["result"]["fingerprint"], "complete")
+        fp = parse_fingerprint(self.accepted_files()["fingerprint.json"])
+        self.assertEqual((fp.cpu_id.vendor, fp.cpu_id.family, fp.cpu_id.model, fp.cpu_id.brand), ("GenuineIntel", 6, 198, "Intel(R) Core(TM) Ultra 9 285K"))
+        self.assertEqual(fp.topology(), arl_s_285k())
+        topo = fp.require_restorable()
+        self.assertEqual([c.cpu for c in fp.cpus], list(range(24)))
+        self.assertEqual(len({fp.word_of(c) for c in topo.cpus_of_kind("P")}), 8)  # distinct per P-core
+        self.assertEqual({fp.word_of(c) for c in range(12, 16)}, {fp.word_of(12)})  # shared inside an E cluster
+        self.assertEqual([c.cpu for c in fp.cpus if c.favored], [0, 3])
+
+    def test_under_the_simulator_no_cpu_identity_is_recorded_and_the_restore_would_refuse(self) -> None:
+        h = self.boot_accepting()  # cpuinfo_path unset: the host's /proc/cpuinfo is never read
+        self.tune(h, rows(row("P3", points={"53": -60})))
+        r = self.accept(h, **{"from": "read"})
+        self.assertTrue(r["ok"], r)
+        self.assertIn("no CPU identity", r["result"]["fingerprint"])
+        self.assertIsNone(parse_fingerprint(self.accepted_files()["fingerprint.json"]).cpu_id)
+
+    def test_an_unreadable_cpuinfo_records_no_identity(self) -> None:
+        h = self.boot_accepting(cpuinfo_path=self.tmp / "missing")
+        self.tune(h, rows(row("P3", points={"53": -60})))
+        r = self.accept(h, **{"from": "read"})
+        self.assertTrue(r["ok"], r)
+        self.assertIn("incomplete", r["result"]["fingerprint"])
