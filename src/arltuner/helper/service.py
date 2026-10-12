@@ -22,6 +22,8 @@ the access check). The peer uid then *is* the invoker: audit ``operator`` ``gui:
 
 A client leaving (EOF / broken socket) ends its connection the way EOF always did: telemetry stops, an operation in flight completes its read-back or
 restore at the next safe point, no new one starts, and the helper is ready for the next client.
+A client that stops reading is treated the same way (``SO_SNDTIMEO`` on its connection: a timed-out send ends the connection). The next client is accepted only
+after **every** thread of the previous connection has ended (``Helper.serve`` returns then); only an admitted client counts as activity for the idle exit.
 """
 from __future__ import annotations
 
