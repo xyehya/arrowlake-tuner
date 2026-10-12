@@ -751,7 +751,7 @@ def _persist_applied_words(helper: Helper) -> None:
 
 def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     """``{available: false}``, or ``{available: true, boot_id, at, applied_at, result}`` with ``result`` shaped like ``tune.read``'s. After an apply the
-    stored words (the verified read-backs) are overlaid, the decoded copy rebuilt and the accepted comparison redone."""
+    stored words (the verified read-backs) are overlaid and the decoded copy rebuilt; the accepted comparison is always redone against the accepted state as it is now."""
     _restore_last(helper)
     record = _boot_record(helper)
     if record is None:
@@ -773,8 +773,8 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                         p.update(_word_json(ws[p["point"]]))
         result["differences"] = []
         result["differences_stale"] = True
-        matched, note = accepted_match(helper, result, helper.fused_words)
-        result["accepted_match"], result["accepted_note"] = matched, note
+    matched, note = accepted_match(helper, result, helper.fused_words)  # G-129: always redone (a file read, no hardware): the accepted state can change after the read (profiles.accept)
+    result["accepted_match"], result["accepted_note"] = matched, note
     result["tune"] = _decode_document(result, topology, helper.fused_words)
     if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
         result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored

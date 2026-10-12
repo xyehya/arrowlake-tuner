@@ -76,6 +76,18 @@ class AcceptSaved(AcceptCase):
         self.assertTrue(listed["accepted"])
         self.assertIn({"name": "mine", "source": "accepted", "created": None}, listed["profiles"])
 
+    def test_tune_last_compares_with_the_state_accepted_after_the_read(self) -> None:
+        """No apply this boot (applied_at is null): the stored read must still be compared with an accepted state that appeared after it."""
+        h = self.boot_accepting()
+        stored = h.call("l0", "tune.last", {})["result"]["result"]
+        self.assertIsNone(stored["accepted_match"])
+        self.assertTrue(stored["accepted_note"].startswith("No accepted state yet"))
+        self.assertTrue(self.accept(h, **{"from": "read"})["ok"])
+        last = h.call("l1", "tune.last", {})["result"]
+        self.assertIsNone(last["applied_at"])
+        self.assertIsNone(last["result"]["accepted_note"])
+        self.assertTrue(last["result"]["accepted_match"] and all(c["match"] for c in last["result"]["accepted_match"]), last["result"]["accepted_match"])
+
     def test_restore_accepted_puts_the_accepted_words_back(self) -> None:
         h = self.boot_accepting()
         intent = rows(row("P3", points={"53": -60}, ), row("P2", points={"53": -30}))
