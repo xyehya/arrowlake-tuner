@@ -700,6 +700,32 @@ class MeasureGroupUnit(unittest.TestCase):
             vfdump.measure_group(io, self.group("P", (0,), (30,)), read_perf, lambda s: None, problems)
         self.assertEqual(len(problems), 1)
 
+    def test_search_cap_finds_a_cap_between_the_neighbours_and_restores(self) -> None:
+        """G-131: the nominal caps (23x / 24x) both miss; a cap in between runs the target. Nearest first, higher side first, original caps restored."""
+        class Fine(FakeIO):
+            def running_ratio(self, cpu: int) -> int:
+                return 23 if 2_340_000 <= self.caps[cpu] < 2_360_000 else 22
+
+        io, problems = Fine(), []
+        m = vfdump.search_cap(io, self.group("E", (8, 9, 10, 11), (23,)), 23, io.word, lambda s: None, problems, samples=5, min_valid=3)
+        self.assertEqual((m.status, m.cap_khz, m.samples_kept, m.samples_total), ("ok", 2_350_000, 5, 5))
+        self.assertEqual(list(dict.fromkeys(khz for cpu, khz in io.writes if cpu == 8))[:5], [2_300_000, 2_400_000, 2_325_000, 2_275_000, 2_350_000])  # the two nominal read-back probes, then nearest first
+        self.assertEqual((io.caps, problems), (io.original, []))
+        self.assertTrue(all(load.stopped for load in io.loads))
+
+    def test_search_cap_gives_up_skips_refused_and_never_exceeds_the_cap_in_force(self) -> None:
+        class Refusing(FakeIO):
+            def write_cap(self, cpu: int, khz: int) -> None:
+                if khz == 2_325_000:
+                    raise OSError(22, "Invalid argument")
+                super().write_cap(cpu, khz)
+
+        io, problems = Refusing(e_cap=2_330_000), []  # the user's cap is 2330 MHz: nothing above it is tried
+        m = vfdump.search_cap(io, self.group("E", (8, 9, 10, 11), (23,)), 23, io.word, lambda s: None, problems, samples=5, min_valid=3)
+        self.assertIsNone(m)
+        self.assertLessEqual(max(khz for _, khz in io.writes), 2_330_000)
+        self.assertEqual((io.caps, problems), (io.original, []))
+
     def measure_one(self, io: FakeIO, kind: str, ratio: int, **kw: int) -> tuple[vfdump.RatioMeasurement, list[int]]:
         cpus = (0,) if kind == "P" else (8, 9, 10, 11)
         out = vfdump.measure_group(io, self.group(kind, cpus, (ratio,)), io.word, lambda s: None, [], **kw)

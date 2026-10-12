@@ -262,12 +262,42 @@ def device_wiring(*, lstat_fn: Callable[[str], Any] = os.lstat) -> MeasureWiring
 # =============================================================================================================================================
 # the journal
 # =============================================================================================================================================
-def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None) -> list[dict[str, Any]]:
-    """Read every value the run will touch and write the journal (temp + fsync + rename) **before** the first change. Returns the entries."""
+def cpu_ranges(cpus: Sequence[int]) -> str:
+    """``[0, 1, 2, 3, 8, 12, 13]`` -> ``"0\u20133, 8, 12\u201313"`` (runs of three or more compacted with an en dash)."""
+    ordered = sorted(set(cpus))
+    parts: list[str] = []
+    i = 0
+    while i < len(ordered):
+        j = i
+        while j + 1 < len(ordered) and ordered[j + 1] == ordered[j] + 1:
+            j += 1
+        if j - i >= 2:
+            parts.append(f"{ordered[i]}\u2013{ordered[j]}")
+        else:
+            parts.extend(str(c) for c in ordered[i:j + 1])
+        i = j + 1
+    return ", ".join(parts)
+
+
+def _cpus_text(cpus: Sequence[int]) -> str:
+    return ("cpu " if len(set(cpus)) == 1 else "cpus ") + cpu_ranges(cpus)
+
+
+def epp_pinned_cpus(w: MeasureWiring, cpus: Sequence[int]) -> list[int]:
+    """G-131: the CPUs whose governor is ``performance``. With intel_pstate in active mode the kernel pins EPP to ``performance`` there and refuses a write with EBUSY; that is the
+    state the run wants anyway, so such a CPU's EPP is neither written nor journaled."""
+    return [cpu for cpu in cpus if w.cpufreq.read(cpu, GOV_ATTR) == "performance"]
+
+
+def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None, skip_epp: Sequence[int] = ()) -> list[dict[str, Any]]:
+    """Read every value the run will touch and write the journal (temp + fsync + rename) **before** the first change. Returns the entries. ``skip_epp``: CPUs whose EPP is not
+    touched by the run (:func:`epp_pinned_cpus`) and so is not journaled."""
     entries: list[dict[str, Any]] = []
     context: dict[str, dict[str, str]] = {}
     for cpu in cpus:
         for attr in TOUCHED:
+            if attr == EPP_ATTR and cpu in skip_epp:
+                continue
             value = w.cpufreq.read(cpu, attr)
             if value is not None:
                 entry: dict[str, Any] = {"cpu": cpu, "attr": attr, "value": value}
@@ -303,8 +333,9 @@ def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None) -
 
 
 def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
-    """Write every journaled value back (max before min before governor before EPP; only where the current value differs). Returns the failures, never raises."""
-    problems: list[str] = []
+    """Write every journaled value back (max before min before governor before EPP; only where the current value differs). Returns the failures, never raises. A failure
+    that hits several CPUs the same way is **one** line (G-131: never a flood of identical errors); a single failure keeps the per-CPU wording."""
+    failed: dict[tuple[str, str], list[tuple[int, str]]] = {}
     for e in sorted(entries, key=lambda e: (e["cpu"], _ATTR_ORDER.get(e["attr"], 9))):
         cpu, attr, value = e["cpu"], e["attr"], e["value"]
         try:
@@ -316,7 +347,15 @@ def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
                 continue
             w.cpufreq.write(cpu, attr, value)
         except Exception as exc:
-            problems.append(f"could NOT restore {attr} of cpu {cpu} to {value!r}: {type(exc).__name__}: {exc} (restore it by hand)")
+            reason = (exc.strerror if isinstance(exc, OSError) and exc.strerror else None) or str(exc)
+            failed.setdefault((attr, f"{type(exc).__name__}: {reason}"), []).append((cpu, value))
+    problems: list[str] = []
+    for (attr, why), items in failed.items():
+        if len(items) == 1:
+            cpu, value = items[0]
+            problems.append(f"could NOT restore {attr} of cpu {cpu} to {value!r}: {why} (restore it by hand)")
+        else:
+            problems.append(f"could NOT restore {attr} of {_cpus_text([c for c, _ in items])} to the journaled values: {why} (restore it by hand)")
     return problems
 
 
@@ -688,14 +727,20 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "plan": plan_source, "complete": False, "kernel": w.kernel_fn(),
             "tuning_state": _tuning_state(helper, topo), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
         }
-        entries = _write_journal(w, cpus, record["boot_id"])  # before the first change
+        pinned = epp_pinned_cpus(w, cpus)  # G-131: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
+        entries = _write_journal(w, cpus, record["boot_id"], pinned)  # before the first change
         journaled = True
+        if pinned:
+            problems.append("governor performance: EPP already at performance")
+        epp_failed: dict[str, list[int]] = {}
         for cpu in cpus:  # EPP for the run (governor unchanged); restored from the journal
             if any(e["cpu"] == cpu and e["attr"] == EPP_ATTR for e in entries):
                 try:
                     w.cpufreq.write(cpu, EPP_ATTR, EPP_VALUE)
                 except OSError as exc:
-                    problems.append(f"energy_performance_preference of cpu {cpu} was not set ({exc.strerror or exc}); the run continues")
+                    epp_failed.setdefault(str(exc.strerror or exc), []).append(cpu)
+        for why, bad in epp_failed.items():  # one note per distinct error, the CPUs as ranges
+            problems.append(f"{EPP_ATTR} not set on {_cpus_text(bad)} ({why})")
 
         def sleep(seconds: float) -> None:
             if cancel.is_set():
@@ -767,6 +812,31 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
                     ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": new["mhz"], "vid_v": new["vid_v"], "status": new["status"], "retry": True,
                               **({"reason": new["reason"]} if "reason" in new else {})})
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
+        # Cap search (G-131): a point that ended unreachable / cpufreq_granularity (the caps land on its neighbours: the kernel converts them to HWP perf units) gets one more
+        # attempt with caps between the neighbours; the cap that ran the target is recorded as ``cap_khz``. Still not hit: it stays unreachable.
+        search = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if p["status"] == "unreachable" and p.get("reason") == "cpufreq_granularity"]
+        total += len(search)
+        for unit, ratio in search:
+            cpus_u = topo.unit_cpus(unit)
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
+            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], (ratio,), ())
+            found = vfdump.search_cap(run.io, group, ratio, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID)
+            done += 1
+            pts = record["units"][unit]["points"]
+            at = next(i for i, p in enumerate(pts) if p["ratio"] == ratio)
+            pts[at]["retried"] = True
+            if found is not None:
+                new = _point(found, top_of[unit], intermittent[unit])
+                label = _fused_point(kept[unit], ratio, oc_of[unit])
+                if label is not None:
+                    new["fused_point"] = label
+                new["retried"] = True
+                if found.cap_khz is not None:
+                    new["cap_khz"] = found.cap_khz
+                pts[at] = new
+                ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": new["mhz"], "vid_v": new["vid_v"], "status": new["status"], "retry": True,
+                          **({"reason": new["reason"]} if "reason" in new else {})})
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
         record["complete"] = True
         record["baseline"] = want_baseline  # only a complete record becomes the baseline (store.save unsets the old one)
     except _Cancelled:
@@ -785,6 +855,13 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
     return _finish(w, record, cancelled, error, problems, ctx)
 
 
+def _capped(problems: list[str], limit: int = 10) -> list[str]:
+    """At most ``limit`` lines travel in the response; a longer list says how many were left out (G-131: never a silent cut)."""
+    if len(problems) <= limit:
+        return list(problems)
+    return problems[:limit - 1] + [f"... and {len(problems) - limit + 1} more notes not shown"]
+
+
 def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, error: BaseException | None, problems: list[str], ctx: OpContext) -> dict[str, Any]:
     stored: dict[str, Any] | None = None
     store_problem: str | None = None
@@ -800,7 +877,7 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
         detail["curve_id"] = stored["id"]
         detail["partial"] = fit_record(stored, RECORD_BUDGET - 4096)  # the message and the problems share the line
     if problems:
-        detail["problems"] = problems[:10]
+        detail["problems"] = _capped(problems)
     note = ""
     if restore_bad:
         note += " " + " ".join(restore_bad)
@@ -818,7 +895,7 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
     if store_problem or restore_bad:
         raise OpError(INTERNAL, f"the measurement finished but:{note}", detail or None)
     assert stored is not None
-    extra = {"problems": problems[:10]} if problems else {}
+    extra = {"problems": _capped(problems)} if problems else {}
     return {"curve_id": stored["id"], "record": fit_record(stored, RECORD_BUDGET - len(json.dumps(extra))), "plan": stored.get("plan"), **extra}
 
 

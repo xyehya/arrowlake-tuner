@@ -120,9 +120,18 @@ class TestStatic(unittest.TestCase):
         self.assertNotRegex(JS, r"\.style\.")
         self.assertNotIn("innerHTML", JS)
 
+    def test_g131_status_counts_notes_and_the_chart_has_a_not_measured_row(self):
+        body = body_of("onMeasureResult")
+        self.assertNotIn('"Problems: "', body)
+        self.assertIn("see below", body)
+        self.assertIn("vc-nm", JS)
+        self.assertIn("function notMeasuredCaption", JS)
+
     def test_pins_are_svg_with_titles_built_via_dom(self):
         self.assertIn('sv("title")', JS)
-        self.assertIn(".vc-pin.reach circle", CSS)
+        self.assertNotIn(".vc-pin.reach", CSS)   # G-131: unmeasured points are ticks in a row under the axis, not rings in the plot
+        self.assertIn(".vc-nm line", CSS)
+        self.assertNotIn('kind: "reach"', JS)
         self.assertIn(".vc-pin.fused path", CSS)
 
 
@@ -242,12 +251,23 @@ class TestBrowser(unittest.TestCase):
                 page.keyboard.press("Escape")
                 # F3 / F7 / F9 on Curves
                 page.click("#tab-curves")
-                page.wait_for_selector("#cv-chart .vc-pin.reach", timeout=5000)
+                page.wait_for_selector("#cv-chart .vc-nm", timeout=5000)
                 page.locator("#cv-primary").select_option(label=page.locator("#cv-primary option:has-text('baseline')").first.inner_text())
                 page.wait_for_selector("#cv-chart .vc-pin.fused", timeout=5000)
                 self.assertEqual(page.locator("#cv-chart .vc-pin.fused").count(), 12)
-                self.assertIn("max_turbo", page.locator("#cv-chart .vc-pin.reach title").first.text_content())
-                self.assertIn("cpufreq_granularity", page.inner_text("#cv-unreach"))
+                # G-131: nothing unmeasured is drawn inside the plot; a "not measured" row under the axis carries a tick per point, with a tooltip, and one caption line groups them
+                self.assertEqual(page.locator("#cv-chart .vc-pin.reach").count(), 0)
+                titles = page.locator("#cv-chart .vc-nm title").all_text_contents()
+                self.assertIn("P1 56\u00d7: above this core's max ratio 55\u00d7", titles)
+                self.assertIn("P1 57\u00d7: above this core's max ratio 55\u00d7", titles)
+                self.assertTrue(any(t.startswith("EC0 23\u00d7: cpufreq caps cannot pin this ratio") for t in titles), titles)
+                self.assertEqual(page.locator("#cv-chart .vc-nm-label").text_content(), "not measured")
+                caption = page.inner_text("#cv-unreach")
+                self.assertTrue(caption.startswith("not measured: "), caption)
+                self.assertIn("at 56\u201357\u00d7 (above core max 55\u00d7)", caption)
+                self.assertIn("cpufreq cannot pin this ratio", caption)
+                self.assertNotIn("Hollow rings", caption)
+                self.assertNotIn("cpufreq_granularity", caption)   # the caption speaks plainly, the codes stay in the table view
                 self.assertIn("fused V/F table as applied", page.inner_text("#cv-base-note"))
             finally:
                 b.close()

@@ -1,12 +1,15 @@
 """``vf.measure`` / ``curves.*`` / ``mem.read`` through a real helper on pipes, over a fake cpufreq sysfs and the SimModel (no hardware, no process, no sleeping)."""
 from __future__ import annotations
 
+import errno
 import json
+import os
 import threading
 import unittest
+from collections.abc import Callable
 
 from arltuner import vfdump
-from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, SimModel
+from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, SimModel, _capped, cpu_ranges
 from arltuner.helper.protocol import MAX_LINE, encode
 
 from ._measure_support import ORIGINAL_EPP, MeasureCase, reference_read
@@ -71,12 +74,13 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(reply["result"]["record"]["name"], "mine")
         self.assertEqual(list(reply["result"]["record"]["units"]), ["P2", "EC3"])  # display order, not request order
         pts = [m for m in h.messages if m.get("event") == "vf.point"]
-        self.assertEqual(len(pts), 8 + 8)
+        self.assertEqual(len(pts), 8 + 8 + 1)  # + the cap search that finds EC3's 23x (G-131), reported as a retry
+        self.assertEqual([m["ratio"] for m in pts if m.get("retry")], [23])
         self.assertEqual(set(pts[0]), {"event", "op_id", "unit", "ratio", "mhz", "vid_v", "status"})
         self.assertEqual((pts[0]["op_id"], pts[0]["unit"], pts[0]["ratio"], pts[0]["mhz"]), ("m", "P2", 8, 800))
         prog = [m for m in h.messages if m.get("event") == "progress" and m.get("op_id") == "m"]
         self.assertEqual((prog[0]["step"], prog[0]["of"]), (0, 16))
-        self.assertEqual((prog[-1]["step"], prog[-1]["of"], prog[-1]["unit"], prog[-1]["ratio"]), (16, 16, "EC3", 48))
+        self.assertEqual((prog[-1]["step"], prog[-1]["of"], prog[-1]["unit"], prog[-1]["ratio"]), (17, 17, "EC3", 23))
         self.assertEqual(set(prog[-1]), {"event", "op_id", "step", "of", "unit", "ratio", "eta_s"})
         self.assertEqual(prog[-1]["eta_s"], 0)
         self.assertGreaterEqual(prog[0]["eta_s"], 1)
@@ -95,16 +99,56 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(points(rec, "P1")[52]["reason"], "cpufreq_granularity")  # F9: P 52x is not pinnable
 
     def test_unpinnable_ratios_are_unreachable_with_a_granularity_reason(self) -> None:
-        """F9: E 29x (cap 29 -> 28, retry cap 30 -> 30) and E 23x never land on the target: no sample at it => unreachable, not an error and not a mismatch."""
+        """F9 / G-131: E 29x and P 52x never land on the target with any cap (the cap search tries and finds nothing): unreachable, not an error and not a mismatch. E 23x is
+        only missed by the two 100 MHz caps; the cap search finds it (next test)."""
         rec = self.start_measure().call("m", "vf.measure", {"mode": "dense", "units": ["EC0", "P4"]}, timeout=60)["result"]["record"]
-        for ratio in (23, 29):
-            e = points(rec, "EC0")[ratio]
-            self.assertEqual((e["status"], e["reason"], e["vid_v"]), ("unreachable", "cpufreq_granularity", None), ratio)
-            self.assertLessEqual(e["kept"], 2)
+        e = points(rec, "EC0")[29]
+        self.assertEqual((e["status"], e["reason"], e["vid_v"], e.get("retried")), ("unreachable", "cpufreq_granularity", None, True))
+        self.assertLessEqual(e["kept"], 2)
+        self.assertNotIn("cap_khz", e)
         self.assertEqual(points(rec, "EC0")[24]["status"], "ok")
         self.assertEqual(points(rec, "EC0")[22]["status"], "ok")
-        self.assertEqual(points(rec, "P4")[52]["reason"], "cpufreq_granularity")
+        self.assertEqual((points(rec, "P4")[52]["status"], points(rec, "P4")[52]["reason"]), ("unreachable", "cpufreq_granularity"))
         self.assertEqual(points(rec, "P4")[53]["status"], "ok")
+        self.assert_cpufreq_pristine()
+
+    def test_the_cap_search_finds_e_23x_and_records_the_cap(self) -> None:
+        """G-131: the kernel converts an E cap to HWP perf units (perf = round(khz / scale)); 2300 and 2400 MHz both miss 23x, a cap between them runs it."""
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["EC0", "EC3"]}, timeout=60)["result"]["record"]
+        for unit in ("EC0", "EC3"):
+            p = points(rec, unit)[23]
+            self.assertEqual((p["status"], p.get("reason"), p["retried"], p["fused_point"]), ("ok", None, True, 3), unit)
+            self.assertIsNotNone(p["vid_v"])
+            self.assertGreaterEqual(p["kept"], 5)
+            self.assertTrue(2_300_000 < p["cap_khz"] < 2_400_000, p["cap_khz"])  # the cap that ran 23x, between the two neighbours
+            self.assertEqual(self.model.settled(unit, p["cap_khz"]), 23)
+            self.assertNotIn("cap_khz", points(rec, unit)[30])  # only a found cap is recorded
+        self.assertAlmostEqual(points(rec, "EC0")[23]["vid_v"], 0.775, delta=0.01)  # the E VID floor
+        self.assert_cpufreq_pristine()  # the search restored every cap
+
+    def test_the_cap_search_model_rounds_to_perf_steps(self) -> None:
+        m = SimModel()
+        self.assertEqual((m.settled("EC0", 2_300_000), m.settled("EC0", 2_400_000), m.settled("EC0", 2_350_000)), (22, 24, 23))
+        self.assertEqual([m.settled("EC0", c * 100_000) for c in (8, 30, 40, 46, 48)], [8, 30, 40, 46, 48])  # nominal caps are unchanged by the rounding
+        q = m.e_cap_quantized(2_350_000)
+        self.assertEqual((m.e_cap_quantized(q), m.e_cap_quantized(4_900_000)), (q, 4_900_000))  # idempotent, the maximum is a whole step
+        self.assertEqual(m.settled("P4", 5_250_000), 51)  # P cores are not rounded: P 52x stays unpinnable
+
+    def test_search_cap_samples_each_read_back_once_and_restores(self) -> None:
+        """The read-back decides: caps the kernel rounds to the same step are sampled once. 29x has no perf step: nothing found, nothing left changed."""
+        from arltuner.vfdump import MeasureGroup, search_cap
+
+        caps: list[int] = []
+        self.perf_hook = lambda cpu: caps.append(int(self.cpufreq.read(cpu, CAP_ATTR)))
+        group = MeasureGroup("EC0", "E", (12, 13, 14, 15), 12, (29,), ())
+        problems: list[str] = []
+        got = search_cap(self.io, group, 29, self.read_perf, lambda s: None, problems, settle_s=0.0, samples=5, interval_s=0.0, min_valid=3)
+        self.assertIsNone(got)
+        self.assertEqual(problems, [])
+        steps = sorted(set(caps))
+        self.assertEqual(len(caps), 5 * len(steps))  # every distinct step sampled exactly once (5 samples each)
+        self.assertTrue(len(steps) >= 2 and all(2_700_000 < c < 3_100_000 for c in steps) and not {self.model.e_cap_quantized(2_900_000), self.model.e_cap_quantized(3_000_000)} & set(steps), steps)  # never the nominal steps again
+        self.assertEqual({self.read(c, CAP_ATTR) for c in (12, 13, 14, 15)}, {str(self.model.max_khz(12))})  # restored
 
     def test_classify_keeps_a_rarely_hit_target_a_mismatch(self) -> None:
         from arltuner.helper.ops_measure import _classify
@@ -428,6 +472,74 @@ class PathsOutTests(MeasureCase):
         reply = self.start_measure().call("m", "vf.measure", {}, timeout=30)
         self.assertEqual((error_code(reply), reply["error"]["detail"]["check"]), ("REFUSED", "LOAD_GENERATOR"))
         self.assertEqual(self.cpufreq.writes, [])
+
+
+class EppTests(MeasureCase):
+    """G-131: under the ``performance`` governor intel_pstate holds EPP and refuses a write with EBUSY; that is the state the run wants, so it is neither written nor journaled.
+    Any other EPP failure is ONE note with the CPUs as ranges, on the way in and on the way back."""
+
+    UNITS = ["P5", "EC1"]  # cpus 5, 12-15
+
+    def ebusy(self, when: Callable[[str, str], bool]) -> None:
+        real = self.cpufreq.write
+
+        def write(cpu: int, attr: str, value: str) -> None:
+            if attr == EPP_ATTR and when(attr, str(value)):
+                raise OSError(errno.EBUSY, os.strerror(errno.EBUSY))
+            real(cpu, attr, value)
+
+        self.cpufreq.write = write  # type: ignore[method-assign]
+
+    def set_governor(self, gov: str) -> None:
+        for cpu in range(24):
+            self.cpufreq.write(cpu, "scaling_governor", gov)
+        self.cpufreq.writes.clear()
+
+    def test_the_performance_governor_leaves_epp_alone_and_says_so_once(self) -> None:
+        self.set_governor("performance")
+        self.ebusy(lambda a, v: True)  # any EPP write would fail
+        journaled: list[list[str]] = []
+        self.perf_hook = lambda cpu: journaled.append([e["attr"] for e in json.loads(self.journal.read_text())["entries"]])
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["problems"], ["governor performance: EPP already at performance"])
+        self.assertEqual({attr for _, attr, _ in self.cpufreq.writes}, {CAP_ATTR})  # no EPP write, neither for the run nor for the restore
+        self.assertTrue(journaled and all(EPP_ATTR not in attrs for attrs in journaled), journaled)  # nothing to restore, so nothing journaled
+        self.assertEqual(self.read(5, EPP_ATTR), ORIGINAL_EPP)
+        self.assertEqual(self.read(5, "scaling_governor"), "performance")
+        self.assertFalse(self.journal.exists())
+
+    def test_any_other_epp_failure_is_one_aggregated_note(self) -> None:
+        self.ebusy(lambda a, v: v == "balance_performance")  # the run's write fails, the restore has nothing to do
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["problems"], ["energy_performance_preference not set on cpus 5, 12–15 (Device or resource busy)"])
+        self.assert_cpufreq_pristine()
+
+    def test_all_cpus_are_one_range(self) -> None:
+        self.ebusy(lambda a, v: v == "balance_performance")
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3"]}, timeout=120)
+        self.assertEqual(reply["result"]["problems"], ["energy_performance_preference not set on cpus 0–23 (Device or resource busy)"])
+
+    def test_a_restore_that_fails_the_same_way_everywhere_is_one_line(self) -> None:
+        self.ebusy(lambda a, v: v == ORIGINAL_EPP)  # the run's write works, writing the original back does not
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
+        self.assertEqual(error_code(reply), "INTERNAL")
+        lines = reply["error"]["detail"]["problems"]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0], "could NOT restore energy_performance_preference of cpus 5, 12–15 to the journaled values: OSError: Device or resource busy (restore it by hand)")
+        self.assertTrue(self.journal.exists(), "an unrestored run keeps its journal")
+
+    def test_cpu_ranges(self) -> None:
+        self.assertEqual(cpu_ranges([0, 1, 2, 3, 8, 12, 13, 14, 15]), "0–3, 8, 12–15")
+        self.assertEqual(cpu_ranges([5, 6]), "5, 6")
+        self.assertEqual(cpu_ranges([3, 1, 2, 1]), "1–3")
+        self.assertEqual(cpu_ranges(list(range(24))), "0–23")
+
+    def test_a_long_problem_list_says_what_it_cuts(self) -> None:
+        self.assertEqual(_capped(["a"] * 10), ["a"] * 10)
+        out = _capped([str(i) for i in range(14)])
+        self.assertEqual((len(out), out[:9], out[9]), (10, [str(i) for i in range(9)], "... and 5 more notes not shown"))
 
 
 class CurvesOpsTests(MeasureCase):
