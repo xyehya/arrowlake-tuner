@@ -1,16 +1,11 @@
-"""CPU map for the Core Ultra 9 285K (Arrow Lake-S): XTU names <-> Linux CPUs <-> E-clusters.
+"""CPU map of an Arrow Lake-S part: XTU names <-> Linux CPUs <-> E-clusters, derived live (D-036).
 
-Pure Python, standard library only, no hardware access. ``detect`` reads two small sysfs files
-(``devices/cpu_core/cpus`` and ``devices/cpu_atom/cpus``) under a caller-supplied root and only
-*validates* them against the static map; it never infers a topology (Contract 3, docs/ARCHITECTURE.md).
+Pure Python, standard library only, no hardware access. ``detect`` builds the map from sysfs (``topology.live``) under a caller-supplied
+root; nothing about a specific SKU is stored here. The simulated reference CPU used by the simulator and the tests lives in
+``topology.reference``.
 
-Source of every static fact below (now stored in ``platforms/arl-s-285k.toml``, G-101): docs/research/lnx-turbostat-plus-facts.md, section "CPU map"
-``[MEASURED lnx 2026-09-29 turbostat+ capture]``:
-  * Linux CPUs 0-7 are P-cores, 8-23 are E-cores (no SMT).
-  * E-clusters of four: 8-11, 12-15, 16-19, 20-23.
-  * Favored P-cores (HWP highest = 92 vs 88): CPU 0 and CPU 3.
-  * XTU "P-Core N" = Linux CPU N; XTU "E-Core k" = Linux CPU 8+k (inference from matching numbers;
-    e.g. E-Core 12 = CPU 20, cluster 3).
+Naming: XTU "P-Core n" = the n-th P CPU in ascending order; "E-Core k" = the k-th E CPU in ascending order; unit ids are ``P<n>`` and
+``EC<n>`` (E clusters numbered in order of their first CPU). Arrow Lake-S has no SMT: one Linux CPU per core.
 """
 
 from __future__ import annotations
@@ -18,8 +13,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from arltuner.platform import default_platform
 
 __all__ = [
     "KIND_E",
@@ -30,22 +23,12 @@ __all__ = [
     "TopologyError",
     "TopologyMismatch",
     "UnknownCore",
-    "arl_s_285k",
     "detect",
 ]
 
 KIND_P = "P"
 KIND_E = "E"
 KINDS: tuple[str, str] = (KIND_P, KIND_E)
-
-# [MEASURED lnx 2026-09-29] docs/research/lnx-turbostat-plus-facts.md "CPU map"
-# (values live in platforms/arl-s-285k.toml, G-101)
-_TOPO = default_platform().topology
-_P_COUNT = _TOPO.p_count
-_E_COUNT = _TOPO.e_count
-_E_CPU_BASE = _TOPO.e_first_cpu  # E index k <-> Linux CPU 8 + k
-_E_CLUSTER_SIZE = _TOPO.e_cluster_size
-_FAVORED_P_INDEXES = frozenset(_TOPO.favored_p)
 
 # Kernel cpulist syntax ("0-7", "8-11,12-23"); an upper sanity bound keeps a corrupt file from
 # expanding into a huge set (kernel NR_CPUS never exceeds 8192).
@@ -58,7 +41,7 @@ class TopologyError(Exception):
 
 
 class TopologyMismatch(TopologyError):
-    """``detect`` could not confirm the static 285K topology (missing, malformed or different files)."""
+    """``detect`` could not derive a usable topology (missing, malformed or inconsistent files)."""
 
 
 class UnknownCore(TopologyError, KeyError, ValueError):
@@ -76,10 +59,12 @@ class Core:
     """One physical core (no SMT, so one Linux CPU per core)."""
 
     kind: str  # "P" | "E"
-    index: int  # XTU numbering: P 0..7, E 0..15
-    cpu: int  # Linux CPU number (P 0..7, E 8..23)
-    cluster: int | None  # E: 0..3 (cpus 8-11, 12-15, 16-19, 20-23); P: None
+    index: int  # XTU numbering: ordinal among the P (or E) CPUs, ascending
+    cpu: int  # Linux CPU number
+    cluster: int | None  # E: ordinal of its cluster (clusters ordered by their first CPU); P: None
     favored: bool
+    max_ratio: int | None = field(default=None, compare=False)  # cpufreq/cpuinfo_max_freq / 100000; None = not read
+    perf: int | None = field(default=None, compare=False)  # acpi_cppc/highest_perf; None = not read
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -92,9 +77,10 @@ class Core:
 
 @dataclass(frozen=True)
 class Topology:
-    """Immutable set of cores with lookup helpers. Equality compares ``cores`` only."""
+    """Immutable set of cores with lookup helpers. Equality compares ``cores`` only (kind, index, cpu, cluster, favored)."""
 
     cores: tuple[Core, ...]
+    favored_source: str | None = field(default=None, compare=False)  # "acpi_cppc" | "cpuinfo_max_freq" | None (no favored core)
     _by_cpu: dict[int, Core] = field(init=False, repr=False, compare=False)
     _by_key: dict[tuple[str, int], Core] = field(init=False, repr=False, compare=False)
 
@@ -141,21 +127,29 @@ class Topology:
             raise UnknownCore(f"core {core!r} is not part of this topology")
         return f"{core.kind}-Core {core.index}"
 
+    # ---- units: a P-core ``P<n>`` or an E-cluster ``EC<n>`` (the things that have one V/F curve) ----
+    def unit_ids(self) -> tuple[str, ...]:
+        """All unit ids: ``P0..`` in index order, then ``EC0..`` in cluster order."""
+        p = sorted(c.index for c in self.cores if c.kind == KIND_P)
+        e = sorted({c.cluster for c in self.cores if c.cluster is not None})
+        return tuple(f"P{i}" for i in p) + tuple(f"EC{k}" for k in e)
 
-def arl_s_285k() -> Topology:
-    """The static 285K map: 8 P (CPU 0-7, favored P0 and P3) + 16 E (CPU 8-23, clusters of 4).
+    def unit_cpus(self, unit: str) -> tuple[int, ...]:
+        """Linux CPUs (ascending) of a unit; ``UnknownCore`` for an unknown id."""
+        if isinstance(unit, str) and unit.startswith("EC") and unit[2:].isdigit():
+            return self.cluster_cpus(int(unit[2:]))
+        if isinstance(unit, str) and unit.startswith("P") and unit[1:].isdigit():
+            return (self.resolve(KIND_P, int(unit[1:])).cpu,)
+        raise UnknownCore(f"unknown unit {unit!r}")
 
-    Source: docs/research/lnx-turbostat-plus-facts.md "CPU map" [MEASURED lnx 2026-09-29].
-    """
-    cores = [
-        Core(kind=KIND_P, index=i, cpu=i, cluster=None, favored=i in _FAVORED_P_INDEXES)
-        for i in range(_P_COUNT)
-    ]
-    cores += [
-        Core(kind=KIND_E, index=k, cpu=_E_CPU_BASE + k, cluster=k // _E_CLUSTER_SIZE, favored=False)
-        for k in range(_E_COUNT)
-    ]
-    return Topology(cores=tuple(cores))
+    def unit_of_cpu(self, cpu: int) -> str:
+        """The unit id a Linux CPU belongs to; ``UnknownCore`` if the CPU is not part of the topology."""
+        core = self.by_cpu(cpu)
+        return f"P{core.index}" if core.cluster is None else f"EC{core.cluster}"
+
+    def cpus_of_kind(self, kind: str) -> tuple[int, ...]:
+        """All Linux CPUs of a core kind, ascending."""
+        return tuple(sorted(c.cpu for c in self.cores if c.kind == kind))
 
 
 def _parse_cpulist(text: str, what: str) -> frozenset[int]:
@@ -190,23 +184,9 @@ def _read_cpulist(path: Path, what: str) -> frozenset[int]:
 
 
 def detect(sysfs_root: Path = Path("/sys")) -> Topology:
-    """Validate the running machine against ``arl_s_285k()`` and return it.
+    """The running machine's topology, derived from sysfs under ``sysfs_root`` (``topology.live.read_live``).
 
-    Reads ``<sysfs_root>/devices/cpu_core/cpus`` (expected ``0-7``) and
-    ``<sysfs_root>/devices/cpu_atom/cpus`` (expected ``8-23``), both in kernel cpulist syntax.
-    Never guesses: a missing, malformed or different file raises ``TopologyMismatch``.
-    """
-    root = Path(sysfs_root)
-    expected = arl_s_285k()
-    want_p = frozenset(c.cpu for c in expected.cores if c.kind == KIND_P)
-    want_e = frozenset(c.cpu for c in expected.cores if c.kind == KIND_E)
-    got_p = _read_cpulist(root / "devices" / "cpu_core" / "cpus", "cpu_core")
-    got_e = _read_cpulist(root / "devices" / "cpu_atom" / "cpus", "cpu_atom")
-    problems = []
-    if got_p != want_p:
-        problems.append(f"cpu_core/cpus is {sorted(got_p)} but the 285K map expects {sorted(want_p)}")
-    if got_e != want_e:
-        problems.append(f"cpu_atom/cpus is {sorted(got_e)} but the 285K map expects {sorted(want_e)}")
-    if problems:
-        raise TopologyMismatch("; ".join(problems))
-    return expected
+    Never guesses: a missing, malformed or inconsistent file raises ``TopologyMismatch``."""
+    from .live import read_live  # lazy: live imports this module
+
+    return read_live(Path(sysfs_root)).topology
