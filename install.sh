@@ -261,7 +261,7 @@ else
         echo "audit.jsonl: created empty (no per-user log found${USER_LOG:+ at $USER_LOG})"
         if [ -z "$USER_LOG" ] && [ -z "$DESTDIR" ]; then
             echo "WARNING: no invoking user (PKEXEC_UID / SUDO_USER, not root) found, so no per-user audit log was seeded. If ~/.local/state/arltuner/audit.jsonl exists" >&2
-            echo "         and this boot already spent mailbox operations, stop here: the per-boot count (cap 600) restarts from zero (D-030)." >&2
+            echo "         and this boot already spent mailbox operations, stop here: the per-boot operation count (an indicator, default cap 100000) restarts from zero (D-030)." >&2
         fi
     fi
     chmod 0600 "$TMPAUDIT"

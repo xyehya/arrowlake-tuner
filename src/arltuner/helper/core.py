@@ -341,7 +341,8 @@ class Helper:
         except OpError as exc:
             self._send(error_response(req.id, exc.code, exc.message, exc.detail))
             return
-        except Busy as exc:  # cannot happen (only this thread begins), but never start a second op
+        except Busy as exc:  # a quick op (profiles.accept / profiles.fingerprint, G-141) took the machine between the check above and begin(): never start a second op
+            self._cancel = None  # the flag made for this refused op belongs to nobody; a cancel must not report it as the running op's
             r = exc.running
             self._send(error_response(req.id, BUSY, str(exc), {"state": r.state.value, "op_id": r.op_id, "op": r.op}))
             return

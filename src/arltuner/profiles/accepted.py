@@ -32,7 +32,7 @@ _LOCK = threading.Lock()
 
 
 class AcceptedError(Exception):
-    """``code`` is ``UNTRUSTED`` | ``BAD_NAME`` | ``IO``."""
+    """``code`` is ``UNTRUSTED`` | ``BAD_NAME`` | ``IO`` | ``MISSING``."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -134,3 +134,33 @@ class AcceptedStore:
                 raise
         else:
             os.rename(new, final)
+
+    def write_fingerprint(self, text: str) -> None:
+        """G-141 (``profiles.fingerprint``): write ``fingerprint.json`` into the EXISTING accepted directory and nothing else -- ``CURRENT``, the profiles and
+        ``EXPECTED-words.txt`` are not touched. A temp file in the directory (``O_EXCL | O_NOFOLLOW`` 0644, ``fsync``) is renamed over the old file. The parent must pass the
+        same trust check as for :meth:`replace`; the accepted directory itself must be a plain directory (not a symlink) holding a ``CURRENT`` file (``AcceptedError``
+        ``MISSING`` otherwise: this op never creates an accepted state)."""
+        self._check_parent()
+        try:
+            st = os.lstat(self.directory)
+        except FileNotFoundError:
+            raise AcceptedError("MISSING", f"{self.directory} does not exist: there is no accepted state to record a fingerprint for") from None
+        except OSError as exc:
+            raise AcceptedError("IO", f"cannot stat {self.directory}: {exc.strerror or exc}") from None
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != self._euid or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise AcceptedError("UNTRUSTED", f"{self.directory} is not a plain directory owned by the helper and not group/world-writable")
+        if not (self.directory / "CURRENT").is_file():
+            raise AcceptedError("MISSING", f"{self.directory} has no CURRENT file: there is no accepted state to record a fingerprint for")
+        tmp = self.directory / f".{FINGERPRINT_FILE}.{os.getpid()}.tmp"
+        with _LOCK:
+            try:
+                _remove(tmp)
+                _write_file(tmp, text)
+                os.replace(tmp, self.directory / FINGERPRINT_FILE)
+            except OSError as exc:
+                raise AcceptedError("IO", f"cannot write {self.directory / FINGERPRINT_FILE}: {exc.strerror or exc}") from None
+            finally:
+                try:
+                    _remove(tmp)
+                except OSError:
+                    pass

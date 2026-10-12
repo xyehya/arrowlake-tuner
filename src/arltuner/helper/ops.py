@@ -45,7 +45,7 @@ from .trust import TrustError, check_lock_file, check_trusted_path, open_checked
 if TYPE_CHECKING:
     from .core import Helper
 
-__all__ = ["BudgetMeter", "OpContext", "OpSpec", "accepted_match", "builtin_ops", "helper_topology", "write_gate"]
+__all__ = ["BudgetMeter", "OpContext", "OpSpec", "accepted_match", "builtin_ops", "helper_topology", "sim_clocks", "write_gate"]
 
 AUDIT_TAIL_DEFAULT = 20
 AUDIT_TAIL_MAX = 200
@@ -71,7 +71,7 @@ class OpContext:
     cancel: threading.Event
     emit: Callable[[dict[str, Any]], object]
 
-    def progress(self, step: int, of: int, ops_used: int, ops_budget: int) -> None:
+    def progress(self, step: int, of: int, ops_used: int | None, ops_budget: int) -> None:
         self.emit({"event": "progress", "op_id": self.req_id, "step": step, "of": of, "ops_used": ops_used, "ops_budget": ops_budget})
 
 
@@ -284,7 +284,10 @@ class BudgetMeter:
     def _budget_locked(self) -> int | None:
         cfg = self._helper.cfg
         if cfg.policy_path is None:
-            return default_m1_policy().max_operations_per_boot
+            try:
+                return default_m1_policy(cfg.topology_fn()).max_operations_per_boot  # G-141: bound to the live topology like every other policy of the helper (D-036), never an assumed layout
+            except TopologyError:
+                return None  # no topology = no budget claimed (the heartbeat says null), not a number from a layout this system may not have
         try:
             _trust(self._helper, cfg.policy_path, want="file", must_exist=True)
             st = os.stat(cfg.policy_path)
@@ -565,6 +568,21 @@ class _VirtualClock:
         self.now += seconds
 
 
+def sim_clocks(helper: Helper, last_attempt_wall: float | None) -> tuple[_VirtualClock, Callable[[], float]]:
+    """The simulator's ``(virtual monotonic clock, anchored wall clock)``, one pair for the life of the process, so the audit timestamps of consecutive sessions stay consistent.
+
+    G-141: the wall clock starts at the real wall time **or at the newest ``attempt`` of the audit log, whichever is later** (``last_attempt_wall``): a previous process
+    of ``--sim`` advanced its virtual clock by every dwell, so its records lie ahead of the real clock, and a restarted helper whose clock began at the real time would
+    find the audit "in the future" and refuse every request with DWELL."""
+    if helper.sim_time is None:
+        virtual = _VirtualClock()
+        wall = anchored_wall_clock(virtual.clock, helper.cfg.wall_clock)
+        if last_attempt_wall is not None and last_attempt_wall > wall():
+            virtual.sleep(last_attempt_wall - wall())
+        helper.sim_time = (virtual, wall)
+    return helper.sim_time
+
+
 def _refuse(text: str, check: str, **detail: Any) -> OpError:
     return OpError(REFUSED, f"{text} Nothing was sent.", {"check": check, **detail})
 
@@ -622,7 +640,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
         raise _trust_refusal(exc, "LOCK_UNTRUSTED") from None
     try:
         # create-or-validate the audit log with O_NOFOLLOW + fstat before AuditLog (which itself opens O_NOFOLLOW|O_APPEND) ever touches it
-        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o644, euid=euid, what="audit log"))
+        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=euid, what="audit log"))  # G-141: private, like install.sh creates it
     except TrustError as exc:
         raise _trust_refusal(exc, "TRUST_PATH") from None
     except OSError as exc:
@@ -636,8 +654,9 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
     except Exception:
         boot = None
     boot_id = boot.strip() or None if isinstance(boot, str) else None
-    used = state.attempts_by_boot.get(boot_id, 0)
-    left = max(policy.max_operations_per_boot - used, 0)
+    counted = state.attempts_by_boot.get(boot_id, 0)  # an unknown boot is its own bucket for the guard's cap ...
+    used = counted if boot_id is not None else None  # ... but is reported as unknown, not as 0 (G-141)
+    left = max(policy.max_operations_per_boot - counted, 0)
     if needed > left:
         raise _refuse(
             f"this dump needs up to {needed} mailbox reads but only {left} of the policy's {policy.max_operations_per_boot} operations per boot are left.",
@@ -647,10 +666,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
     if cfg.simulator:
         # One virtual clock for the life of the process, so the audit timestamps of consecutive dumps stay consistent. Simulator only: the gap
         # between two operator-started sessions is taken to be at least the dwell (on hardware the guard refuses DWELL instead of waiting).
-        if helper.sim_time is None:
-            virtual = _VirtualClock()
-            helper.sim_time = (virtual, anchored_wall_clock(virtual.clock, cfg.wall_clock))
-        virtual, wall = helper.sim_time
+        virtual, wall = sim_clocks(helper, state.last_attempt_wall)
         virtual.sleep(policy.min_dwell_s)
         clock, sleep = virtual.clock, virtual.sleep
         transport_sleep = sleep
@@ -699,7 +715,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
                 raise _Cancel()
             result = guard.execute(req, confirm)
             sent += 1
-            ctx.progress(sent, needed, used + sent, policy.max_operations_per_boot)
+            ctx.progress(sent, needed, None if used is None else used + sent, policy.max_operations_per_boot)
             return result
 
         def refusal_text(exc: GuardRefused) -> str:

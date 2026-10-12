@@ -7,7 +7,7 @@
 # KEEPS /etc/arltuner (policy, accepted state), /var/lib/arltuner (audit log), the tmpfiles.d file (/usr/lib/tmpfiles.d/arltuner.conf) and
 # /run/arltuner unless --purge: while /etc/arltuner/policy.toml stays, the CLI counts as installed (D-030), keeps the per-boot budget in
 # /var/lib/arltuner/audit.jsonl and takes its lock in /run/arltuner/mailbox.lock, so the operator's boot restore still works after a plain uninstall.
-# --purge removes all of them; the CLI then returns to the legacy per-user lock / audit paths and the per-boot operation count (cap 600)
+# --purge removes all of them; the CLI then returns to the legacy per-user lock / audit paths and the per-boot operation count (an indicator, default cap 100000)
 # restarts from zero, so purge only right before a reboot.
 # DESTDIR=/some/dir removes from that tree instead (tests).
 set -euo pipefail
@@ -28,7 +28,7 @@ for arg in "$@"; do
     esac
 done
 
-[ "$PURGE" -eq 0 ] || [ "$RESET_OK" -eq 1 ] || die "--purge deletes /var/lib/arltuner/audit.jsonl, which RESETS the per-boot operation count (cap 600) and the budget safety net; add --yes-reset-budget to confirm (nothing was removed)"
+[ "$PURGE" -eq 0 ] || [ "$RESET_OK" -eq 1 ] || die "--purge deletes /var/lib/arltuner/audit.jsonl, which RESETS the per-boot operation count (an indicator, default cap 100000) and the budget safety net; add --yes-reset-budget to confirm (nothing was removed)"
 [ "$PURGE" -eq 1 ] || [ "$RESET_OK" -eq 0 ] || die "--yes-reset-budget only goes with --purge"
 
 DESTDIR=${DESTDIR:-}

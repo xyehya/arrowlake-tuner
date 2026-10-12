@@ -161,6 +161,7 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "profiles.list": (_empty, False),
     "profiles.save": (_profiles_save, False),
     "profiles.accept": (_profiles_accept, False),  # G-129: writes /etc/arltuner/accepted (a file, never the hardware)
+    "profiles.fingerprint": (_empty, False),  # G-141: fingerprint.json for the existing accepted state, from this boot's read (a file, never the hardware)
     "profiles.get": (_profiles_get, False),  # G-123: what a profile holds (saved intent / accepted chain member)
     "tune.last": (_empty, False),  # G-123: this boot's stored read, or {available: false}
     "vf.measure": (_vf_measure, True),  # G-111, contract 9

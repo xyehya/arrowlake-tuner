@@ -118,11 +118,20 @@ class ValidProfileTests(unittest.TestCase):
         )
 
     def test_boundary_values_are_accepted(self) -> None:
-        body = core('kind = "P"\nindex = 7\nratio = 100\noc_voltage_mv = 2000\noffset_mv = 999')
+        body = core('kind = "P"\nindex = 7\nratio = 255\noc_voltage_mv = 3999\noffset_mv = 999')
         body += core('kind = "E"\nindex = 15\nratio = 1\noc_voltage_mv = 500\noffset_mv = -1000')
         p = load_profile(HEADER + body)
-        self.assertEqual(p.entries[0], CoreSetting("P", 7, 100, 2000, 999))
+        self.assertEqual(p.entries[0], CoreSetting("P", 7, 255, 3999, 999))
         self.assertEqual(p.entries[1], CoreSetting("E", 15, 1, 500, -1000))
+
+    def test_g141_no_hidden_ceiling_below_the_field_encodings(self) -> None:
+        """D-039: a ratio above 100 and a V target above 2000 mV are legal profile values (the CPU's limits and the policy decide); the error names the encoding."""
+        p = load_profile(HEADER + core('kind = "P"\nindex = 0\nratio = 150\noc_voltage_mv = 2500'))
+        self.assertEqual((p.entries[0].ratio, p.entries[0].oc_voltage_mv), (150, 2500))
+        with self.assertRaisesRegex(ProfileError, r"ratio.*256.*1\.\.255.*ratio field \[7:0\]"):
+            load_profile(HEADER + core('kind = "P"\nindex = 0\nratio = 256'))
+        with self.assertRaisesRegex(ProfileError, r"oc_voltage_mv.*4000.*500\.\.3999.*voltage field \[19:8\]"):
+            load_profile(HEADER + core('kind = "P"\nindex = 0\noc_voltage_mv = 4000'))
 
     def test_single_setting_of_each_kind_is_enough(self) -> None:
         for key, val in (("ratio", 50), ("oc_voltage_mv", 1200), ("offset_mv", -10)):
@@ -222,9 +231,9 @@ FAILING: list[tuple[str, str, str]] = [
     ("ratio is string", HEADER + core('kind = "P"\nindex = 0\nratio = "55"'), "core[0].ratio"),
     ("ratio is float", HEADER + core('kind = "P"\nindex = 0\nratio = 55.0'), "core[0].ratio"),
     ("ratio zero", HEADER + core('kind = "P"\nindex = 0\nratio = 0'), "core[0].ratio"),
-    ("ratio too high", HEADER + core('kind = "P"\nindex = 0\nratio = 101'), "core[0].ratio"),
+    ("ratio too high", HEADER + core('kind = "P"\nindex = 0\nratio = 256'), "core[0].ratio"),
     ("oc_voltage_mv too low", HEADER + core('kind = "P"\nindex = 0\noc_voltage_mv = 499'), "core[0].oc_voltage_mv"),
-    ("oc_voltage_mv too high", HEADER + core('kind = "P"\nindex = 0\noc_voltage_mv = 2001'), "core[0].oc_voltage_mv"),
+    ("oc_voltage_mv too high", HEADER + core('kind = "P"\nindex = 0\noc_voltage_mv = 4000'), "core[0].oc_voltage_mv"),
     ("oc_voltage_mv given in volts", HEADER + core('kind = "P"\nindex = 0\noc_voltage_mv = 1.3'), "core[0].oc_voltage_mv"),
     ("offset_mv too low", HEADER + core('kind = "P"\nindex = 0\noffset_mv = -1001'), "core[0].offset_mv"),
     ("offset_mv too high", HEADER + core('kind = "P"\nindex = 0\noffset_mv = 1000'), "core[0].offset_mv"),
@@ -383,7 +392,7 @@ class PointEntries(unittest.TestCase):
     def test_offset_and_expect_ratio_ranges(self) -> None:
         base = 'kind = "E"\nindex = 8\npoint = 6\n'
         for tail, ok in (("offset_mv = -1000", True), ("offset_mv = 999", True), ("offset_mv = -1001", False), ("offset_mv = 1000", False),
-                         ("offset_mv = -5\nexpect_ratio = 0", False), ("offset_mv = -5\nexpect_ratio = 101", False), ("offset_mv = -5\nexpect_ratio = 100", True),
+                         ("offset_mv = -5\nexpect_ratio = 0", False), ("offset_mv = -5\nexpect_ratio = 256", False), ("offset_mv = -5\nexpect_ratio = 255", True),
                          ("offset_mv = -5.5", False), ("offset_mv = true", False)):
             with self.subTest(tail=tail):
                 text = HEADER + self.point(base + tail)

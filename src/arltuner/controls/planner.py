@@ -756,6 +756,16 @@ def build_plan(
                 known = policy.hw_ratio_max[kind]
                 limits[kind] = None if seen is None else seen if known is None else min(seen, known)
         policy = policy.with_hw_limits(limits)
+    kind_favored = {**(favored_words or {}), **{c: r.favored for c, r in baseline.items()}}  # every 0x1C word this session knows, whichever CPU it was read on
+
+    def favored_of_kind(cpu: int) -> list[int | None] | None:
+        """G-141: the words an ``"auto"`` ratio ceiling of ``cpu``'s kind is derived from -- the 0x1C words of the whole kind, as ``WriteGuard._context`` builds it (the guard judges
+        every write with the kind-wide ceiling, so a plan built from the target CPU's own word alone would refuse a ratio the guard and ``tune.plan`` accept)."""
+        if not policy.ratio_auto:
+            return None
+        kind = policy.core_kind(cpu)
+        return [w for c, w in kind_favored.items() if policy.core_kind(c) == kind]
+
     mailbox = bool(targets or point_targets)  # G-117: False for a turbo-table-only plan (no 0x14, no 0x15, no mailbox word)
     first_cpu = point_targets[0].cpu if point_targets else (targets[0].cpu if targets else 0)
     if mailbox and per_core_enabled is not True:
@@ -827,7 +837,7 @@ def build_plan(
         except ValueError as exc:
             raise PlanError(f"{pt.label} point {pt.point}: requested offset does not fit the V/F word: {exc}") from exc
         raises = raises or goal_raw > base.offset_raw
-        ctx = build_context(policy, pt.cpu, favored_word=None, fused_word=None, vf_word_sent=None)
+        ctx = build_context(policy, pt.cpu, favored_word=None, fused_word=None, vf_word_sent=None, favored_words_of_kind=favored_of_kind(pt.cpu))
         purpose = f"apply: write V/F point {pt.point} offset (0x11 P2={pt.point}) of {pt.label}: {pt.describe()}"
         req = Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, new.to_u32(), purpose)
         verdict = predict(policy, req, word, ctx)
@@ -862,7 +872,7 @@ def build_plan(
                 f"no OC point and the hardware keeps no V target (the word is ratio | offset << 21)"
             )
         raises = raises or goal.ratio > current.ratio or goal.v_target_raw > current.v_target_raw or goal.offset_raw > current.offset_raw
-        facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax)
+        facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax, favored_words_of_kind=favored_of_kind(t.cpu))
         words = _vf_words(current, goal, top, t.label)
         sent: int | None = None
         for word, stage in words:

@@ -405,6 +405,12 @@ class WriteGuard:
         return self._tripped
 
     @property
+    def operations(self) -> int:
+        """The operations this session executed and the per-boot counter counted: every mailbox request (a read is a WRMSR) and every plain write; read-backs and plain
+        ``rdmsr`` reads are not operations (G-141: what a helper op reports as the operations it used)."""
+        return self._ops
+
+    @property
     def trip_reason(self) -> str:
         """Why the guard tripped (empty while it has not)."""
         return self._trip_reason

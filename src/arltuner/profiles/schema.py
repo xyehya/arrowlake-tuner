@@ -13,8 +13,8 @@ Profile format::
     [[core]]
     kind = "P"             # "P" | "E"
     index = 4              # P 0..7 ; E 0..15 (XTU numbering)
-    ratio = 55             # optional, 1..100 (multiplier)
-    oc_voltage_mv = 1300   # optional, 500..2000 (adaptive OC-point voltage, mV)
+    ratio = 55             # optional, 1..255 (multiplier; the ratio field [7:0] of the V/F word)
+    oc_voltage_mv = 1300   # optional, 500..3999 (adaptive OC-point voltage, mV; the voltage field [19:8], S2.10)
     offset_mv = -30        # optional, -1000..999 (mV)
 
 Turbo ratio tables (T-023, D-017; optional)::
@@ -33,7 +33,7 @@ Per-V/F-point offsets (T-025; optional, distinct from the whole-curve ``offset_m
     index = 8              # XTU core numbering, like [[core]]; E entries are cluster-wide (same (cluster, point) must agree)
     point = 6              # a FUSED point only: E 1..6, P 1..8 (the OC point is [[core]] oc_voltage_mv, mailbox P2 = 0)
     offset_mv = -20        # -1000..999 mV; changes this point's offset only (ratio and V target of the point word are kept)
-    expect_ratio = 46      # optional, 1..100: the planner refuses if the point's ratio field read from the hardware differs
+    expect_ratio = 46      # optional, 1..255: the planner refuses if the point's ratio field read from the hardware differs
 
 A profile may hold only ``[[point]]`` entries: it needs at least one ``[[core]]`` or ``[[point]]`` (``[turbo]`` alone is still empty).
 Monotonicity V(n) >= V(n-1) across points is enforced by the hardware, not by arltuner (the voltages of fused points are not readable).
@@ -50,6 +50,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.topology import KIND_E, KINDS, Topology, UnknownCore
 
 __all__ = [
@@ -70,14 +71,13 @@ PLATFORM = "arl-s"
 #: Profiles written before the platform file became a family file (D-036) carry the old id; they are the same format (the installed accepted profiles do).
 LEGACY_PLATFORMS = ("arl-s-285k",)
 
-# Unit/type sanity ranges from docs/tasks/T-012-topology-profiles.md (NOT safety bounds).
-RATIO_RANGE = (1, 100)  # multiplier
-OC_VOLTAGE_MV_RANGE = (500, 2000)  # adaptive OC-point voltage, mV
+# Field-encoding ranges (G-141, D-039: no narrower hidden ceiling; the policy and the CPU's own limits are the bounds). RATIO_RANGE / TURBO_RATIO_RANGE and the V target
+# range come from arltuner.mailbox.encoding, shared with the policy loader and the helper's intent validation; a refusal names it as the source.
+OC_VOLTAGE_MV_RANGE = V_TARGET_RANGE_MV  # adaptive OC-point voltage, mV
 OFFSET_MV_RANGE = (-1000, 999)  # mV
 
 _MAX_PROFILE_BYTES = 1 << 20
 TURBO_BUCKETS = 8  # buckets of MSR 0x1AD / 0x650, bucket 0 (LSB) = one active core
-TURBO_RATIO_RANGE = (1, 255)  # one byte per bucket
 
 #: T-025: a ``[[point]]`` names a V/F point by its ``P2`` (1..15, registers.md "Mailbox commands"); how many points a core has is read live (``tune.read``) and judged
 #: where the profile meets a CPU (``expect_ratio`` guards the write). Unit/type sanity here, like every range in this file.
@@ -133,7 +133,7 @@ class PointSetting:
         _check_int(where, "point", self.point, *POINT_RANGE, " (the OC point is [[core]] oc_voltage_mv)")
         _check_int(where, "offset_mv", self.offset_mv, *OFFSET_MV_RANGE)
         if self.expect_ratio is not None:
-            _check_int(where, "expect_ratio", self.expect_ratio, *EXPECT_RATIO_RANGE)
+            _check_int(where, "expect_ratio", self.expect_ratio, *EXPECT_RATIO_RANGE, f" ({RATIO_SOURCE})")
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ class TurboTables:
             if not isinstance(value, (list, tuple)) or len(value) != TURBO_BUCKETS:
                 raise ProfileError(f"turbo.{key}: expected a list of {TURBO_BUCKETS} integers, got {value!r}")
             for i, ratio in enumerate(value):
-                _check_int("turbo", f"{key}[{i}]", ratio, *TURBO_RATIO_RANGE)
+                _check_int("turbo", f"{key}[{i}]", ratio, *TURBO_RATIO_RANGE, f" ({RATIO_SOURCE}, one byte per bucket)")
             object.__setattr__(self, key, tuple(value))
 
 
@@ -281,9 +281,9 @@ def _check_setting(
         raise ProfileError(f"{where}.kind: unknown kind {kind!r} (expected 'P' or 'E')")
     _check_int(where, "index", index, 0, _MAX_INDEX[kind], f" for kind {kind!r}")
     if ratio is not None:
-        _check_int(where, "ratio", ratio, *RATIO_RANGE)
+        _check_int(where, "ratio", ratio, *RATIO_RANGE, f" ({RATIO_SOURCE})")
     if oc_voltage_mv is not None:
-        _check_int(where, "oc_voltage_mv", oc_voltage_mv, *OC_VOLTAGE_MV_RANGE)
+        _check_int(where, "oc_voltage_mv", oc_voltage_mv, *OC_VOLTAGE_MV_RANGE, f" ({V_TARGET_SOURCE})")
     if offset_mv is not None:
         _check_int(where, "offset_mv", offset_mv, *OFFSET_MV_RANGE)
     if ratio is None and oc_voltage_mv is None and offset_mv is None:

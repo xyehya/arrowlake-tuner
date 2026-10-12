@@ -18,6 +18,13 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
   family / model / brand (``/proc/cpuinfo``; none under the simulator): what the Windows restore needs to find the same cores again. A read that did not
   cover the 0x09 words writes the file with ``null`` words, which the Windows restore refuses (the reply says ``fingerprint: incomplete``).
 
+* G-141: the op refuses (``STALE_READ``, "read again first") when the audit log shows a mailbox write (``0x11`` ...) or a plain MSR write after the read the words come
+  from began (:func:`arltuner.helper.ops_tune.stale_since_read`); an apply that completed in this process keeps them current. ``{from: "read"}`` records the turbo tables of
+  the read too. It runs only while nothing else holds the device (``BUSY`` while a ``tune.apply`` / read / measure runs, and it holds the state machine while it works, so
+  none can start in between): the words it records can not change under it.
+* G-141 ``profiles.fingerprint``: writes ``fingerprint.json`` alone into the existing accepted directory from this boot's fused ``0x09`` words (the same file ``accept``
+  records), for an accepted state made before G-138; ``CURRENT``, the profiles and ``EXPECTED-words.txt`` are not touched. See :func:`op_profiles_fingerprint`.
+
 No mailbox traffic, no MSR. A root file write under the helper's trust rules, like ``profiles.save``.
 """
 from __future__ import annotations
@@ -29,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 from arltuner.guard import AuditLog
 from arltuner.guard.policy import fused_top_ratio
 from arltuner.mailbox import VfWord
-from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError
+from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables
 from arltuner.profiles.accepted import SAFE_PROFILE_NAME, AcceptedError, AcceptedStore
 from arltuner.profiles.fingerprint import CpuId, FingerprintError, build_fingerprint, cpu_id_from_cpuinfo
 from arltuner.profiles.serialize import dump_profile
@@ -38,13 +45,14 @@ from arltuner.topology import Topology
 
 from . import ops_tune as T
 from .ops import OpContext, _only
-from .protocol import BAD_REQUEST, REFUSED, OpError
+from .protocol import BAD_REQUEST, BUSY, REFUSED, OpError
+from .state import Busy, State
 from .trust import TrustError, check_trusted_path
 
 if TYPE_CHECKING:
     from .core import Helper
 
-__all__ = ["op_profiles_accept", "validate_profiles_accept"]
+__all__ = ["op_profiles_accept", "op_profiles_fingerprint", "validate_profiles_accept"]
 
 _VOLT_EPS = 0.002  # V: two decoded targets this close are the same word (the decode is raw / 1024)
 _MV_EPS = 0.6  # mV: one offset raw step is 0.977 mV
@@ -93,8 +101,10 @@ def _whole_mv(raw_mv: float, back: int, what: str) -> int:
     return mv
 
 
-def _profile_from_words(topology: Topology, name: str, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None) -> Profile:
-    """The profile that puts back the words of ``last`` (see the module docstring)."""
+def _profile_from_words(
+    topology: Topology, name: str, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None, tables: Mapping[str, Sequence[int]] | None = None
+) -> Profile:
+    """The profile that puts back the words of ``last`` and, when the read had them, the turbo tables ``tables`` (``{"e": 8 buckets, "p": 8 buckets}``; see the module docstring)."""
     entries: list[CoreSetting] = []
     points: list[PointSetting] = []
     for unit in topology.unit_ids():
@@ -125,8 +135,11 @@ def _profile_from_words(topology: Topology, name: str, last: Mapping[int, Sequen
             if w.ratio == 0 or (top is not None and w.ratio > top):
                 continue  # an empty word, or the OC point (ratio above the top fused one): not a fused point
             points.append(PointSetting(core.kind, core.index, n, _whole_mv(w.offset_mv, w.offset_raw, f"{unit} point {n} offset"), w.ratio))
+    turbo = None
+    if tables and all(isinstance(tables.get(k), (list, tuple)) and len(tables[k]) == 8 for k in ("e", "p")):
+        turbo = TurboTables(e=tuple(tables["e"]), p=tuple(tables["p"]))  # G-141: what the read found is what is accepted; a restore then writes no table that differs
     try:
-        return Profile(name, tuple(entries), None, tuple(points))
+        return Profile(name, tuple(entries), turbo, tuple(points))
     except ProfileError as exc:
         raise _refused(f"the last read holds nothing to record ({exc}).", "NOTHING_TO_ACCEPT") from None
 
@@ -150,7 +163,33 @@ def _cpu_id(cfg: Any) -> CpuId | None:
         return None
 
 
+def _hold_device(helper: Helper, ctx: OpContext, op: str) -> None:
+    """Take the helper's state machine for the duration of ``op`` (G-141): ``BUSY`` while a long op (``tune.apply``, a read, a measurement ...) runs, and none can start
+    while this one works -- ``profiles.accept`` / ``profiles.fingerprint`` are quick off-thread ops, so without this a ``tune.apply`` could change the words under them."""
+    try:
+        helper.machine.begin(ctx.req_id, op, State.PLANNING)
+    except Busy as exc:
+        r = exc.running
+        raise OpError(BUSY, f"the helper is {r.state.value} ({r.op} {r.op_id}); {op} needs the words in force to stand still. Try again when it has finished. Nothing was changed.",
+                      {"state": r.state.value, "op_id": r.op_id, "op": r.op}) from None
+
+
 def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    _hold_device(helper, ctx, "profiles.accept")
+    try:
+        return _accept(helper, args)
+    finally:
+        helper.machine.end(ctx.req_id)
+
+
+def _stale_refusal(helper: Helper) -> OpError | None:
+    why = T.stale_since_read(helper)
+    if why is None:
+        return None
+    return _refused(f"the words of the last read may no longer be what the CPU holds: {why}. Read again first (Tune > Read), then accept.", "STALE_READ")
+
+
+def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
     cfg = helper.cfg
     directory = getattr(cfg, "accepted_dir", None)
     if directory is None:
@@ -165,11 +204,17 @@ def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> 
     last = T._last_words(helper)
     if not last:
         raise _refused("no tune.read this boot: the accepted state is what the CPU holds, so read it first (Tune > Read).", "NO_READ")
+    stale = _stale_refusal(helper)
+    if stale is not None:
+        raise stale
     fused = getattr(helper, "fused_words", None) or {}
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cfg.wall_clock()))
     if "from" in args:
         name = "read-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime(cfg.wall_clock()))
-        profile = _profile_from_words(topology, name, last, fused)
+        st = T._state(helper)
+        with st.lock:
+            tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
+        profile = _profile_from_words(topology, name, last, fused, tables)
         source = "the state of the last read"
     else:
         name = args["name"]
@@ -211,3 +256,63 @@ def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> 
     return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced, "cpus": len(last),
             "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None,
             "fingerprint": fingerprint_note}
+
+
+def op_profiles_fingerprint(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """G-141: ``profiles.fingerprint`` (no args) -- record ``fingerprint.json`` for the accepted state that exists, from this boot's fused ``0x09`` words, without re-accepting.
+
+    For an accepted state made before G-138 (it has no fingerprint, so the Windows restore refuses it). Writes ONLY ``<accepted>/fingerprint.json`` (atomically); ``CURRENT``,
+    the profiles and ``EXPECTED-words.txt`` stay byte for byte as they are. The words are the live ``0x09`` words of this boot's last read (``helper.fused_words``); the
+    CPU identity comes from ``/proc/cpuinfo`` as in ``profiles.accept``. Refusals (nothing is changed): ``NO_ACCEPTED_DIR`` / ``NO_ACCEPTED_STATE`` (there is no accepted
+    state: use ``profiles.accept``), ``NO_READ`` (this boot's read lacks the ``0x09`` word of a unit: read the whole system first), ``BUSY`` (another long op runs), and the
+    store's trust refusals. Result: ``{recorded, cpus, accepted: [profile names], fingerprint: "complete" | "incomplete: <why>"}``; ``incomplete`` (for example no CPU
+    identity under the simulator) is written all the same, as ``profiles.accept`` does, and says what the Windows restore will refuse. One audit record (``op profiles.fingerprint``)
+    is appended before the file is written. No mailbox traffic, no MSR."""
+    _hold_device(helper, ctx, "profiles.fingerprint")
+    try:
+        return _fingerprint(helper)
+    finally:
+        helper.machine.end(ctx.req_id)
+
+
+def _fingerprint(helper: Helper) -> dict[str, Any]:
+    cfg = helper.cfg
+    directory = getattr(cfg, "accepted_dir", None)
+    if directory is None:
+        raise _refused("this helper keeps no accepted state (no accepted-state directory is configured).", "NO_ACCEPTED_DIR")
+    directory = Path(directory)
+    if cfg.enforce_trust:
+        try:
+            check_trusted_path(directory.parent, want="dir", must_exist=True, lstat_fn=cfg.lstat_fn)
+        except TrustError as exc:
+            raise _refused(f"the accepted state's location is untrusted: {exc}.", "NO_ACCEPTED_STATE") from None
+    try:
+        chain = [n for n, _ in T._accepted_chain(helper)]  # the same trusted read as everything else: no CURRENT / no profile = no accepted state
+    except OpError as exc:
+        raise _refused(f"there is no accepted state to record a fingerprint for ({exc.message.removesuffix(' Nothing was sent.')}); accept a profile first (Profiles > Set as accepted).", "NO_ACCEPTED_STATE") from None
+    topology = T._topology(helper)
+    T._last_words(helper)  # the lazy restore of this boot's stored read brings the fused words back after a helper restart
+    fused = dict(getattr(helper, "fused_words", None) or {})
+    missing = [u for u in topology.unit_ids() if topology.unit_cpus(u)[0] not in fused]
+    if missing:
+        raise _refused(
+            f"this boot's read has no fused 0x09 word for {', '.join(missing)}; read the whole system first (Tune > Read), then record the fingerprint.", "NO_READ"
+        )
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cfg.wall_clock()))
+    fingerprint = build_fingerprint(topology, fused, _cpu_id(cfg))
+    try:
+        fingerprint.require_restorable()
+        note = "complete"
+    except FingerprintError as exc:
+        note = f"incomplete: {exc}"
+    T._trust(helper, cfg.audit_path, want="file", must_exist=False)
+    try:
+        AuditLog(cfg.audit_path).append("result", op="profiles.fingerprint", accepted=chain, recorded=stamp, cpus=len(fused))
+    except (OSError, ValueError) as exc:
+        raise _refused(f"cannot record this in the audit log: {exc}.", "AUDIT_UNAVAILABLE") from None
+    try:
+        AcceptedStore(directory, euid=cfg.euid_fn()).write_fingerprint(fingerprint.to_json(stamp))
+    except AcceptedError as exc:
+        check = "NO_ACCEPTED_STATE" if exc.code in ("UNTRUSTED", "MISSING") else exc.code
+        raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": check}) from None
+    return {"recorded": stamp, "cpus": len(fingerprint.cpus), "accepted": chain, "fingerprint": note}

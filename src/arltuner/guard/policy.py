@@ -17,7 +17,7 @@ TOML schema (``load_policy``)::
     max_operations_per_boot = 12          # cap over ALL processes since boot, from the audit log (T-016; D-011)
     min_dwell_s = 60.0
 
-    e_cpus = ["8-23"]                     # optional: CPUs that are E-cores (default 8-23); every other CPU is treated as P
+    e_cpus = ["8-23"]                     # optional: CPUs that are E-cores (default: the live topology's; without one, the simulated reference part's 8-23); every other CPU is treated as P
     effective_offset_floor_mv = -100      # optional (D-015): floor of BIOS offset + runtime offset
     assumed_bios_offset_mv = { P = -50, E = 0 }   # optional (D-015): the operator's BIOS per-core V/F offset by core kind
 
@@ -78,6 +78,13 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
 from arltuner.mailbox import Cmd, VfWord, is_write
+from arltuner.mailbox.encoding import (
+    ENCODING_OFFSET_CEILING_MV,
+    ENCODING_OFFSET_FLOOR_MV,
+    ENCODING_RATIO_MAX,
+    ENCODING_V_TARGET_MAX_MV,
+    V_TARGET_MIN_MV as _V_TARGET_MIN_MV,
+)
 from arltuner.topology.cpumap import KIND_E, KIND_P, Topology
 from arltuner.topology.reference import arl_s_285k
 
@@ -123,9 +130,9 @@ __all__ = [
 
 #: D-015 (docs/DECISIONS.md): the runtime offset ADDS to the BIOS per-core V/F offset ``[MEASURED win 2026-10-01]``. The BIOS offset is not readable through the
 #: mailbox; a policy may state one per core kind (``assumed_bios_offset_mv``) and the runtime floor of a kind is
-#: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``. The default is unchanged by G-128 (P -50 mV, E 0 mV: the runtime floor of a policy that states nothing stays
-#: P -50 mV / E -100 mV, no widening); a policy that wants the CPU's own effective offset only (the shipped advanced policy) states 0 for both.
-DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": -50, "E": 0})
+#: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``. G-141: the default assumes **no** BIOS offset for either kind (0), so the runtime floor of a policy that
+#: states nothing is ``effective_offset_floor_mv`` itself for P and E. (It used to be P -50 mV, one operator's old BIOS value, which cut 50 mV off the window on every other machine.)
+DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": 0, "E": 0})
 DEFAULT_EFFECTIVE_OFFSET_FLOOR_MV = -100
 
 #: D-016 defaults of the per-operation step limits and the offset ceiling: the orchestrator's conservative choice (``[UNVERIFIED]`` as
@@ -140,22 +147,19 @@ DEFAULT_OFFSET_CEILING_MV = 0
 #: the CPU's own ``0x01 [7:0]`` fused max OC ratio, of a V target the policy value clamped by ``0x28 - 1 LSB``; both are read live in the session (an unread limit
 #: = no raise, fail closed). What remains here are the **field encodings** (the widest value the word can carry, registers.md "V/F data word") and the XTU range
 #: of the offset: a policy value outside them cannot be written into the word at all.
-ENCODING_RATIO_MAX = 255  # ratio field [7:0] of the 0x11 word
-ENCODING_V_TARGET_MAX_MV = 3999  # voltage field [19:8] is S2.10 over 12 bits: 0xFFF / 1024 V = 3.999 V (the real limit is 0x28, read live)
-ENCODING_OFFSET_CEILING_MV = 999  # offset field [31:21] is 11-bit signed; XTU allows -1000...+999 mV (registers.md V/F data word)
-ENCODING_OFFSET_FLOOR_MV = -1000
+# ENCODING_* (imported above from arltuner.mailbox.encoding, the one home of the field-encoding bounds; G-141) are re-exported here unchanged.
 #: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C[15:8] fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
 #: above the top fused point is reachable without a hand-written ``ratio_max``; clamped by the CPU's own ``0x01`` limit (D-039), never by a constant.
 AUTO_OC_HEADROOM = 3
-_V_TARGET_MIN_MV = 500  # XTU's voltage override range starts at 0.5 V (registers.md "Limits XTU applies"); also the profile schema's lower bound
 _RATIO_STEP_RANGE = (1, ENCODING_RATIO_MAX)
 _V_STEP_MV_RANGE = (2, 1000)  # >= 2 mV so that every step window holds at least one whole-mV value (1 mV = 1.024 raw)
 _OFFSET_STEP_MV_RANGE = (2, 1000)
 
-#: The simulated reference CPU's E CPUs: the default of a Policy that was never bound to a topology (simulator and tests). Every hardware path binds the live
-#: topology (``Policy.with_topology`` / ``load_policy(..., topology=...)``, D-036).
+#: The simulated reference CPU, used ONLY where the caller asked for no topology on purpose (``default_m1_policy()`` / ``load_policy(text)`` of the simulator and the tests).
+#: G-141 (D-036): a ``Policy`` built directly with no ``e_cpus`` is *unbound* (``e_cpus is None``) and ``core_kind`` refuses to guess a layout for it; every hardware path
+#: binds the live topology (``Policy.with_topology`` / ``load_policy(..., topology)`` / ``default_m1_policy(topology)``).
 _REFERENCE_TOPOLOGY = arl_s_285k()
-_E_CPUS_DEFAULT = frozenset(_REFERENCE_TOPOLOGY.cpus_of_kind(KIND_E))
+_E_CPUS_REFERENCE = frozenset(_REFERENCE_TOPOLOGY.cpus_of_kind(KIND_E))
 
 _U32_MAX = 0xFFFFFFFF
 _CPU_MAX = 1023  # far above any real CPU number; rejects garbage, not a hardware fact
@@ -899,7 +903,7 @@ class Policy:
     ``assumed_bios_offset_mv`` / ``effective_offset_floor_mv`` / ``e_cpus`` (T-021, D-015): the BIOS per-core V/F offset by core kind
     (``"P"``/``"E"``; the operator's stated value, not readable through the mailbox), the floor of *BIOS + runtime* offset, and which
     CPUs are E-cores (any other CPU counts as P -- the stricter floor). ``offset_floor_raw(cpu)`` is the resulting floor of the runtime
-    offset field (``<= 0``): P -50 mV, E -100 mV by default. The runtime offset adds to the BIOS offset ``[MEASURED win 2026-10-01]``.
+    offset field (``<= 0``): -100 mV for P and E by default (no BIOS offset is assumed). The runtime offset adds to the BIOS offset ``[MEASURED win 2026-10-01]``.
 
     ``max_operations_per_boot`` (T-016) is the same count taken over **every process** since the current boot, read from the
     audit log (``attempt`` records with the current ``boot_id``): the CLI is one process per command, so a per-session limit
@@ -921,7 +925,7 @@ class Policy:
     max_operations_per_boot: int = 12
     assumed_bios_offset_mv: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_ASSUMED_BIOS_OFFSET_MV))
     effective_offset_floor_mv: int = DEFAULT_EFFECTIVE_OFFSET_FLOOR_MV
-    e_cpus: frozenset[int] = _E_CPUS_DEFAULT
+    e_cpus: frozenset[int] | None = None  # None = not bound to a topology: core_kind() raises instead of assuming a particular layout
     ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
     v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
     v_target_auto: frozenset[str] = frozenset()  # kinds whose V target ceiling is "auto": the CPU's own 0x28 maximum minus one LSB, read in the session
@@ -987,13 +991,14 @@ class Policy:
         object.__setattr__(self, "assumed_bios_offset_mv", MappingProxyType({k: int(v) for k, v in bios.items()}))
         if not _is_int(self.effective_offset_floor_mv) or not -1000 <= self.effective_offset_floor_mv <= 0:
             raise PolicyError(f"effective_offset_floor_mv must be an int in -1000..0 mV, got {self.effective_offset_floor_mv!r} (field encoding: XTU range -1000..+999 mV)")
-        if isinstance(self.e_cpus, (str, bytes, Mapping)) or not isinstance(self.e_cpus, Iterable):
-            raise PolicyError(f"e_cpus must be a collection of ints, got {type(self.e_cpus).__name__}")
-        e_cpus = list(self.e_cpus)
-        for v in e_cpus:
-            if not _is_int(v) or not 0 <= v <= _CPU_MAX:
-                raise PolicyError(f"e_cpus: {v!r} is not an int in 0..{_CPU_MAX}")
-        object.__setattr__(self, "e_cpus", frozenset(int(v) for v in e_cpus))
+        if self.e_cpus is not None:
+            if isinstance(self.e_cpus, (str, bytes, Mapping)) or not isinstance(self.e_cpus, Iterable):
+                raise PolicyError(f"e_cpus must be a collection of ints, got {type(self.e_cpus).__name__}")
+            e_cpus = list(self.e_cpus)
+            for v in e_cpus:
+                if not _is_int(v) or not 0 <= v <= _CPU_MAX:
+                    raise PolicyError(f"e_cpus: {v!r} is not an int in 0..{_CPU_MAX}")
+            object.__setattr__(self, "e_cpus", frozenset(int(v) for v in e_cpus))
         if not _is_int(self.max_operations_per_session) or self.max_operations_per_session < 1:
             raise PolicyError(f"max_operations_per_session must be an int >= 1, got {self.max_operations_per_session!r}")
         if not _is_int(self.max_operations_per_boot) or self.max_operations_per_boot < 1:
@@ -1042,14 +1047,16 @@ class Policy:
         return replace(self, cpus=frozenset(c.cpu for c in topology.cores), e_cpus=frozenset(topology.cpus_of_kind(KIND_E)))
 
     def core_kind(self, cpu: int) -> str:
-        """``"E"`` for a CPU listed in ``e_cpus``, else ``"P"`` (the kind with the stricter default floor)."""
+        """``"E"`` for a CPU listed in ``e_cpus``, else ``"P"`` (the kind with the stricter default floor). ``PolicyError`` for a policy not bound to a topology."""
+        if self.e_cpus is None:
+            raise PolicyError("this policy is not bound to a CPU topology (e_cpus unset): bind it with Policy.with_topology / load_policy(..., topology) before asking a CPU's kind")
         return "E" if cpu in self.e_cpus else "P"
 
     def offset_floor_raw(self, cpu: int) -> int:
         """D-015: the lowest runtime offset (raw, 1/1024 V) allowed on ``cpu`` so that BIOS + runtime stays at or above
         ``effective_offset_floor_mv``: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]`` in mV, converted with XTU's rounding
         (``(|mV| * 1024 + 512) // 1000``, sign kept) and clamped to ``<= 0`` (an offset of 0 is always within the floor; the matching upper
-        bound is ``offset_ceiling_mv``, D-016). P -50 mV -> -51, E -100 mV -> -102 by default."""
+        bound is ``offset_ceiling_mv``, D-016). -100 mV -> -102 for P and E by default."""
         floor_mv = self.effective_offset_floor_mv - self.assumed_bios_offset_mv[self.core_kind(cpu)]
         if floor_mv >= 0:
             return 0
@@ -1089,7 +1096,7 @@ def default_m1_policy(topology: Topology | None = None) -> Policy:
     * Reads (registers.md "Mailbox commands", P1/P2 columns): ``0x01`` p1 0..7 p2 0; ``0x02`` p1 0..7 p2 0; ``0x09`` p1 0x11
       (domain floors) with p2 = domain {0,2,7}; ``0x1C`` and ``0x14`` p1 0 p2 0; ``0x28`` p1 = domain {0,2,7} p2 0; ``0x10`` p1 {0,2,7} p2 0.
     * Writes: ``0x15`` p1 0 p2 0 with ``percore_enable_only``; ``0x11`` p1 0 p2 0 with ``vf_bounded`` (no entry params: the D-015
-      runtime floor, P -50 mV / E -100 mV, is the offset floor), and -- the XTU follow-ups of a per-core
+      runtime floor, -100 mV for both kinds, is the offset floor), and -- the XTU follow-ups of a per-core
       Apply, ``[MEASURED win 2026-10-01]`` -- ``0x1D`` p1 0 p2 0 with ``favored_ratio_follows_vf`` and ``0x27`` p1 0 p2 0 with
       ``granular_equals_read``; reads ``0x26`` p1 0 p2 0 (with ``0x1C``/``0x09``/``0x28`` above). Everything else, including every other
       write command, is denied.
@@ -1226,8 +1233,7 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
         kwargs = {"cpus": frozenset(_parse_int_list("cpus", doc["cpus"]))}
     if named is not None:
         kwargs["source"] = named
-    if topology is not None:
-        kwargs["e_cpus"] = frozenset(topology.cpus_of_kind(KIND_E))
+    kwargs["e_cpus"] = frozenset(topology.cpus_of_kind(KIND_E)) if topology is not None else _E_CPUS_REFERENCE  # no topology = the simulator / tests, on purpose (G-141)
     if "max_operations_per_session" in doc:
         kwargs["max_operations_per_session"] = doc["max_operations_per_session"]
     if "max_operations_per_boot" in doc:

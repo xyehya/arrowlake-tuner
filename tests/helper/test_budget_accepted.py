@@ -61,6 +61,25 @@ class BudgetMeterTests(HelperCase):
         used, budget = self.helper(policy_path=None).budget.snapshot()
         self.assertEqual((used, budget), (0, default_m1_policy().max_operations_per_boot))
 
+    def test_built_in_policy_is_bound_to_the_live_topology_or_gives_no_budget(self) -> None:
+        """G-141 (D-036): the no-policy-file budget comes from a policy bound to the live topology; a topology that cannot be derived gives null, not the 285K's number."""
+        from arltuner.topology import TopologyError
+
+        def broken() -> Any:
+            raise TopologyError("no cpu_core / cpu_atom")
+
+        seen: list[int] = []
+
+        def topology() -> Any:
+            from arltuner.topology import synthetic
+
+            seen.append(1)
+            return synthetic(6, 8)
+
+        self.assertEqual(self.helper(policy_path=None, topology_fn=topology).budget.snapshot()[1], 12)
+        self.assertEqual(seen, [1])  # the helper's own topology function was asked
+        self.assertIsNone(self.helper(policy_path=None, topology_fn=broken).budget.snapshot()[1])
+
     def test_counts_match_the_guard_for_this_boot_only(self) -> None:
         lines = [attempt(BOOT)] * 5 + [attempt(OTHER_BOOT)] * 3 + [attempt(None)] * 2 + [attempt(BOOT, "result"), attempt(BOOT, "refused"), attempt(BOOT, "readback")]
         write_lines(self.audit, lines)

@@ -410,10 +410,22 @@ class AutoLimitsTests(unittest.TestCase):
         self.assertIsNone(self.ctx(p, 0, 0x1000).v_target_max_raw)  # only [11:0] counts
         self.assertIsNone(self.ctx(p, 0, None).v_target_max_raw)
 
-    def test_the_default_m1_policy_floor_is_not_widened(self) -> None:
+    def test_the_default_m1_policy_assumes_no_bios_offset(self) -> None:
         p = default_m1_policy()
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -50, "E": 0})
-        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-51, -102))  # P runtime floor -50 mV, E -100 mV, as before G-128
+        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})
+        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-102, -102))  # G-141: -100 mV for both kinds (the P default used to assume a -50 mV BIOS offset)
+
+    def test_a_policy_built_without_a_topology_does_not_guess_the_285k_layout(self) -> None:
+        """G-141 (D-036): a bare ``Policy`` is unbound (``e_cpus`` unset) and refuses to say which CPU is an E-core; the loaders bind a topology (or, on purpose, the reference)."""
+        from arltuner.topology import synthetic
+
+        bare = Policy(cpus=frozenset(range(4)))
+        self.assertIsNone(bare.e_cpus)
+        with self.assertRaisesRegex(PolicyError, "not bound to a CPU topology"):
+            bare.core_kind(0)
+        self.assertEqual(bare.with_topology(synthetic(2, 4)).core_kind(3), "E")
+        self.assertEqual(default_m1_policy().core_kind(8), "E")  # the simulator / tests ask for the reference part explicitly
+        self.assertEqual(default_m1_policy(synthetic(6, 8)).core_kind(6), "E")
 
     def test_default_m1_policy_follows_a_given_topology(self) -> None:
         from arltuner.topology import synthetic
