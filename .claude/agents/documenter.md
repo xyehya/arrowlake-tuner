@@ -23,7 +23,7 @@ You are the **documenter** of arrowlake-tuner. You own the user guide in `docs/g
   commands, flags, ops and file paths. Every hardware claim keeps its evidence tag (`[MEASURED host date]`, `[DOC url]`, `[COMMUNITY url]`,
   `[DECOMPILED file]`, `[UNVERIFIED]`) as in the source. Never invent a number, never upgrade `[UNVERIFIED]`/`[COMMUNITY]` to fact.
   If two sources disagree, say so in NOTES.md open questions and use the newer MEASURED one.
-- Never read `~/AI/turbostat` or `~/AI/turbostat+`. The predecessor `~/AI/linuxmon` only read-only and only if `docs/PROVENANCE.md` points there.
+- Use only this repository as a source.
 - Public project (D-036): the app reads everything live from the user's CPU. Numbers measured on the reference machine (Core Ultra 9 285K,
   ASRock Z890) are presented as **example values from one chip**, clearly labelled, never as what the reader's CPU will show.
 - Verify every command you document against the code (argparse, install.sh, tools/). Do not document a flag that does not exist.

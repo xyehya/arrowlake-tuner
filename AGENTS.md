@@ -24,8 +24,8 @@ never only in chat · `git push` (remote in STATE).
   driver load, cpufreq caps). **Worker/worktree agents NEVER do** — they work against the simulator and fake sysfs only.
 - The orchestrator needs an explicit go-ahead in chat for each write sitting. Every mailbox request — reads too — is a WRMSR.
 - Mailbox traffic: one transaction at a time, never a sweep (`docs/SAFETY.md`, 2026-08-26 incident). Reads: allowlisted registers only.
-- Never widen the policy beyond D-032 (advanced limits 2026-10-11: offsets ±200 mV, V target ≤ hardware max, ratio ≤ P 57 / E 49, op caps as
-  indicators) without the operator's yes. Never work around a guard refusal. One mailbox transaction at a time stays.
+- Never widen the operator's `/etc/arltuner/policy.toml` (or the shipped defaults) without their yes. The code's own ceilings are the CPU's
+  reported limits and the field encoding (D-038/D-039). Never work around a guard refusal. One mailbox transaction at a time stays.
 - Never download or install software/drivers without naming it (name, source, size) and a yes. OCCT never elevated. The Windows ThrottleStop
   driver is carved from the operator's own exe, never committed, stopped after applying.
 - Workers use only this repository; facts come in via `docs/knowledge/`.
