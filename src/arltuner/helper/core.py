@@ -1,9 +1,14 @@
-"""The helper process: contract 8 over stdin/stdout, SPEC 4.6 state machine, heartbeat, one machine-wide instance.
+"""The helper process: contract 8 over stdin/stdout (or, G-144, over one Unix-socket connection at a time), SPEC 4.6 state machine, heartbeat, one machine-wide instance.
 
 Threads: the caller's thread runs the dispatch loop; a reader thread turns stdin lines into frames (so a signal or a shutdown never waits on a
 blocked read); a heartbeat thread; at most one worker thread for the single long op; one telemetry emitter. Every write to stdout goes through one
 locked :class:`Writer`. Shutdown (EOF, SIGTERM, SIGHUP, SIGINT, a broken stdout) sets one flag that also sets the running op's cancel flag: the
 current mailbox transaction finishes, no new one starts, the op sends its one final response, telemetry stops, the process exits.
+
+Two lifetimes (D-043): the **process** (instance lock, ``tuned_this_boot``, journal recovery: :meth:`Helper.start` / :meth:`Helper.stop`) and a **connection**
+(:meth:`Helper.serve`: writer, reader, heartbeat, dispatch loop, and at its end the same orderly stop as on EOF). ``run`` is both around one stdio pair.
+The socket service (:mod:`arltuner.helper.service`) calls ``start``, then ``serve`` once per accepted client, then ``stop``; between clients the helper is
+idle and ready (no stale request ids, no writer, no telemetry).
 """
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ import queue
 import signal
 import threading
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, BinaryIO
 
@@ -116,6 +122,9 @@ class Helper:
         self._worker: threading.Thread | None = None
         self._tele: _Telemetry | None = None
         self._tele_lock = threading.Lock()
+        self._lock: InstanceLock | None = None
+        self.peer_uid: int | None = None  # socket service: the uid of the connected client (SO_PEERCRED), None on stdio
+        self.socket_mode = False  # set by the socket service: the invoker is the peer uid, never an environment variable
         self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
         self.last_words: dict[int, list[int]] | None = None  # G-112: cpu -> [OC word, point 1, point 2, ...] after the last complete tune.read / vf.dump (and the read-backs of tune.apply); None = unknown
@@ -155,22 +164,82 @@ class Helper:
 
     # ---------------------------------------------------------------- the loop
     def run(self, stdin: BinaryIO, stdout: BinaryIO) -> int:
+        """One stdio pair for the life of the process (tests, ``--sim``, the dev path)."""
         self._writer = Writer(stdout, on_broken=lambda: self.request_shutdown("stdout closed"))
+        code = self.start(self._send)
+        if code is not None:
+            return code
+        try:
+            self._serve_loop(stdin)
+        finally:
+            self.stop()
+        return 0
+
+    def start(self, notify: Callable[[dict[str, Any]], object] | None = None) -> int | None:
+        """Process-level start: the machine-wide instance lock, ``tuned_this_boot`` from the audit log, the stale measure journal. ``None`` = started;
+        otherwise the exit code (the refusal was passed to ``notify`` and logged)."""
         lock = InstanceLock(self.cfg.lock_path, euid=self.cfg.euid_fn())
         try:
             lock.acquire()
         except TrustError as exc:  # a symlink, a foreign-owned or a writable-by-others lock file: never followed, never taken over
-            self._send(error_response(None, REFUSED, f"untrusted lock file: {exc}", {"check": "LOCK_UNTRUSTED", "path": exc.path, "reason": exc.reason}))
+            if notify is not None:
+                notify(error_response(None, REFUSED, f"untrusted lock file: {exc}", {"check": "LOCK_UNTRUSTED", "path": exc.path, "reason": exc.reason}))
             self.cfg.log(f"lock: {exc}")
             return EXIT_REFUSED_TO_START
         except (InstanceBusy, OSError) as exc:
-            self._send(error_response(None, REFUSED, f"the helper is already running on this system: {exc}", {"check": "INSTANCE_LOCK"}))
+            if notify is not None:
+                notify(error_response(None, REFUSED, f"the helper is already running on this system: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
+        self._lock = lock
         self._derive_tuned_this_boot()
         self._recover_measure_journal()  # a stale journal = a measurement that died with the previous helper: put cpufreq back before anything else runs
+        return None
+
+    def stop(self) -> None:
+        lock, self._lock = self._lock, None
+        if lock is not None:
+            lock.release()
+
+    @property
+    def signalled(self) -> bool:
+        """A SIGTERM / SIGHUP / SIGINT arrived (or a shutdown was requested for the whole process)."""
+        return self._signal is not None
+
+    def busy(self) -> bool:
+        """An operation (long, or a read-only one on its own thread) is running or telemetry is on."""
+        with self._slow_lock:
+            slow = bool(self._slow)
+        return self.machine.running is not None or slow or self._tele is not None
+
+    def serve(self, rfile: BinaryIO, wfile: BinaryIO, *, peer_uid: int | None = None) -> None:
+        """One connection of the socket service: the protocol over ``rfile`` / ``wfile`` until the client leaves (EOF, a broken socket) or a signal. At
+        the end an operation in flight has completed its read-back / restore, telemetry is stopped and the helper is ready for the next client. The
+        peer's uid is the invoker (audit ``operator``, the stress child's user) for exactly this connection."""
+        self._writer = Writer(wfile, on_broken=lambda: self.request_shutdown("client socket closed"))
+        self.peer_uid = peer_uid
+        operator = self.cfg.operator
+        if peer_uid is not None:
+            self.cfg.operator = f"gui:uid{peer_uid}"
+        try:
+            self._serve_loop(rfile)
+        finally:
+            self.cfg.operator = operator
+            self.peer_uid = None
+            self._writer = None
+            self._reset_connection()
+
+    def _reset_connection(self) -> None:
+        self._shutdown.clear()
+        self._seen.clear()
+        self._cancel = None
+        self._worker = None
+        self._inflight.clear()
+
+    def _serve_loop(self, stdin: BinaryIO) -> None:
         frames: queue.Queue[Frame] = queue.Queue(maxsize=QUEUE_MAX)
-        threading.Thread(target=self._reader, args=(stdin, frames), name="helper-stdin", daemon=True).start()
+        reader = threading.Thread(target=self._reader, args=(stdin, frames), name="helper-stdin", daemon=True)
+        reader.start()
         beat = threading.Thread(target=self._heartbeat, name="helper-heartbeat", daemon=True)
         beat.start()
         try:
@@ -189,8 +258,7 @@ class Helper:
                 self._handle(frame)
         finally:
             self._finish(frames)
-            lock.release()
-        return 0
+            beat.join(_SLOW_JOIN_S)  # _finish set the shutdown flag the heartbeat waits on; it must be gone before the next connection clears the flag
 
     def _derive_tuned_this_boot(self) -> None:
         """G-122: after the instance lock (so a restart sees what the previous helper's guard logged), before any frame: ``tuned_this_boot`` from the audit log."""

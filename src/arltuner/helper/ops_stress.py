@@ -1,6 +1,6 @@
 """G-116 ops (contract 9 addendum): ``stress.start`` (long, state ``stressing``), ``stress.stop``, ``stress.list``. **No mailbox, no MSR write.**
 
-``stress.start`` runs ``stress-ng`` (cpu / cache screens) or ``stressapptest`` (memory screen) **as the invoking user** (``PKEXEC_UID``; dropped by ``Popen``'s own
+``stress.start`` runs ``stress-ng`` (cpu / cache screens) or ``stressapptest`` (memory screen) **as the invoking user** (the socket peer's uid, D-043; dropped by ``Popen``'s own
 ``user`` / ``group`` / ``extra_groups`` so the setgroups / setgid / setuid happen in the child before exec, in C, with no Python between fork and exec: the task
 text names ``preexec_fn``, which the Python docs call unsafe in a threaded process and the helper is threaded), in their own session / process group, with a
 fixed environment and absolute, trust-checked executables. It samples the telemetry snapshot every ``progress_s`` (achieved MHz / ratio per unit, temperature,
@@ -44,7 +44,7 @@ from .state import State
 from .trust import TrustError, check_trusted_path
 
 __all__ = [
-    "Invoker", "InvokerError", "SimStress", "StressWiring", "Workdir", "default_invoker", "default_workdir", "device_wiring", "prepare_workdir", "sim_wiring",
+    "Invoker", "InvokerError", "SimStress", "StressWiring", "Workdir", "default_invoker", "default_workdir", "device_wiring", "helper_invoker", "invoker_for_uid", "prepare_workdir", "sim_wiring",
     "stress_ops",
 ]
 
@@ -77,14 +77,9 @@ class Invoker:
     user: str
 
 
-def default_invoker(environ: dict[str, str] | None = None, getpwuid: Callable[[int], Any] | None = None) -> Invoker:
-    """The user who started the GUI: ``PKEXEC_UID`` set by pkexec, never root, known to the passwd database. Anything else is :class:`InvokerError`
-    (a stress child is never started as root, and never as a guessed user)."""
-    env = os.environ if environ is None else environ
-    raw = env.get("PKEXEC_UID")
-    if raw is None or not _UID_RE.match(raw):
-        raise InvokerError("PKEXEC_UID is not set to a numeric user id (the helper was not started through pkexec)")
-    uid = int(raw)
+def invoker_for_uid(uid: int, getpwuid: Callable[[int], Any] | None = None) -> Invoker:
+    """The user with this uid: never root, known to the passwd database. Anything else is :class:`InvokerError` (a stress child is never started as root,
+    and never as a guessed user)."""
     if uid == 0:
         raise InvokerError("the invoking user is root; stress children are never run as root")
     try:
@@ -98,6 +93,27 @@ def default_invoker(environ: dict[str, str] | None = None, getpwuid: Callable[[i
     if pw.pw_uid != uid or pw.pw_gid is None:
         raise InvokerError(f"the passwd entry of uid {uid} is not usable")
     return Invoker(uid, int(pw.pw_gid), str(pw.pw_name))
+
+
+def default_invoker(environ: dict[str, str] | None = None, getpwuid: Callable[[int], Any] | None = None) -> Invoker:
+    """The stdio dev path only (``sudo -n env PKEXEC_UID=<uid> arltuner-helper --device``): the uid in ``PKEXEC_UID``. The socket service never reads it
+    (:func:`helper_invoker`)."""
+    env = os.environ if environ is None else environ
+    raw = env.get("PKEXEC_UID")
+    if raw is None or not _UID_RE.match(raw):
+        raise InvokerError("PKEXEC_UID is not set to a numeric user id (this helper has no invoking user)")
+    return invoker_for_uid(int(raw), getpwuid)
+
+
+def helper_invoker(helper: Any, getpwuid: Callable[[int], Any] | None = None, environ: dict[str, str] | None = None) -> Invoker:
+    """Who the stress children run as, for *this* helper: in socket mode the connected peer's uid (read now, per call - the wiring outlives clients) and
+    nothing else; with no connected peer, or root, :class:`InvokerError` (``NO_INVOKER``). On the stdio dev path the ``PKEXEC_UID`` environment variable."""
+    if getattr(helper, "socket_mode", False):
+        uid = getattr(helper, "peer_uid", None)
+        if uid is None:
+            raise InvokerError("no client is connected to the helper socket")
+        return invoker_for_uid(uid, getpwuid)
+    return default_invoker(environ, getpwuid)
 
 
 # =============================================================================================================================================
@@ -240,6 +256,7 @@ def device_wiring(helper: Any) -> StressWiring:
     return StressWiring(
         store=StressStore(INSTALLED_STATE_DIR / "stress", enforce_trust=helper.cfg.enforce_trust, lstat_fn=lstat_fn),
         trust_check=trust,
+        invoker_fn=lambda: helper_invoker(helper),  # read at call time: the wiring is built once, the peer changes per client
         sample_fn=_telemetry_snapshot,
         klog_factory=lambda: KernelLogWatch([KmsgLog(), JournalLog(trust_check=trust)]),
         health_fn=lambda: take_snapshot(Path("/")),

@@ -1,7 +1,7 @@
 """Preflight (SPEC section 3): pure checks over an injectable filesystem root. Read-only, no hardware access, no subprocess.
 
 ``preflight(root)`` reads a handful of small files under ``root`` (``/proc/cpuinfo``, ``/sys/kernel/security/lockdown``, ``/dev/cpu/*/msr``,
-``/sys/module/msr/parameters/allow_writes``, ``/proc/<pid>/comm``, executables in the usual bin directories) and returns one named ``CheckResult``
+``/sys/module/msr/parameters/allow_writes``, the helper socket node and ``/etc/arltuner/helper.toml``, executables in the usual bin directories) and returns one named ``CheckResult``
 per check. A failed check is a named refusal, never a workaround. "Recognised platform" is CPUID (vendor, family, model on every CPU; an unknown stepping is a
 WARN) plus a live topology check (P and E CPU sets non-empty, E clusters of equal size, derived from sysfs, D-036). The result also carries the live
 ``topology`` (units, favored cores) for the GUI.
@@ -42,11 +42,6 @@ OPTIONAL_TOOLS: dict[str, str] = {
     "sensors": "lm_sensors (Fedora) / lm-sensors (Debian, Ubuntu)",
     "nvidia-smi": "the NVIDIA driver utilities (nvidia-utils / nvidia-smi)",
 }
-
-#: Process names (``/proc/<pid>/comm``, max 15 chars) that host a polkit authentication agent. GNOME's agent lives inside the shell.
-_AGENT_COMMS = frozenset({"gnome-shell", "plasmashell", "cinnamon", "budgie-wm", "pantheon-agent-", "pkttyagent"})
-_AGENT_WORDS = ("polkit", "policykit")
-
 
 class Status(Enum):
     PASS = "pass"
@@ -286,51 +281,43 @@ def _find_exe(root: Path, name: str, path_dirs: Iterable[str]) -> Path | None:
     return None
 
 
-def check_pkexec(root: Path, path_dirs: Sequence[str]) -> CheckResult:
-    if _find_exe(root, "pkexec", path_dirs) is None:
-        return CheckResult("pkexec", Status.READ_ONLY, "pkexec not found in " + ":".join(path_dirs) + ": the root helper cannot start (install polkit)")
-    return CheckResult("pkexec", Status.PASS, "pkexec found")
+#: The helper's socket, relative to the preflight root (D-043); ``arltuner.helper.service.SOCKET_PATH`` is the same path.
+HELPER_SOCKET = "run/arltuner/helper.sock"
+HELPER_TOML = "etc/arltuner/helper.toml"
 
 
-_POLKITD_PATHS = ("usr/lib/polkit-1/polkitd", "usr/libexec/polkitd", "usr/lib/polkit-1/polkitd-1", "usr/lib/policykit-1/polkitd", "usr/libexec/polkit-1/polkitd")
+def check_helper_service(root: Path, *, applies: bool = True) -> CheckResult:
+    """The root helper is a service on ``/run/arltuner/helper.sock`` (D-043): the node is a socket owned by root that "other" cannot reach, and
+    ``/etc/arltuner/helper.toml`` admits somebody (``[access]`` non-empty and valid). It does not connect (the socket serves one client, and the one that
+    asks is usually that client). ``applies=False``: the helper is not serving a socket (simulator, stdio dev path) and the check passes as not applicable."""
+    name = "helper_service"
+    if not applies:
+        return CheckResult(name, Status.PASS, "not applicable: this helper does not serve the socket (simulator or stdio)")
+    import stat
 
-
-def check_polkit(root: Path) -> CheckResult:
-    name = "polkit"
-    found = next((p for p in _POLKITD_PATHS if (root / p).is_file()), None)
-    if found is None:
-        return CheckResult(name, Status.READ_ONLY, "polkitd not found: the root helper cannot start (install polkit)")
-    return CheckResult(name, Status.PASS, f"polkitd installed (/{found})")
-
-
-def _process_comms(root: Path) -> list[str] | None:
-    proc = root / "proc"
+    node = root / HELPER_SOCKET
     try:
-        entries = list(proc.iterdir())
+        st = os.lstat(node)
     except OSError:
-        return None
-    comms = []
-    for e in entries:
-        if not e.name.isdigit():
-            continue
-        try:
-            comms.append((e / "comm").read_text(encoding="utf-8", errors="replace").strip())
-        except OSError:
-            continue  # the process ended, or hidepid
-    return comms
+        return CheckResult(name, Status.READ_ONLY, "the helper socket /run/arltuner/helper.sock is missing: run install.sh (it enables arltuner-helper.socket)")
+    if not stat.S_ISSOCK(st.st_mode):
+        return CheckResult(name, Status.READ_ONLY, "/run/arltuner/helper.sock is not a socket")
+    if st.st_uid != 0 and root == Path("/"):
+        return CheckResult(name, Status.READ_ONLY, f"/run/arltuner/helper.sock belongs to uid {st.st_uid}, not root")
+    if st.st_mode & 0o007:
+        return CheckResult(name, Status.READ_ONLY, f"/run/arltuner/helper.sock mode {stat.S_IMODE(st.st_mode):04o} gives access to other users (must be root:<group> 0660)")
+    from arltuner.helper.settings import parse_helper_toml  # lazy: arltuner.helper imports this module
 
-
-def check_polkit_agent(root: Path) -> CheckResult:
-    name = "polkit_agent"
-    comms = _process_comms(root)
-    if comms is None:
-        return CheckResult(name, Status.READ_ONLY, "cannot list /proc: cannot tell whether a polkit agent runs in the session")
-    for c in comms:
-        low = c.lower()
-        # comm is truncated to 15 chars ("polkit-gnome-au", "lxqt-policykit-"), so match the family name and exclude the daemon itself.
-        if c in _AGENT_COMMS or (any(w in low for w in _AGENT_WORDS) and not low.startswith("polkitd")):
-            return CheckResult(name, Status.PASS, f"polkit agent present ({c})")
-    return CheckResult(name, Status.READ_ONLY, "no polkit authentication agent in the session: pkexec cannot ask for the password, the helper cannot start")
+    try:
+        access = parse_helper_toml(_read(root, HELPER_TOML), "/etc/arltuner/helper.toml").access
+    except FileNotFoundError:
+        return CheckResult(name, Status.READ_ONLY, "/etc/arltuner/helper.toml is missing: nobody is allowed to use the helper (run install.sh)")
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, Status.READ_ONLY, f"/etc/arltuner/helper.toml cannot be used: {exc}")
+    if access.empty:
+        return CheckResult(name, Status.READ_ONLY, "/etc/arltuner/helper.toml has no [access] users or group: nobody is allowed to use the helper (sudo bash install.sh --add-user NAME)")
+    who = ", ".join([*access.users, *([f"group {access.group}"] if access.group else [])])
+    return CheckResult(name, Status.PASS, f"helper socket present (root-owned, no access for other users); allowed: {who}")
 
 
 def check_python(version: Sequence[int]) -> CheckResult:
@@ -362,9 +349,11 @@ def preflight(
     python_version: Sequence[int] | None = None,
     path_dirs: Sequence[str] | None = None,
     tools: dict[str, str] | None = None,
+    helper_service: bool = True,
 ) -> PreflightReport:
     """Run every SPEC section 3 check against the filesystem under ``root`` and return the named results (never raises on a missing file).
-    ``topology``: the topology to report instead of deriving it from ``root/sys`` (the simulator's)."""
+    ``topology``: the topology to report instead of deriving it from ``root/sys`` (the simulator's). ``helper_service=False``: the helper
+    that runs this does not serve the socket (simulator, stdio dev path), so that check is not applicable."""
     root = Path(root)
     plat = platform if platform is not None else default_platform()
     topo, topo_why = topology, None
@@ -389,9 +378,7 @@ def preflight(
         lambda: check_topology(topo, topo_why),
         lambda: check_msr_device(root, cpus),
         lambda: check_msr_allow_writes(root),
-        lambda: check_pkexec(root, dirs),
-        lambda: check_polkit(root),
-        lambda: check_polkit_agent(root),
+        lambda: check_helper_service(root, applies=helper_service),
         lambda: check_python(version),
         lambda: check_tools(root, dirs, OPTIONAL_TOOLS if tools is None else tools),
     ]
