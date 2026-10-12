@@ -123,6 +123,11 @@ class InstallLayout(InstallCase):
         self.assertEqual(self.mode("/var/lib/arltuner/audit.jsonl"), 0o600)
         self.assertIn("seeded from", self.result.stdout)
 
+    def test_no_script_still_says_the_operation_cap_is_600(self) -> None:
+        """G-141: the per-boot operation count is an indicator (default cap 100000, D-039); the installer texts must not state the old cap."""
+        for script in ("install.sh", "uninstall.sh"):
+            self.assertNotIn("cap 600", (REPO / script).read_text(), script)
+
     def test_the_polkit_action_and_tmpfiles_are_the_packaging_files(self) -> None:
         self.assertEqual(
             self.path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy").read_bytes(),
