@@ -33,7 +33,7 @@ class Static(unittest.TestCase):
 
     def test_the_windows_script_has_no_inline_words_of_a_machine(self) -> None:
         text = (REPO / "tools/win/restore_tuning.ps1").read_text()
-        self.assertRegex(text, r"\[string\]\$From = \(Join-Path \$env:LOCALAPPDATA 'arltuner\\accepted'\)")
+        self.assertRegex(text, r"\[string\]\$From = \(Join-Path \$env:ProgramData 'arltuner\\accepted'\)")
         self.assertIn("EXPECTED-words.txt", text)
         for needle in ("p-step7", "F9A00035", "FC600037", "$Expected = [ordered]@{\n"):
             self.assertNotIn(needle, text)
@@ -49,7 +49,7 @@ class Static(unittest.TestCase):
             for word in ("0x5B439", "5B439", "WINDOWS_LP_OF_CPU", "fused-0x09-cpu"):
                 self.assertNotIn(word, text, rel)
         text = (REPO / "tools/win/restore_tuning.ps1").read_text()
-        self.assertLess(text.index("fingerprint.json in"), text.index("sc.exe start ThrottleStop"))
+        self.assertLess(text.index("fingerprint.json in"), text.index("Ts-Driver start"))
 
 
 class Stops(unittest.TestCase):
