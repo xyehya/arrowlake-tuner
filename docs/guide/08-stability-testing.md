@@ -68,7 +68,7 @@ The project's gate (D-019, 2026-10-04) for calling a state accepted [MEASURED wi
 
 Both passed on Windows (2026-10-04) and on Linux (2026-10-07/08) for the accepted state there. This gate is the project's choice, not a standard. OCCT
 and Linpack are not shipped or launched by this tool; install and run them yourself. Alternatives named in the repo: y-cruncher, Prime95 small-FFT, a
-newer Linpack build (`linpack-binaries.md` in the predecessor repo; not evaluated here) [favored-cores.md §4, tuning-results.md §5]. Whatever you choose:
+a newer Linpack build (not evaluated here) [favored-cores.md §4, tuning-results.md §5]. Whatever you choose:
 
 - it must **self-check** its results (a test that only loads the CPU cannot catch silent corruption);
 - run it long, at the voltages and ratios you will really use, with the cooling you will really have;

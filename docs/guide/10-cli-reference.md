@@ -3,7 +3,7 @@
 This page lists the command-line tools: the `arltuner` CLI, the GUI launcher, the helper script and the scripts in `tools/`. It is for scripting,
 for working without the GUI, and for developers. Every command and flag below is taken from the argument parsers and script headers.
 
-**The GUI is the main interface.** The CLI is the operator's direct path to the same guarded write code. A mailbox command on real hardware sends WRMSRs
+**The GUI is the main interface.** The CLI is the direct path to the same guarded write code. A mailbox command on real hardware sends WRMSRs
 to MSR `0x150`: use it as carefully as the GUI.
 
 ## 1. Overview

@@ -19,7 +19,7 @@ What happens:
    default browser opens it.
 4. On the launcher page press **Open arrowlake-tuner**. The page posts a one-time token to the server and redirects you into the app.
 
-The launcher is `$XDG_RUNTIME_DIR/arltuner/launcher.html` (else `/tmp/arltuner-<uid>/launcher.html`), mode 0600, in a private directory. The token
+The launcher is `$XDG_RUNTIME_DIR/arltuner/launcher.html` (else `/tmp/arltuner-<uid>/launcher.html`), mode 0600, in a directory only you can enter (0700). The token
 never appears in a command line or URL. The link works **once** and expires if unused (900 s in the code, `Config.token_ttl_s`); the launcher file is
 deleted after the first use.
 
@@ -110,7 +110,7 @@ The Tune page's **Read ratios & voltages** is a series of mailbox reads, and eac
 |---|---|
 | No password prompt, "helper: n/a" | the helper is not installed (checkout only) or `--no-helper` was used; install ([02](02-install.md)) |
 | Prompt never appears, helper does not start | no polkit authentication agent in the session (`polkit_agent` check); run from a normal desktop login, not a bare SSH session |
-| `arltuner-gui: ...: owned by uid ... / lets others in` | the launcher directory is not a private directory of yours; fix its owner/mode (0700) or pass `--launcher` |
+| `arltuner-gui: ...: owned by uid ... / lets others in` | the launcher directory is not one only you can access; fix its owner/mode (0700) or pass `--launcher` |
 | Browser shows the launcher but the button does nothing | the one-time token expired or was used; run the command again for a fresh link |
 | Banner "Read-only mode" | see section 3; the banner lists the failing checks and their reasons |
 

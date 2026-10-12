@@ -10,7 +10,7 @@ cd arrowlake-tuner
 ```
 The checkout is only ever **copied** by the installer. The installed copy is what the GUI's root helper runs; the helper refuses to run from a
 user-writable path (SPEC §4.4). The restore script `tools/lnx/restore_tuning.sh` is the exception: it runs the checkout's Python with `sudo`, in isolated mode (`python3 -I`, G-142), as the
-operator's command-line path (D-031), so keep your checkout writable only by you.
+command-line path (D-031), so keep your checkout writable only by you.
 
 ## 2. Optional: run the offline test suite
 ```
@@ -35,7 +35,7 @@ What it does, in order:
 | Installs `tmpfiles.d` | `/usr/lib/tmpfiles.d/arltuner.conf`, creating `/run/arltuner` (mailbox lock directory, root, 0755) |
 | Seeds the configuration **only if absent** | `/etc/arltuner/policy.toml` from `policies/default.toml`; `/etc/arltuner/helper.toml` with `allow_taint_bits = [2]` |
 | Leaves your accepted state alone | `/etc/arltuner/accepted/` is never created, changed or removed by the installer. A fresh install has none: you create it in the app ([09](09-profiles-and-restore.md)) |
-| Creates the state directory | `/var/lib/arltuner/` with the audit log `audit.jsonl` (0600) and private (0700) directories `curves/`, `stress/`, `profiles/`, `state/` |
+| Creates the state directory | `/var/lib/arltuner/` with the audit log `audit.jsonl` (0600) and root-only (0700) directories `curves/`, `stress/`, `profiles/`, `state/` |
 | Seeds the audit log once | from the invoking user's own `~/.local/state/arltuner/audit.jsonl` if it exists (so the per-boot operation count survives a mid-boot install; this is the log the command line writes before the install); otherwise an empty log. An existing log is never overwritten |
 | Runs a self-check | prints `arltuner self-check: all N checks passed.` The helper refuses to start if any check fails |
 

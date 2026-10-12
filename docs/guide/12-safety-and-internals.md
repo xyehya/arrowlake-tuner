@@ -48,9 +48,9 @@ The guard never sleeps and never retries a failing write.
 **Never work around a refusal.** A refusal names the cause; fix the cause (for example the BIOS gate, the policy value, or a missing read), not the guard.
 
 ## 3. One transaction at a time
-The mailbox discipline comes from an incident on the project author's machine, recorded in `docs/SAFETY.md` ("2026-08-26 incident"): a broad sweep of mailbox
+The mailbox discipline comes from an incident on the project author's machine with earlier monitoring tooling, recorded in `docs/SAFETY.md` ("2026-08-26 incident"): a broad sweep of mailbox
 *get* requests was followed about 5.5 minutes later by an abrupt end of the boot, and on the next warm boot a PCI device (a Wi-Fi card) was missing until the AC power
-was physically removed. Causality is unproven; the mailbox burst was the only identified low-level change [MEASURED on the operator's other repository].
+was physically removed. Causality is unproven; the mailbox burst was the only identified low-level change [observed once by the project author, causality unproven].
 The rule that follows is kept regardless of any limit setting:
 
 - **One transaction at a time**, serialised by a lock file (`/run/arltuner/mailbox.lock`), never a sweep, loop or "enumerate everything".
@@ -137,7 +137,7 @@ stable (`docs/SAFETY.md`). The audit log has no size cap and is never truncated 
 - **Random loopback address (G-142, D-042).** The server binds `127.x.y.z` with a random port, a fresh address each run (it falls back to `127.0.0.1`, with a warning on the terminal, only
   if that bind fails). Browsers keep cookies per host name, not per port, so every run has its own cookie jar: another local service cannot receive your session cookie. This replaces
   the earlier accepted risk of D-028 #1, and it matters because the plan nonce is returned to the browser (D-033): whoever holds the cookie could otherwise fetch it.
-- **One-time token and session.** Access starts with a **one-time token** in a private (0700, 0600 file) launcher; it becomes a session cookie that expires after 30 minutes idle or 12 hours
+- **One-time token and session.** Access starts with a **one-time token** in a launcher file only you can read (directory 0700, file 0600); it becomes a session cookie that expires after 30 minutes idle or 12 hours
   in total. Requests need an exact `Host` and a same-origin check (`Sec-Fetch-Site`); a duplicate session cookie is refused (401).
 - **Session scope.** The scope is fixed when the session starts: `full` (the launcher) or `read`. A **read** session may call only an explicit list of read-only operations (preflight,
   audit tail, curves list/get, profiles list/get, `tune.last`, memory read, stress list, telemetry), and its event stream carries only heartbeat, state and telemetry. Nothing that

@@ -110,7 +110,7 @@ failure and retries nothing. A good run ends:
 RESTORED: all cores/clusters match the accepted state.
 ```
 and a bad one with `STOP: N core(s)/cluster(s) differ`. It refuses to start when no accepted state exists, the policy is missing, or OCCT is running as root.
-Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, in isolated mode (`python3 -I`), as the operator command-line path (D-031), and sets
+Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, in isolated mode (`python3 -I`), as the command-line path (D-031), and sets
 `ARLTUNER_ALLOW_MAILBOX=1` itself for the guarded commands.
 
 `bash tools/lnx/reapply_current.sh [--check] [--from DIR] [--policy FILE]` is the older, simpler script: it applies each profile in `CURRENT` with one `CONFIRM <token>` per
@@ -154,7 +154,7 @@ including `fingerprint.json`), `policy.toml`, the audit log `audit.jsonl` and th
 # once per Windows install (elevated PowerShell, in the repository)
 py -3 tools\win\ts_driver.py init-dir                                  # create and lock down %ProgramData%\arltuner (carve also does it)
 py -3 tools\win\ts_driver.py carve --exe C:\path\to\ThrottleStop.exe     # -> %ProgramData%\arltuner\ThrottleStop.sys (hash-checked)
-powershell -ExecutionPolicy Bypass -File tools\win\preflight.ps1        # read-only checks; fix every FIX line
+powershell -ExecutionPolicy Bypass -File tools\win\preflight.ps1        # read-only checks; fix every FIX line (see the note below)
 # from an Administrator terminal, copy the Linux files in:
 #   /etc/arltuner/accepted/*   ->  %ProgramData%\arltuner\accepted\   (CURRENT, EXPECTED-words.txt, profiles\, fingerprint.json)
 #   /etc/arltuner/policy.toml  ->  %ProgramData%\arltuner\accepted\policy.toml   (or pass -Policy FILE)
@@ -162,6 +162,9 @@ powershell -ExecutionPolicy Bypass -File tools\win\preflight.ps1        # read-o
 # after every boot
 powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1   # type CONFIRM once; or double-click tools\win\Restore-Tuning.cmd
 ```
+The preflight's line "driver service ThrottleStop" shows FIX until a run has started the service; that is expected, because the restore script creates and starts the service itself. A leftover
+`%LOCALAPPDATA%\arltuner\ThrottleStop.sys` from an older version is flagged and must be deleted (a non-admin could replace it).
+
 What a run does: checks (administrator, XTU service stopped, no OCCT/XTU, admin-only directories, `fingerprint.json` present), then one `CONFIRM`, then `ts_driver.py start`
 (verifies the directory, its ACL, reparse points and the driver's SHA-256, writes a **new uniquely named copy** of the driver for this run, creates the service on it, re-verifies, starts it),
 then the guarded identity reads, each profile of `CURRENT` applied, every V/F word read back and compared with `EXPECTED-words.txt`, and finally `ts_driver.py remove` (stops and deletes the

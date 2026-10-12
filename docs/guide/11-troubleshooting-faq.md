@@ -13,7 +13,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 |---|---|---|
 | Banner "Read-only mode. Mailbox requests are disabled, so Tune cannot read or apply. Measuring and the dashboard still work." | a preflight check of status `read-only` | read the reasons in the banner; see the rows below |
 | `lockdown`: kernel lockdown is `[integrity]` or `[confidentiality]` | Secure Boot enabled | disable Secure Boot in the BIOS, or boot a kernel without lockdown ([01 §4](01-requirements.md)) |
-| `msr_device`: `/dev/cpu/N/msr` missing | the `msr` driver is not loaded or built in | `sudo modprobe msr` (an explicit operator step) |
+| `msr_device`: `/dev/cpu/N/msr` missing | the `msr` driver is not loaded or built in | `sudo modprobe msr` (an explicit step you take; the tool never does it) |
 | `msr_allow_writes`: `msr.allow_writes=off` | the kernel refuses MSR writes | boot with `msr.allow_writes=on` or write `on` to `/sys/module/msr/parameters/allow_writes` as root |
 | `hypervisor` | running in a virtual machine | run on bare metal |
 | `cpuid` / `topology` | not an Arrow Lake-S CPU or an unexpected core layout | not supported; nothing will be written |
