@@ -389,7 +389,8 @@ class TestUndumpable(unittest.TestCase):
     def test_gui_script_wires_both(self):
         text = (ROOT / "tools" / "arltuner-gui.py").read_text()
         self.assertIn("set_undumpable()", text)
-        self.assertIn("spawn_helper(helper_cmd)", text)
+        self.assertIn("spawn_helper(a.helper)", text)  # the dev / simulator path (socketpair, not pipes)
+        self.assertIn("connect_helper(HELPER_SOCKET)", text)  # the installed helper (D-043)
         self.assertNotIn("subprocess.PIPE", text)
 
 

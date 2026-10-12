@@ -3,9 +3,9 @@
 # writes MSRs (/dev/cpu/*/msr), cpufreq sysfs, and files under /var/lib/arltuner, /run/arltuner and /etc/arltuner, and drops privileges for stress children.
 # Hardening is deliberately minimal and each line is safe for that work:
 #   NoNewPrivileges / RestrictSUIDSGID / LockPersonality : no privilege gain through exec, no setuid files, no personality changes
-#   PrivateNetwork                                       : the helper needs no network (the AF_UNIX socket is a file, handed over as fd 3)
 # NOT set on purpose: PrivateDevices (hides /dev/cpu/*/msr), ProtectKernelTunables / ProtectSystem (cpufreq sysfs, /etc/arltuner), ProtectHome and
-# PrivateTmp (stress working directories under /run/user/<uid> and /tmp), CapabilityBoundingSet (CAP_SYS_RAWIO and friends are needed).
+# PrivateTmp (stress working directories under /run/user/<uid> and /tmp), PrivateNetwork (it also remounts /sys and cuts AF_NETLINK / abstract AF_UNIX;
+# not worth an untested risk), CapabilityBoundingSet (CAP_SYS_RAWIO and friends are needed).
 [Unit]
 Description=arrowlake-tuner root helper
 Documentation=https://github.com/xyehya/arrowlake-tuner
@@ -21,4 +21,3 @@ TimeoutStopSec=120
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-PrivateNetwork=yes
