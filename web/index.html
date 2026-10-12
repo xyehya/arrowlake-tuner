@@ -332,7 +332,7 @@
 
   <!-- ============================== Stress ============================== -->
   <section class="panel" id="panel-stress" role="tabpanel" aria-labelledby="tab-stress" tabindex="0" hidden>
-    <p class="st-banner" id="st-banner" role="note"><strong>Quick screen — NOT an acceptance gate (D-019: Linpack 2021 60 min + SSE 60 min).</strong> It can find an unstable setting fast. It cannot show that a setting is stable.</p>
+    <p class="st-banner" id="st-banner" role="note"><strong>Quick screen — NOT an acceptance gate.</strong> It can find an unstable setting fast; it cannot show that a setting is stable. Before you trust a setting, run a long self-checking load (a Linpack-class test for an hour or more).</p>
 
     <div class="st-grid">
       <article class="card st-setup" id="st-setup">
@@ -457,6 +457,15 @@
         <p class="muted ops-note" id="hb-cap"></p>
       </article>
 
+      <article id="sys-limits" class="card">
+        <div class="card-head"><h2>Tuning limits</h2></div>
+        <p class="muted" id="sl-note">Read the ratios and voltages in Tune to see the limits.</p>
+        <table class="grid" id="sl-table" hidden>
+          <thead><tr><th scope="col">Limit</th><th scope="col">Kind</th><th scope="col">Your policy</th><th scope="col">Your CPU allows</th></tr></thead>
+          <tbody id="sl-body"></tbody>
+        </table>
+      </article>
+
       <article id="preflight" class="card">
         <div class="card-head">
           <h2>Preflight</h2>
@@ -473,12 +482,12 @@
     <article id="audit" class="card">
       <div class="card-head">
         <h2>Audit log</h2>
-        <button type="button" id="btn-audit">Refresh</button>
+        <div class="row-tight"><div class="seg seg-s" id="audit-filter"></div><button type="button" id="btn-audit">Refresh</button></div>
       </div>
       <p id="audit-note" class="muted">Not read yet.</p>
       <div class="scroll">
         <table class="grid" id="audit-table" hidden>
-          <thead><tr><th scope="col">Time</th><th scope="col" class="n">#</th><th scope="col">Event</th><th scope="col">CPU</th><th scope="col">Cmd</th><th scope="col">Result</th><th scope="col">Reason</th></tr></thead>
+          <thead><tr><th scope="col">Time</th><th scope="col" class="n">#</th><th scope="col">Event</th><th scope="col">CPU</th><th scope="col">Request</th><th scope="col">Result</th><th scope="col">Purpose / reason</th></tr></thead>
           <tbody id="audit-body"></tbody>
         </table>
       </div>

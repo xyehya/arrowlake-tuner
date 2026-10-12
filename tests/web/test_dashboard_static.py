@@ -152,7 +152,7 @@ class TestScript(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bapi\(", JS)), len(re.findall(r"\bapi\(\s*\"", JS)) + 1)  # +1: the definition; every call names its op literally
 
     def test_stress_tab_is_a_quick_screen_and_says_so(self):  # G-119
-        self.assertIn("Quick screen — NOT an acceptance gate (D-019: Linpack 2021 60 min + SSE 60 min).", HTML)
+        self.assertIn("Quick screen — NOT an acceptance gate.", HTML)
         for ident in ("st-banner", "st-kind", "st-method", "st-dur", "st-dur-custom", "st-cap", "st-mem", "st-units", "btn-stress-start", "btn-stress-stop", "st-ring",
                       "st-errors", "st-result", "st-hist", "btn-stress-refresh"):
             self.assertIn(f'id="{ident}"', HTML)

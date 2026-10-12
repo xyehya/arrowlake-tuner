@@ -861,3 +861,4 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 }
 .tn-prov { margin: 4px 0 8px; font-size: 13px; }
 .tn-prov:empty { display: none; }
+.pr-chain-card > .row-tight { margin-top: 14px; }

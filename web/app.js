@@ -3564,6 +3564,26 @@
     return "Limit: " + (mine || "none stated") + " from your policy (" + POLICY_FILE + ")" + (cpu ? " \u2014 editable; your CPU allows " + cpu + "." : " \u2014 editable in " + POLICY_FILE + ".");
   }
   const NO_LIMITS = "The helper did not report the policy limits (update the helper), so the controls are disabled.";
+  // System > Tuning limits: the policy next to what the CPU reports (D-039), from the last tuning read; nothing here is fixed in the page.
+  function renderSysLimits() {
+    const has = !!(T.words && T.words.limits);
+    $("sl-table").hidden = !has;
+    setText("sl-note", !T.words ? "Read the ratios and voltages in Tune to see the limits."
+      : !has ? (T.words.limitsNote || NO_LIMITS)
+        : "Every limit is your policy, not the tool\u2019s: edit " + POLICY_FILE + " (as root) to go further, up to what your CPU reports. A change applies from the next read or plan.");
+    if (!has) { fill($("sl-body"), []); return; }
+    const sgn = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
+    const src = (s) => (s === "auto" ? " (auto)" : "");
+    const rows = [];
+    for (const k of ["P", "E"]) {
+      const lim = limitsOf(k), hw = T.words.hw ? T.words.hw[k] : null, kind = k === "P" ? "P-cores" : "E-clusters";
+      if (!lim) continue;
+      rows.push(["Voltage offset", kind, sgn(lim.offMin) + "\u2026" + sgn(lim.offMax) + " mV", hw && hw.off ? sgn(hw.off[0]) + "\u2026" + sgn(hw.off[1]) + " mV (field range)" : "not read"]);
+      rows.push(["Adaptive voltage (OC point)", kind, isNum(lim.vtMax) ? "up to " + lim.vtMax.toFixed(3) + " V" + src(lim.vtSrc) : "none stated (no raise)", hw && isNum(hw.vtMaxV) ? "up to " + hw.vtMaxV.toFixed(3) + " V (cmd 0x28)" : "not read"]);
+      rows.push(["OC ratio", kind, isNum(lim.ratioMax) ? "up to " + lim.ratioMax + "\u00d7" + src(lim.ratioSrc) : "none stated (no raise)", hw && isNum(hw.ratioOc) ? "up to " + hw.ratioOc + "\u00d7 (cmd 0x01)" : "not read"]);
+    }
+    fill($("sl-body"), rows.map((r) => { const tr = el("tr"); tr.append(td(r[0]), td(r[1]), td(r[2], "mono"), td(r[3], "mono")); return tr; }));
+  }
 
   function appliedFromWords(w) {
     // the OC word (P2 = 0) carries the whole-curve offset, so it counts too: a curve offset on it is tuning even when every point reads 0
@@ -3612,6 +3632,7 @@
     T.expanded = new Set();
     const a = appliedFromWords(w);
     setAppliedChip(a.kind, a.text, a.title);
+    renderSysLimits();
     $("tn-steps").hidden = true;
     $("tn-console").hidden = false;
     $("tn-preview-card").hidden = false;
@@ -4996,24 +5017,54 @@
   // ---- audit tail ------------------------------------------------------------------------------------------------------------------
   function hex(v) { return isNum(v) ? "0x" + v.toString(16) : v === undefined || v === null ? "" : String(v); }
 
+  // Request names for the audit table (registers.md "Mailbox commands" and the plain MSRs the guard allows); anything else shows as hex.
+  const MB_NAMES = { 0x01: "OC capability read", 0x02: "per-core capability read", 0x09: "fused top point read", 0x10: "V/F word read", 0x11: "V/F word write",
+    0x14: "misc config read", 0x15: "misc config write", 0x1C: "favored ratio read", 0x1D: "favored ratio write", 0x26: "granular ratio read", 0x27: "granular ratio write",
+    0x28: "max voltage read" };
+  const MSR_NAMES = { 0xCE: "platform info", 0x198: "perf status", 0x1AD: "P turbo ratios", 0x1AE: "P turbo core counts", 0x650: "E turbo ratios", 0x651: "E turbo core counts" };
+  const AUDIT = { filter: "all" };
+  function auditRequest(o) {
+    const num = (v) => (isNum(v) ? v : typeof v === "string" && /^0x[0-9a-f]+$/i.test(v) ? parseInt(v, 16) : null);
+    const cmd = num(o.cmd), msr = num(o.msr);
+    if (cmd !== null) return hex(cmd) + (MB_NAMES[cmd] ? " " + MB_NAMES[cmd] : "") + (num(o.p1) !== null || num(o.p2) !== null ? " (" + [o.p1, o.p2].map((x) => (num(x) !== null ? hex(num(x)) : "-")).join(", ") + ")" : "");
+    if (msr !== null) return "MSR " + hex(msr) + (MSR_NAMES[msr] ? " " + MSR_NAMES[msr] : "") + (o.msr_kind === "write" ? " write" : "");
+    return "";
+  }
+  function auditTime(ts) {
+    const d = typeof ts === "string" ? new Date(ts) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : String(ts === undefined ? "" : ts);
+  }
+  // "writes" keeps what changed or could have changed the CPU: write attempts and their results, read-backs, refusals, errors and trips.
+  function auditKeep(o) {
+    if (AUDIT.filter === "all") return true;
+    if (["refused", "error", "trip", "readback"].indexOf(o.event) >= 0) return true;
+    const cmd = typeof o.cmd === "string" ? parseInt(o.cmd, 16) : o.cmd;
+    return o.msr_kind === "write" || (isNum(cmd) && [0x11, 0x15, 0x1D, 0x27].indexOf(cmd) >= 0);
+  }
+
   async function loadAudit() {
-    const { status, body } = await api("audit.tail", { n: 20 });
+    const { status, body } = await api("audit.tail", { n: 200 });
     const note = $("audit-note");
     if (!(status === 200 && body.ok && isObj(body.result))) {
       note.textContent = "Audit log unavailable: " + errText(body);
       $("audit-table").hidden = true;
       return;
     }
-    const recs = Array.isArray(body.result.records) ? body.result.records.slice().reverse() : [];
-    note.textContent = recs.length ? "Last " + recs.length + " records, newest first" + (body.result.truncated ? " (older records not shown)." : ".") : "The audit log is empty.";
+    const all = Array.isArray(body.result.records) ? body.result.records.slice().reverse() : [];
+    const recs = all.filter((r) => !isObj(r) || auditKeep(r));
+    note.textContent = !all.length ? "The audit log is empty."
+      : (AUDIT.filter === "all" ? "Last " + all.length + " records" : recs.length + " write-related records in the last " + all.length) + ", newest first, local time" + (body.result.truncated ? " (older records not shown)." : ".");
     fill($("audit-body"), recs.map((r) => {
       const o = isObj(r) ? r : { unparsable: String(r) };
       const row = el("tr");
       const rc = o.rc_name !== undefined ? o.rc_name : (o.rc !== undefined ? o.rc : "");
       const rcCell = el("td");
-      if (rc !== "") rcCell.append(pill(rc, rc === "OK" || rc === 0 ? "s-ok" : "s-neutral"));
-      row.append(td(o.ts, "mono"), td(o.seq, "n"), td(o.event !== undefined ? o.event : (o.unparsable !== undefined ? "unparsable" : "")),
-        td(o.cpu), td(hex(o.cmd), "mono"), rcCell, td(o.reason !== undefined ? o.reason : ""));
+      if (rc !== "") rcCell.append(pill(rc, rc === "OK" || rc === 0 || rc === "Pass" ? "s-ok" : "s-neutral"));
+      else if (o.event === "result" && o.value !== undefined) rcCell.append(el("span", "mono muted", String(o.value)));
+      const tcell = td(auditTime(o.ts), "mono");
+      tcell.title = String(o.ts || "");
+      row.append(tcell, td(o.seq, "n"), td(o.event !== undefined ? o.event : (o.unparsable !== undefined ? "unparsable" : "")),
+        td(o.cpu), td(auditRequest(o), "mono"), rcCell, td(o.reason !== undefined ? o.reason : (o.purpose !== undefined ? o.purpose : "")));
       return row;
     }));
     $("audit-table").hidden = recs.length === 0;
@@ -5112,6 +5163,7 @@
   initProfiles();
   $("btn-preflight").addEventListener("click", loadPreflight);
   $("btn-audit").addEventListener("click", loadAudit);
+  segmented($("audit-filter"), [{ value: "all", label: "All" }, { value: "writes", label: "Writes & refusals" }], AUDIT.filter, (m) => { AUDIT.filter = m; loadAudit(); });
   $("btn-mem-refresh").addEventListener("click", loadMem);
   $("btn-mem-all").addEventListener("click", openTimings);
   $("btn-timings-close").addEventListener("click", () => closeDialog($("dlg-timings")));
