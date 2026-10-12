@@ -34,6 +34,6 @@
 | G-130 | web follow-ups: apply race, preflight warn, VccIA nulls, unit lists from topology | lnx | T0 | **merged** 2026-10-12 | G-127 |
 | G-131 | measure: EPP under performance governor, unmeasured points off the plot, E 23× cap search, method review | lnx | T0 | **merged** 2026-10-12 | G-129 |
 | R-001 | research on HW (D-037): power profile / EPP / min-pinning vs V/F capping; E kHz→perf granularity | lnx | T1 | **merged** 2026-10-12 | — |
-| G-132 | measure/stress from R-001: min=max pinning, no_turbo note, cap_granularity, user_cap, stress EPP | lnx | T0 | ready | G-131 |
+| G-132 | measure/stress from R-001: min=max pinning, no_turbo note, cap_granularity, user_cap, stress EPP | lnx | T0 | **merged** 2026-10-12 | G-131 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
