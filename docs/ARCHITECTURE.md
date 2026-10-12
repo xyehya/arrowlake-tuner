@@ -301,3 +301,19 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   - **Small:** audit log created / tightened to 0600 (helper ops, `AuditLog`); a stale measure journal is recovered first and refuses `STALE_JOURNAL` if it cannot be restored (as stress does); `--sim` clocks start
     at the newest audit record (apply after a helper restart is no longer `DWELL` "in the future"); `tune.plan` refuses `AUDIT_UNAVAILABLE` when the per-boot count cannot be read (it was taken as 0); a failed
     Windows affinity restore after a failed access is logged and attached as a note. Tests: `tests/helper/test_g141.py` and the module tests named in the commits.
+
+## Addendum G-144 — the helper as a socket service (D-043; supersedes the pkexec/polkit parts of Contract 8's transport)
+Transport: the protocol of Contract 8 is unchanged (JSON lines, 64 KiB cap, ids, events); only the pipe is now a connection. **Root argv:** `--device` or
+`--device --socket` (nothing else, once each, in that order); non-root runs (tests, `--sim`) may add `--socket-path FILE --helper-toml FILE`.
+- **Socket:** `/run/arltuner/helper.sock` (`arltuner.helper.service.SOCKET_PATH`). Either handed over by systemd (`arltuner-helper.socket`, `LISTEN_PID`/`LISTEN_FDS`,
+  fd 3; refused unless it is a listening AF_UNIX socket on a root-owned path with no "other" access) or made by the helper (trusted run dir, stale node removed only if it
+  is a root-owned socket and the instance lock is held, bound under umask 0177, then `chown :group`, `chmod 0660`, then `listen`). One instance lock per machine as before.
+- **Authorization per accept:** `SO_PEERCRED` uid against `helper.toml` `[access]` (`users` by name, `group` by membership; read trust-checked at every accept; missing, empty,
+  unreadable, untrusted or invalid = nobody; root only if listed in `users`). A refused peer, and a second client while one is connected, gets one line
+  `{"id":null,"ok":false,"error":{"code":"REFUSED","message":…,"detail":{"check":"ACCESS_DENIED"|"CLIENT_BUSY"}}}` and is closed. The access check comes first (no leak of "busy").
+- **Invoker = peer uid:** audit `operator` is `gui:uid<N>` for the connection; the stress child runs as that uid (root peer: `NO_INVOKER`). `PKEXEC_UID` is read only on the stdio dev path.
+- **Lifecycle:** `Helper.start()` (lock, `tuned_this_boot`, journal recovery) once; `Helper.serve(rfile, wfile, peer_uid=)` per client; `Helper.stop()` at exit. A client leaving
+  stops telemetry; an op in flight finishes at its next safe point (read-back / restore) before the next client is accepted; request ids start fresh per connection.
+  Socket-activated helpers exit after `idle_exit_s` (default 600, 0 = never) with no client and no op; SIGTERM ends the connection the same orderly way and removes a socket the helper made.
+- **GUI:** `arltuner.web.helperlink.connect_helper()` checks the node (socket, root-owned), connects, and uses `preflight` as the handshake; a framed refusal or EOF becomes a
+  `HelperConnectError` whose text names the fix. `--helper CMD …` (simulator/dev) is unchanged. Preflight check `helper_service` replaces `pkexec`/`polkit`/`polkit_agent`.
