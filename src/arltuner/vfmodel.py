@@ -3,7 +3,7 @@
 No I/O, no hardware. Every function takes plain numbers; ``helper/ops_tune.py`` feeds it the measured baseline curve (a ``vf.measure`` record flagged
 ``baseline``), the words of the last ``tune.read`` and the turbo tables. The results are PREDICTIONS (they carry no more certainty than their inputs).
 
-Facts (``docs/knowledge/platform-285k.md`` sections 3 and 5):
+Facts (``docs/knowledge/platform-arl-s.md`` sections 3 and 5):
   * F4 monotonic rule: hardware enforces V(n) >= V(n-1); a deeper offset is silently clamped up (P0 BIOS 57x -49.8 mV landed at -42.5 mV, i.e. clamped to
     the 56x voltage) ``[MEASURED lnx 2026-10-02]``. Between two points the VID interpolates linearly (54x = midpoint of 53x/55x, +-2 mV
     ``[MEASURED lnx 2026-10-03]``; E 45x -7.4 of -10 mV ``[MEASURED lnx 2026-10-02]``). Above the top point the bins follow the top point (E 47-48x run on

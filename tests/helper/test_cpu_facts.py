@@ -17,7 +17,7 @@ from .test_tune import ADVANCED, TuneCase, error_code, row, rows, texts
 
 P_TABLE = [8, 20, 30, 48, 53, 55, 56, 57]
 E_TABLE = [8, 15, 23, 30, 40, 46]
-FUSED = {  # platform-285k.md section 4 [MEASURED win 2026-10-01 / lnx 2026-10-02]: cpu -> (word, V)
+FUSED = {  # examples/reference-285k/notes/platform.md section 4 [MEASURED win 2026-10-01 / lnx 2026-10-02]: cpu -> (word, V)
     0: (0x5B439, 1.4258), 1: (0x53839, 1.3047), 2: (0x57439, 1.3633), 3: (0x59439, 1.3945), 4: (0x54439, 1.3164), 5: (0x56C39, 1.3555), 6: (0x56039, 1.3438),
     7: (0x58039, 1.3750), 8: (0x4A02E, 1.1563), 12: (0x48C2E, 1.1367), 16: (0x48C2E, 1.1367), 20: (0x48C2E, 1.1367),
 }
@@ -57,7 +57,7 @@ class SimTableTests(FactsCase):
             self.assertEqual([self.sim.vf(cpu, 0, p).ratio for p in range(1, 7)], E_TABLE, cpu)
 
     def test_oc_word_fused_words_and_favored_words_are_the_measured_ones(self) -> None:
-        """F2: P0's OC word is 0x39 (BIOS favored 57x), the others 0; 0x09 and 0x1C as in platform-285k.md section 4."""
+        """F2: P0's OC word is 0x39 (BIOS favored 57x), the others 0; 0x09 and 0x1C as in examples/reference-285k/notes/platform.md section 4."""
         self.boot(STOCK)
         self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)
         self.assertEqual({self.sim.vf(c, 0, 0).to_u32() for c in range(1, 24)}, {0})

@@ -18,7 +18,7 @@ Make `tune.plan`/`tune.apply` match what the hardware did on 2026-10-11 (`docs/k
    bare-ratio word (`0x39`); report `equivalent: true` with both words.
 
 ## Read first
-`docs/knowledge/tuning-results.md` (2026-10-11 write section) · `docs/knowledge/platform-285k.md` §3–4 · `docs/knowledge/registers.md` (V/F word) ·
+`docs/knowledge/tuning-results.md` (2026-10-11 write section) · `docs/knowledge/platform-arl-s.md` §3–4 · `docs/knowledge/registers.md` (V/F word) ·
 `src/arltuner/helper/ops_tune.py` · `src/arltuner/vfmodel.py` · `src/arltuner/controls/planner.py` · `src/arltuner/helper/ops_measure.py` (stock rule) ·
 `src/arltuner/helper/ops.py` (`accepted_match`) · `src/arltuner/msr/sim.py`.
 

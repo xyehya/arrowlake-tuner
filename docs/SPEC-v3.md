@@ -78,7 +78,7 @@ only from the installed tree. The orchestrator asks for a go before the first ma
 G-111 helper ops (measure, curves store, mem, telemetry restart) · G-112 policy D-032 + tune ops (read/plan/apply/reset/restore) · G-113 web
 (all pages) · then one reinstall with `--reseed-config`, a Quick stock-baseline measurement on the machine, and the first-write go.
 
-## 9. CPU facts the app must respect (operator 2026-10-11; evidence `docs/knowledge/platform-285k.md` §3–5, `tuning-results.md`)
+## 9. CPU facts the app must respect (operator 2026-10-11; evidence `docs/knowledge/platform-arl-s.md` §3–5, `tuning-results.md`)
 | # | Fact | Where it binds |
 |---|---|---|
 | F1 | **Point tables are fixed and per domain:** P-cores (all 8) `P2 1..8` = 8, 20, 30, 48, 53, 55, 56, 57×; E-clusters `P2 1..6` = 8, 15, 23, 30, 40, 46×. Beyond ⇒ rc 0x11. Tables come from `tune.read`; the simulator models exactly these (never invented per-core tables) [MEASURED lnx 2026-10-02] | sim, measure, Tune grid |

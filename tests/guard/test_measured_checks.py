@@ -1,5 +1,5 @@
 """T-021 guard tests: the checks and rules that follow XTU's *measured* per-core Apply (``[MEASURED win 2026-10-01]``,
-docs/knowledge/windows-path.md S-04...S-07): session facts for ``0x11`` (``0x1C`` / ``0x09`` reads, zero fields), the ``0x1D`` and
+docs/knowledge/registers.md level-4 log section, S-04...S-07): session facts for ``0x11`` (``0x1C`` / ``0x09`` reads, zero fields), the ``0x1D`` and
 ``0x27`` checks and their read-back predicates, the XTU-shaped ``revert_plan``, and the D-015 effective-offset floor in ``Policy``.
 
 Same rules as test_guard.py: every refusal sends nothing (``assert_refused`` checks the recording transport and the audit log), and each

@@ -53,7 +53,7 @@ TOML schema (``load_policy``)::
     # [[allow]]
     # name = "vf_point_offset_write" ; cmd = 0x11 ; p1 = [0] ; p2 = [1, 2, 3, 4, 5, 6] ; kind = "write" ; check = "vf_point_offset_bounded"
 
-Evidence (T-021, ``[MEASURED win 2026-10-01]``, ``docs/knowledge/windows-path.md`` S-03d, S-04...S-07): XTU's per-core Apply is
+Evidence (T-021, ``[MEASURED win 2026-10-01]``, ``docs/knowledge/registers.md`` "Measured via XTU's level-4 log on Windows" (S-03d, S-04...S-07)): XTU's per-core Apply is
 ``0x11`` (full word) -> ``0x1D`` (data = that word's ratio) -> ``0x26`` read -> ``0x27`` (data = the value read), and its ``0x11`` word
 carries the core's non-zero baseline ratio (else ``0x1C[7:0]``) and the **fused** V target (``0x09 P1=0x11 P2=0`` ``[19:8]``): the
 per-core ``0x10`` baseline is ``0x0`` on 23 of 24 cores, so it is not a usable reference by itself. The checks below therefore
@@ -600,10 +600,10 @@ def _check_vf_bounded(
 
 
 #: T-025: ``0x11`` / ``0x10`` with ``P2`` = a V/F point (registers.md "Mailbox commands": P2 1..15; the OC point is the ``P2 = 0`` word, not a
-#: point index: ``0x10 P2=7`` -> rc ``0x11`` on E CPU 8, ``[MEASURED lnx 2026-10-02]``, docs/knowledge/platform-285k.md).
+#: point index: ``0x10 P2=7`` -> rc ``0x11`` on E CPU 8, ``[MEASURED lnx 2026-10-02]``, docs/knowledge/platform-arl-s.md section 3).
 POINT_P2_MAX = 15
 #: T-028: domains whose V/F points a point-offset write may address: P1 0 = core, P1 2 = ring (package-level, addressed through any CPU;
-#: ``0x10 P1=2 P2=1..8`` = ring points 8,14,20,28,34,37,38,39x, ``[MEASURED lnx 2026-10-02]``, docs/knowledge/platform-285k.md). P1 1 / 7 stay refused.
+#: ``0x10 P1=2 P2=1..8`` = ring points 8,14,20,28,34,37,38,39x, ``[MEASURED lnx 2026-10-02]``, docs/knowledge/platform-arl-s.md section 3). P1 1 / 7 stay refused.
 POINT_P1_ALLOWED = frozenset({0, 2})
 
 
@@ -1088,7 +1088,7 @@ class Policy:
 def default_m1_policy(topology: Topology | None = None) -> Policy:
     """Conservative milestone-1 policy. D-016 / T-022: safety is by **bounds**, and every ceiling is left at its no-raise default (``ratio_max``
     / ``v_target_max_mv`` unset, ``offset_ceiling_mv`` 0, steps 1 ratio / 20 mV / 25 mV), so this policy still refuses every raise and every
-    positive offset while allowing undervolting offsets inside the D-015 window; ``arl-voltage-topology.md`` "Implications for milestone 1".
+    positive offset while allowing undervolting offsets inside the D-015 window; ``docs/knowledge/registers.md`` "Voltage semantics".
 
     * the CPUs of ``topology`` (the live one on hardware; without one, the simulated reference CPU); 1 operation per session; at most 12 operations per
       boot over all processes (``max_operations_per_boot``, T-016: counted from the audit log, reads included, read-back

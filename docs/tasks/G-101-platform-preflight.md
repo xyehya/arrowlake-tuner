@@ -6,7 +6,7 @@ Move the platform facts (CPUID, topology, V/F point ratios, fused words `FUSED_P
 `platforms/arl-s-285k.toml`, loaded and validated; implement the preflight checks of SPEC §3 as pure functions over injectable sysfs/proc roots.
 
 ## Read first
-`docs/SPEC.md` §3 · `docs/knowledge/platform-285k.md` · `src/arltuner/topology/` · grep `FUSED_POINT` in `src/arltuner`.
+`docs/SPEC.md` §3 · `docs/knowledge/platform-arl-s.md` · `src/arltuner/topology/` · grep `FUSED_POINT` in `src/arltuner`.
 
 ## Owns
 `platforms/`, `src/arltuner/platform/`, `tests/platform/`; plus, only to switch them to the platform file (no behaviour change): `src/arltuner/topology/`,

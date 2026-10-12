@@ -6,7 +6,7 @@
 Make the page teach and enforce the real V/F model (SPEC-v3 §9) using the contract 9 addendum shapes.
 
 ## Read first
-`docs/SPEC-v3.md` §3, §4, §9 · `docs/ARCHITECTURE.md` contract 9 + 2026-10-11 addendum · `docs/knowledge/platform-285k.md` §3–5 · `web/` · `tests/web/`.
+`docs/SPEC-v3.md` §3, §4, §9 · `docs/ARCHITECTURE.md` contract 9 + 2026-10-11 addendum · `docs/knowledge/platform-arl-s.md` §3–5 · `web/` · `tests/web/`.
 
 ## Owns
 `web/*`, `tests/web/*` (update `fake_helper.py`/`fake_v3.py` to the addendum shapes and the F1 tables — no invented per-core tables).

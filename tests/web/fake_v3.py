@@ -1,7 +1,7 @@
 """Contract 9 (docs/ARCHITECTURE.md, SPEC-v3) for the fake helper: ``mem.read``, ``vf.measure``, ``curves.*``, ``tune.*``, ``profiles.*``.
 
 No hardware and no real helper code. Numbers are synthetic but shaped like the machine: P ~0.70 -> 1.40 V, E ~0.65 -> 1.15 V; the memory fixture is the
-measured one in ``docs/knowledge/memory-mchbar.md``. ``FakeHelper`` inherits ``V3Ops`` and calls ``handle_v3`` for the ops listed in ``V3_OPS``.
+measured one in ``examples/reference-285k/notes/platform.md`` section 8. ``FakeHelper`` inherits ``V3Ops`` and calls ``handle_v3`` for the ops listed in ``V3_OPS``.
 
 Assumptions the web page binds to (not pinned by contract 9; reported in the G-113 handoff):
   * ``tune.read`` keeps the ``vf.dump`` document shape (units -> cpus -> ``oc`` / ``points``); the page derives the tuning unit from ``kind`` and

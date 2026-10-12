@@ -5,7 +5,7 @@
 The telemetry package must not import ``arltuner.mailbox`` / ``arltuner.guard`` / ``arltuner.msr.transport``
 (enforced by tests/telemetry/test_isolation.py).
 
-The set below must equal the proposed read rows in docs/knowledge/telemetry-sources.md; the orchestrator mirrors them into
+The set below must equal the telemetry read rows in docs/knowledge/telemetry-sources.md; the orchestrator mirrors them into
 ``guard/policy.py`` ``PLAIN_MSR_READABLE`` at merge. Evidence tags: see that document.
 """
 from __future__ import annotations
