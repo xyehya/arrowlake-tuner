@@ -362,7 +362,7 @@ dl.kv dd { margin: 0; }
   color: var(--neutral-fg);
 }
 .pill.s-pass, .pill.s-ok, .pill.s-write { background: var(--ok-bg); color: var(--ok-fg); }
-.pill.s-read-only, .pill.s-missing, .pill.s-unknown, .pill.s-busy { background: var(--warn-bg); color: var(--warn-fg); }
+.pill.s-read-only, .pill.s-missing, .pill.s-unknown, .pill.s-busy, .pill.s-warn { background: var(--warn-bg); color: var(--warn-fg); }
 .pill.s-refuse, .pill.s-bad { background: var(--bad-bg); color: var(--bad-fg); }
 .pill.s-neutral { background: var(--neutral-bg); color: var(--neutral-fg); }
 

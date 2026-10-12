@@ -469,7 +469,9 @@ class TestCpuFacts(V3Base):
         # G-114 shape: label / active_cores / margin_v / contributors / before_v / light_load beside predicted_v and set_by
         self.assertEqual(set(pl["vccia"]), {"predicted_v", "set_by", "label", "active_cores", "margin_v", "contributors", "before_v", "light_load"})
         self.assertEqual(set(pl["vccia"]["set_by"]), {"unit", "ratio"})
-        self.assertEqual((pl["vccia"]["label"], pl["vccia"]["active_cores"]), ("prediction", "all"))
+        self.assertEqual((pl["vccia"]["label"], pl["vccia"]["active_cores"]), ("highest requested VID among units", "all"))
+        self.assertIsNone(pl["vccia"]["margin_v"])                      # G-128: no regulator margin, no ring floor
+        self.assertIsNone(pl["vccia"]["contributors"]["ring"])
         self.assertEqual(set(pl["vccia"]["contributors"]), {"P", "E", "ring"})
         self.assertEqual(set(pl["vccia"]["light_load"]), {"predicted_v", "set_by", "active_cores"})
 

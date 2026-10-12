@@ -94,7 +94,7 @@ class TestHtml(unittest.TestCase):
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tune-read"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-measure"[^>]*\bdisabled\b')
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tn-plan"[^>]*\bdisabled\b')
-        self.assertIn("12 curves (8 P-cores + 4 E-clusters)", HTML)
+        self.assertIn("One curve per tuning unit", HTML)
 
     def test_tabs_are_an_aria_tablist(self):  # G-110, tab set from SPEC-v3
         self.assertIn('role="tablist"', HTML)

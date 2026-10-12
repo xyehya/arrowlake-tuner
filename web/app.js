@@ -29,6 +29,8 @@
     adopted: false,        // opId came from a heartbeat/progress event, not from this page's own POST
     doneIds: new Set(),    // ids whose result has been shown (a late heartbeat must not re-adopt them)
     submitting: false,
+    submitKind: null,      // while a POST for a long op is in flight: its kind ("read" | "measure" | "commit" | "stress"), so events that beat the 202 are attributed right
+    early: new Map(),      // id -> result event that arrived over SSE while the POST was still in flight (a fast helper); launched() takes it when the 202 names the id
     cancelling: false,
     sessionLost: false,
   };
@@ -287,6 +289,7 @@
       if (/^\s*e/i.test(name)) return "E";
     }
     const n = Number(cpu);
+    if (UNIT_BY_CPU[String(cpu)]) return unitKind(UNIT_BY_CPU[String(cpu)]);   // the live topology says which CPUs are P-cores
     return Number.isFinite(n) && n < 8 ? "P" : "E";
   }
   function shortName(name, kind, cpu) {
@@ -325,9 +328,29 @@
 
   // ---- preflight -------------------------------------------------------------------------------------------------------------------
   function statusClass(s) { return "s-" + String(s).replace(/[^a-z-]/g, ""); }
-  const CHECK_ORDER = { refuse: 0, "read-only": 1, unknown: 2, missing: 3, pass: 4 };
+  const CHECK_ORDER = { refuse: 0, "read-only": 1, unknown: 2, warn: 3, missing: 4, pass: 5 };
+
+  // Adopt preflight.topology.units as the live unit list (null: no topology, back to the fixed default list). Everything built once from the list is rebuilt.
+  function applyUnits(topo) {
+    const list = unitsFromTopology(topo) || DEFAULT_UNITS;
+    const key = (l) => l.map((x) => x.id + ":" + x.cpus.join(".")).join("|");
+    if (key(list) === key(UNIT_IDS.map((id) => ({ id: id, cpus: unitCpus(id) })))) return;
+    setUnitInfo(list);
+    CV.drawn = new Set(UNIT_IDS); CV.sel = new Set(UNIT_IDS); T.drawn = new Set(UNIT_IDS); ST.sel = new Set(UNIT_IDS);
+    buildMeasureControls();
+    buildStressUnits();
+    $("cv-presets").dataset.key = "";
+    renderPresets();
+    if (T.words) buildRows();
+    renderScopeNote();
+    renderCurves();
+    renderStress();
+    renderTunePreview();
+    updateGate();
+  }
 
   function renderPreflight(r) {
+    applyUnits(isObj(r) ? r.topology : null);
     FAV.pre = isObj(r) ? favFromTopology(r.topology) : null;   // absent topology: no favored cores from here (the read may still name some)
     recomputeFav();
     if (!isObj(r) || typeof r.mode !== "string" || !Array.isArray(r.checks)) {
@@ -350,7 +373,7 @@
     ]);
     const checks = r.checks.slice().sort((a, b) => {
       const x = CHECK_ORDER[a && a.status], y = CHECK_ORDER[b && b.status];
-      return (x === undefined ? 5 : x) - (y === undefined ? 5 : y);
+      return (x === undefined ? 6 : x) - (y === undefined ? 6 : y);
     });
     fill($("pf-body"), checks.map((c) => {
       const li = el("li", "check");
@@ -390,7 +413,7 @@
     S.opsUsed = isNum(ev.ops_used) ? ev.ops_used : null;
     S.opsBudget = isNum(ev.ops_budget) && ev.ops_budget > 0 ? ev.ops_budget : null;
     noteOps();
-    if (S.hbState && S.hbState !== "idle" && S.hbOpId && !S.opId && !S.doneIds.has(S.hbOpId)) {  // re-attach to a running op after a reload
+    if (S.hbState && S.hbState !== "idle" && S.hbOpId && !S.opId && !S.submitting && !S.doneIds.has(S.hbOpId)) {  // re-attach to a running op after a reload
       adoptOp(S.hbOpId, S.hbState);
     } else if (S.hbState === "idle" && S.adopted && S.opId) {  // the adopted op ended and its result was missed
       const kind = S.opKind;
@@ -1089,7 +1112,36 @@
   function heartbeatFresh() { return S.hbAt > 0 && Date.now() - S.hbAt <= HEARTBEAT_STALE_MS; }
 
   // ---- tuning units (Contract 9: 12 curves = 8 P-cores + 4 E-clusters) and policy ranges (D-032) ---------------------------------------
-  const UNIT_IDS = ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3"];
+  // The live unit list comes from preflight.topology.units ({id, kind, cpus, favored}); the fixed 8 P + 4 E list is the fallback while no topology was seen.
+  // UNIT_IDS is mutated in place (never reassigned), so every tab that iterates it sees the live list; applyUnits() rebuilds what was built once.
+  const DEFAULT_UNITS = ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3"].map((id) => ({ id: id, kind: id.charAt(0) === "P" ? "P" : "E",
+    cpus: id.charAt(0) === "P" ? [Number(id.slice(1))] : [0, 1, 2, 3].map((k) => 8 + 4 * Number(id.slice(2)) + k) }));
+  const UNIT_IDS = DEFAULT_UNITS.map((x) => x.id);
+  const UNIT_INFO = {};     // id -> {kind, cpus} for the live list
+  const UNIT_BY_CPU = {};   // cpu (string) -> unit id
+  function setUnitInfo(list) {
+    for (const k of Object.keys(UNIT_INFO)) delete UNIT_INFO[k];
+    for (const k of Object.keys(UNIT_BY_CPU)) delete UNIT_BY_CPU[k];
+    UNIT_IDS.length = 0;
+    for (const x of list) { UNIT_IDS.push(x.id); UNIT_INFO[x.id] = { kind: x.kind, cpus: x.cpus.slice() }; for (const c of x.cpus) UNIT_BY_CPU[String(c)] = x.id; }
+  }
+  setUnitInfo(DEFAULT_UNITS);
+  // preflight.topology.units -> a clean list (P units first, then E, in the order given), or null when the topology is absent or unusable.
+  function unitsFromTopology(topo) {
+    if (!isObj(topo) || !Array.isArray(topo.units)) return null;
+    const seen = new Set(), cpuSeen = new Set(), out = [];
+    for (const x of topo.units) {
+      if (!isObj(x) || typeof x.id !== "string" || !/^(P|EC)\d+$/.test(x.id) || seen.has(x.id)) continue;
+      const cpus = Array.isArray(x.cpus) ? x.cpus.filter((c) => Number.isInteger(c) && c >= 0) : [];
+      if (!cpus.length || cpus.some((c) => cpuSeen.has(c))) continue;
+      seen.add(x.id); cpus.forEach((c) => cpuSeen.add(c));
+      out.push({ id: x.id, kind: x.id.charAt(0) === "P" ? "P" : "E", cpus: cpus });
+    }
+    return out.length ? out.filter((x) => x.kind === "P").concat(out.filter((x) => x.kind === "E")) : null;
+  }
+  function unitsOfKind(k) { return UNIT_IDS.filter((u) => unitKind(u) === k); }
+  function cpuSub(u) { const c = unitCpus(u); return c.length === 1 ? "cpu " + c[0] : "cpus " + c[0] + "–" + c[c.length - 1]; }
+
   // Favored cores come from live data only (D-036): the preflight topology (CPPC performance or cpuinfo max frequency), else the 0x1C favored ratios of the
   // last read (the P-cores whose ratio equals the highest, when they differ), else none. No core is favored by default.
   const FAV_TEXT = { acpi_cppc: "favored core (highest CPPC performance)", cpuinfo_max_freq: "favored core (highest max frequency)", "0x1C": "favored core (0x1C favored ratio)" };
@@ -1128,7 +1180,7 @@
     if (CV.chart && V.tab === "curves") renderCurves(); else if (CV.chart) renderPresets();
     if (T.words) buildRows();
   }
-  function coreUnit(c) { return c.kind === "P" && /^\d+$/.test(String(c.cpu)) ? "P" + c.cpu : null; }   // a dashboard core -> its tuning unit (P-core n is unit Pn)
+  function coreUnit(c) { return c.kind === "P" && /^\d+$/.test(String(c.cpu)) ? (UNIT_BY_CPU[String(c.cpu)] && unitKind(UNIT_BY_CPU[String(c.cpu)]) === "P" ? UNIT_BY_CPU[String(c.cpu)] : "P" + c.cpu) : null; }   // a dashboard core -> its tuning unit (P-core n is unit Pn)
   function coreMark(c) { const u = coreUnit(c); return u && isFav(u) ? " \u2605" : ""; }
   function coreFavTitle(c) { const u = coreUnit(c); return u && isFav(u) ? ", " + favTitle(u) : ""; }
   // The system's answer and the 0x1C favored ratios of the read disagree (an empty set counts: "none favored" against a core with a higher ratio).
@@ -1138,8 +1190,9 @@
     vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005,     // V, adaptive target at the OC point
     ratioMax: { P: 57, E: 49 },
   };
-  function unitKind(id) { return id.charAt(0) === "P" ? "P" : "E"; }
+  function unitKind(id) { return UNIT_INFO[id] ? UNIT_INFO[id].kind : id.charAt(0) === "P" ? "P" : "E"; }
   function unitCpus(id) {
+    if (UNIT_INFO[id]) return UNIT_INFO[id].cpus;
     if (unitKind(id) === "P") return [Number(id.slice(1))];
     const n = Number(id.slice(2));
     return [8 + 4 * n, 9 + 4 * n, 10 + 4 * n, 11 + 4 * n];
@@ -1160,7 +1213,9 @@
     if (typeof u.id === "string" && UNIT_IDS.indexOf(u.id) >= 0) return u.id;   // tune.read (G-112) names the unit
     if (typeof u.unit === "string" && UNIT_IDS.indexOf(u.unit) >= 0) return u.unit;
     const first = Array.isArray(u.cluster_cpus) && isNum(u.cluster_cpus[0]) ? u.cluster_cpus[0] : (Array.isArray(u.cpus) && isObj(u.cpus[0]) ? u.cpus[0].cpu : null);
+    if (isNum(first) && UNIT_BY_CPU[String(first)] && unitKind(UNIT_BY_CPU[String(first)]) === (u.kind === "P" ? "P" : "E")) return UNIT_BY_CPU[String(first)];   // the live list says which unit owns the cpu
     if (u.kind === "P" && isNum(first) && first >= 0 && first < 8) return "P" + first;
+    if (u.kind === "E" && isNum(u.cluster) && UNIT_IDS.indexOf("EC" + u.cluster) >= 0) return "EC" + u.cluster;
     if (u.kind === "E" && isNum(u.cluster) && u.cluster >= 0 && u.cluster < 4) return "EC" + u.cluster;
     if (u.kind === "E" && isNum(first) && first >= 8 && first < 24) return "EC" + Math.floor((first - 8) / 4);
     return null;
@@ -1175,10 +1230,27 @@
     onOpStarted();
   }
 
+  function beginSubmit(kind) { S.submitting = true; S.submitKind = kind; }
+  // Called right after the POST answered, before launched() looks at the answer. Results that arrived meanwhile and were not claimed by launched() are replayed afterwards.
+  function endSubmit() {
+    S.submitting = false; S.submitKind = null;
+    setTimeout(() => { if (!S.submitting && S.early.size) { const evs = Array.from(S.early.values()); S.early.clear(); evs.forEach(onResult); } }, 0);
+  }
+
   // A POST answers 202 {id} for a long op (the result arrives over SSE), or 200 with the result at once (a helper that finished quickly).
   function launched(kind, status, body) {
     if (status === 202 && isObj(body) && typeof body.id === "string") {
       if (S.doneIds.has(body.id)) return true;  // the SSE result beat the POST response (a fast helper): already shown
+      if (S.early.has(body.id)) {  // the result came over SSE before the 202 (a fast helper): show it now, under the kind this POST started
+        const ev = S.early.get(body.id);
+        S.early.delete(body.id);
+        S.doneIds.add(body.id);
+        S.opId = null; S.opKind = null; S.adopted = false; S.cancelling = false;
+        dispatchResult(kind, ev);
+        updateGate();
+        loadAudit();
+        return true;
+      }
       S.opId = body.id; S.opKind = kind; S.adopted = false; S.cancelling = false;
       onOpStarted();
       return true;
@@ -1208,7 +1280,10 @@
 
   function onProgress(ev) {
     const id = typeof ev.op_id === "string" ? ev.op_id : null;
-    if (!S.opId && id && !S.doneIds.has(id)) adoptOp(id, typeof ev.unit === "string" ? "measuring" : isNum(ev.elapsed_s) ? "stressing" : S.hbState);
+    if (!S.opId && id && !S.doneIds.has(id)) {
+      adoptOp(id, typeof ev.unit === "string" ? "measuring" : isNum(ev.elapsed_s) ? "stressing" : S.hbState);
+      if (S.submitting && S.submitKind) S.opKind = S.submitKind;   // a progress event beat the 202: the idle heartbeat says nothing about what our POST started
+    }
     if (id !== S.opId) return;
     if (isNum(ev.ops_used) && isNum(ev.ops_budget)) { S.opsUsed = ev.ops_used; S.opsBudget = ev.ops_budget; renderHelper(); }
     if (S.opKind === "measure") measureProgress(ev); else if (S.opKind === "stress") stressProgress(ev); else mailboxProgress(ev);
@@ -1227,6 +1302,7 @@
 
   function onResult(ev) {
     // A result for an id this page does not remember (reload, second tab) is shown too: the operation is addressed by id, not by tab.
+    if (S.submitting && S.opId === null && typeof ev.id === "string") { S.early.set(ev.id, ev); return; }   // our POST has not been answered yet: launched() claims it by id
     if (typeof ev.id === "string") S.doneIds.add(ev.id);
     if (S.opId !== null && ev.id !== S.opId) return;  // another tab's operation ended; this page's running op is untouched
     const kind = S.opKind || inferKind(ev);
@@ -1450,11 +1526,11 @@
   // ---- Tune: reading the ratios and voltages (the old vf.dump) ---------------------------------------------------------------------------------
   async function startRead() {
     if (gateReason() !== "") return;
-    S.submitting = true;
+    beginSubmit("read");
     setText("tn-status", "Submitting...");
     updateGate();
     const { status, body } = await api("tune.read", {});
-    S.submitting = false;
+    endSubmit();
     if (launched("read", status, body)) {
       if (S.opId) {
         setText("tn-status", "Reading (operation " + S.opId + "). Results arrive over the event stream.");
@@ -1748,8 +1824,8 @@
   function presets() {   // the Favored preset exists only when favored cores were detected
     const list = [
       { value: "all", label: "All", units: UNIT_IDS },
-      { value: "P", label: "P-cores", units: UNIT_IDS.slice(0, 8) },
-      { value: "E", label: "E-clusters", units: UNIT_IDS.slice(8) },
+      { value: "P", label: "P-cores", units: unitsOfKind("P") },
+      { value: "E", label: "E-clusters", units: unitsOfKind("E") },
     ];
     if (FAV.ids.length) list.push({ value: "fav", label: "Favored \u2605", units: FAV.ids.slice(), title: "The detected favored P-cores: " + FAV.ids.join(", ") + " (" + FAV_TEXT[FAV.source].replace(/^favored core /, "") + ")" });
     return list;
@@ -1762,7 +1838,8 @@
     }
     syncSegmented(host, presetOf(CV.drawn));
   }
-  const MEASURE_SECONDS = { quick: 120, dense: 600 };   // all 12 units (SPEC-v3 section 3)
+  const MEASURE_SECONDS = { quick: 120, dense: 600 };   // for the 12 reference units (SPEC-v3 section 3): the estimate scales per unit
+  const MEASURE_REF_UNITS = 12;
 
   function tuningKind(c) {
     const t = isObj(c) ? c.tuning_state : null;
@@ -2191,7 +2268,7 @@
   // ---- measuring --------------------------------------------------------------------------------------------------------------------------
   function estimateText() {
     const n = CV.sel.size;
-    const secs = MEASURE_SECONDS[CV.mode] * n / UNIT_IDS.length;
+    const secs = MEASURE_SECONDS[CV.mode] * n / MEASURE_REF_UNITS;
     return (CV.mode === "quick" ? "Quick" : "Dense") + ", " + n + (n === 1 ? " unit" : " units") + ", about " + (secs < 90 ? Math.round(secs) + " s" : Math.round(secs / 60) + " min");
   }
 
@@ -2207,8 +2284,8 @@
   }
 
   function buildMeasureControls() {
-    segmented($("cv-mode"), [{ value: "quick", label: "Quick", title: "The V/F point ratios of each unit, about 2 minutes for all 12" },
-      { value: "dense", label: "Dense", title: "Every ratio from 8 to the unit's top, about 10 minutes for all 12" }], CV.mode, (m) => { CV.mode = m; updateCurvesGate(); });
+    segmented($("cv-mode"), [{ value: "quick", label: "Quick", title: "The V/F point ratios of each unit, about 2 minutes for all units" },
+      { value: "dense", label: "Dense", title: "Every ratio from 8 to the unit's top, about 10 minutes for all units" }], CV.mode, (m) => { CV.mode = m; updateCurvesGate(); });
     const host = $("cv-units");
     const chips = UNIT_IDS.map((u) => {
       const b = el("button", "unit-chip u-" + u);
@@ -2216,19 +2293,19 @@
       b.dataset.unit = u;
       b.setAttribute("aria-pressed", "true");
       b.title = unitTileTitle(u);
-      b.append(el("span", "uc-name", u + favMark(u)), el("span", "uc-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]));
+      b.append(el("span", "uc-name", u + favMark(u)), el("span", "uc-cpus", cpuSub(u)));
       b.addEventListener("click", () => { if (CV.sel.has(u)) CV.sel.delete(u); else CV.sel.add(u); syncUnitChips(); updateCurvesGate(); });
       return b;
     });
     const quick = el("div", "chip-quick");
-    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", UNIT_IDS.slice(0, 8)], ["E-clusters", UNIT_IDS.slice(8)], ["None", []]]) {
+    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", unitsOfKind("P")], ["E-clusters", unitsOfKind("E")], ["None", []]]) {
       const b = el("button", "link", label);
       b.type = "button";
       b.addEventListener("click", () => { CV.sel = new Set(units); syncUnitChips(); updateCurvesGate(); });
       quick.append(b);
     }
     const p = el("div", "chips-p"), e = el("div", "chips-e");
-    p.append(...chips.slice(0, 8)); e.append(...chips.slice(8));
+    p.append(...chips.filter((b) => unitKind(b.dataset.unit) === "P")); e.append(...chips.filter((b) => unitKind(b.dataset.unit) === "E"));
     fill(host, [p, e, quick]);
   }
   function syncUnitChips() {
@@ -2241,11 +2318,11 @@
     if (CV.sel.size < UNIT_IDS.length) args.units = UNIT_IDS.filter((u) => CV.sel.has(u));
     const nm = $("cv-name").value.trim();
     if (nm) args.name = nm;
-    S.submitting = true;
+    beginSubmit("measure");
     setText("cv-status", "Submitting...");
     updateGate();
     const { status, body } = await api("vf.measure", args);
-    S.submitting = false;
+    endSubmit();
     if (launched("measure", status, body)) {
       if (S.opId) {
         CV.live = { id: "live", name: nm || "Measuring", mode: CV.mode, units: {}, live: true };
@@ -2549,7 +2626,7 @@
     }
     const perUnit = UNIT_IDS.filter((u) => rows[u]).map((u) => Object.assign({ target: u }, rows[u]));
     const merged = [];
-    for (const [g, units] of [["P", UNIT_IDS.slice(0, 8)], ["E", UNIT_IDS.slice(8)]]) {
+    for (const [g, units] of [["P", unitsOfKind("P")], ["E", unitsOfKind("E")]]) {
       const present = units.filter((u) => rows[u]);
       if (!present.length) continue;
       const first = JSON.stringify(rows[units[0]] || null);
@@ -2588,9 +2665,9 @@
 
   // ---- rows ---------------------------------------------------------------------------------------------------------------------------------
   function rowDefs() {
-    if (T.scope === "simple") return [{ id: "P", label: "All P-cores", sub: "8 cores", units: UNIT_IDS.slice(0, 8), kind: "P" },
-      { id: "E", label: "All E-clusters", sub: "4 clusters, 16 cores", units: UNIT_IDS.slice(8), kind: "E" }];
-    return UNIT_IDS.map((u) => ({ id: u, label: unitLabel(u), sub: unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpus " + unitCpus(u)[0] + "–" + unitCpus(u)[3], units: [u], kind: unitKind(u) }));
+    if (T.scope === "simple") return [{ id: "P", label: "All P-cores", sub: unitsOfKind("P").length + (unitsOfKind("P").length === 1 ? " core" : " cores"), units: unitsOfKind("P"), kind: "P" },
+      { id: "E", label: "All E-clusters", sub: unitsOfKind("E").length + (unitsOfKind("E").length === 1 ? " cluster, " : " clusters, ") + unitsOfKind("E").reduce((n, u) => n + unitCpus(u).length, 0) + " cores", units: unitsOfKind("E"), kind: "E" }];
+    return UNIT_IDS.map((u) => ({ id: u, label: unitLabel(u), sub: cpuSub(u), units: [u], kind: unitKind(u) }));
   }
 
   function buildRows() {
@@ -2607,7 +2684,7 @@
     for (const def of defs) {
       const row = el("div", "tn-rowwrap");
       const line = el("div", "tn-row k-" + def.kind);
-      const name = el("div", "tn-unit u-" + (def.units.length === 1 ? def.units[0] : def.kind === "P" ? "P0" : "EC0"));
+      const name = el("div", "tn-unit u-" + (def.units.length === 1 ? def.units[0] : def.kind === "P" ? (unitsOfKind("P")[0] || "P0") : (unitsOfKind("E")[0] || "EC0")));
       const star = def.units.length === 1 ? favMark(def.units[0]) : "";
       const nm = el("span", "tn-name", def.label + star);
       if (star) nm.title = favTitle(def.units[0]);
@@ -3022,7 +3099,7 @@
       const favIds = Object.keys(fav).sort();
       r.note.textContent = k === "P"
         ? (favIds.length ? "Favored ratio per core (0x1C) sits on top of the table: " + favIds.map((u) => u + " " + fav[u] + "\u00d7").join(", ") + "." : "Favored ratios per core were not read.")
-        : "E-clusters have no favored core." + (eTurboNote(UNIT_IDS.slice(8)) ? " " + eTurboNote(UNIT_IDS.slice(8)) : "");
+        : "E-clusters have no favored core." + (eTurboNote(unitsOfKind("E")) ? " " + eTurboNote(unitsOfKind("E")) : "");
     }
     setText("tn-turbo-note", "bucket = number of active cores, fewest first");
     setText("tn-turbo-help", "Ratios may only fall as more cores are active. A value higher than the bucket to its left is not offered, and lowering a bucket brings the ones on its right down with it. A plan that breaks the order is refused with TURBO_ORDER. Counts are read-only.");
@@ -3100,7 +3177,7 @@
     }
     const tables = isObj(r.tables) && Array.isArray(r.tables.p) && Array.isArray(r.tables.e) ? { p: r.tables.p.filter(isNum), e: r.tables.e.filter(isNum) } : null;
     // contract 9 addendum (2026-10-11): fused {cpu: {word, ratio, v}} (cmd 0x09) and turbo {P: {ratios[8], counts[8]}, E: {...}, favored: {cpu: ratio}}
-    const unitOfCpu = (c) => { const n = Number(c); return !Number.isInteger(n) || n < 0 ? null : n < 8 ? "P" + n : n < 24 ? "EC" + Math.floor((n - 8) / 4) : null; };
+    const unitOfCpu = (c) => { const n = Number(c); return !Number.isInteger(n) || n < 0 ? null : UNIT_BY_CPU[String(n)] ? UNIT_BY_CPU[String(n)] : n < 8 ? "P" + n : n < 24 ? "EC" + Math.floor((n - 8) / 4) : null; };
     const fused = {};
     if (isObj(r.fused)) for (const k of Object.keys(r.fused)) {
       const id = unitOfCpu(k), f = r.fused[k];
@@ -3123,7 +3200,7 @@
     if (offs.every((x) => Math.abs(x) < MV_TOL)) return { kind: "stock", text: "stock", title: "Every offset read back as 0 mV." };
     const grp = (ids) => agg(ids.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)), MV_TOL);
     const f = (g) => (isNum(g) ? fmtMv(g) : g === MIXED ? "mixed" : "n/a");
-    return { kind: "words", text: "tuned (P " + f(grp(UNIT_IDS.slice(0, 8))) + ", E " + f(grp(UNIT_IDS.slice(8))) + ")", title: "Offsets read from the CPU this boot." };
+    return { kind: "words", text: "tuned (P " + f(grp(unitsOfKind("P"))) + ", E " + f(grp(unitsOfKind("E"))) + ")", title: "Offsets read from the CPU this boot." };
   }
 
   function agoText(ms) {
@@ -3152,7 +3229,7 @@
   // meta (tune.last): {at (epoch s), applied_at (epoch s | null)}: the words are the helper's stored read of this boot, not a fresh one.
   function setWords(r, meta) {
     const w = normWords(r);
-    if (!Object.keys(w.units).length) { setText("tn-status", "The read returned no V/F units for the 12 tuning units. Nothing to edit."); return; }
+    if (!Object.keys(w.units).length) { setText("tn-status", "The read returned no V/F units for the " + UNIT_IDS.length + " tuning units. Nothing to edit."); return; }
     FAV.read = favFromRead(w.turbo);
     recomputeFav();
     T.words = w;
@@ -3183,7 +3260,7 @@
   }
 
   function renderScopeNote() {
-    setText("tn-scope-note", T.scope === "simple" ? "All P-cores move together, and all E-clusters move together." : "12 curves (8 P-cores + 4 E-clusters), each on its own.");
+    setText("tn-scope-note", T.scope === "simple" ? "All P-cores move together, and all E-clusters move together." : UNIT_IDS.length + " curves (" + unitsOfKind("P").length + " P-cores + " + unitsOfKind("E").length + " E-clusters), each on its own.");
   }
 
   function renderWordsTable() {
@@ -3261,10 +3338,10 @@
 
   async function requestPlan(intent, onError) {
     if (idleGate() !== "") return;
-    S.submitting = true;
+    beginSubmit(null);
     updateGate();
     const { status, body } = await api("tune.plan", { intent: intent });
-    S.submitting = false;
+    endSubmit();
     updateGate();
     if (status === 200 && body.ok && isObj(body.result) && typeof body.result.plan_id === "string") {
       openPlanDialog(body.result, intent);
@@ -3662,12 +3739,12 @@
     if (document.getElementById("plan-go").disabled) return;
     P.state = "running";
     P.progressText = "";
-    S.submitting = true;
+    beginSubmit("commit");
     renderPlanBody();
     renderPlanFoot();
     updateModalGate();
     const { status, body } = await api("tune.apply", { plan_id: P.res.plan_id, typed: "CONFIRM " + P.res.nonce });
-    S.submitting = false;
+    endSubmit();
     if (!launched("commit", status, body)) {
       P.state = "error";
       const code = isObj(body.error) ? body.error.code : "";
@@ -3886,26 +3963,30 @@
     mem.append(new Option("Automatic: 3/4 of free memory", ""));
     for (const mb of ST_MEM_MB) mem.append(new Option(mb / 1024 + " GB", String(mb)));
     mem.addEventListener("change", () => { ST.memMb = mem.value === "" ? null : Number(mem.value); renderStress(); });
-    // units: a mini core map. P-cores in one row, the four E-clusters (4 cores each) beside them.
+    buildStressUnits();
+  }
+
+  function buildStressUnits() {
+    // units: a mini core map. P-cores in one row, the E-clusters beside them.
     const tiles = UNIT_IDS.map((u) => {
       const b = el("button", "mm-tile u-" + u);
       b.type = "button";
       b.dataset.unit = u;
       b.setAttribute("aria-pressed", "true");
       b.title = unitTileTitle(u);
-      b.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]), el("span", "mm-mhz", ""));
+      b.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", cpuSub(u)), el("span", "mm-mhz", ""));
       b.addEventListener("click", () => { if (ST.sel.has(u)) ST.sel.delete(u); else ST.sel.add(u); renderStress(); });
       return b;
     });
     const quick = el("div", "chip-quick");
-    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", UNIT_IDS.slice(0, 8)], ["E-clusters", UNIT_IDS.slice(8)], ["None", []]]) {
+    for (const [label, units] of [["All", UNIT_IDS], ["P-cores", unitsOfKind("P")], ["E-clusters", unitsOfKind("E")], ["None", []]]) {
       const b = el("button", "link", label);
       b.type = "button";
       b.addEventListener("click", () => { ST.sel = new Set(units); renderStress(); });
       quick.append(b);
     }
     const p = el("div", "mm-p"), e = el("div", "mm-e");
-    p.append(...tiles.slice(0, 8)); e.append(...tiles.slice(8));
+    p.append(...tiles.filter((b) => unitKind(b.dataset.unit) === "P")); e.append(...tiles.filter((b) => unitKind(b.dataset.unit) === "E"));
     fill($("st-units"), [p, e, quick]);
   }
 
@@ -3953,7 +4034,7 @@
     if (running) est = S.cancelling ? "Stopping. The tool is ended and the cpufreq limits are put back." : "Running. Stop ends it early; the result is kept either way.";
     else if (why !== "") est = why;
     else if (none) est = "Select at least one unit.";
-    else est = "Ready: " + (ST.kind === "cpu" ? ST_WORDS[ST.method] + " load on " + (ST.sel.size === UNIT_IDS.length ? "all 12 units" : ST.sel.size + (ST.sel.size === 1 ? " unit" : " units")) : "memory test of " + (ST.memMb === null ? "3/4 of free memory" : ST.memMb / 1024 + " GB") + " on all CPUs") +
+    else est = "Ready: " + (ST.kind === "cpu" ? ST_WORDS[ST.method] + " load on " + (ST.sel.size === UNIT_IDS.length ? "all " + UNIT_IDS.length + " units" : ST.sel.size + (ST.sel.size === 1 ? " unit" : " units")) : "memory test of " + (ST.memMb === null ? "3/4 of free memory" : ST.memMb / 1024 + " GB") + " on all CPUs") +
       " for " + fmtLen(secs) + (ST.cap === null ? "" : ", capped at " + ST.cap + "×") + ". It raises power and heat for that time.";
     setText("st-est", est);
   }
@@ -3998,11 +4079,11 @@
       if (ST.memMb !== null) args.memory_mb = ST.memMb;
     }
     if (ST.cap !== null) args.ratio_cap = ST.cap;
-    S.submitting = true;
+    beginSubmit("stress");
     setText("st-status", "Submitting...");
     updateGate();
     const { status, body } = await api("stress.start", args);
-    S.submitting = false;
+    endSubmit();
     if (launched("stress", status, body)) {
       if (S.opId) {
         ST.run = { kind: ST.kind, of: secs, elapsed: 0, errors: 0, units: ST.kind === "cpu" ? units : UNIT_IDS.slice() };
@@ -4126,7 +4207,7 @@
   function stUnitsText(r) {
     if (r.kind === "memory") return "all CPUs";
     const u = Array.isArray(r.units) ? r.units.filter((x) => typeof x === "string") : [];
-    return !u.length || u.length >= UNIT_IDS.length ? "all 12" : u.join(" ");
+    return !u.length || u.length >= UNIT_IDS.length ? "all " + UNIT_IDS.length : u.join(" ");
   }
 
   function renderStressHistory(problem) {

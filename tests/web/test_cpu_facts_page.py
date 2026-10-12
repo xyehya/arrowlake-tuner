@@ -225,8 +225,9 @@ class TestBrowser(unittest.TestCase):
                 # G-117: the review badges warnings by code; the VccIA block carries the label, the headroom and the 1-2 core case
                 self.assertEqual(page.locator('#dlg-plan .plan-warn li[data-code="E40_OFFSET"].bad').count(), 1)
                 self.assertIn("clamped", page.locator('#dlg-plan .plan-warn li[data-code="CLAMPED"] .tn-badge').first.inner_text())
-                self.assertIn("prediction", page.inner_text("#dlg-plan .plan-vccia"))
-                self.assertIn("regulator headroom", page.inner_text("#dlg-plan .plan-vccia"))
+                self.assertIn("highest requested VID among units", page.inner_text("#dlg-plan .plan-vccia"))   # G-128 label; margin_v is null: no headroom text, no "null"
+                self.assertNotIn("regulator headroom", page.inner_text("#dlg-plan .plan-vccia"))
+                self.assertNotRegex(page.inner_text("#dlg-plan .plan-vccia"), r"null|NaN|undefined")
                 self.assertIn("1\u20132 cores loaded", page.inner_text("#dlg-plan .plan-vccia"))
                 page.keyboard.press("Escape")
                 # G-117: a turbo-only edit sends {turbo} alone and the review describes plain MSR writes
