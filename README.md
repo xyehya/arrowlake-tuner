@@ -12,9 +12,11 @@ XTU alternative · stress test · stressapptest · stress-ng.
   read-back, stress/validation screens, profiles. Verified on hardware 2026-10-11/12 (`docs/knowledge/tuning-results.md`). Start with
   **`docs/USER-GUIDE.md`**.
 - **CLI + restore scripts** (Linux and Windows) unchanged. Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).
-- **Accepted tuning on the reference machine:** `profiles/CURRENT` (p-step7 + E split3) — passed OCCT Linpack 2021 60 min + SSE 60 min on both OSes.
+- **No tuning ships with the repo (D-036).** A fresh install has no accepted state: you create it in the app (Tune, then Profiles > Set as accepted).
+  One chip's results are kept as an illustration only in `examples/reference-285k/` — never apply them to another CPU.
 
-Platform today: Core Ultra 9 285K + ASRock Z890 Steel Legend WiFi (`docs/HARDWARE.md`). Other CPUs: read-only until described in a platform file.
+**Supported:** Intel Core Ultra 200S, Arrow Lake-S desktop (CPU family 6, model 198), on Linux. Developed and verified on a Core Ultra 9 285K
+(`docs/HARDWARE.md`); everything the app shows is read from your machine. Other CPUs are refused or read-only.
 
 ## Safety
 Writing CPU voltages can corrupt data or crash the machine. Every write goes through a guard (allowlist, operator policy limits — D-032), one mailbox
@@ -24,7 +26,7 @@ transaction at a time, a plan-bound review/apply, read-back and an audit log; a 
 ```
 python3 tools/run_tests.py                       # offline suite (simulator only)
 python3 tools/arltuner.py topology               # 24-core map
-python3 tools/arltuner.py plan profiles/p-step7.toml --sim --policy policies/session-2026-10-02-points.toml
+python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --sim --policy policies/default.toml   # a plan against the simulator
 ```
 
 ## Layout
@@ -36,4 +38,4 @@ python3 tools/arltuner.py plan profiles/p-step7.toml --sim --policy policies/ses
 | `docs/knowledge/` | distilled facts: registers (single source of truth), platform, tuning results, Linux/Windows paths |
 | `docs/PROVENANCE.md` | where the evidence lives (predecessor repo `linuxmon`) |
 | `src/arltuner/`, `tests/`, `tools/` | library + CLI, tests, Linux/Windows scripts |
-| `profiles/`, `policies/` | accepted tuning state and its policy |
+| `policies/` · `examples/` | the generic root policy installed as the default · one chip's results, illustration only (nothing reads them) |

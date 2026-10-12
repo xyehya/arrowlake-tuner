@@ -145,7 +145,7 @@
     NO_ACCEPTED_STATE: "there is no usable accepted state yet (save a profile as accepted on the Profiles tab)",
     NOT_APPLIED: "the profile is not what the CPU holds now: apply it first, then set it as accepted",
     NOT_REPRESENTABLE: "a word of the current state cannot be written to a profile file exactly, so it is not recorded",
-    NO_READ: "nothing was read this boot: read the tuning words first",
+    NO_READ: "nothing was read this boot: read the system first (Tune)",
     NO_ACCEPTED_DIR: "this helper keeps no accepted state",
     AUDIT_UNAVAILABLE: "the audit log cannot be written, so nothing was changed",
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",

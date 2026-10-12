@@ -21,7 +21,10 @@ CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or s
 
 class TestStatic(unittest.TestCase):
     def test_the_stored_read_is_asked_for_once_and_never_over_an_editor(self):
-        self.assertEqual(len(re.findall(r'\bapi\(\s*"tune\.last"', JS)), 1)
+        self.assertEqual(len(re.findall(r'\bapi\(\s*"tune\.last"', JS)), 2)   # the load, and (G-129) the compare redone after Set as accepted
+        refresh = func_body("refreshAcceptedCompare")
+        self.assertNotIn("setWords(", refresh)                 # it only swaps the accepted comparison of the words already shown
+        self.assertNotIn("buildRows(", refresh)
         body = func_body("loadLastRead")
         self.assertIn("T.words || S.lastTried", body)        # a reconnect must not wipe the editor
         self.assertIn("if (T.words ||", body)                # a read that finished meanwhile wins
