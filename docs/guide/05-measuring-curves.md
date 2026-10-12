@@ -79,7 +79,7 @@ A point is `ok`, `mismatch` (the target ratio was hit now and then but too rarel
 | `user_cap` | your own `scaling_max_freq` is below the ratio, so it was not attempted. Remove the cap and measure again |
 
 **`interpolated`.** For a V/F point that failed with `cap_granularity` or `active_cores` and has a measured point on both sides, the tool estimates the
-voltage by a straight line between the nearest measured V/F points (the page labels it "(interpolated)"). This rests on the measured behaviour that the
+voltage by a straight line between the nearest measured V/F points (the chart draws it as a hollow marker and the caption says "interpolated (hollow markers): ..."). This rests on the measured behaviour that the
 CPU itself interpolates between points: 54x measured at the midpoint of 53x and 55x on every P-core [MEASURED lnx 2026-10-11]. An interpolated value is
 never shown as measured; points above the unit's reach are not interpolated.
 

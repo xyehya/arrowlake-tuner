@@ -20,7 +20,7 @@ The CPU's overclocking mailbox accepts runtime changes only if the firmware allo
 
 | Setting | Value | Why |
 |---|---|---|
-| **Undervolt Protection (UVP)** | Disabled | With UVP on, the CPU refuses offsets below the fused floor (mailbox return code `0x13 UndervoltProtection`) [DECOMPILED win-xtu-decompile-mailbox.md, registers.md "Return codes"] |
+| **Undervolt Protection (UVP)** | Disabled | With UVP on, the CPU refuses offsets below the fused floor (mailbox return code `0x13 UndervoltProtection`) [DECOMPILED registers.md "Return codes"] |
 | **OC Lock** | Disabled | With OC Lock on, every OC-mailbox write is refused (return code `0x01 OCLocked`) [DECOMPILED, registers.md "Return codes"] |
 | Overclocking support (some boards) | Enabled | The firmware flag `OcSupport` defaults to off in Intel's reference firmware [DOC FSP FspmUpd.h, registers.md "BIOS/FSP gating flags"] |
 | Secure Boot | Disabled, or a kernel with lockdown `none` | Secure Boot normally turns on kernel lockdown, which blocks MSR writes (section 4) |
@@ -39,7 +39,7 @@ absence of an error.
 | polkit | `pkexec` and `polkitd` installed, and a **polkit authentication agent** running in your desktop session (GNOME, KDE and similar have one). The root helper starts through `pkexec` and asks for your password | checks `pkexec`, `polkit`, `polkit_agent` |
 | A desktop session | The GUI is a local web page; a browser must open on the same machine | |
 | Python 3.12 or newer | Standard library only; nothing to `pip install`. `install.sh` uses `/usr/bin/python3` and refuses if it is older than 3.12 | `python` |
-| A current browser | Chromium or Firefox. The GUI is served on `127.0.0.1` only | |
+| A current browser | Chromium or Firefox. The GUI is served on a random loopback address (`127.x.y.z`, see [03](03-first-run.md)); it is not reachable from the network | |
 | Root (sudo) | Only to run `install.sh` / `uninstall.sh` and the restore script | |
 
 Check: `python3 --version`, `command -v pkexec`.
@@ -55,7 +55,7 @@ The tool reaches the CPU through `/dev/cpu/N/msr`. Every OC-mailbox request, **i
 |---|---|---|
 | `/dev/cpu/N/msr` exists for every CPU | `ls /dev/cpu/*/msr \| wc -l` (24 on the reference chip) | Preflight `msr_device`. If the module exists but is not loaded: `sudo modprobe msr` (an explicit step; the tool never does it). Fedora builds the driver into the kernel (`CONFIG_X86_MSR=y`) [DOC src.fedoraproject.org f44 kernel config, linux-path.md §1] |
 | Kernel lockdown is `none` | `cat /sys/kernel/security/lockdown` shows `[none]` | With `[integrity]` or `[confidentiality]` MSR writes are blocked and the app is read-only (Secure Boot is the usual cause) [DOC include/linux/security.h, linux-path.md §1] |
-| `msr.allow_writes` is not `off` | `cat /sys/module/msr/parameters/allow_writes` as root (the file is root-only; an unprivileged preflight shows `unknown` and the root helper decides) | `on` or `default` are fine. To set it: boot parameter `msr.allow_writes=on`, or write `on` to that file as root [DOC lnx-interfaces.md, linux-path.md §1] |
+| `msr.allow_writes` is not `off` | `cat /sys/module/msr/parameters/allow_writes` as root (the file is root-only; an unprivileged preflight shows `unknown` and the root helper decides) | `on` or `default` are fine. To set it: boot parameter `msr.allow_writes=on`, or write `on` to that file as root [DOC kernel msr driver, linux-path.md §1] |
 | Root access to the msr nodes | The nodes are `root:msr 0660`, but **group membership is not enough**: opening as an ordinary user fails with EPERM | The root helper (polkit) does the access. You do not need to change permissions [MEASURED lnx 2026-10-08, linux-path.md §1] |
 
 Effects you should expect: the first MSR write of a boot sets kernel taint bit 2 (`TAINT_CPU_OUT_OF_SPEC`), and the kernel logs

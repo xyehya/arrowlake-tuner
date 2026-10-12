@@ -10,15 +10,16 @@ python3 tools/arltuner-gui.py --open
 ```
 What happens:
 
-1. The script starts a small web server on `127.0.0.1` (a random local port; nothing is reachable from the network).
+1. The script starts a small web server on a **random loopback address** `127.x.y.z` and a random port (G-142, D-042). Nothing is reachable from the network, and each run has its own address, so
+   the browser's session cookie of one run is not sent to any other local service. Only if that bind fails does it fall back to `127.0.0.1` and print a warning.
 2. It starts the root helper with `pkexec /usr/lib/arltuner/arltuner-helper --device`. Your desktop shows the **polkit password prompt**
    ("Authentication is required to run the arrowlake-tuner helper"). Enter your administrator password. This is the only privilege step, and it
    is needed on every start; polkit is configured not to remember the authorisation.
-3. It writes a **launcher page** and prints `listening on http://127.0.0.1:PORT` and `open once: file://.../launcher.html`. With `--open` the
+3. It writes a **launcher page** and prints `listening on http://127.x.y.z:PORT` (the address and port are random every run) and `open once: file://.../launcher.html`. With `--open` the
    default browser opens it.
 4. On the launcher page press **Open arrowlake-tuner**. The page posts a one-time token to the server and redirects you into the app.
 
-The launcher is `$XDG_RUNTIME_DIR/arltuner/launcher.html` (else `/tmp/arltuner-<uid>/launcher.html`), mode 0600, in a private directory. The token
+The launcher is `$XDG_RUNTIME_DIR/arltuner/launcher.html` (else `/tmp/arltuner-<uid>/launcher.html`), mode 0600, in a directory only you can enter (0700). The token
 never appears in a command line or URL. The link works **once** and expires if unused (900 s in the code, `Config.token_ttl_s`); the launcher file is
 deleted after the first use.
 
@@ -57,8 +58,8 @@ The header has the app name, a mode tag, the tabs, the refresh slider and two co
 | **Tune** | read the ratios and voltages the CPU holds, change them, review, apply | [06](06-undervolting.md), [07](07-overclocking.md) |
 | **Stress** | CPU or memory stress screens | [08](08-stability-testing.md) |
 | **Profiles** | save, compare, accept and re-apply tunings | [09](09-profiles-and-restore.md) |
-| **System** | helper state, operations this boot, preflight | below |
-| **Audit** | the audit log of mailbox operations | [12](12-safety-and-internals.md) |
+| **System** | helper state, operations this boot, **Tuning limits** (your policy next to what your CPU reports; [12 §4](12-safety-and-internals.md)), preflight | below |
+| **Audit** | the audit log of mailbox operations, with a filter (**All** / **Writes & refusals**) and the request named in words | [12](12-safety-and-internals.md) |
 
 Dashboard controls: the **Refresh** slider (0.25, 0.5, 1, 2 or 5 s; changing it restarts the sampler), **Pause**, a chart window of 1, 5 or
 15 minutes, and a core-map metric (Clock, Busy, Temp, VID) with a fixed or automatic colour scale. The Memory card shows trained values read from
@@ -109,7 +110,7 @@ The Tune page's **Read ratios & voltages** is a series of mailbox reads, and eac
 |---|---|
 | No password prompt, "helper: n/a" | the helper is not installed (checkout only) or `--no-helper` was used; install ([02](02-install.md)) |
 | Prompt never appears, helper does not start | no polkit authentication agent in the session (`polkit_agent` check); run from a normal desktop login, not a bare SSH session |
-| `arltuner-gui: ...: owned by uid ... / lets others in` | the launcher directory is not a private directory of yours; fix its owner/mode (0700) or pass `--launcher` |
+| `arltuner-gui: ...: owned by uid ... / lets others in` | the launcher directory is not one only you can access; fix its owner/mode (0700) or pass `--launcher` |
 | Browser shows the launcher but the button does nothing | the one-time token expired or was used; run the command again for a fresh link |
 | Banner "Read-only mode" | see section 3; the banner lists the failing checks and their reasons |
 

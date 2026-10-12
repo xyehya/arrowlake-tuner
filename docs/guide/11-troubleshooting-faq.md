@@ -13,7 +13,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 |---|---|---|
 | Banner "Read-only mode. Mailbox requests are disabled, so Tune cannot read or apply. Measuring and the dashboard still work." | a preflight check of status `read-only` | read the reasons in the banner; see the rows below |
 | `lockdown`: kernel lockdown is `[integrity]` or `[confidentiality]` | Secure Boot enabled | disable Secure Boot in the BIOS, or boot a kernel without lockdown ([01 §4](01-requirements.md)) |
-| `msr_device`: `/dev/cpu/N/msr` missing | the `msr` driver is not loaded or built in | `sudo modprobe msr` (an explicit operator step) |
+| `msr_device`: `/dev/cpu/N/msr` missing | the `msr` driver is not loaded or built in | `sudo modprobe msr` (an explicit step you take; the tool never does it) |
 | `msr_allow_writes`: `msr.allow_writes=off` | the kernel refuses MSR writes | boot with `msr.allow_writes=on` or write `on` to `/sys/module/msr/parameters/allow_writes` as root |
 | `hypervisor` | running in a virtual machine | run on bare metal |
 | `cpuid` / `topology` | not an Arrow Lake-S CPU or an unexpected core layout | not supported; nothing will be written |
@@ -27,13 +27,14 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 ## 3. Refusals while planning or applying
 | Message / code | Meaning | Fix |
 |---|---|---|
-| `REFUSED POLICY_RANGE` | a value is outside the policy range (offset, voltage target or ratio) | lower the value, or change the policy ([12 §4](12-safety-and-internals.md)) |
-| `STEP_LIMIT` | the plan needs a larger single step than the policy allows | change fewer things, or in smaller steps |
+| `REFUSED POLICY_RANGE` | a value is outside a limit. The message says whose: `policy ratio_max P = 60 (/etc/arltuner/policy.toml; ...)`, `CPU limit ... (cmd 0x01 ...)` or `field encoding` | lower the value; for a policy limit edit `/etc/arltuner/policy.toml` (your CPU's own limit and the field width cannot be edited) ([12 §4](12-safety-and-internals.md)) |
+| `STEP_LIMIT` | the plan needs a larger single step than your policy's `max_*_step` allows | change fewer things, or in smaller steps |
 | `TURBO_ORDER` | a turbo bucket is higher than the bucket to its left | each bucket must be at or below the one before it ([07 §5](07-overclocking.md)) |
 | `NO_READ` | nothing was read this boot | **Read ratios & voltages** in Tune |
 | "This plan expired" | plans expire after 10 minutes | close the dialog and press **Review changes** again |
 | `NOTHING_TO_DO` / "Nothing would change" | the CPU already holds the planned words | no action needed |
 | `NOT_APPLIED` (Set as accepted) | the saved profile is not what the CPU holds | apply it first ([09](09-profiles-and-restore.md)) |
+| `STALE_READ` (Set as accepted) | a mailbox or plain MSR write happened after the read it would record | **Read ratios & voltages** again, then accept |
 | `NO_ACCEPTED_STATE` | **Restore accepted** with no accepted state | set one first |
 | `NO_ENV_FLAG`, `BAD_CONFIRMATION` (CLI) | `ARLTUNER_ALLOW_MAILBOX=1` not exported, or the confirmation does not match | [10 §2](10-cli-reference.md) |
 | `AUDIT_UNAVAILABLE` | the audit log cannot be read or written, so nothing is sent | inspect the file; never delete or truncate it to get past this ([12 §5](12-safety-and-internals.md)) |
@@ -46,7 +47,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 | `STALE_JOURNAL`, `RESTORE_FAILED` | cpufreq limits from an earlier run could not be put back | check `scaling_max_freq` / `scaling_min_freq` in System before anything else; restarting the helper applies a stale journal |
 
 ## 4. Mailbox return codes (Audit tab, `rc` / `rc_name`)
-From `registers.md` "Return codes" [DECOMPILED win-xtu-decompile-mailbox.md]:
+From `registers.md` "Return codes" [DECOMPILED registers.md]:
 
 | rc | Name | Typical cause |
 |---|---|---|
@@ -102,8 +103,9 @@ measurement still work but Tune cannot read or apply.
 
 **Does it apply tuning automatically at boot?** No. Unattended autostart is an unsigned proposal (D-021) and is not implemented.
 
-**Does it work on Windows?** There is no Windows GUI. A PowerShell restore exists, is tied to the reference chip, and is untested from this repository
-([09 §4](09-profiles-and-restore.md)).
+**Does it work on Windows?** There is no Windows GUI. A PowerShell restore exists; it finds your cores through the `fingerprint.json` that **Set as accepted** records on Linux, so it is meant to work on any
+Arrow Lake-S, for the machine the state was recorded on. It is untested on real Windows in its current form ([09 §4](09-profiles-and-restore.md)). If the Windows scripts say
+"no fingerprint.json", press **Record CPU fingerprint for Windows** in Profiles (after a Tune read) and copy the accepted directory again.
 
 **Can I use XTU, ThrottleStop or HWiNFO at the same time?** No. They are other mailbox clients. Close them before tuning.
 
@@ -111,6 +113,10 @@ measurement still work but Tune cannot read or apply.
 
 **What are the "community hint" warnings?** E40 and WHEA warnings come from community or reference-chip reports, not from a rule of the hardware. They are
 labelled that way; use them as hints.
+
+**Can I raise the limits? I run extreme cooling.** Yes. Every limit is the numbers in `/etc/arltuner/policy.toml` (offset window, adaptive voltage ceiling, OC-ratio ceilings, step sizes). Edit them as root; a change applies from the
+next read or plan. The hard ceilings are only what your CPU reports (mailbox command `0x01` for ratios, `0x28` for voltage) and the register field widths (offsets -1000 ... +999 mV). The defaults are conservative on
+purpose, and going further is entirely at your own risk ([12 §4](12-safety-and-internals.md)).
 
 **How do I clear a stuck state?** Cold boot. If a stale cpufreq journal remains, restarting the GUI applies it. The accepted state is changed only by
 **Set as accepted**.

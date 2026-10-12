@@ -3,7 +3,7 @@
 This page explains how to decide whether a tuning is stable: what the **Stress** tab does and does not tell you, the longer acceptance gate the
 project used, and how to watch for machine-check errors. It is for anyone who has applied a change.
 
-**The one rule: a quick screen is not an acceptance gate.** The Stress tab says so on every result ("A quick screen, not an acceptance gate."), and the
+**The one rule: a quick screen is not an acceptance gate.** The Stress tab says so in a banner ("Quick screen - NOT an acceptance gate ... Before you trust a setting, run a long self-checking load (a Linpack-class test for an hour or more)") and on every result ("A quick screen, not an acceptance gate."), and the
 code deliberately never prints "pass" or "stable" (D-019). It can only tell you "no errors detected in N min" or that something went wrong.
 
 ## 1. Why a long test is needed
@@ -68,7 +68,7 @@ The project's gate (D-019, 2026-10-04) for calling a state accepted [MEASURED wi
 
 Both passed on Windows (2026-10-04) and on Linux (2026-10-07/08) for the accepted state there. This gate is the project's choice, not a standard. OCCT
 and Linpack are not shipped or launched by this tool; install and run them yourself. Alternatives named in the repo: y-cruncher, Prime95 small-FFT, a
-newer Linpack build (`linpack-binaries.md` in the predecessor repo; not evaluated here) [favored-cores.md §4, tuning-results.md §5]. Whatever you choose:
+a newer Linpack build (not evaluated here) [favored-cores.md §4, tuning-results.md §5]. Whatever you choose:
 
 - it must **self-check** its results (a test that only loads the CPU cannot catch silent corruption);
 - run it long, at the voltages and ratios you will really use, with the cooling you will really have;

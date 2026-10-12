@@ -14,7 +14,7 @@ will see.
 ## 1. How the tool talks to the CPU
 The CPU exposes a voltage/frequency control interface, the **OC mailbox**, through model-specific register `0x150`. A request is a 64-bit value
 `1<<63 | P2<<48 | P1<<40 | cmd<<32 | data`; the CPU clears bit 63 when it has answered, the status is in bits 39:32 and the result in bits 31:0
-[DECOMPILED win-xtu-decompile-mailbox.md; matches kernel and published sources, registers.md "OC mailbox"].
+[DECOMPILED registers.md "OC mailbox"; matches kernel and published sources].
 
 - **Every mailbox request, including a read, is a write (WRMSR) to MSR `0x150`.** There is no memory-mapped alternative [DECOMPILED registers.md]. This
   is why "Read ratios & voltages" in the Tune tab needs the same write permission as Apply.
@@ -60,7 +60,7 @@ Facts about the points:
   voltage, and no delivered-voltage telemetry exists for the DLVRs [MEASURED lnx 2026-09-29 / 2026-10-01, registers.md, platform-285k.md §5].
 
 ## 4. The V/F word
-The word for core-scoped commands `0x10` (read) and `0x11` (write) has these fields [DECOMPILED win-xtu-decompile-mailbox.md, registers.md "V/F data word"]:
+The word for core-scoped commands `0x10` (read) and `0x11` (write) has these fields [DECOMPILED registers.md "V/F data word"]:
 
 | Bits | Field | Encoding |
 |---|---|---|
@@ -87,7 +87,7 @@ Example (reference chip): `0xF9A00035` = ratio `0x35` (53x), no target, offset -
 |---|---|---|
 | Where | any fused point (per point) or the whole curve | the **OC point** only |
 | What it does | adds a fixed delta (mV) to the point's voltage | sets the voltage the OC point uses |
-| Range in this tool | -200 ... +200 mV (policy D-032) | up to the CPU's own maximum (mailbox command `0x28`) |
+| Range in this tool | default -200 ... +200 mV, your policy (D-039); the field holds -1000 ... +999 mV | default up to the CPU's own maximum (mailbox command `0x28`); your policy may state a lower number |
 | Needs an OC ratio | no | yes: the target is only active when a ratio above the top fused ratio is set |
 
 Because the fused points take offsets only, an "undervolt" in this tool is always an offset. A **target voltage** exists only on the OC point
@@ -113,7 +113,7 @@ Measured behaviour of an E OC point (EC1, ratio 48 above the fused top 46; examp
 | 1.117 V (below point 6) | 48x = 47x = 1.1375 V: clamped up to point 6 |
 
 A **P-core** OC ratio raise (58x on P0) had been written once on Windows without a recorded stability outcome [MEASURED win 2026-10-06, treated as
-"written once, ungated", platform-285k.md §10]. The ceiling the tool allows is a policy number ([02](02-install.md), D-038).
+"written once, ungated", platform-285k.md §10]. The ceiling the tool allows is a policy number you can edit, up to what the CPU's own limit (mailbox command `0x01`) reports ([02](02-install.md), [12 §4](12-safety-and-internals.md), D-038, D-039).
 
 An OC ratio cannot be cleared to 0 at runtime; a cold boot clears it [MEASURED lnx 2026-10-11, tuning-results.md].
 
@@ -224,7 +224,7 @@ runtime because the lock bit was 0 [MEASURED lnx 2026-10-08, platform-285k.md].
 ## 14. Key facts at a glance
 | Fact | Tag and source |
 |---|---|
-| Every mailbox request, reads included, is a WRMSR to MSR `0x150` | [DECOMPILED win-xtu-decompile-mailbox.md] registers.md "OC mailbox" |
+| Every mailbox request, reads included, is a WRMSR to MSR `0x150` | [DECOMPILED registers.md] registers.md "OC mailbox" |
 | P-core and E-cluster have fixed fused V/F points that accept offsets only (reference: P 8, E 6) | [MEASURED lnx 2026-10-02] platform-285k.md §3 |
 | Adaptive target voltage is active on the OC point only; it needs an OC ratio above the top fused ratio | [MEASURED lnx 2026-10-11] tuning-results.md |
 | `P2 = 0` offset = whole-curve offset; without an OC point a written target is dropped | [MEASURED lnx 2026-10-11] tuning-results.md |

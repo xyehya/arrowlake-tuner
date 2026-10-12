@@ -21,12 +21,18 @@ is read back and is written to an audit log. A **cold boot reverts every runtime
 | Item | Supported |
 |---|---|
 | CPU | Intel Core Ultra 200S, Arrow Lake-S desktop: CPU family 6, model 198 (0xC6), stepping 2 (`platforms/arl-s.toml`). An unlisted stepping gives a warning, not a refusal. Any other CPU is read-only or refused. |
-| OS | Linux on bare metal (not a VM), with systemd and polkit. Windows gets a PowerShell restore script only (see [09](09-profiles-and-restore.md)). |
+| OS | Linux on bare metal (not a VM), with systemd and polkit. Windows gets a PowerShell restore script only, driven by a fingerprint recorded on Linux (see [09 §4](09-profiles-and-restore.md); not yet run on real Windows in its current form). |
 | Board | Any board for the CPU whose BIOS lets you disable **Undervolt Protection** and **OC Lock**. The board-specific part is only the Vcore reading, which the app looks up by the board's DMI name. It is known for the reference board (ASRock Z890 Steel Legend WiFi); on an unknown board the dashboard shows no Vcore rather than a guess (`platforms/arl-s.toml`). |
 
 **Example values.** The project was developed and measured on one machine: a Core Ultra 9 285K on an ASRock Z890 Steel Legend WiFi. Where this
 guide quotes numbers from it (fused voltages, point ratios, undervolt offsets) they are labelled *example values from one chip*. The app reads
 everything live from your CPU. Your chip has its own V/F curve; values that are stable on the reference chip can crash yours.
+
+## Limits in one paragraph
+**Every limit is your policy.** The voltage-offset window, the adaptive-voltage ceiling, the OC-ratio ceilings and the step sizes are numbers in `/etc/arltuner/policy.toml`. The shipped values are
+conservative defaults; the file is yours (root-owned, never overwritten by the installer), the program hard-codes none of them, and a change applies from the next read or plan (D-039). The only
+ceilings you cannot edit are your CPU's own (the OC-ratio limit from mailbox command `0x01`, the maximum voltage from `0x28`, both read live) and the register field widths (offset -1000 ... +999 mV).
+Extreme-cooling users (liquid nitrogen, binned chips) can therefore raise the defaults, entirely at their own risk. Details and the exact refusal texts: [12 §4](12-safety-and-internals.md).
 
 ## Safety in four lines
 1. Writing CPU voltages can crash the machine or silently corrupt data. Only you are responsible for what you apply.
@@ -58,10 +64,10 @@ Details: [12 Safety and internals](12-safety-and-internals.md) and [`../SAFETY.m
   `lnx` is the Linux host, `win` the Windows install on the same reference machine.
 - **Names.** A *unit* is one tuning domain: a P-core, or an E-core cluster (E-cores share a regulator in clusters of four). The reference chip
   has 12 units (8 P + 4 E); the app derives the list from your CPU.
-- **Tune page labels** in this guide use the G-133 names (**All-Core** / **Per-Core**, **Whole Curve Offset** / **Per V/F point Offsets**).
-  If your build still shows "Simple" / "Per unit" / "Whole curve" / "Per point", they mean the same.
+- **Button and tab names** are quoted from the web page (for example **Read ratios & voltages**, **All-Core** / **Per-Core**, **Whole Curve Offset** / **Per V/F point Offsets**, **Set as accepted**).
+  Screenshots of the pages are in the repository [README](../../README.md#screenshots); they show one example machine.
 - Commands are for a normal user shell unless they start with `sudo`.
 
 ## Other documents
-[`../../README.md`](../../README.md) (short project README), [`../USER-GUIDE.md`](../USER-GUIDE.md) (older one-page guide), [`../SPEC-v3.md`](../SPEC-v3.md)
+[`../../README.md`](../../README.md) (short project README), [`../SPEC-v3.md`](../SPEC-v3.md)
 (product spec), [`../DECISIONS.md`](../DECISIONS.md), [`../knowledge/`](../knowledge/) (distilled hardware facts; `registers.md` is the single source for encodings).

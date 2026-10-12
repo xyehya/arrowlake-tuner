@@ -3,7 +3,7 @@
 This page lists the command-line tools: the `arltuner` CLI, the GUI launcher, the helper script and the scripts in `tools/`. It is for scripting,
 for working without the GUI, and for developers. Every command and flag below is taken from the argument parsers and script headers.
 
-**The GUI is the main interface.** The CLI is the operator's direct path to the same guarded write code. A mailbox command on real hardware sends WRMSRs
+**The GUI is the main interface.** The CLI is the direct path to the same guarded write code. A mailbox command on real hardware sends WRMSRs
 to MSR `0x150`: use it as carefully as the GUI.
 
 ## 1. Overview
@@ -32,18 +32,22 @@ Commands: `topology`, `plan`, `apply`, `read-vf`, `read`, `vf-dump`, `point-offs
   a health bracket before and after, read-back, and an audit-log line.
 - **Modes.** `--sim` runs against a software simulator of the reference 285K (no hardware; the default for the read commands); `--device` uses
   `/dev/cpu/N/msr` (Linux, needs root); `--device-win` is Windows 11 as Administrator through ThrottleStop's driver
-  ([09 §4](09-profiles-and-restore.md); reference-chip only). `apply` requires exactly one of the three.
-- Without `--policy` the CLI uses a **built-in conservative policy** (no raise, small steps). To use your installed limits pass
-  `--policy /etc/arltuner/policy.toml`, as the restore scripts do.
+  ([09 §4](09-profiles-and-restore.md); needs the accepted state's `fingerprint.json`, see `--fingerprint`). `apply` requires exactly one of the three.
+- Without `--policy` the CLI uses a **built-in conservative policy** (no raise, small steps). To use your own limits pass
+  `--policy /etc/arltuner/policy.toml`, as the restore scripts do. **Every limit is the policy file's number** (D-039): ratio and voltage ceilings, the offset window and the step
+  limits are yours to edit, up to what your CPU reports (mailbox commands `0x01` for the ratio and `0x28` for the voltage, read live in the session) and the register field
+  encodings (offset -1000 ... +999 mV). A refusal names where its limit comes from ([12 §4](12-safety-and-internals.md)). A ratio raise costs one extra guarded `0x01` read
+  per core kind, which the plan counts.
 
 ### Common options (`apply`, `read-vf`, `read`, `vf-dump`, `point-offset`)
 | Option | Meaning |
 |---|---|
 | `--sim` / `--device` / `--device-win` | backend (see above) |
-| `--policy FILE` | reviewed policy TOML (see [12](12-safety-and-internals.md)) |
-| `--audit FILE` | audit log. Default on an installed machine: `/var/lib/arltuner/audit.jsonl`; else `~/.local/state/linuxmon/audit.jsonl` (Windows `%LOCALAPPDATA%\linuxmon\audit.jsonl`) |
-| `--lock FILE` | lock file. Default on an installed machine: `/run/arltuner/mailbox.lock`; else `/run/lock/linuxmon-mailbox.lock`, else the temp dir |
+| `--policy FILE` | policy TOML: its numbers are your limits (see [12 §4](12-safety-and-internals.md)) |
+| `--audit FILE` | audit log. Default on an installed machine: `/var/lib/arltuner/audit.jsonl`; else `$XDG_STATE_HOME/arltuner/audit.jsonl` (default `~/.local/state/arltuner/audit.jsonl`; Windows `%LOCALAPPDATA%\arltuner\audit.jsonl`) |
+| `--lock FILE` | lock file. Default on an installed machine: `/run/arltuner/mailbox.lock`; else `/run/lock/arltuner-mailbox.lock`, else the temp dir |
 | `--operator NAME` | name recorded in the audit log (default `$USER`) |
+| `--fingerprint FILE` | `--device-win` only: the accepted state's `fingerprint.json` (default `%LOCALAPPDATA%\arltuner\accepted\fingerprint.json`; the Windows scripts pass the one in `%ProgramData%\arltuner\accepted`) |
 | `--allow-taint-bit N` | kernel taint bit the health gate may ignore; repeatable. Use `--allow-taint-bit 2` on Linux (the first MSR write of a boot sets bit 2, expected) |
 
 "Installed machine" means `/etc/arltuner/policy.toml` exists and passes the helper's trust check (D-030). If it exists but is untrusted, the CLI refuses
@@ -101,6 +105,11 @@ Starts the web server and, when installed, the root helper through `pkexec`. Opt
 developers only). `--device` **refuses to start from a checkout** (helper code is never run from a user-writable tree); the installed copy is started by
 `pkexec` ([02](02-install.md)). Its protocol is contract 8 and 9 of `docs/ARCHITECTURE.md`.
 
+## 4a. `tools/screenshots.py`
+Captures the README images of the web page with headless Chrome (standard library only). `python3 tools/screenshots.py --sim` starts the GUI against the simulator (no hardware);
+`--launcher PATH` logs in to a GUI you started, with a **read-only** session (scope `read`, [12 §7](12-safety-and-internals.md)); `--out DIR`, `--only a,b`. It only
+displays what the page shows and never presses Read, Review, Apply or Measure. Developers only.
+
 ## 5. Scripts in `tools/lnx/`
 | Script | What | Hardware access |
 |---|---|---|
@@ -117,8 +126,15 @@ developers only). `--device` **refuses to start from a checkout** (helper code i
 you understand that you are removing that safety step**, and never schedule it or run it unattended (cron, systemd, boot hooks); its own header forbids it.
 
 ## 6. Scripts in `tools/win/`
-`restore_tuning.ps1`, `Restore-Tuning.cmd`, `reapply_current.ps1`, `preflight.ps1`, `ts_driver.py`: see [09 §4](09-profiles-and-restore.md). Windows is a
-restore-only path and is not tested from this repository.
+| Script | What |
+|---|---|
+| `restore_tuning.ps1 [-From DIR] [-Policy FILE] [-Before] [-Orchestrated]` | restore the accepted state and compare word for word |
+| `Restore-Tuning.cmd` | double-click launcher: elevates (UAC), runs `restore_tuning.ps1` |
+| `reapply_current.ps1 [-Check] [-From DIR] [-Policy FILE]` | apply the profiles in `CURRENT`, one confirmation each; `-Check` = read-only dump |
+| `preflight.ps1` | read-only checks (elevation, Memory integrity, driver blocklist, XTU service, other mailbox clients, Python, driver state) |
+| `ts_driver.py init-dir \| carve --exe PATH \| start \| install \| status \| remove \| check-dir DIR` | prepare the admin-only directory, carve the driver from your own ThrottleStop exe, manage the per-run service ([09 §4](09-profiles-and-restore.md)) |
+
+Windows is a restore-only path and is **untested on real Windows with the G-138/G-142 changes**: the first run is the bring-up test.
 
 ## 7. Tests
 ```
