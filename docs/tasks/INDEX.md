@@ -43,5 +43,7 @@
 | G-138 | Windows restore for any ARL-S: LP map derived live + fingerprint recorded at accept | lnx/win | T0 | **merged** 2026-10-12 (Windows run untested) | — |
 | G-139 | Tune polish after the live check: first-visit race, even point cells, inactive retained target, live read-cost | lnx | T0 | **merged** 2026-10-12 | G-133 |
 | G-140 | public scrub: legacy tool names and paths, private-repo refs, personal paths, interoperability disclaimer (D-041) | lnx | T0 | **merged** 2026-10-12 | — |
+| G-141 | backend fixes from the code review (plan/guard ratio context, pacing, journals, turbo fold, ceilings, accept, fingerprint op, 0600) | lnx | T0 | in progress 2026-10-12 | — |
+| G-142 | security review fixes (Windows driver path, loopback cookie isolation + read scope, -I restore, socketpair, caps, NaN) | lnx/win | T0 | in progress 2026-10-12 | — |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
