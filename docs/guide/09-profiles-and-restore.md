@@ -104,7 +104,7 @@ bash tools/lnx/restore_tuning.sh --policy FILE
 | `--orchestrated` | for the project's automation after a go-ahead in chat; skips the prompt. Do not use it unless you know why |
 
 What it does: records a health snapshot (kernel taint, PCI devices, modules), applies each profile listed in `CURRENT` through the guard with `sudo`
-(it asks for your password once), dumps the V/F words, compares every one with `EXPECTED-words.txt`, and takes a second health snapshot. It stops at the first
+(it asks for your `sudo` password once), dumps the V/F words, compares every one with `EXPECTED-words.txt`, and takes a second health snapshot. It stops at the first
 failure and retries nothing. A good run ends:
 ```
 RESTORED: all cores/clusters match the accepted state.

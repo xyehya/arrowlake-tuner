@@ -9,7 +9,7 @@ to MSR `0x150`: use it as carefully as the GUI.
 ## 1. Overview
 | Command | Purpose | Touches hardware? |
 |---|---|---|
-| `python3 tools/arltuner-gui.py` | start the web GUI and root helper ([03](03-first-run.md)) | via the helper, after polkit |
+| `python3 tools/arltuner-gui.py` | start the web GUI; it connects to the root helper service, no password ([03](03-first-run.md)) | via the helper service |
 | `python3 tools/arltuner.py topology` | print the core map from sysfs | reads sysfs only |
 | `python3 tools/arltuner.py plan` | dry-run a profile against the simulator | no |
 | `python3 tools/arltuner.py apply --device` | apply a profile through the guard | yes, writes |
@@ -97,17 +97,18 @@ It prints a token; type `CONFIRM <token>`. One request is sent, read back and lo
 time, never a sweep** ([12](12-safety-and-internals.md)).
 
 ## 3. `tools/arltuner-gui.py`
-Starts the web server and, when installed, the root helper through `pkexec`. Options `--open`, `--no-helper`, `--helper CMD ...`, `--launcher PATH`,
+Starts the web server and connects it to the root helper service on `/run/arltuner/helper.sock` (installed by `install.sh`; no password, no polkit; a refusal is printed with its fix and the exit status is 2). Options `--open`, `--no-helper`, `--helper CMD ...`, `--launcher PATH`,
 `--web-root DIR`: see [03](03-first-run.md). Running it again while it is running prints a fresh one-time link.
 
 ## 4. `tools/arltuner-helper.py`
 `python3 tools/arltuner-helper.py --sim [--policy F --audit F --lock F]` runs the helper against the simulator from a checkout (JSON lines on stdin/stdout;
-developers only). `--device` **refuses to start from a checkout** (helper code is never run from a user-writable tree); the installed copy is started by
-`pkexec` ([02](02-install.md)). Its protocol is contract 8 and 9 of `docs/ARCHITECTURE.md`.
+developers only). `--socket` serves one client at a time on a Unix socket instead (non-root, simulator: `--socket-path FILE --helper-toml FILE`). `--device` **refuses to start from a checkout** (helper code is never
+run from a user-writable tree); the installed copy is the `ExecStart` of the socket-activated `arltuner-helper.service`, or you run `sudo /usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket`
+yourself without systemd ([02](02-install.md)). Its protocol is contract 8 and 9 and the G-144 addendum of `docs/ARCHITECTURE.md`.
 
 ## 4a. `tools/screenshots.py`
 Captures the README images of the web page with headless Chrome (standard library only). `python3 tools/screenshots.py --sim` starts the GUI against the simulator (no hardware);
-`--launcher PATH` logs in to a GUI you started, with a **read-only** session (scope `read`, [12 §7](12-safety-and-internals.md)); `--out DIR`, `--only a,b`. It only
+`--launcher PATH` logs in to a GUI you started, with a **read-only** session (scope `read`, [12 §8](12-safety-and-internals.md)); `--out DIR`, `--only a,b`. It only
 displays what the page shows and never presses Read, Review, Apply or Measure. Developers only.
 
 ## 5. Scripts in `tools/lnx/`

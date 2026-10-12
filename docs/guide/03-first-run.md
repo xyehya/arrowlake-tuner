@@ -1,6 +1,6 @@
 # 03 First run
 
-This page walks through starting the GUI for the first time, what the polkit prompt does, how the login link works, and how to read the
+This page walks through starting the GUI for the first time, how the GUI connects to the root helper (no password), how the login link works, and how to read the
 System tab's preflight. It is for someone who has just run `install.sh` ([02](02-install.md)).
 
 ## 1. Start the GUI
@@ -12,9 +12,9 @@ What happens:
 
 1. The script starts a small web server on a **random loopback address** `127.x.y.z` and a random port (G-142, D-042). Nothing is reachable from the network, and each run has its own address, so
    the browser's session cookie of one run is not sent to any other local service. Only if that bind fails does it fall back to `127.0.0.1` and print a warning.
-2. It starts the root helper with `pkexec /usr/lib/arltuner/arltuner-helper --device`. Your desktop shows the **polkit password prompt**
-   ("Authentication is required to run the arrowlake-tuner helper"). Enter your administrator password. This is the only privilege step, and it
-   is needed on every start; polkit is configured not to remember the authorisation.
+2. It **connects to the root helper** on `/run/arltuner/helper.sock`. There is **no password prompt** and no polkit: systemd (socket activation) starts the helper on the first
+   connection, and the helper admits you because your user name is in the allowlist in `/etc/arltuner/helper.toml` (the installer put the user who ran `sudo bash install.sh` there; add others with
+   `sudo bash install.sh --add-user NAME`, [02](02-install.md)). The helper serves **one client at a time**. If it cannot admit or reach you, the script prints the reason and the fix and exits (section 5).
 3. It writes a **launcher page** and prints `listening on http://127.x.y.z:PORT` (the address and port are random every run) and `open once: file://.../launcher.html`. With `--open` the
    default browser opens it.
 4. On the launcher page press **Open arrowlake-tuner**. The page posts a one-time token to the server and redirects you into the app.
@@ -23,15 +23,15 @@ The launcher is `$XDG_RUNTIME_DIR/arltuner/launcher.html` (else `/tmp/arltuner-<
 never appears in a command line or URL. The link works **once** and expires if unused (900 s in the code, `Config.token_ttl_s`); the launcher file is
 deleted after the first use.
 
-If no helper is installed (you only have a checkout), the script starts without a helper: the page loads but every call that needs the helper
-answers 503. That mode is for development. `--no-helper` forces it.
+If the socket does not exist (nothing installed, you only have a checkout), the script prints a warning and starts without a helper: the page loads but every call that needs the helper
+answers 503. That mode is for development. `--no-helper` forces it; `--helper CMD ...` runs a helper command of your own (the simulator: `--helper python3 tools/arltuner-helper.py --sim`).
 
 ### Options of `tools/arltuner-gui.py`
 | Option | Meaning |
 |---|---|
 | `--open` | open the launcher in the default browser |
 | `--no-helper` | do not start any helper (API calls answer 503) |
-| `--helper CMD ...` | use another helper command, everything after the flag is the command (development, tests) |
+| `--helper CMD ...` | development / simulator: use this helper command (speaks the helper protocol on stdin/stdout) instead of the installed helper service; everything after the flag is the command |
 | `--launcher PATH` | where to write the launcher page |
 | `--web-root DIR` | GUI files; default is `./web` of the checkout if it exists, else `/usr/share/arltuner/web` |
 
@@ -40,13 +40,12 @@ Run the same command again while the first one is still running:
 ```
 python3 tools/arltuner-gui.py --open
 ```
-It detects the running server, asks it for a fresh single-use launcher (via a signal) and prints `open once: ...` again, without a second password
-prompt or a second server. A browser session expires after 30 minutes idle or 12 hours in total (`Config.session_idle_s`, `session_max_s`); the
+It detects the running server, asks it for a fresh single-use launcher (via a signal) and prints `open once: ...` again, without a second server. A browser session expires after 30 minutes idle or 12 hours in total (`Config.session_idle_s`, `session_max_s`); the
 same command gets you back in.
 
 ### Stop
-Press **Ctrl+C** in the terminal that runs the GUI. The helper exits with it. Stopping the GUI changes nothing on the CPU: whatever was applied
-stays applied until a cold boot.
+Press **Ctrl+C** in the terminal that runs the GUI. The GUI disconnects; the helper stops its telemetry, lets an operation in flight finish its read-back or restore, and exits by itself after about
+10 idle minutes (`idle_exit_s`; systemd starts it again at the next connection). Stopping the GUI changes nothing on the CPU: whatever was applied stays applied until a cold boot.
 
 ## 2. What you see
 The header has the app name, a mode tag, the tabs, the refresh slider and two connection pills. The tabs, in the order you use them:
@@ -86,7 +85,7 @@ delivered to the core; no such telemetry exists on this platform [MEASURED lnx 2
 | `topology` | P and E CPU sets read from sysfs, E clusters of equal size | none: the CPU is not an Arrow Lake-S layout |
 | `msr_device` | `/dev/cpu/N/msr` for every CPU | `sudo modprobe msr` |
 | `msr_allow_writes` | not `off` (shows `unknown` for an unprivileged read; the root helper's own preflight decides) | boot with `msr.allow_writes=on` |
-| `pkexec`, `polkit`, `polkit_agent` | installed, and an authentication agent runs in the session | install polkit; log in to a desktop session |
+| `helper_service` | the socket `/run/arltuner/helper.sock` exists and is a root-owned socket, and `/etc/arltuner/helper.toml` has an `[access]` allowlist that admits somebody | `sudo bash install.sh` (enables `arltuner-helper.socket`); `sudo bash install.sh --add-user NAME` |
 | `python` | 3.12 or newer | update Python |
 | `tool:*` | optional tools found; `missing: install <pkg>` otherwise (never changes the mode) | install the package ([01](01-requirements.md)) |
 
@@ -108,8 +107,8 @@ The Tune page's **Read ratios & voltages** is a series of mailbox reads, and eac
 ## 5. Troubleshooting the start
 | Symptom | Likely cause |
 |---|---|
-| No password prompt, "helper: n/a" | the helper is not installed (checkout only) or `--no-helper` was used; install ([02](02-install.md)) |
-| Prompt never appears, helper does not start | no polkit authentication agent in the session (`polkit_agent` check); run from a normal desktop login, not a bare SSH session |
+| "helper: n/a", every call answers 503 | no helper: the socket does not exist (nothing installed) or `--no-helper` was used; install ([02](02-install.md)) |
+| The script exits with `arltuner-gui: ...` about the helper | the message names the cause and the command that fixes it: see the table in [11 §2](11-troubleshooting-faq.md) |
 | `arltuner-gui: ...: owned by uid ... / lets others in` | the launcher directory is not one only you can access; fix its owner/mode (0700) or pass `--launcher` |
 | Browser shows the launcher but the button does nothing | the one-time token expired or was used; run the command again for a fresh link |
 | Banner "Read-only mode" | see section 3; the banner lists the failing checks and their reasons |

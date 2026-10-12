@@ -8,7 +8,7 @@ Open operator decisions are marked **OD-n** (§14) and block the phase named the
 |---|---|
 | O-1 | **Linux in general** (any distro, packages named per distro). **Windows: PowerShell restore only**, no GUI. |
 | O-2 | **Python (stdlib) + local web UI** in the browser. |
-| O-3 | GUI **unprivileged**; a **root helper** (polkit/pkexec) performs every privileged read and write. |
+| O-3 | GUI **unprivileged**; a **root helper** (a socket-activated service with a per-connection user allowlist, D-043; no polkit) performs every privileged read and write. |
 | O-4 | Apply = **before/after diff + type CONFIRM once** (D-020 style). |
 | O-5 | **Live readings embedded.** |
 | O-6 | **Stress tests embedded**: frequency caps for fixed-ratio stability, compute screens, a memory test (stressapptest). |
@@ -32,23 +32,24 @@ CPUID alone. Each failure is a named refusal, never a workaround; preflight re-r
 | not under a hypervisor (`hypervisor` cpuinfo flag) | read-only mode |
 | lockdown: bracketed word in `/sys/kernel/security/lockdown` is `none` (Secure Boot lockdown blocks MSR writes) | read-only + explanation |
 | `/dev/cpu/*/msr` present (module loaded, built in, or loadable); `/sys/module/msr/parameters/allow_writes` ≠ `off` | explanation |
-| polkit + `pkexec` + a polkit agent in the session | helper cannot start; explanation |
+| the helper socket `/run/arltuner/helper.sock` exists and `/etc/arltuner/helper.toml` `[access]` admits somebody (`helper_service`, D-043) | read-only; explanation |
 | Python ≥ 3.12 (D-024) | refuse |
 | optional tools: stress-ng, stressapptest, perf, turbostat, lm-sensors, nvidia-smi | feature shows "missing: install <pkg>" |
 Measured here `[MEASURED lnx 2026-10-08]`: lockdown `[none]`, Secure Boot disabled, `allow_writes` default, `intel_pstate` active (HWP).
 
 ## 4. Architecture
 ```
-browser ──HTTP 127.0.0.1:<port> (cookie)──► ui server  (user; stdlib ThreadingHTTPServer; static files from the install dir; SSE for live data)
-                                                 │ JSON lines over the helper's stdin/stdout (no socket)
+browser ──HTTP 127.x.y.z:<port> (cookie)──► ui server  (user; stdlib ThreadingHTTPServer; static files from the install dir; SSE for live data)
+                                                 │ JSON lines over the helper's Unix socket /run/arltuner/helper.sock (D-043)
                                                  ▼
-                                     root helper (pkexec /usr/lib/arltuner/arltuner-helper; exactly one per machine)
+                                     root helper (arltuner-helper.service, socket-activated; exactly one per machine, one client at a time)
                                      = library: controls → guard → msr.transport → mailbox; health; telemetry readers; freq-cap; stress launcher
 ```
-### 4.1 Helper start (R21)
-polkit action `io.github.arrowlake-tuner.helper` with `org.freedesktop.policykit.exec.path` = the installed helper, defaults `auth_admin`
-(no `_keep`, never `allow_active=yes`). pkexec clears the environment: the helper does **not** need `ARLTUNER_ALLOW_MAILBOX`; the polkit password is
-the human act that replaces the exported flag for GUI sessions (recorded in D-021). The CLI keeps the env-flag rule unchanged.
+### 4.1 Helper start (R21; D-043 replaced polkit)
+`arltuner-helper.socket` (systemd, `/run/arltuner/helper.sock`, mode 0666) starts `arltuner-helper.service` on the first connection; without systemd the helper is started by hand with
+`/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket`. There is no polkit and no password. The gate is the helper's own `SO_PEERCRED` check of every connection against
+the `[access]` allowlist of `/etc/arltuner/helper.toml` (the installer seeds the sudo user; `install.sh --add-user NAME`); one client at a time; idle exit after ~10 min. The helper supplies
+`ARLTUNER_ALLOW_MAILBOX` itself for an admitted connection (the allowlist replaces the password that used to be the human act, D-021/D-043). The CLI keeps the env-flag rule unchanged.
 ### 4.2 Server hardening (R2, R3, R24)
 - Bind 127.0.0.1, random port. A one-time **bootstrap token** (≥128 bit) is written to a 0600 file and opened via a `file://` launcher page — never
   in argv or a URL that reaches history; the first request swaps it for an `HttpOnly; SameSite=Strict` session cookie and redirects to a clean URL.
@@ -136,7 +137,7 @@ source, privilege, package, platform-specific?). The operator's separate monitor
    executed by the root helper.
 
 ## 10. Autostart (O-8) — D-021 draft, unsigned
-Modes: **off** (default) · **with CONFIRM** (user autostart entry opens the GUI on the plan diff; needs a polkit agent) · **unattended** (system unit
+Modes: **off** (default) · **with CONFIRM** (user autostart entry opens the GUI on the plan diff; the user must be in the helper allowlist) · **unattended** (system unit
 at boot, root). Unattended:
 - applies only `/etc/arltuner/accepted/CURRENT` (root-owned, installed by a confirmed acceptance, §6.4) and only a profile with a recorded gate;
   health bracket before/after; boot-ramp path; ends with the word-for-word compare;
@@ -151,13 +152,13 @@ written opt-in), AGENTS.md "explicit go-ahead per write session" (the opt-in is 
 unattended", the `orchestrator_confirm.py` docstring, the env-flag rule for GUI/autostart (polkit / the opt-in replace it).
 
 ## 11. Packaging (O-1, R26, OD-1)
-System install only for the helper: `/usr/lib/arltuner/` (code), `/usr/share/arltuner/web/` (static), `/usr/share/polkit-1/actions/…policy`,
+System install only for the helper: `/usr/lib/arltuner/` (code), `/usr/share/arltuner/web/` (static), `/etc/systemd/system/arltuner-helper.{socket,service}`,
 `/etc/arltuner/`, `/var/lib/arltuner/`, optional `arltuner-autostart.service` + timer, desktop entry; user data `~/.config/arltuner/profiles/`.
 `install.sh` / `uninstall.sh` (root, idempotent). Packages (Fedora `[MEASURED]`; others `[UNVERIFIED]`):
 | Need | Fedora | Debian / Ubuntu | Arch |
 |---|---|---|---|
 | python ≥ 3.12 | python3 | python3 (Debian 13+, Ubuntu 24.04+) | python |
-| polkit, pkexec | polkit | polkitd + pkexec | polkit |
+| systemd (recommended; other inits start the helper by hand) | systemd | systemd | systemd |
 | stress-ng · stressapptest | stress-ng · stressapptest | stress-ng · stressapptest | stress-ng · stressapptest (AUR) |
 | perf · turbostat | perf · kernel-tools | linux-perf (Debian) / linux-tools-$(uname -r) (Ubuntu) · ? | perf · ? |
 | lm-sensors · nvidia-smi | lm_sensors · nvidia driver | lm-sensors · nvidia-utils-* | lm_sensors · nvidia-utils |
