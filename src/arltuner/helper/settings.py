@@ -118,11 +118,13 @@ def parse_helper_toml(text: str, where: str = "helper.toml") -> HelperToml:
 
 
 def load_helper_toml(
-    path: Path | str, *, lstat_fn: Callable[[str], Any] = os.lstat, root_uid: int = 0, must_exist: bool = False,
+    path: Path | str, *, lstat_fn: Callable[[str], Any] = os.lstat, root_uid: int = 0, must_exist: bool = False, check_parents: bool = True,
 ) -> HelperToml:
     """The trust-checked read (root-owned file and parents, no symlink, not group/world-writable, at most 64 KiB). An absent file is the defaults (nobody
-    admitted) unless ``must_exist``. ``TrustError`` for an untrusted file, ``ValueError`` for bad content."""
-    check_trusted_path(path, want="file", must_exist=must_exist, lstat_fn=lstat_fn, root_uid=root_uid)
+    admitted) unless ``must_exist``. ``TrustError`` for an untrusted file, ``ValueError`` for bad content. ``check_parents=False`` (a non-root simulator
+    or test run, whose parents are not root's) leaves the descriptor checks of :func:`open_checked` (owner, mode, one link, no symlink) as the only ones."""
+    if check_parents:
+        check_trusted_path(path, want="file", must_exist=must_exist, lstat_fn=lstat_fn, root_uid=root_uid)
     try:
         fd = open_checked(path, write=False, create=False, euid=root_uid, what="helper.toml")
     except FileNotFoundError:

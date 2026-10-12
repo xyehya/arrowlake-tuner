@@ -18,7 +18,7 @@ from typing import Any
 
 from arltuner.health import HealthSnapshot
 from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR
-from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker, prepare_workdir
+from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker, helper_invoker, invoker_for_uid, prepare_workdir
 from arltuner.helper.trust import TrustError
 from arltuner.stress import CHILD_ENV, KernelLogWatch
 
@@ -253,7 +253,7 @@ class InvokerTests(unittest.TestCase):
     def pw(uid: int = 1000, gid: int = 1001, name: str = "yk") -> Any:
         return types.SimpleNamespace(pw_uid=uid, pw_gid=gid, pw_name=name)
 
-    def test_the_invoking_user_comes_from_pkexec_uid(self) -> None:
+    def test_the_invoking_user_comes_from_pkexec_uid_on_the_stdio_dev_path(self) -> None:
         self.assertEqual(default_invoker({"PKEXEC_UID": "1000"}, lambda uid: self.pw(uid)), Invoker(1000, 1001, "yk"))
 
     def test_anything_else_is_refused(self) -> None:
@@ -267,6 +267,51 @@ class InvokerTests(unittest.TestCase):
             default_invoker({"PKEXEC_UID": "1234"}, missing)
         with self.assertRaises(InvokerError):
             default_invoker({"PKEXEC_UID": "1234"}, lambda uid: self.pw(uid + 1))  # the database answered for someone else
+
+
+class PeerInvokerTests(unittest.TestCase):
+    """D-043: in socket mode the invoker is the connected peer's uid - never an environment variable."""
+
+    pw = staticmethod(InvokerTests.pw)
+
+    def helper(self, **kw: Any) -> Any:
+        return types.SimpleNamespace(**kw)
+
+    def test_the_peer_uid_is_the_invoker(self) -> None:
+        h = self.helper(socket_mode=True, peer_uid=1000)
+        self.assertEqual(helper_invoker(h, lambda uid: self.pw(uid)), Invoker(1000, 1001, "yk"))
+
+    def test_the_environment_is_ignored_in_socket_mode(self) -> None:
+        h = self.helper(socket_mode=True, peer_uid=1000)
+        self.assertEqual(helper_invoker(h, lambda uid: self.pw(uid), {"PKEXEC_UID": "4242"}).uid, 1000)
+        with self.assertRaises(InvokerError):  # no peer: the variable is not a fallback
+            helper_invoker(self.helper(socket_mode=True, peer_uid=None), lambda uid: self.pw(uid), {"PKEXEC_UID": "1000"})
+
+    def test_root_as_the_peer_has_no_invoker(self) -> None:
+        with self.assertRaises(InvokerError):
+            helper_invoker(self.helper(socket_mode=True, peer_uid=0), lambda uid: self.pw(uid))
+        with self.assertRaises(InvokerError):
+            invoker_for_uid(0, lambda uid: self.pw(uid))
+
+    def test_a_peer_unknown_to_passwd_has_no_invoker(self) -> None:
+        def missing(uid: int) -> Any:
+            raise KeyError(uid)
+
+        with self.assertRaises(InvokerError):
+            helper_invoker(self.helper(socket_mode=True, peer_uid=4321), missing)
+
+    def test_the_peer_is_read_at_call_time(self) -> None:
+        h = self.helper(socket_mode=True, peer_uid=1000)
+        fn = lambda: helper_invoker(h, lambda uid: self.pw(uid, name=f"u{uid}"))  # noqa: E731
+        self.assertEqual(fn().user, "u1000")
+        h.peer_uid = 2000
+        self.assertEqual(fn().user, "u2000")
+        h.peer_uid = None
+        with self.assertRaises(InvokerError):
+            fn()
+
+    def test_not_socket_mode_falls_back_to_the_environment(self) -> None:
+        self.assertEqual(helper_invoker(self.helper(socket_mode=False, peer_uid=None), lambda uid: self.pw(uid), {"PKEXEC_UID": "1000"}).uid, 1000)
 
 
 class NoInvokerTests(StressCase):

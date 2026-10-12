@@ -699,7 +699,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
             policy,
             audit,
             session_token=token,
-            env={ENV_FLAG: "1"},  # SPEC 4.1: the polkit password replaced the exported flag; never os.environ
+            env={ENV_FLAG: "1"},  # D-043: the allowlisted socket peer replaced the exported flag; never os.environ
             health_gate=gate,
             lock_path=cfg.lock_path,
             clock=clock,

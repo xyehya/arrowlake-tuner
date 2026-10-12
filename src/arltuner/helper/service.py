@@ -124,10 +124,11 @@ def adopt_socket(fd: int = SD_LISTEN_FDS_START, *, euid: int = 0, lstat_fn: Call
 def create_socket(
     path: Path | str, *, group: str | None, euid: int = 0, lstat_fn: Callable[[str], Any] = os.lstat, umask_fn: Callable[[int], int] = os.umask,
     chown_fn: Callable[..., object] = os.chown, chmod_fn: Callable[[str, int], object] = os.chmod, unlink_fn: Callable[[str], object] = os.unlink,
-    mkdir_fn: Callable[[str, int], object] = os.mkdir, getgrnam: Callable[[str], Any] | None = None,
+    mkdir_fn: Callable[[str, int], object] = os.mkdir, getgrnam: Callable[[str], Any] | None = None, trust_parents: bool = True,
 ) -> socket.socket:
     """Make the listening socket safely (module docstring). ``ServiceError`` for anything that is not as it should be; a socket is never left wider than
-    0600 until it is complete and never bound at all if its directory or an existing node is suspect."""
+    0600 until it is complete and never bound at all if its directory or an existing node is suspect. ``trust_parents=False`` (non-root test / simulator runs)
+    checks only the directory itself (owned by ``euid``, not group/world-writable), not its ancestors."""
     path = Path(path)
     directory = str(path.parent)
     if not group:
@@ -150,8 +151,13 @@ def create_socket(
     except OSError as exc:
         raise ServiceError(f"cannot stat {directory}: {exc.strerror or exc}") from None
     try:
-        check_trusted_path(directory, want="dir", lstat_fn=lstat_fn, root_uid=euid)
-    except TrustError as exc:
+        if trust_parents:
+            check_trusted_path(directory, want="dir", lstat_fn=lstat_fn, root_uid=euid)
+        else:
+            dst = lstat_fn(directory)
+            if not stat.S_ISDIR(dst.st_mode) or dst.st_uid != euid or dst.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise TrustError(directory, "not a directory of this user that others cannot write")
+    except (TrustError, OSError) as exc:
         raise ServiceError(f"the run directory is not trusted: {exc}") from None
     try:
         st = lstat_fn(str(path))

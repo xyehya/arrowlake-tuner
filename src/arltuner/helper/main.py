@@ -348,7 +348,7 @@ def run_socket(
         env.pop(name, None)
 
     def settings():  # type: ignore[no-untyped-def]
-        return load_helper_toml(toml_path, lstat_fn=lstat_fn, root_uid=euid)
+        return load_helper_toml(toml_path, lstat_fn=lstat_fn, root_uid=euid, check_parents=euid == 0)
 
     def make_socket():  # type: ignore[no-untyped-def]
         if fd is not None:
@@ -357,7 +357,7 @@ def run_socket(
             group = settings().access.group
         except (TrustError, ValueError, OSError) as exc:
             raise ServiceError(f"cannot read the access group from {toml_path}: {exc}") from None
-        return create_socket(sock_path, group=group, euid=euid, lstat_fn=lstat_fn)
+        return create_socket(sock_path, group=group, euid=euid, lstat_fn=lstat_fn, trust_parents=euid == 0)
 
     return Service(helper, make_socket, path=sock_path, settings_loader=settings, activated=fd is not None, log=log).run()
 

@@ -38,12 +38,24 @@ class FakeRoot(unittest.TestCase):
         for c in range(24):
             self.write(f"dev/cpu/{c}/msr", "")
         self.write("sys/module/msr/parameters/allow_writes", "default\n")
-        self.exe("usr/bin/pkexec")
-        self.write("usr/lib/polkit-1/polkitd", "")
         self.write("proc/1/comm", "systemd\n")
-        self.write("proc/200/comm", "polkit-gnome-au\n")  # comm is truncated to 15 chars
+        self.make_socket(0o660)
+        self.write("etc/arltuner/helper.toml", 'allow_taint_bits = [2]\n[access]\nusers = ["alice"]\ngroup = "arltuner"\n')
         for tool in OPTIONAL_TOOLS:
             self.exe(f"usr/bin/{tool}")
+
+    def make_socket(self, mode: int) -> Path:
+        """A real socket node at run/arltuner/helper.sock of the fake root (D-043)."""
+        import socket
+
+        p = self.root / "run/arltuner/helper.sock"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.unlink(missing_ok=True)
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(str(p))
+        s.close()  # the node stays
+        p.chmod(mode)
+        return p
 
     def write(self, rel: str, text: str) -> Path:
         p = self.root / rel
@@ -73,8 +85,8 @@ class AllGoodTests(FakeRoot):
 
     def test_check_names(self):
         names = [r.name for r in self.run_pf().results]
-        self.assertEqual(names[:10], ["cpuid", "hypervisor", "lockdown", "topology", "msr_device", "msr_allow_writes", "pkexec", "polkit", "polkit_agent", "python"])
-        self.assertEqual(names[10:], [f"tool:{t}" for t in OPTIONAL_TOOLS])
+        self.assertEqual(names[:8], ["cpuid", "hypervisor", "lockdown", "topology", "msr_device", "msr_allow_writes", "helper_service", "python"])
+        self.assertEqual(names[8:], [f"tool:{t}" for t in OPTIONAL_TOOLS])
 
     def test_to_dict_is_json(self):
         d = json.loads(json.dumps(self.run_pf().to_dict()))
@@ -348,67 +360,69 @@ class MsrTests(FakeRoot):
         self.assertEqual(self.run_pf().mode, "write")
 
 
-class PolkitTests(FakeRoot):
-    def test_pkexec_missing(self):
-        (self.root / "usr/bin/pkexec").unlink()
-        r = self.run_pf().get("pkexec")
+class HelperServiceTests(FakeRoot):
+    """D-043: the helper is a service on /run/arltuner/helper.sock; no pkexec, no polkit, no agent are looked for."""
+
+    def test_no_polkit_checks_exist(self):
+        names = [r.name for r in self.run_pf().results]
+        self.assertFalse([n for n in names if "polkit" in n or "pkexec" in n])
+
+    def test_passes_with_a_root_only_socket_and_an_allowlist(self):
+        r = self.run_pf().get("helper_service")
+        self.assertEqual(r.status, Status.PASS)
+        self.assertIn("alice", r.reason)
+        self.assertIn("group arltuner", r.reason)
+
+    def test_the_socket_is_missing(self):
+        (self.root / "run/arltuner/helper.sock").unlink()
+        r = self.run_pf().get("helper_service")
         self.assertEqual(r.status, Status.READ_ONLY)
-        self.assertIn("helper cannot start", r.reason)
+        self.assertIn("run install.sh", r.reason)
+        self.assertEqual(self.run_pf().mode, "read-only")
 
-    def test_pkexec_not_executable(self):
-        (self.root / "usr/bin/pkexec").chmod(0o644)
-        if os.geteuid() != 0:
-            self.assertEqual(self.status("pkexec"), Status.READ_ONLY)
+    def test_not_a_socket(self):
+        p = self.root / "run/arltuner/helper.sock"
+        p.unlink()
+        p.write_text("")
+        r = self.run_pf().get("helper_service")
+        self.assertEqual((r.status, r.reason), (Status.READ_ONLY, "/run/arltuner/helper.sock is not a socket"))
 
-    def test_pkexec_in_custom_dir(self):
-        (self.root / "usr/bin/pkexec").unlink()
-        self.exe("opt/x/pkexec")
-        self.assertEqual(self.status("pkexec"), Status.READ_ONLY)
-        self.assertEqual(self.status("pkexec", path_dirs=["/opt/x"]), Status.PASS)
+    def test_a_socket_others_can_reach_is_not_ok(self):
+        for mode in (0o666, 0o664, 0o662, 0o661):
+            with self.subTest(mode=oct(mode)):
+                self.make_socket(mode)
+                r = self.run_pf().get("helper_service")
+                self.assertEqual(r.status, Status.READ_ONLY)
+                self.assertIn("other users", r.reason)
 
-    def test_polkitd_missing(self):
-        (self.root / "usr/lib/polkit-1/polkitd").unlink()
-        self.assertEqual(self.status("polkit"), Status.READ_ONLY)
+    def test_a_socket_of_root_only_mode_0600_is_fine(self):
+        self.make_socket(0o600)
+        self.assertEqual(self.status("helper_service"), Status.PASS)
 
-    def test_polkitd_libexec_location(self):
-        (self.root / "usr/lib/polkit-1/polkitd").unlink()
-        self.write("usr/libexec/polkitd", "")
-        self.assertEqual(self.status("polkit"), Status.PASS)
+    def test_helper_toml_missing_or_without_an_allowlist_or_broken(self):
+        cases = {"missing": None, "no access": "allow_taint_bits = [2]\n", "empty": "[access]\nusers = []\n", "broken": "[access\n", "unknown key": "[access]\nusr = [\"a\"]\n"}
+        for label, text in cases.items():
+            with self.subTest(label):
+                p = self.root / "etc/arltuner/helper.toml"
+                p.unlink()
+                if text is not None:
+                    self.write("etc/arltuner/helper.toml", text)
+                r = self.run_pf().get("helper_service")
+                self.assertEqual(r.status, Status.READ_ONLY)
+                self.assertIn("helper.toml", r.reason)
+                self.write("etc/arltuner/helper.toml", '[access]\nusers = ["alice"]\n')
 
-    def test_no_agent(self):
-        shutil.rmtree(self.root / "proc/200")
-        r = self.run_pf().get("polkit_agent")
-        self.assertEqual(r.status, Status.READ_ONLY)
-        self.assertIn("no polkit authentication agent", r.reason)
+    def test_users_only_or_group_only_are_both_fine(self):
+        for text in ('[access]\nusers = ["alice"]\n', '[access]\ngroup = "arltuner"\n'):
+            self.write("etc/arltuner/helper.toml", text)
+            self.assertEqual(self.status("helper_service"), Status.PASS)
 
-    def test_polkitd_daemon_is_not_an_agent(self):
-        shutil.rmtree(self.root / "proc/200")
-        self.write("proc/300/comm", "polkitd\n")
-        self.assertEqual(self.status("polkit_agent"), Status.READ_ONLY)
-
-    def test_gnome_shell_counts_as_agent(self):
-        shutil.rmtree(self.root / "proc/200")
-        self.write("proc/300/comm", "gnome-shell\n")
-        self.assertEqual(self.status("polkit_agent"), Status.PASS)
-
-    def test_pkttyagent(self):
-        shutil.rmtree(self.root / "proc/200")
-        self.write("proc/300/comm", "pkttyagent\n")
-        self.assertEqual(self.status("polkit_agent"), Status.PASS)
-
-    def test_kde_agent(self):
-        shutil.rmtree(self.root / "proc/200")
-        self.write("proc/300/comm", "polkit-kde-agent-1\n")
-        self.assertEqual(self.status("polkit_agent"), Status.PASS)
-
-    def test_non_pid_proc_entries_ignored(self):
-        shutil.rmtree(self.root / "proc/200")
-        self.write("proc/self/comm", "gnome-shell\n")
-        self.assertEqual(self.status("polkit_agent"), Status.READ_ONLY)
-
-    def test_proc_missing(self):
-        shutil.rmtree(self.root / "proc")
-        self.assertEqual(self.status("polkit_agent"), Status.READ_ONLY)
+    def test_not_applicable_for_a_simulator_or_stdio_helper(self):
+        (self.root / "run/arltuner/helper.sock").unlink()
+        r = self.run_pf(helper_service=False).get("helper_service")
+        self.assertEqual(r.status, Status.PASS)
+        self.assertIn("not applicable", r.reason)
+        self.assertEqual(self.run_pf(helper_service=False).mode, "write")
 
 
 class PythonTests(FakeRoot):

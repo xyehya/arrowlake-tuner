@@ -32,7 +32,7 @@ def ns(**kw) -> argparse.Namespace:
 
 
 class RootArgvTests(unittest.TestCase):
-    """Item 1: when the euid is 0 argv is untrusted input from the pkexec caller; the helper accepts none of it."""
+    """Item 1: when the euid is 0 argv is untrusted input; the helper accepts only --device, or --device --socket (D-029, D-043)."""
 
     def run_main(self, argv, euid=0):
         out, err = io.BytesIO(), io.StringIO()
@@ -60,7 +60,21 @@ class RootArgvTests(unittest.TestCase):
         self.assertIsNone(helper_main.root_argv_refusal([]))
         self.assertIsNone(helper_main.root_argv_refusal(["--device"]))
         self.assertEqual(helper_main.root_argv_refusal(["--sim"])[0], "ROOT_SIM")
+        self.assertIsNone(helper_main.root_argv_refusal(["--device", "--socket"]))
         self.assertEqual(helper_main.root_argv_refusal(["--device", "--lock=/x"])[0], "ROOT_ARGV")
+
+    def test_socket_argv_is_exactly_device_then_socket(self) -> None:
+        for argv in (["--socket"], ["--socket", "--device"], ["--device", "--device"], ["--device", "--socket", "--socket"], ["--device", "--socket", "x"],
+                     ["--socket-path", "/tmp/s"], ["--device", "--socket", "--socket-path=/tmp/s"], ["--device", "--socket", "--helper-toml", "/tmp/h"],
+                     ["--socket=1"], ["--device", "--socket", "--sim"]):
+            with self.subTest(argv=argv):
+                code, lines, _ = self.run_main(argv)
+                self.assertEqual(code, 77)
+                self.assertIn(lines[0]["error"]["detail"]["check"], ("ROOT_ARGV", "ROOT_SIM"))
+
+    def test_root_socket_mode_builds_the_same_installed_config(self) -> None:
+        cfg = helper_main.build_config(ns(socket=True, audit="/tmp/evil"), log=lambda t: None, root=True)
+        self.assertEqual((cfg.audit_path, cfg.policy_path, cfg.operator), (helper_main.INSTALLED_AUDIT, helper_main.INSTALLED_POLICY, "helper"))
 
     def test_root_with_no_argv_still_has_to_start_from_a_trusted_code_tree(self) -> None:
         code, lines, _ = self.run_main([])  # a checkout is not root-owned: STARTUP refusal, nothing else happens
@@ -131,6 +145,11 @@ class TaintBitsConfigTests(HelperCase):
     def test_the_key_is_read(self) -> None:
         self.assertEqual(self.load("allow_taint_bits = [34, 12]\n"), frozenset({34, 12}))
         self.assertEqual(self.load("allow_taint_bits = []\n"), frozenset())
+
+    def test_the_access_table_and_idle_exit_do_not_disturb_the_taint_bits(self) -> None:
+        self.assertEqual(self.load('allow_taint_bits = [2]\nidle_exit_s = 60\n[access]\nusers = ["a"]\ngroup = "arltuner"\n'), frozenset({2}))
+        with self.assertRaises(ValueError):  # a malformed [access] makes the whole file invalid (fail closed)
+            self.load('allow_taint_bits = [2]\n[access]\nusers = "a"\n')
 
     def test_unknown_keys_and_bad_values_are_refused(self) -> None:
         for text in ("other = 1\n", "allow_taint_bits = [64]\n", "allow_taint_bits = [-1]\n", 'allow_taint_bits = ["34"]\n', "allow_taint_bits = 34\n",

@@ -14,7 +14,7 @@ Cookie isolation (G-142, D-042): browser cookies are scoped to the host name, no
 session cookie to any other local web service. The server therefore binds a random loopback address ``127.x.y.z`` (fallback ``127.0.0.1`` only when
 that bind fails): a separate cookie jar per run. Sessions have a scope: ``full`` (the launcher) or ``read`` (``scope=read`` at ``/bootstrap``;
 may call only ``READ_OPS``). Further mitigations: session expiry, exact Host / Origin / Sec-Fetch-Site checks, the plan-bound CONFIRM nonce
-(SPEC §4.3), and polkit authentication at helper start (SPEC §4.1).
+(SPEC §4.3), and the helper's own authorization of its one client (D-043: allowlisted uid by SO_PEERCRED).
 """
 from __future__ import annotations
 

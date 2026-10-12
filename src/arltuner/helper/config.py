@@ -15,13 +15,13 @@ from arltuner.topology import Topology
 
 __all__ = [
     "HEARTBEAT_S", "HelperConfig", "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_CODE_DIR", "INSTALLED_HELPER", "INSTALLED_HELPER_TOML",
-    "INSTALLED_LOCK", "INSTALLED_LOCK_DIR", "INSTALLED_PLATFORMS_DIR", "INSTALLED_POLICY", "INSTALLED_STATE_DIR", "INSTALLED_WEB_DIR",
+    "INSTALLED_LOCK", "INSTALLED_LOCK_DIR", "INSTALLED_PLATFORMS_DIR", "INSTALLED_POLICY", "INSTALLED_SOCKET", "INSTALLED_STATE_DIR", "INSTALLED_WEB_DIR",
 ]
 
 # The installed layout (SPEC 4.4 / 11, D-030; created by ``install.sh``). Everything the root helper trusts lives under these root-owned paths.
 INSTALLED_CODE_DIR = Path("/usr/lib/arltuner")  # the ``arltuner`` package is INSTALLED_CODE_DIR / "arltuner", platform files in ../platforms
 INSTALLED_PLATFORMS_DIR = INSTALLED_CODE_DIR / "platforms"
-INSTALLED_HELPER = INSTALLED_CODE_DIR / "arltuner-helper"  # the polkit action's exec.path; started as ``pkexec <this> --device``
+INSTALLED_HELPER = INSTALLED_CODE_DIR / "arltuner-helper"  # the ExecStart of arltuner-helper.service: ``<this> --device --socket`` (D-043)
 INSTALLED_WEB_DIR = Path("/usr/share/arltuner/web")
 INSTALLED_POLICY = Path("/etc/arltuner/policy.toml")  # its presence + trust is the CLI's "installed" test (D-030)
 INSTALLED_HELPER_TOML = Path("/etc/arltuner/helper.toml")
@@ -30,6 +30,7 @@ INSTALLED_STATE_DIR = Path("/var/lib/arltuner")
 INSTALLED_AUDIT = INSTALLED_STATE_DIR / "audit.jsonl"
 INSTALLED_LOCK_DIR = Path("/run/arltuner")  # tmpfiles.d: 0755 root (``/run/lock`` is 1777: anyone could pre-create the lock file there)
 INSTALLED_LOCK = INSTALLED_LOCK_DIR / "mailbox.lock"
+INSTALLED_SOCKET = INSTALLED_LOCK_DIR / "helper.sock"  # the helper service's socket (D-043); ``arltuner.helper.service.SOCKET_PATH`` is the same path
 
 HEARTBEAT_S = 2.0  # contract 8
 HealthGate = Callable[[str], tuple[bool, str]]
@@ -63,6 +64,6 @@ class HelperConfig:
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], object] = time.sleep  # the mailbox transport's poll sleep on hardware (never the cancel-aware one)
     heartbeat_s: float = HEARTBEAT_S
-    operator: str = "helper"  # recorded in the audit log; the polkit password is the human act (SPEC 4.1)
+    operator: str = "helper"  # recorded in the audit log; "gui:uid<N>" of the connected socket peer per connection (D-043)
     extra_ops: Mapping[str, Any] = field(default_factory=dict)  # tests: stub ops (OpSpec) registered next to the built-in ones
     log: Callable[[str], None] = lambda text: None  # stderr in production
