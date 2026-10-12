@@ -1,69 +1,69 @@
-# Favored P-cores: how they are chosen, and how to bin the other cores
+# Favored cores: what they are, how they are read, how to characterise cores
 
-Sources: desk research 2026-10-08 (Sonnet worker, web only; curated), plus our own data in `platform-285k.md` §2–4 and `tuning-results.md` §1.
+General for Arrow Lake-S. The reference chip's per-core tables are in `examples/reference-285k/notes/` (one sample, not a spec).
 
-## 1. How favored cores are designated
-- Intel characterizes each core at sort/class test and **fuses** the result. Firmware/pcode publishes it per core as HWP_CAPABILITIES
-  Highest_Performance and ACPI `_CPC` highest perf. Linux `intel_pstate` then calls `sched_set_itmt_core_prio()` (ITMT, Turbo Boost Max 3.0).
-  The OS only consumes the ranking. [DOC https://blog.linuxplumbersconf.org/2016/ocw/system/presentations/3813/original/plumbers_fcore_v2.pdf]
+## 1. What favored cores are
+- Intel characterises each core at manufacturing test and **fuses** the result; firmware (pcode) publishes it per core as `HWP_CAPABILITIES`
+  Highest_Performance (MSR 0x771) and ACPI `_CPC` highest performance. Linux `intel_pstate` feeds that ranking to the scheduler
+  (`sched_set_itmt_core_prio()`, ITMT = Turbo Boost Max 3.0); the OS only consumes it.
+  [DOC https://blog.linuxplumbersconf.org/2016/ocw/system/presentations/3813/original/plumbers_fcore_v2.pdf]
   [DOC https://lkml.iu.edu/hypermail/linux/kernel/1610.2/04086.html]
-- Patent US10922143B2: fuses "programmed at manufacturing time" mark per-core attributes. A favored core can run a higher frequency and/or a lower
-  voltage. [DOC https://patents.google.com/patent/US10922143B2/en]
-- Patent US12073227B2: per-core Vmin is fused in high-volume manufacturing, and pcode/BIOS ranks the cores (an efficiency criterion, not TBM3's).
-  [DOC https://patents.google.com/patent/US12073227B2/en]
-- We found no evidence that a board vendor can re-designate the favored cores. They expose only per-core ratio limits and V/F offsets.
-  [UNVERIFIED]
-- The ARL ranking criterion (Fmax at a V ceiling, VID, or Vmin) is not published anywhere we found. [UNVERIFIED]
-- On our chip the favored cores are CPU 0 and CPU 3. Evidence: HWP highest perf 92 vs 88; `0x1C` fused max ratio 57x vs 55x. [MEASURED lnx 2026-09-29]
+- Patents describe the mechanism: per-core attributes fused "programmed at manufacturing time", a favored core may run a higher frequency and/or a lower
+  voltage [DOC https://patents.google.com/patent/US10922143B2/en]; per-core Vmin fused in high-volume manufacturing and ranked by pcode/BIOS by an
+  efficiency criterion [DOC https://patents.google.com/patent/US12073227B2/en].
+- On ARL-S a favored P-core has a higher fused top ratio than the others; the OC mailbox shows it per core in cmd `0x1C` (`[15:8]` = fused ratio, `[7:0]`
+  = current favored ratio, which follows a `0x1D` write) (`registers.md`) [MEASURED win 2026-10-01, lnx 2026-10-11]. XTU's ARL-S constants name
+  "2 favored cores" [DECOMPILED XTU, `registers.md` "Not the mailbox"]; ThrottleStop's "Per Core" setting is this favored ratio (`0x1C`/`0x1D`)
+  [DECOMPILED win-throttlestop-fivr.md].
+- The turbo table gives the top ratio only to the 1-2 active-core buckets, so a favored core reaches it only with few cores busy [MEASURED lnx
+  2026-10-11].
+- No evidence that a board vendor can re-designate favored cores; boards expose per-core ratio limits and V/F offsets only [UNVERIFIED].
 
-## 2. What our data says about the criterion
-Stock VIDs (V) [MEASURED lnx 2026-10-02, `lnx-first-read.md` vf-dump --measure; CPU 0 without BIOS offsets]:
+## 2. How the app reads them (live, D-036)
+- `src/arltuner/topology/live.py`: favored = the P-cores with the highest `/sys/devices/system/cpu/cpuN/acpi_cppc/highest_perf`; if that file is
+  missing on any P-core, the highest `cpufreq/cpuinfo_max_freq`; **none** when all P-cores are equal. `favored_source` names the source used.
+- After a `tune.read`, `0x1C[15:8]` per core is the cross-check (done by the caller, never an input to the topology).
+- Both sysfs values follow runtime writes: a `0x1D` write raises HWP highest and `cpuinfo_max_freq` (an E-core went 0x44 -> 0x45, 4.9 -> 5.0 GHz)
+  [MEASURED lnx 2026-10-12], so detection shows the state the firmware and earlier writes left, not a fuse readout. The fused byte `0x1C[15:8]` does
+  not move.
+- Example from one chip (285K): favored CPU 0 and 3, `highest_perf` 92 vs 88, `0x1C` `0x3939` vs `0x3737` [MEASURED lnx 2026-09-29].
 
-| CPU | 53x | 55x | fused 57x word | p-step7 55x headroom to ~1.27–1.29 V |
-|---|---|---|---|---|
-| 0* | 1.216 | 1.299 | 1.426 | −28 |
-| 1 | 1.221 | 1.306 | 1.305 | −36 |
-| 4 | 1.226 | 1.319 | 1.316 | −33 |
-| 6 | 1.249 | – | 1.344 | −61 |
-| 5 | 1.261 | 1.359 | 1.355 | −73 |
-| 2 | 1.271 | 1.366 | 1.363 | −81 |
-| 7 | – | 1.376 | 1.375 | −91 |
-| 3* | – | – | 1.395 | −28 |
+## 3. What is known about the criterion
+- The ARL ranking criterion (Fmax at a voltage ceiling, VID, Vmin) is not published [UNVERIFIED].
+- **Favored is not simply the lowest VID at a common point:** on the reference chip two non-favored cores were within 20 mV of a favored core at 53x/55x
+  [MEASURED lnx 2026-10-02, one chip].
+- **The top points of non-favored cores are flat placeholders:** on the reference chip each non-favored core's fused 57x word equals its own 55x stock VID
+  within 2 mV, while on the favored cores the 55->57x slope is real (+127 mV) [MEASURED lnx 2026-10-02, one chip]. This refines the community lead that
+  non-favored top points are "pre-defined from the favored cores" [COMMUNITY
+  https://skatterbencher.com/2025/03/16/skatterbencher-84-core-ultra-9-285k-overclocked-to-5800-mhz/]: they are not copies.
+  Working hypothesis: favored = the cores that passed a top-ratio Fmax test within the voltage ceiling; VID is a by-product [UNVERIFIED].
+- **Fused VID spread is mostly guard band, not true Vmin:** in an all-core 60-min gate every P-core held 55x at ~1.27-1.29 V, so the cores with the
+  worst fused VID had the most undervolt room [MEASURED win 2026-10-04 / lnx 2026-10-08, one chip]. Caveat: all-core test; per-core Vmin was not
+  measured.
 
-- **Favored ≠ simply the lowest VID at a common point.** CPU 1 and CPU 4 are within 20 mV of CPU 0 at 53x/55x and are not favored.
-- **On non-favored cores the 57x fused word ≈ the 55x stock VID (within 2 mV).** The "57x point" is therefore a flat placeholder that no test
-  characterized; those cores were never validated above 55x. On the favored cores the 55→57x slope is real (CPU 0: +127 mV). This refines the
-  community lead that non-favored top points are "pre-defined from the favored cores" [COMMUNITY https://skatterbencher.com/2025/03/16/skatterbencher-84-core-ultra-9-285k-overclocked-to-5800-mhz/].
-  On our dCode they are not copies: each sits at its own 55x VID. [MEASURED + inference]
-- Working hypothesis: favored = the cores that passed a 57x Fmax test within the voltage ceiling, and VID is a by-product. [UNVERIFIED]
-- **Fused VID spread is mostly guard band, not true Vmin.** In the p-step7 gate (all-core, 60 min) every core held 55x at ~1.27–1.29 V, so the
-  cores with the worst fused VID had the most undervolt room [MEASURED win 2026-10-04 / lnx 2026-10-08]. Caveat: that test was all-core, and OCCT
-  does not name the failing core, so per-core Vmin is still unmeasured.
-
-## 3. Per-core bin metrics (what to measure)
+## 4. How to characterise cores
 | Metric | How | Indicates |
 |---|---|---|
-| M1 fused/stock VID per point | `vf-dump --measure` (read-only) | the factory's view, guard band included |
-| M2 Vmin @ fixed ratio (53x, 55x) | 1T self-checking load pinned to one core; step that core's point offset down | real voltage margin (the main bin metric) |
-| M3 Fmax @ fixed V (e.g. OC ratio 56/57x at 1.35 V target) | per-core OC ratio + V target, 1T load | frequency headroom; the TBM3-style criterion |
-| M4 margin = M1 − M2 | derived | how much guard band the fuse carried |
-| M5 ΔT and PP0 W at fixed ratio+VID | 1T at a pinned cap; `0x19C` per-core temp, RAPL PP0 | leakage/thermal position (TVB ~1.1 mV/°C [COMMUNITY]) |
+| M1 fused/stock VID per point | stock measured curve (read-only) + cmd `0x09` top point | the factory's view, guard band included |
+| M2 Vmin at a fixed ratio | 1-thread self-checking load pinned to one core; step that core's point offset down | real voltage margin (the main bin metric) |
+| M3 Fmax at a fixed V | per-core OC ratio + V target, 1-thread load | frequency headroom (the TBM3-style criterion) |
+| M4 margin = M1 - M2 | derived | guard band the fuse carried |
+| M5 temperature and core power at fixed ratio + VID | pinned cap; per-core `0x19C` temperature, RAPL | leakage / thermal position (TVB ~1.1 mV/C [COMMUNITY]) |
 | HWP highest / `0x1C` | read-only | the OS-visible ranking only |
-
-## 4. Test protocol (Linux; writes are orchestrator-only, each session needs a go-ahead, per SAFETY.md)
-1. Baseline: stock state for the tested point (or p-step7), health gate, `vf-dump --measure`.
-2. Isolate: run the load with `taskset -c N` on one physical P-core. Leave the others idle and stock. Each P-core has its own DLVR, so one
-   core's offset does not move the others. Fix the ratio with cpufreq `scaling_max_freq` (P caps exact at 48/53/55x; 52x not pinnable).
-3. Loads must self-check, because ARL failures are silent wrong results with no WHEA or MCE: y-cruncher 1T, Prime95 small-FFT 1 worker,
-   Linpack 1T residual check, `stress-ng --verify`. Rotate them, because single-thread instability shows up under different loads.
-4. M2 sweep, per core: step that core's point offset −5 mV per write (guard limit ≤55 mV per write, floor −100). Run 10 min per step. At the
-   first error, back off +10 mV and confirm with 60 min. Record Vmin, the load that failed, and the temperature.
-5. M3 (optional, raises V/ratio, so needs a separate go-ahead and a ceiling ≤ the favored cores' fused 57x VID): set the OC ratio to 56x, then 57x,
-   at a fixed target voltage. Pass/fail per core with the same loads.
-6. M5: at a fixed cap and VID on each core, record steady-state core temp and PP0 power. Same fan curve, same ambient.
-7. Rank by M2 at 55x (primary), then M3, then M5. Re-run M2 on the top 2 cores after a cold boot. Restore p-step7 and confirm readback.
+Protocol sketch (writes need the operator's go-ahead per `docs/SAFETY.md`):
+1. Baseline: stock state, health gate, stock measured curve.
+2. Isolate: load one P-core with `taskset -c N`, others idle and stock; fix the ratio with `scaling_min_freq` = `scaling_max_freq` (some ratios are not
+   reachable by a cap, `power-profile-capping.md` §6). Each P-core has its own DLVR, so one core's offset does not move the others.
+3. Loads must self-check, because failures are silent (`tuning-results.md` §1): y-cruncher 1T, Prime95 small-FFT 1 worker, Linpack 1T residual check,
+   `stress-ng --verify`; rotate them.
+4. M2 per core: lower that core's point offset in small steps within your policy, ~10 min per step; at the first error back off and confirm with a long
+   run; record Vmin, the failing load and the temperature.
+5. M3 (raises V/ratio): OC ratio one bin above the core's top at a fixed target voltage no higher than the favored cores' fused top VID; pass/fail per core.
+6. M5: same cap and VID on each core, same fan curve and ambient; record steady-state temperature and power.
+7. Rank by M2 (primary), then M3, then M5; re-run M2 on the top cores after a cold boot.
 
 ## 5. Open questions
-- Does a 58x OC ratio add a P point (ring did at 40x)? Does a non-favored core accept 56/57x at all?
-- Where does HWiNFO's "Favored Cores List" come from? ASRock CPU Indicator formula?
-- Aging: favored cores spend the most time at the highest VID. Intel says ARL is not affected by the RPL Vmin shift [COMMUNITY https://hothardware.com/news/arrow-lake-and-mobile-immune-crashing-issue]. Not confirmed independently.
+- Does a non-favored P-core accept an OC ratio above its own top (56/57x on the 285K) at all? Does a P OC ratio above the fused top add a readable point?
+- Where does HWiNFO's "Favored Cores List" come from? What formula does ASRock's CPU Indicator use?
+- Aging: favored cores spend the most time at the highest VID. Intel states ARL is not affected by the Raptor Lake Vmin shift
+  [COMMUNITY https://hothardware.com/news/arrow-lake-and-mobile-immune-crashing-issue]; not confirmed independently.
