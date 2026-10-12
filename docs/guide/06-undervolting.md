@@ -16,9 +16,10 @@ offset on a point, or on the whole curve. There are two ways to enter it:
 | **Whole Curve Offset** | one offset applied to every point of the unit | a first, coarse step; also lowers the points you never run |
 | **Per V/F point Offsets** | an offset per fused point (P-core: 8 points; E-cluster: 6 on the reference chip) | shaping the curve where it matters (all-core clocks, the top points) |
 
-The range is -200 ... +200 mV (policy D-032) in 5 mV steps; values snap to the hardware's 1/1024 V (0.977 mV) grid and the exact millivolts are
-shown. The limits come from the policy in `/etc/arltuner/policy.toml` ([02](02-install.md)); the page reads them live from the helper (G-133). A
-BIOS per-core offset, if you left one set, adds to what you write.
+The default range is -200 ... +200 mV in 5 mV steps; values snap to the hardware's 1/1024 V (0.977 mV) grid and the exact millivolts are
+shown. **That range is your policy, not a built-in limit** (D-039): it is `offset_ceiling_mv` / `effective_offset_floor_mv` in `/etc/arltuner/policy.toml`, editable as root up to the
+register field's own range of -1000 ... +999 mV. The page reads the limits live from the helper and says under each control "from your policy (...) - editable; your CPU allows ..."; **System → Tuning
+limits** lists them all ([12 §4](12-safety-and-internals.md)). A BIOS per-core offset, if you left one set, adds to what you write.
 
 **Scope.** **All-Core** shows two rows ("All P-cores", "All E-clusters") and writes the same values to every unit of that kind. **Per-Core** shows one
 row per unit (every P-core, every E-cluster) so each can differ. Silicon varies per core: on the reference chip the 55x voltage differs by 77 mV
@@ -32,13 +33,13 @@ between P0 and P7 [MEASURED lnx 2026-10-11], so the right offset differs too.
 - [ ] You are at the machine. If it hangs, power-cycle it; the tuning is gone after a cold boot.
 
 ## 3. Step by step
-1. **Read.** In Tune press **Read ratios & voltages**. The tool reads the CPU's words (about 124-136 mailbox reads on the reference chip: one per
-   V/F point of each unit, plus fused-point and favored-ratio reads). Each request is a WRMSR, so the card shows how many operations this boot has
-   used. The page keeps the last read of this boot and shows when it was made; **Show raw words** reveals the hex words.
+1. **Read.** In Tune press **Read ratios & voltages**. The tool reads the CPU's words (about 140 mailbox reads on the 12-unit reference chip: one per
+   V/F point of each unit, plus the fused-point reads, the favored-ratio reads, and the CPU's own limits `0x01` and `0x28`; the page computes the estimate from your unit list and shows
+   the exact count when the read ends). Each request is a WRMSR, so the card shows how many operations this boot has used. The page keeps the last read of this boot and shows when it was made; **Show raw words** reveals the hex words.
    The **applied** chip says `stock`, `words` or `unknown` for the state the CPU is in.
 2. **Choose a unit and one point.** Start small: one core, one point, -10 to -20 mV. Pick **Per-Core**, pick the unit, switch its offset control to
    **Per V/F point Offsets**, and set one point. The preview chart overlays the predicted curve on your baseline, marked as a prediction.
-   Points that are fused but above what a core runs (for example 56x/57x on a non-favored P-core) are tagged "offset only, above this core's limit" and get no predicted voltage (G-133; recheck the wording on your build).
+   Points that are fused but above what a core runs (for example 56x/57x on a non-favored P-core) are tagged "above 55x limit" (the number is that core's own limit; the tooltip has the full sentence) and get no predicted voltage.
 3. **Review changes.** The dialog shows, per unit and point, before and after (millivolts and volts), the number of operations, and warnings. Read them:
 
    | Warning | Meaning |

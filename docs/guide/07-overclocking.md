@@ -6,9 +6,6 @@ someone who has done [undervolting](06-undervolting.md) first and understands th
 **Danger.** Raising ratio and voltage increases heat, power draw and wear, and can destroy data. The tool accepts values up to the limits in your policy;
 those are *ceilings that stop typos*, not safe values. Raise in the smallest steps, stress-test every step ([08](08-stability-testing.md)), and watch temperatures.
 
-**Labels.** This page uses the names introduced by task G-133 (OC ratio before adaptive voltage; **All-Core** / **Per-Core**). If your build predates it,
-the Tune page still shows the older layout and the ratio dropdown may offer only the unit's current top ratio; the facts below are unchanged.
-
 ## 1. The model: ratio first, then voltage
 Per unit (a P-core or an E-cluster), Tune offers three kinds of change, in this order:
 
@@ -18,7 +15,7 @@ Per unit (a P-core or an E-cluster), Tune offers three kinds of change, in this 
 
 The adaptive voltage belongs to the **OC point only** and exists only when an OC ratio above the unit's top fused ratio is set; the lower points take
 offsets only ([04 §5-6](04-arrow-lake-vf-primer.md)). So with no OC ratio configured, the adaptive-voltage control is disabled with the reason "set an OC
-ratio first". Per the G-133 specification the OC box reads:
+ratio first". The OC box reads:
 
 | OC ratio set | Box text | Adaptive voltage |
 |---|---|---|
@@ -34,24 +31,30 @@ If the policy's ratio ceiling is not above the unit's stock maximum, the ratio d
 allowed by `ratio_max` in `/etc/arltuner/policy.toml`.
 
 ## 2. Limits that apply
-| Limit | Value | Source |
-|---|---|---|
-| Voltage offset | -200 ... +200 mV | D-032 |
-| Adaptive target ceiling | the CPU's own maximum from mailbox command `0x28` (minus one step), read in the session | D-032; `policies/default.toml` |
-| Ratio ceiling (`ratio_max`, per kind) | policy `"auto"` = the fused maximum from `0x1C` **plus 3** (D-038, 2026-10-12), clamped to the code limit P 62 / E 60. Builds before task G-134 use the plain fused maximum. A number in `policy.toml` overrides it | D-038; `src/arltuner/guard/policy.py` `fused_ratio_cap` |
-| Ratio change per write | at most 8 | D-032 |
-| Turbo tables | non-increasing with active cores; each byte non-zero and within the ratio ceiling | `turbo_ratio_bounded` check |
-| Operation counters | indicators only | D-032 |
+**Every limit here is your policy, not a built-in rule** (D-039). The values in the second column are *defaults* in `/etc/arltuner/policy.toml`; you can edit them as root, up to the
+hard ceilings in the third column, which are your CPU's own limits (read live) and the register field widths. Overclockers who run liquid nitrogen or other extreme cooling on
+very good silicon can therefore go beyond the defaults, at their own risk. Nothing is hard-coded below the CPU's own limits.
 
-D-038 was made because with the older rule a P-core's ceiling equalled its fused top, so no P OC ratio was possible at all. On the reference machine the
-operator set `ratio_max` to P 60 / E 50 in `/etc/arltuner/policy.toml` (D-038). Read your actual limits on the Tune page; do not assume them.
+| Limit | Default (editable in `policy.toml`) | Hard ceiling (not editable) |
+|---|---|---|
+| Voltage offset | -200 ... +200 mV | the 11-bit field: -1000 ... +999 mV |
+| Adaptive target voltage | `"auto"`: the CPU's own maximum from mailbox command `0x28` minus one step | that same CPU value, read live; the 12-bit field (0.5 ... 3.999 V). Not read = no raise |
+| OC ratio (`ratio_max` P, E) | `"auto"`: the fused ratio from `0x1C` bits 15:8 **plus 3** (D-038: P 57 to 60, E 46 to 49), or a number you write | the CPU's OC-ratio limit from mailbox command `0x01` bits 7:0 for that core kind, read live; the field holds 1 ... 255. Not read = no raise |
+| Ratio change per write | 8 | 255 |
+| Turbo tables | non-increasing with active cores; each byte within the ratio ceiling | 1 ... 255 per bucket |
+| Operation counters | indicators only (100000) | none |
+
+The reference chip reports 120x in `0x01` for its P-cores, so there your policy, not the CPU, is the effective ceiling [MEASURED win 2026-10-01, registers.md]. The old "auto" rule
+(ceiling = the fused top) allowed no P OC ratio at all; D-038 added the 3-bin headroom, D-039 made every number editable. On the reference machine the project author also set `ratio_max`
+to P 60 / E 50 in `/etc/arltuner/policy.toml`. **Read your actual limits on the Tune page or in System → Tuning limits (policy next to what your CPU allows); do not assume them.** A refusal
+names where its limit came from ([12 §4](12-safety-and-internals.md)). To allow more, edit the number, for example `E = 52` under `[ratio_max]`; it applies from the next read or plan.
 
 ## 3. Step by step: an OC ratio on one unit
 1. Complete the undervolting checklist in [06 §2](06-undervolting.md): baseline curve stored, gate chosen, nothing else on the mailbox.
 2. **Read ratios & voltages**, choose **Per-Core**, find the unit.
 3. Pick an OC ratio **one step above** the unit's stock maximum. If it is above the top fused ratio the adaptive voltage control enables; the tool prefills
    it with the unit's fused top voltage (read with `0x09`) so you can see what will be written. It never sends a zero target with an OC point
-   (D-035; the prefill is a G-133 feature, so an older build shows an empty target).
+   (D-035).
 4. Leave the adaptive voltage at the prefilled value for the first test (the OC point then runs at the same voltage as the point below it). Raise it
    in 5 mV steps only if the test fails and temperatures allow. A target below the top fused voltage is clamped up to it by the hardware ([04 §6](04-arrow-lake-vf-primer.md)).
 5. **Review changes.** Check the operations count, the warnings (`WHEA risk`, `turbo raise`, `positive offset`) and the predicted VccIA.

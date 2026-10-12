@@ -87,7 +87,7 @@ Example (reference chip): `0xF9A00035` = ratio `0x35` (53x), no target, offset -
 |---|---|---|
 | Where | any fused point (per point) or the whole curve | the **OC point** only |
 | What it does | adds a fixed delta (mV) to the point's voltage | sets the voltage the OC point uses |
-| Range in this tool | -200 ... +200 mV (policy D-032) | up to the CPU's own maximum (mailbox command `0x28`) |
+| Range in this tool | default -200 ... +200 mV, your policy (D-039); the field holds -1000 ... +999 mV | default up to the CPU's own maximum (mailbox command `0x28`); your policy may state a lower number |
 | Needs an OC ratio | no | yes: the target is only active when a ratio above the top fused ratio is set |
 
 Because the fused points take offsets only, an "undervolt" in this tool is always an offset. A **target voltage** exists only on the OC point
@@ -113,7 +113,7 @@ Measured behaviour of an E OC point (EC1, ratio 48 above the fused top 46; examp
 | 1.117 V (below point 6) | 48x = 47x = 1.1375 V: clamped up to point 6 |
 
 A **P-core** OC ratio raise (58x on P0) had been written once on Windows without a recorded stability outcome [MEASURED win 2026-10-06, treated as
-"written once, ungated", platform-285k.md §10]. The ceiling the tool allows is a policy number ([02](02-install.md), D-038).
+"written once, ungated", platform-285k.md §10]. The ceiling the tool allows is a policy number you can edit, up to what the CPU's own limit (mailbox command `0x01`) reports ([02](02-install.md), [12 §4](12-safety-and-internals.md), D-038, D-039).
 
 An OC ratio cannot be cleared to 0 at runtime; a cold boot clears it [MEASURED lnx 2026-10-11, tuning-results.md].
 
