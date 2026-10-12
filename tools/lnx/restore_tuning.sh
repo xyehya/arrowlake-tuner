@@ -47,7 +47,7 @@ fi
 
 lm() {  # one guarded arltuner command (run confirmed above / in chat); full output in the capture file
   local tag="$1"; shift; local f="captures/lnx/restore-$ts-$tag.txt"
-  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 tools/lnx/orchestrator_confirm.py python3 tools/arltuner.py "$@" --device --policy "$policy" --allow-taint-bit 2 > "$f" 2>&1 \
+  sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 -I tools/lnx/orchestrator_confirm.py python3 -I tools/arltuner.py "$@" --device --policy "$policy" --allow-taint-bit 2 > "$f" 2>&1 \
     || { echo "STOP: $tag failed (see $f)"; tail -5 "$f"; exit 1; }
   grep -E '^Result|REFUSED|refused' "$f" | sed 's/^/  /' || true
 }
@@ -58,7 +58,7 @@ if [ "$check" = 0 ]; then
 fi
 echo "=== read-back"
 lm after vf-dump --json "captures/lnx/restore-$ts-after.json"
-python3 - "captures/lnx/restore-$ts-after.json" "$from/EXPECTED-words.txt" <<'PY'
+python3 -I - "captures/lnx/restore-$ts-after.json" "$from/EXPECTED-words.txt" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 got = {}

@@ -108,3 +108,53 @@ class Stops(unittest.TestCase):
     def test_unknown_arguments_are_refused(self) -> None:
         for rel in SCRIPTS:
             self.assertEqual(run(rel, "--bogus").returncode, 2)
+
+
+class RootRunsIsolatedPython(unittest.TestCase):
+    """G-142 item 3: the restore scripts run python as root; user-writable code (PYTHONPATH, user site, cwd, script dir) must not be importable."""
+
+    def test_every_python_command_in_the_scripts_is_isolated(self) -> None:
+        import re
+        for rel in SCRIPTS:
+            for n, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                for m in re.finditer(r"\bpython3?\b(?! --version)(\s+\S+)?", line):
+                    self.assertEqual(m.group(1).strip() if m.group(1) else "", "-I", f"{rel}:{n}: {line.strip()}")
+
+    def _confirm(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("orchestrator_confirm_g142", REPO / "tools/lnx/orchestrator_confirm.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_orchestrator_confirm_inserts_the_isolated_flag(self) -> None:
+        iso = self._confirm().isolate
+        self.assertEqual(iso(["python3", "tools/arltuner.py", "read"]), ["python3", "-I", "tools/arltuner.py", "read"])
+        self.assertEqual(iso(["python3", "-I", "x.py"]), ["python3", "-I", "x.py"])
+        self.assertEqual(iso(["python3.13", "-u", "x.py"]), ["python3.13", "-I", "-u", "x.py"])
+        self.assertEqual(iso(["python3", "-c", "print(1)"]), ["python3", "-I", "-c", "print(1)"])
+        self.assertEqual(iso(["/usr/bin/python3", "-sI", "x.py"]), ["/usr/bin/python3", "-sI", "x.py"])
+        self.assertEqual(iso(["cat", "x"]), ["cat", "x"])
+        self.assertEqual(iso([]), [])
+
+    def test_the_child_cannot_import_from_pythonpath_cwd_or_the_script_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            evil = Path(d) / "evil"
+            evil.mkdir()
+            (evil / "g142_planted.py").write_text("print('PLANTED RAN')\n")
+            env = {"PATH": os.environ["PATH"], "PYTHONPATH": str(evil)}
+            for cwd in (str(evil), "/"):
+                r = subprocess.run(["python3", str(REPO / "tools/lnx/orchestrator_confirm.py"), "python3", "-c", "import g142_planted"],
+                                   capture_output=True, text=True, timeout=60, cwd=cwd, env=env)
+                self.assertNotIn("PLANTED RAN", r.stdout)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("ModuleNotFoundError", r.stdout)
+
+    def test_tools_arltuner_adds_src_from_its_own_path_under_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run(["python3", "-I", str(REPO / "tools/arltuner.py"), "--help"], capture_output=True, text=True, timeout=60, cwd=d,
+                               env={"PATH": os.environ["PATH"], "PYTHONPATH": d})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("topology", r.stdout)
