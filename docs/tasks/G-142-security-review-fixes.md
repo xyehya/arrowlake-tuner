@@ -2,7 +2,7 @@
 
 - **Status:** in progress · **Host:** lnx (+ win scripts, untested there) · **Tier:** T0 · **Branch:** `task/G-142-security-review-fixes`
 
-Rebase on main first (G-140 renamed `%LOCALAPPDATA%\linuxmon\` → `%LOCALAPPDATA%\arltuner\`). Record the outcome as **D-042** (append to
+Rebase on main first (G-140 renamed the Windows data directory to `%LOCALAPPDATA%\arltuner\`). Record the outcome as **D-042** (append to
 docs/DECISIONS.md): security review 2026-10-12; cookie isolation supersedes D-028 #1's "accepted" weight because D-033(d) returns the plan
 nonce to the client; restore scripts under `-I`; health-gate dwell is a known limitation (add one paragraph to docs/SAFETY.md, finding 14).
 1. **HIGH Windows driver from a user-writable path** (`tools/win/ts_driver.py:~32,~123`, `restore_tuning.ps1:~89`, `reapply_current.ps1`):
