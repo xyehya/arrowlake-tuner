@@ -23,8 +23,6 @@
     opsHist: [],           // [{t, v}]: mailbox operations used this boot, noted whenever the heartbeat's count changes (the session sparkline)
     lastTried: false,      // tune.last answered once (a reconnect must not wipe the editor)
     lastBusy: false,       // a tune.last call is in flight
-    lastFails: 0,          // consecutive tune.last calls that were refused (the helper's read-only slots full) or failed
-    lastTimer: null,
     lastAt: 0,             // when tune.last was last asked (the Tune tab asks again no sooner than 2 s later)
     lastNote: false,       // tn-status holds the page's own "fetching the kept read" note
     teleAt: 0,
@@ -117,7 +115,22 @@
   }
 
   // ---- network ---------------------------------------------------------------------------------------------------------------------
-  async function api(op, args) {
+  // G-139: the helper runs at most 4 read-only ops at once and answers the others BUSY ("try again"); the page asks six of them the moment the event stream opens. A BUSY answer to one of
+  // these READ-ONLY ops is therefore asked again, with a growing pause. Nothing else is ever repeated automatically: not tune.read / tune.plan / tune.apply, measure, stress.start,
+  // profiles.save / profiles.accept, or anything that writes or costs mailbox operations (a repeat there is the user's decision).
+  const RETRY_BUSY_OPS = new Set(["preflight", "audit.tail", "mem.read", "curves.list", "curves.get", "profiles.list", "profiles.get", "tune.last", "stress.list"]);
+  const BUSY_RETRY_MS = [300, 700, 1500, 3000, 5000, 8000];
+  // opts.onBusy(n, body) (optional) is called before each repeat, n = the repeat about to happen (1-based).
+  async function api(op, args, opts) {
+    for (let n = 0; ; n++) {
+      const r = await apiOnce(op, args);
+      const busy = r.status === 409 && isObj(r.body.error) && r.body.error.code === "BUSY";
+      if (!busy || !RETRY_BUSY_OPS.has(op) || n >= BUSY_RETRY_MS.length || S.sessionLost) return r;
+      if (opts && typeof opts.onBusy === "function") opts.onBusy(n + 1, r.body);
+      await new Promise((res) => setTimeout(res, BUSY_RETRY_MS[n]));
+    }
+  }
+  async function apiOnce(op, args) {
     let resp;
     try {
       resp = await fetch("/api/call", {
@@ -1572,30 +1585,26 @@
   }
 
   // On load: this boot's stored read (tune.last). No mailbox operation: the helper kept the last complete read in a root-owned file.
-  // G-139: the page asks six read-only things the moment the event stream opens and the helper runs at most four of those at once (it answers the others BUSY, "try again"),
-  // so on a cold first visit this call can be refused. It is asked again with a growing pause until it is answered (or a read showed up), and whenever the Tune tab opens with nothing shown.
-  const LAST_RETRY_MS = [300, 700, 1500, 3000, 5000, 8000];
+  // G-139: the api helper asks again when the helper answers BUSY (see RETRY_BUSY_OPS); the status line says so meanwhile, and the Tune tab asks again when it opens with nothing shown.
   async function loadLastRead() {
     if (T.words || S.lastTried || S.lastBusy) return;
-    clearTimeout(S.lastTimer);
     S.lastBusy = true;
     S.lastAt = Date.now();
     let res;
-    try { res = await api("tune.last", {}); } finally { S.lastBusy = false; }
+    try {
+      res = await api("tune.last", {}, { onBusy: (n, b) => {
+        if (T.words || ($("tn-status").textContent !== "" && !S.lastNote)) return;   // never over a message of an operation
+        setText("tn-status", "Fetching the read kept by the helper (it was busy: " + errText(b) + "). Trying again."); S.lastNote = true;
+      } });
+    } finally { S.lastBusy = false; }
     const { status, body } = res;
     if (T.words) return;   // a read finished meanwhile
     if (status !== 200 || !body.ok || !isObj(body.result)) {
       if (S.sessionLost || status === 401) return;
-      const n = S.lastFails++;
-      const quiet = $("tn-status").textContent === "" || S.lastNote;   // never over a message of an operation
-      if (n < LAST_RETRY_MS.length) {
-        if (quiet) { setText("tn-status", "Fetching the read kept by the helper (it was busy: " + errText(body) + "). Trying again."); S.lastNote = true; }
-        S.lastTimer = setTimeout(loadLastRead, LAST_RETRY_MS[n]);
-      } else if (quiet) { setText("tn-status", "The read kept by the helper could not be fetched (" + errText(body) + "). Open this tab again to retry, or press Read ratios & voltages."); S.lastNote = true; }
+      if ($("tn-status").textContent === "" || S.lastNote) { setText("tn-status", "The read kept by the helper could not be fetched (" + errText(body) + "). Open this tab again to retry, or press Read ratios & voltages."); S.lastNote = true; }
       return;
     }
     S.lastTried = true;
-    S.lastFails = 0;
     if (S.lastNote) { setText("tn-status", ""); S.lastNote = false; }
     if (body.result.available !== true || !isObj(body.result.result)) return;   // none exists for this boot
     setWords(body.result.result, { at: body.result.at, applied_at: body.result.applied_at });
