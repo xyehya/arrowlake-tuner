@@ -124,7 +124,19 @@ def not_installed(path: str):
 
 
 class CliCase(unittest.TestCase):
+    #: G-137 (D-039): a ratio ceiling is the policy value clamped by the CPU's own limit (cmd 0x01), and ``plan`` / ``apply`` do not read 0x01 yet (the planner's read phase has no such
+    #: step: follow-up), so a CLI raise of the ratio is "no raise" on its own. A class that exercises ratio raises through the CLI sets this to bind the policy the CLI loads to the
+    #: limit the (simulated) CPU reports: ``{"P": 120, "E": 120}`` is the ``0x778`` the reference machine answers (``measured_baseline``).
+    CPU_RATIO_LIMITS: dict[str, int] | None = None
+
     def setUp(self) -> None:
+        if self.CPU_RATIO_LIMITS is not None:
+            limits = self.CPU_RATIO_LIMITS
+            real_load, real_default = cli.load_policy, cli.default_m1_policy
+            for name, real in (("load_policy", real_load), ("default_m1_policy", real_default)):
+                patcher = mock.patch.object(cli, name, lambda *a, _real=real, **k: _real(*a, **k).with_hw_limits(limits))
+                patcher.start()
+                self.addCleanup(patcher.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
@@ -511,6 +523,7 @@ class Measured(CliCase):
 
 
 class RaiseThroughTheCli(CliCase):
+    CPU_RATIO_LIMITS = {"P": 120, "E": 120}
     """D-016 / T-022: the reviewed policy file is the only thing that can raise anything. ``examples/reference-285k/policies/example-oc-ramp.toml`` is the example
     (E ratio 49 / 1.250 V, P ratio 58, shipped step limits; T-023 / D-017 lowered the E ceiling from 50 to 49); it is read only because a test names it. ``--sim`` without an injected simulator
     is the measured machine (``SimConfig.measured``) with the zero-field rule on."""

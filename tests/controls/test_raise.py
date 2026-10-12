@@ -165,7 +165,7 @@ class AboveTheBounds(RaiseCase):
         s = self.session(config=config, steps=dict(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200), **RAISE)
         with self.assertRaises(PlanRefused) as ctx:
             s.apply(profile(e_core(0, oc_voltage_mv=1200)))  # raw 1229 > 1199
-        self.assertIn("hardware maximum", ctx.exception.refusals[0].detail)
+        self.assertIn("CPU limit", ctx.exception.refusals[0].detail)
         self.assertEqual(s.write_requests(), [])
         self.assertTrue(self.session(config=config, steps=dict(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200), **RAISE).apply(profile(e_core(0, oc_voltage_mv=1165))).ok)
 

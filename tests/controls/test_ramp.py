@@ -297,7 +297,7 @@ class TheHardwareMaximumRead(unittest.TestCase):
         readings = {c: dataclasses.replace(measured_readings(c), vmax=0x4B0) for c in (8, 9, 10, 11)}  # hardware max 0x4AF = 1199 raw
         policy = policy_with(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200, **RAISE)
         plan = build_plan(profile(e_core(0, oc_voltage_mv=1200)), TOPO, readings, per_core_enabled=True, policy=policy)
-        self.assertTrue(any("hardware maximum" in r.detail for r in plan.refusals))
+        self.assertTrue(any("CPU limit" in r.detail and "cmd 0x28" in r.detail for r in plan.refusals))
         self.assertFalse(plan.needs_ramp)
 
 
@@ -310,10 +310,10 @@ class PreflightAgainstExplicitBounds(unittest.TestCase):
         return ctx.exception
 
     def test_values_outside_the_bounds_are_refused_before_any_read(self) -> None:
-        self.refused(profile(e_core(0, ratio=51)), "ratio_max[E] = 50")
-        self.refused(profile(p4(ratio=59)), "ratio_max[P] = 58")
-        self.refused(profile(e_core(0, oc_voltage_mv=1251)), "v_target_max_mv[E] = 1250")
-        self.refused(profile(p4(oc_voltage_mv=1501)), "v_target_max_mv[P] = 1500")
+        self.refused(profile(e_core(0, ratio=51)), "ratio_max E = 50")
+        self.refused(profile(p4(ratio=59)), "ratio_max P = 58")
+        self.refused(profile(e_core(0, oc_voltage_mv=1251)), "v_target_max_mv E = 1250")
+        self.refused(profile(p4(oc_voltage_mv=1501)), "v_target_max_mv P = 1500")
         self.refused(profile(e_core(0, offset_mv=26)), "offset_ceiling_mv 25")  # +26 mV = raw 27 > the ceiling raw 26
         self.refused(profile(p4(offset_mv=-51)), "D-015")
 

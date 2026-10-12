@@ -934,11 +934,11 @@ def _static_problem(policy: Policy, target: Target) -> str | None:
     if target.ratio is not None:
         cap = policy.ratio_max[kind]
         if cap is not None and target.ratio > cap:
-            return f"ratio {target.ratio} is above the policy ratio_max[{kind}] = {cap}"
+            return f"ratio {target.ratio} is above policy ratio_max {kind} = {cap} ({policy.where})"
     if target.oc_voltage_mv is not None:
         cap = policy.v_target_max_mv[kind]
         if cap is not None and _v_raw_of_mv(target.oc_voltage_mv) > _v_raw_of_mv(cap):
-            return f"OC-point voltage {target.oc_voltage_mv} mV is above the policy v_target_max_mv[{kind}] = {cap} mV"
+            return f"OC-point voltage {target.oc_voltage_mv} mV is above policy v_target_max_mv {kind} = {cap} mV ({policy.where})"
     if target.offset_mv is not None:
         return _offset_problem(policy, target.cpu, target.offset_mv)
     return None
@@ -1011,7 +1011,7 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
                 refusals.append(PredictedRefusal(number, write_cpu, 0, reason.value, f"plain write of {msr:#x}: {why}", msr))
             elif cap is not None and max(ratios) > cap:
                 refusals.append(
-                    PredictedRefusal(number, write_cpu, 0, Refusal.CHECK_FAILED.value, f"turbo_ratio_bounded: ratio {max(ratios)} is above the policy ratio_max[{kind}] = {cap}", msr)
+                    PredictedRefusal(number, write_cpu, 0, Refusal.CHECK_FAILED.value, f"turbo_ratio_bounded: ratio {max(ratios)} is above policy ratio_max {kind} = {cap} ({policy.where})", msr)
                 )
     if refusals:
         raise PlanRefused(tuple(refusals))

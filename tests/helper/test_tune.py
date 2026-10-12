@@ -389,7 +389,7 @@ class ApplyWordTests(TuneCase):
         audit = [json.loads(line) for line in self.audit.read_text().splitlines()]
         attempts = [a for a in audit if a.get("event") == "attempt"]
         self.assertTrue(attempts)
-        self.assertTrue(all(int(a["cmd"], 16) in (0x10, 0x11, 0x14, 0x15, 0x1C, 0x1D, 0x26, 0x27, 0x09, 0x28) for a in attempts if "cmd" in a))
+        self.assertTrue(all(int(a["cmd"], 16) in (0x10, 0x11, 0x14, 0x15, 0x1C, 0x1D, 0x26, 0x27, 0x09, 0x28, 0x01) for a in attempts if "cmd" in a))
         seqs = [a["seq"] for a in audit]
         self.assertEqual(seqs, sorted(set(seqs)))  # one transaction after the other: every request audited before it was sent, in order
         self.assertEqual(sum(1 for a in audit if a.get("event") == "attempt" and int(a.get("cmd", "0x0"), 16) == 0x11), len(self.sim_writes()))

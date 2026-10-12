@@ -695,7 +695,7 @@ class WriteGuard:
             self._refuse(Refusal.CHECK_FAILED, f"write entry {entry.name!r} has no evaluable check", req, confirm)
         assert check is not None and baseline is not None
         try:
-            context = build_msr_context(self._policy, int(req.msr), platform_info=self._platform_info(), favored_words=self.favored_words())
+            context = build_msr_context(self._policy, int(req.msr), platform_info=self._platform_info(), favored_words=self.favored_words(), oc_cap_words=self.oc_cap_words())
             ok, detail = check(req, baseline, entry.params, context)
         except Exception as exc:
             ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
@@ -807,7 +807,16 @@ class WriteGuard:
             vf_word_sent=self._last_vf_word_sent(cpu),
             max_voltage_word=self._baselines.get((int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), cpu, 0, 0)),
             favored_words_of_kind=self.favored_words(self._policy.core_kind(cpu)).values() if self._policy.ratio_auto else None,
+            oc_cap_words_of_kind=self.oc_cap_words(self._policy.core_kind(cpu)).values(),
         )
+
+    def oc_cap_words(self, kind: str | None = None) -> dict[int, int]:
+        """The ``0x01 P1=0 P2=0`` words read this session (cpu -> word), of one core kind if given: the CPU's own ratio limit (D-039) that clamps every ratio ceiling."""
+        return {
+            c: w
+            for (cmd, c, p1, p2), w in self._baselines.items()
+            if cmd == int(Cmd.OC_CAPABILITY_READ) and (p1, p2) == (0, 0) and (kind is None or self._policy.core_kind(c) == kind)
+        }
 
     def favored_words(self, kind: str | None = None) -> dict[int, int]:
         """The ``0x1C`` words read this session (cpu -> word), of one core kind if given: the data an ``"auto"`` ratio ceiling is derived from."""
