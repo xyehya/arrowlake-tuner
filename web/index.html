@@ -52,7 +52,7 @@
     <div class="toolbar dash-bar">
       <div class="seg" id="dash-sub" role="group" aria-label="Dashboard view"></div>
       <span class="grow"></span>
-      <span id="dash-state" class="pill s-neutral" title="The tuning words last read from the CPU this boot. Read them in Tune.">applied: unknown</span>
+      <span id="dash-state" class="pill s-neutral" title="The ratios and voltages last read from the CPU this boot. Read them in Tune.">applied: unknown</span>
       <div class="seg" id="win-seg" role="group" aria-label="Chart window"></div>
       <button type="button" id="btn-pause" aria-pressed="false">Pause</button>
     </div>
@@ -246,19 +246,19 @@
       <div class="tn-lead">
         <div>
           <h2>Tune</h2>
-          <p class="muted" id="tn-sub">Read the tuning words first. Everything below starts from what the CPU holds now.</p>
+          <p class="muted" id="tn-sub">Read the ratios and voltages first. Everything below starts from what the CPU holds now.</p>
         </div>
         <div class="tn-lead-actions">
           <span id="tn-state" class="pill s-neutral">applied: unknown</span>
-          <button type="button" id="btn-tune-read" class="primary" disabled>Read tuning words</button>
+          <button type="button" id="btn-tune-read" class="primary" disabled>Read ratios &amp; voltages</button>
         </div>
       </div>
       <ol class="tn-steps" id="tn-steps">
-        <li><strong>Read</strong> the tuning words the CPU holds now.</li>
+        <li><strong>Read</strong> the ratios and voltages the CPU holds now.</li>
         <li><strong>Choose</strong> a voltage offset, an OC target voltage or an OC ratio, per unit or for all.</li>
         <li><strong>Review</strong> the before and after, then press Apply. Each word is read back.</li>
       </ol>
-      <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. A read costs &#8776; 124&#8211;136 operations (112 V/F reads + 12 fused-point reads, plus the favored-ratio reads); <span id="tn-used">n/a</span> used so far this boot.</p>
+      <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. A read costs <span id="tn-cost-n">about one operation per V/F point of each unit</span>; <span id="tn-used">n/a</span> used so far this boot.</p>
       <p id="tn-reason" class="muted"></p>
       <div class="run-line" id="tn-run" hidden>
         <progress id="tn-bar" max="1" value="0" aria-label="Read progress"></progress>
@@ -275,6 +275,8 @@
         <span class="grow"></span>
         <button type="button" id="btn-tn-hex" aria-pressed="false">Show raw words</button>
       </div>
+      <p class="muted tn-prov" id="tn-prov" role="status"></p>
+      <p class="muted tn-prov" id="tn-pred-note"></p>
       <div class="tn-table" id="tn-rows" role="group" aria-label="Tuning controls"></div>
       <div class="tn-foot">
         <div class="tn-foot-msg" id="tn-foot-msg" role="status">No changes yet.</div>
@@ -288,10 +290,11 @@
     </article>
 
     <article class="card" id="tn-vccia-card" hidden>
-      <div class="card-head"><h2>Predicted VccIA</h2><span class="muted" id="tn-vccia-basis"></span></div>
+      <div class="card-head"><h2>Highest predicted VID</h2><span class="muted" id="tn-vccia-basis"></span></div>
       <p class="vccia-line" id="tn-vccia-line"></p>
       <ul class="vccia-list" id="tn-vccia-list"></ul>
       <p class="muted" id="tn-vccia-note"></p>
+      <p class="muted" id="tn-vccia-live"></p>
     </article>
 
     <article class="card" id="tn-turbo-card" hidden>
@@ -314,7 +317,7 @@
     </article>
 
     <article class="card" id="tn-words-card" hidden>
-      <div class="card-head"><h2>Tuning words</h2><span class="muted" id="tn-words-note"></span></div>
+      <div class="card-head"><h2>Values as read</h2><span class="muted" id="tn-words-note"></span></div>
       <div class="scroll"><table class="grid num" id="vf-table">
         <caption class="sr">V/F words per CPU</caption>
         <thead><tr><th scope="col" class="n">CPU</th><th scope="col">Unit</th><th scope="col">OC point</th><th scope="col">V/F points (ratio, offset mV)</th></tr></thead>
@@ -333,7 +336,7 @@
       <article class="card st-setup" id="st-setup">
         <div class="card-head">
           <h2>Stress screen</h2>
-          <span class="muted">Loads the CPU or the memory for a few minutes and counts errors. It writes no tuning words; cpufreq limits are put back when it ends.</span>
+          <span class="muted">Loads the CPU or the memory for a few minutes and counts errors. It writes no ratios or voltages; cpufreq limits are put back when it ends.</span>
         </div>
         <div class="st-fields">
           <div class="field"><span class="field-label" id="lbl-st-kind">Screen</span><div class="seg" id="st-kind" role="group" aria-labelledby="lbl-st-kind"></div></div>
@@ -385,7 +388,7 @@
 
     <article class="card" id="st-history-card">
       <div class="card-head"><h2>Earlier screens</h2><button type="button" id="btn-stress-refresh" class="small">Refresh</button></div>
-      <p id="st-hist-empty" class="muted">No stress screens stored yet. Start one above; the result is kept on this machine.</p>
+      <p id="st-hist-empty" class="muted">No stress screens stored yet. Start one above; the result is kept on this computer.</p>
       <div class="scroll"><table class="grid num st-hist" id="st-hist" hidden>
         <caption class="sr">Stored stress screens, newest first</caption>
         <thead><tr><th scope="col">Started</th><th scope="col">Screen</th><th scope="col">Units</th><th scope="col" class="n">Ran</th><th scope="col">Ended</th><th scope="col" class="n">Errors</th><th scope="col">Health</th><th scope="col" class="n">Max temp</th><th scope="col" class="n">Max power</th></tr></thead>

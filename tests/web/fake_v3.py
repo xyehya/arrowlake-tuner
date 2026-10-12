@@ -36,7 +36,8 @@ from datetime import datetime, timezone
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
 UNITS = [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]
 UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)}}
-FAVORED = ("P0", "P3")
+DEFAULT_FAVORED = ("P0", "P3")   # a simulator fixture, not the page's knowledge: the P-cores the fake reports as favored; FakeHelper.favored changes it
+FAVORED = DEFAULT_FAVORED
 P_QUICK = [8, 20, 30, 48, 53, 55, 56, 57]
 E_QUICK = [8, 15, 23, 30, 40, 46]
 P_POINTS = [8, 20, 30, 48, 53, 55, 56, 57]   # F1: every P-core carries these 8 points; no per-core tables [MEASURED lnx 2026-10-02]
@@ -80,7 +81,7 @@ def reach_ratio(unit: str) -> int:
     """The highest ratio the unit can hold under load (F3): P0/P3 57x, the other P-cores 55x, E-clusters the turbo table top."""
     if kind_of(unit) == "E":
         return E_TURBO_TOP
-    return P_REACH["favored"] if unit in FAVORED else P_REACH["other"]
+    return P_REACH["favored"] if unit in FAVORED or not FAVORED else P_REACH["other"]   # no favored core: all P-cores are equal and reach the top
 
 
 def unreachable_reason(unit: str, ratio: int) -> str | None:
@@ -175,6 +176,20 @@ def fused_of(unit: str) -> dict:
     return {"word": "0x%X" % (ratio | raw << 8), "ratio": ratio, "v": round(raw / 1024, 4)}
 
 
+def topology_view() -> dict:
+    """The ``topology`` object of the G-128 ``preflight`` contract: every tuning unit with its CPUs, the favored flag, the highest ratio it can hold and its CPPC performance."""
+    units = []
+    for u in UNITS:
+        p = kind_of(u) == "P"
+        fav = p and u in FAVORED
+        units.append({"id": u, "kind": kind_of(u), "cpus": list(UNIT_CPUS[u]), "favored": fav, "max_ratio": reach_ratio(u), "perf": (255 if fav else 236) if p else None})
+    return {"units": units, "favored_source": "acpi_cppc" if FAVORED else None}
+
+
+def read_at_iso(epoch: float | None) -> str | None:
+    return None if epoch is None else datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def turbo_view(tables: dict) -> dict:
     """The ``turbo`` object of the tune.read addendum: P / E bucket ratios and counts, and the per-core favored ratio (0x1C)."""
     return {"P": {"ratios": list(tables["p"]), "counts": list(TURBO_COUNTS["P"])}, "E": {"ratios": list(tables["e"]), "counts": list(TURBO_COUNTS["E"])},
@@ -205,7 +220,20 @@ def predict_unit(rec: dict | None, unit: str, points: list[dict]) -> dict[int, d
 class V3Ops:
     """Mixed into ``FakeHelper`` (which provides ``_reply``, ``_err``, ``progress`` / ``emit``)."""
 
+    @property
+    def favored(self) -> tuple:
+        return FAVORED
+
+    @favored.setter
+    def favored(self, units) -> None:
+        """Which P-cores the fake reports as favored (preflight topology and the ``tune.read`` turbo.favored ratios); ``()`` = none, all P-cores equal."""
+        global FAVORED
+        FAVORED = tuple(units)
+
     def _init_v3(self) -> None:
+        self.favored = DEFAULT_FAVORED
+        self.topology_enabled = True      # G-128 contract: preflight carries ``topology``; False simulates a helper without it
+        self.read_at_enabled = True       # G-128 contract: tune.read / tune.last carry ``read_at`` (ISO UTC)
         self.memory = memory_fixture()
         self.curves: dict[str, dict] = {}
         self.tuning = initial_tuning()
@@ -491,9 +519,12 @@ class V3Ops:
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
         fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}
-        return {"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
-                "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
-                "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)}
+        out = {"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
+               "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
+               "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)}
+        if self.read_at_enabled and self.last_read_at is not None:
+            out["read_at"] = read_at_iso(self.last_read_at)
+        return out
 
     def seed_last_read(self, at: float | None = None) -> None:
         """A read made earlier this boot by another page / helper process: ``tune.last`` serves it (G-123)."""

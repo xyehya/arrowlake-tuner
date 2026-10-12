@@ -855,3 +855,5 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
   .st-fields input[type="range"] { width: 100%; }
   .st-sum { font-size: 17px; }
 }
+.tn-prov { margin: 4px 0 8px; font-size: 13px; }
+.tn-prov:empty { display: none; }
