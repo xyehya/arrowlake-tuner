@@ -354,9 +354,10 @@ def run_socket(
         if fd is not None:
             return adopt_socket(fd, euid=euid, lstat_fn=lstat_fn)
         try:
-            group = settings().access.group
+            group = settings().access.group  # optional: the node is handed to this group; the peer check is the gate either way
         except (TrustError, ValueError, OSError) as exc:
-            raise ServiceError(f"cannot read the access group from {toml_path}: {exc}") from None
+            log(f"helper.toml unreadable ({exc}); the socket is made without a group and nobody is admitted until it is fixed")
+            group = None
         return create_socket(sock_path, group=group, euid=euid, lstat_fn=lstat_fn, trust_parents=euid == 0)
 
     return Service(helper, make_socket, path=sock_path, settings_loader=settings, activated=fd is not None, log=log).run()

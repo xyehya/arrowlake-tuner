@@ -37,7 +37,7 @@ GOOD: dict[str, tuple[int, int]] = {
 }
 
 
-def run(tree, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None, groups=("arltuner",)) -> dict[str, str | None]:
+def run(tree, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None) -> dict[str, str | None]:
     contents = {
         str(selfcheck.HELPER): launcher,
         "/etc/systemd/system/arltuner-helper.socket": SOCKET_UNIT,
@@ -48,12 +48,7 @@ def run(tree, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None,
     def read(p) -> bytes:
         return contents[str(p)]
 
-    def getgrnam(name: str):
-        if name not in groups:
-            raise KeyError(name)
-        return object()
-
-    results = selfcheck.selfcheck(lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), read_fn=read, getgrnam=getgrnam)
+    results = selfcheck.selfcheck(lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), read_fn=read)
     return dict(results)
 
 
@@ -65,7 +60,7 @@ class Good(unittest.TestCase):
     def test_a_correct_install_passes_every_check(self) -> None:
         results = run(GOOD)
         self.assertEqual({k: v for k, v in results.items() if v}, {})
-        self.assertEqual(len(results), 21)
+        self.assertEqual(len(results), 20)
         self.assertFalse([k for k in results if "polkit" in k and "old" not in k])  # no polkit action/rules checks any more, only "no old polkit action file"
 
     def test_the_audit_log_may_be_absent(self) -> None:
@@ -168,10 +163,8 @@ class Damage(unittest.TestCase):
             self.assertEqual(list(bad), ["systemd service unit arltuner-helper.service"])
             self.assertNotIn("systemd service unit arltuner-helper.service: content", run(tree))
 
-    def test_the_group_must_exist(self) -> None:
-        label, why = self.only(GOOD, groups=())
-        self.assertIn("group arltuner exists", label)
-        self.assertIn("groupadd", why)
+    def test_no_group_is_required_any_more(self) -> None:
+        self.assertFalse([k for k in run(GOOD) if "group" in k])
 
     def test_helper_toml_is_required_and_must_admit_somebody(self) -> None:
         label, _ = self.only({k: v for k, v in GOOD.items() if k != "/etc/arltuner/helper.toml"})
@@ -245,15 +238,16 @@ class UnitContent(unittest.TestCase):
 
     def test_the_shipped_units_say_what_the_task_says(self) -> None:
         sock = selfcheck.unit_sections(SOCKET_UNIT)["Socket"]
-        self.assertEqual((sock["ListenStream"], sock["SocketMode"], sock["SocketUser"], sock["SocketGroup"], sock["RemoveOnStop"]),
-                         (["/run/arltuner/helper.sock"], ["0660"], ["root"], ["arltuner"], ["yes"]))
+        self.assertEqual((sock["ListenStream"], sock["SocketMode"], sock["SocketUser"], sock["RemoveOnStop"]),
+                         (["/run/arltuner/helper.sock"], ["0666"], ["root"], ["yes"]))
+        self.assertNotIn("SocketGroup", sock)  # the peer check is the gate (D-043 amendment); no group is needed
         svc = selfcheck.unit_sections(SERVICE_UNIT)["Service"]
         self.assertEqual(svc["ExecStart"], ["/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket"])
         self.assertEqual((svc["Type"], svc["NoNewPrivileges"]), (["simple"], ["yes"]))
         self.assertNotIn("Install", selfcheck.unit_sections(SERVICE_UNIT))  # started by the socket, never enabled by itself
 
     def test_socket_mode_owner_group_and_path_are_pinned(self) -> None:
-        for old, new in ((b"SocketMode=0660", b"SocketMode=0666"), (b"SocketMode=0660", b"SocketMode=0664"), (b"SocketGroup=arltuner", b"SocketGroup=users"),
+        for old, new in ((b"SocketMode=0666", b"SocketMode=0660"), (b"SocketMode=0666", b"SocketMode=0664"), (b"SocketMode=0666", b"SocketMode=0777"),
                          (b"SocketUser=root", b"SocketUser=yk"), (b"ListenStream=/run/arltuner/helper.sock", b"ListenStream=/run/user/1000/helper.sock"),
                          (b"Accept=no", b"Accept=yes")):
             with self.subTest(new=new):

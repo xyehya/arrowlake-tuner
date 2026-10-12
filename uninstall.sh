@@ -6,9 +6,9 @@
 # Stops and disables the helper units (arltuner-helper.socket / .service) and removes them, then removes the code (/usr/lib/arltuner), the web files and
 # the polkit action file of an old install, if any. Idempotent.
 # KEEPS /etc/arltuner (policy, helper.toml with its [access] allowlist, accepted state), /var/lib/arltuner (audit log), the tmpfiles.d file
-# (/usr/lib/tmpfiles.d/arltuner.conf), /run/arltuner and the group arltuner unless --purge: while /etc/arltuner/policy.toml stays, the CLI counts as installed (D-030), keeps the per-boot budget in
+# (/usr/lib/tmpfiles.d/arltuner.conf), /run/arltuner unless --purge: while /etc/arltuner/policy.toml stays, the CLI counts as installed (D-030), keeps the per-boot budget in
 # /var/lib/arltuner/audit.jsonl and takes its lock in /run/arltuner/mailbox.lock, so the operator's boot restore still works after a plain uninstall.
-# --purge removes all of them (and the group); the CLI then returns to the legacy per-user lock / audit paths and the per-boot operation count (an indicator, default cap 100000)
+# --purge removes all of them; the CLI then returns to the legacy per-user lock / audit paths and the per-boot operation count (an indicator, default cap 100000)
 # restarts from zero, so purge only right before a reboot.
 # DESTDIR=/some/dir removes from that tree instead (tests).
 set -euo pipefail
@@ -64,8 +64,7 @@ rmdir "$DESTDIR/usr/share/arltuner" 2>/dev/null && echo "removed $DESTDIR/usr/sh
 
 if [ "$PURGE" -eq 1 ]; then
     remove "$DESTDIR/usr/lib/tmpfiles.d/arltuner.conf" "$DESTDIR/run/arltuner" "$DESTDIR/etc/arltuner" "$DESTDIR/var/lib/arltuner"
-    if [ -z "$DESTDIR" ] && getent group arltuner >/dev/null 2>&1; then groupdel arltuner && echo "removed group arltuner"; fi
-    echo "purged config (the allowlist with it), audit log, tmpfiles.d file, lock directory and group. The CLI is back on the legacy lock/audit paths; its per-boot operation count restarts from zero: reboot before the next hardware write."
+    echo "purged config (the allowlist with it), audit log, tmpfiles.d file and lock directory. The CLI is back on the legacy lock/audit paths; its per-boot operation count restarts from zero: reboot before the next hardware write."
 else
     for keep in "$DESTDIR/etc/arltuner" "$DESTDIR/var/lib/arltuner" "$DESTDIR/usr/lib/tmpfiles.d/arltuner.conf" "$DESTDIR/run/arltuner"; do
         if [ -e "$keep" ]; then echo "kept $keep (--purge removes it)"; fi

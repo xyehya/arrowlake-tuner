@@ -287,7 +287,8 @@ HELPER_TOML = "etc/arltuner/helper.toml"
 
 
 def check_helper_service(root: Path, *, applies: bool = True) -> CheckResult:
-    """The root helper is a service on ``/run/arltuner/helper.sock`` (D-043): the node is a socket owned by root that "other" cannot reach, and
+    """The root helper is a service on ``/run/arltuner/helper.sock`` (D-043): the node is a socket owned by root (its mode, 0666 or 0660, is not judged:
+    the peer check is the gate), and
     ``/etc/arltuner/helper.toml`` admits somebody (``[access]`` non-empty and valid). It does not connect (the socket serves one client, and the one that
     asks is usually that client). ``applies=False``: the helper is not serving a socket (simulator, stdio dev path) and the check passes as not applicable."""
     name = "helper_service"
@@ -304,8 +305,6 @@ def check_helper_service(root: Path, *, applies: bool = True) -> CheckResult:
         return CheckResult(name, Status.READ_ONLY, "/run/arltuner/helper.sock is not a socket")
     if st.st_uid != 0 and root == Path("/"):
         return CheckResult(name, Status.READ_ONLY, f"/run/arltuner/helper.sock belongs to uid {st.st_uid}, not root")
-    if st.st_mode & 0o007:
-        return CheckResult(name, Status.READ_ONLY, f"/run/arltuner/helper.sock mode {stat.S_IMODE(st.st_mode):04o} gives access to other users (must be root:<group> 0660)")
     from arltuner.helper.settings import parse_helper_toml  # lazy: arltuner.helper imports this module
 
     try:
@@ -317,7 +316,7 @@ def check_helper_service(root: Path, *, applies: bool = True) -> CheckResult:
     if access.empty:
         return CheckResult(name, Status.READ_ONLY, "/etc/arltuner/helper.toml has no [access] users or group: nobody is allowed to use the helper (sudo bash install.sh --add-user NAME)")
     who = ", ".join([*access.users, *([f"group {access.group}"] if access.group else [])])
-    return CheckResult(name, Status.PASS, f"helper socket present (root-owned, no access for other users); allowed: {who}")
+    return CheckResult(name, Status.PASS, f"helper socket present (root-owned, mode {stat.S_IMODE(st.st_mode):04o}); allowed: {who}")
 
 
 def check_python(version: Sequence[int]) -> CheckResult:

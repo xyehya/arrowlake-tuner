@@ -6,7 +6,7 @@ Keys (anything else is refused; the file may be absent = defaults)::
     idle_exit_s = 600             # socket-activated service only: exit after this many idle seconds (0 = never); default 600
     [access]
     users = ["alice"]             # who may use the helper socket (names, resolved to uids at every check)
-    group = "arltuner"            # and/or members of this group; the socket file is root:<group> 0660
+    group = "arltuner"            # and/or members of this group; optional; the socket node is mode 0666 and the peer check is the gate
 
 **Fail closed:** a missing or empty ``[access]`` admits nobody, a malformed one makes the whole file invalid (the socket server then admits nobody and the
 taint-bit reader refuses), and root (uid 0) is admitted only when it is listed in ``users`` - never through the group.

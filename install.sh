@@ -2,9 +2,10 @@
 # arrowlake-tuner system install (G-106, G-144; SPEC 4.4 / 11, D-024, D-030, D-043). Run as root:
 #   sudo bash install.sh [--reseed-config] [--add-user NAME]...
 #
-# The helper is a root service on a Unix socket (/run/arltuner/helper.sock, group arltuner, systemd socket activation): no polkit, no password.
-# Who may use it is the [access] allowlist in /etc/arltuner/helper.toml. The invoking user (SUDO_USER) is put there on the first install (and added to
-# the group arltuner: log out and in again for the group to apply); --add-user NAME appends more. An existing allowlist is never dropped.
+# The helper is a root service on a Unix socket (/run/arltuner/helper.sock, mode 0666, systemd socket activation): no polkit, no password.
+# Who may use it is the [access] allowlist in /etc/arltuner/helper.toml, checked by the helper (SO_PEERCRED) at every connection. The invoking user
+# (SUDO_USER) is put there on the first install; --add-user NAME appends more; an allowed user needs no re-login and no group. An existing allowlist is
+# never dropped. ([access] group = "NAME" can also admit a group's members; nothing here creates or sets one.)
 #
 # Layout (root:root; dirs 0755, files 0644 unless noted):
 #   /usr/lib/arltuner/arltuner/            the Python package, precompiled here (root-owned __pycache__)
@@ -13,7 +14,7 @@
 #   /usr/lib/arltuner/arltuner-selfcheck   0755 post-install trust check
 #   /usr/lib/arltuner/arltuner-access      0755 helper.toml [access] editor (used by this script)
 #   /usr/share/arltuner/web/               static GUI files
-#   /etc/systemd/system/arltuner-helper.{socket,service}      the socket (root:arltuner 0660) and the service it starts; enabled here (socket only)
+#   /etc/systemd/system/arltuner-helper.{socket,service}      the socket (root 0666) and the service it starts; enabled here (socket only)
 #   /usr/lib/tmpfiles.d/arltuner.conf      /run/arltuner 0755 root (mailbox lock directory, the socket)
 #   /etc/arltuner/{policy.toml,helper.toml}   operator-owned limits: seeded from the checkout (policies/default.toml) ONLY when absent
 #                                          (--reseed-config replaces them; the [access] allowlist always stays)
@@ -24,7 +25,7 @@
 # The checkout is only ever COPIED. After the copy, the only Python that runs (compileall, the self-check) is the installed, root-owned tree, in
 # isolated mode, with cwd /. Idempotent: a second run replaces code/web/units/tmpfiles and leaves policy.toml, helper.toml's allowlist and the audit log alone. The old polkit action file
 # of the G-106 install is removed. A running helper is stopped first (the socket unit, or SIGTERM to an old pkexec-started one).
-# DESTDIR=/some/dir installs into that tree instead (tests, packaging): no chown unless root, no systemd-tmpfiles / systemctl / groupadd / usermod, no live self-check.
+# DESTDIR=/some/dir installs into that tree instead (tests, packaging): no chown unless root, no systemd-tmpfiles / systemctl, no live self-check.
 set -euo pipefail
 umask 022
 export LC_ALL=C
@@ -46,7 +47,7 @@ while [ $# -gt 0 ]; do
             [ "$1" != root ] || die "--add-user: root is never added to the allowlist"
             ADD_USERS+=("$1")
             ;;
-        -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $1 (usage: install.sh [--reseed-config] [--add-user NAME]...)" ;;
     esac
     shift
@@ -229,7 +230,7 @@ copy_files "$SRC/web" "$WEB.new.$$" ! -name '.*'
 normalize "$WEB.new.$$"
 swap_dir "$WEB.new.$$" "$WEB"
 
-# --- 3. systemd units, the old polkit action, tmpfiles.d, the group --------------------------------------------------------------------
+# --- 3. systemd units, the old polkit action, tmpfiles.d --------------------------------------------------------------------
 mkdir -p "$UNITS"  # system directory: created if missing, never re-moded
 copy_one "$SRC/packaging/arltuner-helper.socket" "$UNITS/arltuner-helper.socket" 0644
 copy_one "$SRC/packaging/arltuner-helper.service" "$UNITS/arltuner-helper.service" 0644
@@ -241,16 +242,6 @@ if [ -z "$DESTDIR" ]; then
     else
         install -d -m 0755 -o root -g root /run/arltuner
     fi
-fi
-
-GROUP=arltuner
-if [ -n "$DESTDIR" ]; then
-    echo "group $GROUP: skipped (DESTDIR install)"
-elif getent group "$GROUP" >/dev/null 2>&1; then
-    echo "group $GROUP: exists"
-else
-    groupadd -r "$GROUP" || die "groupadd -r $GROUP failed"
-    echo "group $GROUP: created"
 fi
 
 # --- 4. /etc/arltuner: seeded from the repo only when absent ------------------------------------------------------------------------
@@ -276,27 +267,12 @@ fi
 # the invoking user is seeded only into an EMPTY allowlist, --add-user appends, an existing allowlist is never dropped (also by --reseed-config).
 ACCESS_ARGS=()
 [ -z "$INVOKER" ] || ACCESS_ARGS+=(--seed-user "$INVOKER")
-[ -z "$INVOKER" ] && [ "${#ADD_USERS[@]}" -eq 0 ] || ACCESS_ARGS+=(--seed-group "$GROUP")  # a group is seeded only together with somebody to admit
 for u in ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do ACCESS_ARGS+=(--add-user "$u"); done
 [ "$RESEED" -eq 0 ] || ACCESS_ARGS+=(--reseed)
-ACCESS_OUT=$(cd / && "$PYTHON" -I "$LIB/arltuner-access" "$ETC/helper.toml" ${ACCESS_ARGS[@]+"${ACCESS_ARGS[@]}"}) || die "could not write $ETC/helper.toml"
-printf '%s\n' "$ACCESS_OUT"
-SEEDED=$(printf '%s\n' "$ACCESS_OUT" | sed -n 's/^seeded: //p')  # the invoking user, only when the allowlist was empty and they were put into it
+(cd / && "$PYTHON" -I "$LIB/arltuner-access" "$ETC/helper.toml" ${ACCESS_ARGS[@]+"${ACCESS_ARGS[@]}"}) || die "could not write $ETC/helper.toml"
 if ! grep -q '^users = \[.\+\]' "$ETC/helper.toml" && ! grep -q '^group = ' "$ETC/helper.toml"; then
     echo "WARNING: nobody is allowed to use the helper yet (no invoking user found). Run: sudo bash install.sh --add-user NAME" >&2
 fi
-
-# the users just admitted get the socket's group, so they can open the socket: the seeded invoker and the --add-user names - never a user who merely
-# re-ran the installer against an existing allowlist (that would widen it through the group)
-for u in ${SEEDED:+"$SEEDED"} ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do
-    if [ -n "$DESTDIR" ]; then
-        echo "usermod -aG $GROUP $u: skipped (DESTDIR install)"
-    else
-        id -u -- "$u" >/dev/null 2>&1 || die "no such user: $u"
-        usermod -aG "$GROUP" -- "$u" || die "usermod -aG $GROUP $u failed"
-        echo "$u is in group $GROUP (log out and in again for it to apply to running sessions)"
-    fi
-done
 
 # The accepted state (/etc/arltuner/accepted) is user data (D-036): it is not seeded, replaced or removed here. An existing one (this machine's earlier
 # installs, or one saved in the app) is left exactly as it is; a fresh install has none until the user saves a profile as accepted.

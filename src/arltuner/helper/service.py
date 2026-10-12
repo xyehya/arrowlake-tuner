@@ -3,16 +3,18 @@
 ``arltuner-helper --device --socket`` listens on ``/run/arltuner/helper.sock`` (``SOCKET_PATH``) and serves the ordinary protocol (contract 8, JSON lines)
 to **one client at a time**. Two ways to get the listening socket, one code path after that:
 
-* **socket activation** (the shipped ``arltuner-helper.socket`` unit): systemd binds the socket (``root:arltuner 0660``) and hands it over as fd 3 with
+* **socket activation** (the shipped ``arltuner-helper.socket`` unit): systemd binds the socket (``root`` 0666) and hands it over as fd 3 with
   ``LISTEN_PID`` / ``LISTEN_FDS`` (the ``sd_listen_fds`` protocol, implemented here with the standard library only). The helper then exits after
   ``idle_exit_s`` (``helper.toml``, default 600) with no client and no operation; the next connect starts it again. The handed-over socket is checked
-  (a filesystem socket owned by root with no access for "other") and refused otherwise;
+  (a listening filesystem socket owned by root) and refused otherwise;
 * **self-made** (any other init, a manual start): the helper creates the socket itself. The run directory must be a trusted directory (root-owned, not
   group/world-writable); an existing node is removed only when it is a socket owned by us (a stale one - the instance lock proves no other helper runs);
-  it is bound under ``umask 0177`` (so it is born 0600), only then handed to the group (``chown``) and widened to 0660, and only then does it
+  it is bound under ``umask 0177`` (so it is born 0600), then (``[access] group`` set: handed to that group, ``chown``) widened to 0666, and only then does it
   ``listen``: at no moment can anyone connect through a wider permission than the final one. It stays until the helper stops; it never idles out.
 
-**Authorization is the peer, on every accept** (``SO_PEERCRED``, kernel-supplied; the socket's mode is only the first fence). The peer's uid must be
+**The socket is world-connectable (D-043 amendment, 2026-10-12): the peer check below is THE gate**, so a newly allowed user needs no re-login for a group.
+
+**Authorization is the peer, on every accept** (``SO_PEERCRED``, kernel-supplied). The peer's uid must be
 admitted by ``/etc/arltuner/helper.toml`` ``[access]`` (:class:`~arltuner.helper.settings.Access`; re-read - trust-checked - at every accept, so a change takes
 effect without a restart; unreadable / untrusted / invalid / missing = nobody). A refused peer, and a second client while one is connected, gets exactly one
 framed ``REFUSED`` error line (``id`` null) and is closed; nothing of the helper's state is shown to a peer that is not admitted (the busy answer comes after
@@ -40,9 +42,10 @@ from .protocol import REFUSED, encode, error_response
 from .settings import DEFAULT_IDLE_EXIT_S, HelperToml
 from .trust import TrustError, check_trusted_path
 
-__all__ = ["CLIENT_BUSY", "ACCESS_DENIED", "Peer", "SOCKET_PATH", "Service", "ServiceError", "adopt_socket", "create_socket", "listen_fds", "peer_credentials"]
+__all__ = ["CLIENT_BUSY", "ACCESS_DENIED", "Peer", "SOCKET_MODE", "SOCKET_PATH", "Service", "ServiceError", "adopt_socket", "create_socket", "listen_fds", "peer_credentials"]
 
 SOCKET_PATH = Path("/run/arltuner/helper.sock")
+SOCKET_MODE = 0o666  # connectable by everyone; SO_PEERCRED + [access] decide (D-043 amendment)
 SD_LISTEN_FDS_START = 3
 ACCESS_DENIED = "ACCESS_DENIED"  # detail.check of the refusal for a peer that is not admitted
 CLIENT_BUSY = "CLIENT_BUSY"  # detail.check of the refusal for a second client
@@ -92,8 +95,8 @@ def listen_fds(environ: Mapping[str, str], pid: int) -> int | None:
 
 
 def adopt_socket(fd: int = SD_LISTEN_FDS_START, *, euid: int = 0, lstat_fn: Callable[[str], Any] = os.lstat) -> socket.socket:
-    """The descriptor systemd handed over, checked: a listening ``AF_UNIX`` stream socket on a filesystem path whose node is a socket of ``euid`` that
-    "other" cannot touch (a unit that left it world-accessible is refused at start, not served)."""
+    """The descriptor systemd handed over, checked: a listening ``AF_UNIX`` stream socket on a filesystem path whose node is a socket of ``euid`` (its mode
+    is not checked: the peer check is the gate)."""
     try:
         sock = socket.socket(fileno=fd)
     except OSError as exc:
@@ -112,8 +115,6 @@ def adopt_socket(fd: int = SD_LISTEN_FDS_START, *, euid: int = 0, lstat_fn: Call
             raise ServiceError(f"cannot stat the socket {name}: {exc.strerror or exc}") from None
         if not stat.S_ISSOCK(st.st_mode) or st.st_uid != euid:
             raise ServiceError(f"{name} is not a socket owned by uid {euid}")
-        if st.st_mode & 0o007:
-            raise ServiceError(f"{name} mode {stat.S_IMODE(st.st_mode):04o} gives access to other users; refusing to serve on it")
         os.set_inheritable(sock.fileno(), False)
     except BaseException:
         sock.detach()  # leave the descriptor alone: the process is exiting and nothing else owns it
@@ -127,20 +128,21 @@ def create_socket(
     mkdir_fn: Callable[[str, int], object] = os.mkdir, getgrnam: Callable[[str], Any] | None = None, trust_parents: bool = True,
 ) -> socket.socket:
     """Make the listening socket safely (module docstring). ``ServiceError`` for anything that is not as it should be; a socket is never left wider than
-    0600 until it is complete and never bound at all if its directory or an existing node is suspect. ``trust_parents=False`` (non-root test / simulator runs)
+    0600 until it is complete (then 0666: the peer check is the gate) and never bound at all if its directory or an existing node is suspect. ``group`` is
+    optional (``[access] group``); when given it must exist and the node is handed to it. ``trust_parents=False`` (non-root test / simulator runs)
     checks only the directory itself (owned by ``euid``, not group/world-writable), not its ancestors."""
     path = Path(path)
     directory = str(path.parent)
-    if not group:
-        raise ServiceError("no [access] group in helper.toml: the socket cannot be made root:<group> 0660 (set the group, or start the helper from the systemd socket unit)")
-    if getgrnam is None:
-        import grp
+    gid = None
+    if group:
+        if getgrnam is None:
+            import grp
 
-        getgrnam = grp.getgrnam
-    try:
-        gid = getgrnam(group).gr_gid
-    except (KeyError, OSError):
-        raise ServiceError(f"the group {group!r} of [access] does not exist") from None
+            getgrnam = grp.getgrnam
+        try:
+            gid = getgrnam(group).gr_gid
+        except (KeyError, OSError):
+            raise ServiceError(f"the group {group!r} of [access] does not exist") from None
     try:
         lstat_fn(directory)
     except FileNotFoundError:
@@ -181,8 +183,9 @@ def create_socket(
             bound = True
         finally:
             umask_fn(old)
-        chown_fn(str(path), -1, gid, follow_symlinks=False)
-        chmod_fn(str(path), 0o660)
+        if gid is not None:
+            chown_fn(str(path), -1, gid, follow_symlinks=False)
+        chmod_fn(str(path), SOCKET_MODE)
         sock.listen(_BACKLOG)
     except BaseException as exc:
         sock.close()

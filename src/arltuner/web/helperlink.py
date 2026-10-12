@@ -36,7 +36,7 @@ class HelperTimeout(Exception):
 
 class HelperConnectError(Exception):
     """The helper socket cannot be used; ``str(exc)`` says what to do about it. ``kind``: ``missing`` | ``untrusted`` | ``denied`` (no permission on the
-    socket file) | ``not_allowed`` / ``busy`` (the helper's framed refusal) | ``unavailable`` | ``closed`` | ``timeout``."""
+    socket file: the node's mode is wrong) | ``not_allowed`` / ``busy`` (the helper's framed refusal) | ``unavailable`` | ``closed`` | ``timeout``."""
 
     def __init__(self, kind: str, message: str) -> None:
         super().__init__(message)
@@ -322,8 +322,8 @@ def connect_helper(
     except PermissionError:
         sock.close()
         raise HelperConnectError(
-            "denied", f"no permission to use the helper socket {path}: your user is not in the allowlist. Run: sudo bash install.sh --add-user {who}  "
-            f"then log out and in again (or, right now: sg arltuner -c 'python3 tools/arltuner-gui.py')") from None
+            "denied", f"permission denied on the helper socket {path}: its file mode is wrong (it should be root-owned, mode 0666; the helper's allowlist "
+            f"decides who may use it). Reinstall to repair it: sudo bash install.sh") from None
     except ConnectionRefusedError:
         sock.close()
         raise HelperConnectError("unavailable", f"nothing is listening on {path}: start it with: sudo systemctl enable --now arltuner-helper.socket") from None

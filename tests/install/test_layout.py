@@ -149,8 +149,9 @@ class InstallLayout(InstallCase):
 
     def test_without_systemd_pid1_or_a_real_root_nothing_live_is_touched(self) -> None:
         out = self.result.stdout
-        self.assertIn("group arltuner: skipped (DESTDIR install)", out)
         self.assertNotIn("systemctl", out)
+        self.assertNotIn("groupadd", out)
+        self.assertNotIn("usermod", out)
         self.assertEqual(self.path("/usr/lib/tmpfiles.d/arltuner.conf").read_bytes(), (REPO / "packaging" / "arltuner.tmpfiles.conf").read_bytes())
 
     def test_installed_tree_passes_the_helpers_own_trust_check_modulo_ownership(self) -> None:
@@ -457,34 +458,33 @@ class AccessAllowlist(InstallCase):
     def toml(self) -> dict:
         return tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text())
 
-    def test_the_invoking_user_is_seeded_with_the_group_on_a_fresh_install(self) -> None:
+    def test_the_invoking_user_is_seeded_without_any_group_on_a_fresh_install(self) -> None:
         r = self.ok_install(extra_env={"SUDO_USER": "alice"})
-        self.assertEqual(self.toml(), {"allow_taint_bits": [2], "access": {"users": ["alice"], "group": "arltuner"}})
+        self.assertEqual(self.toml(), {"allow_taint_bits": [2], "access": {"users": ["alice"]}})  # D-043 amendment: no group, no usermod, no re-login
         self.assertEqual(self.mode("/etc/arltuner/helper.toml"), 0o644)
-        self.assertIn("usermod -aG arltuner alice: skipped (DESTDIR install)", r.stdout)
+        self.assertNotIn("usermod", r.stdout + r.stderr)
         self.assertNotIn("nobody is allowed", r.stderr)
 
     def test_add_user_appends_and_is_idempotent_and_never_drops_the_others(self) -> None:
         self.ok_install(extra_env={"SUDO_USER": "alice"})
         self.ok_install("--add-user", "bob")
         self.ok_install("--add-user", "bob", "--add-user", "carol")
-        self.assertEqual(self.toml()["access"], {"users": ["alice", "bob", "carol"], "group": "arltuner"})
+        self.assertEqual(self.toml()["access"], {"users": ["alice", "bob", "carol"]})
         before = self.path("/etc/arltuner/helper.toml").read_bytes()
         self.ok_install("--add-user", "carol")
         self.assertEqual(self.path("/etc/arltuner/helper.toml").read_bytes(), before)
 
     def test_a_rerun_with_another_sudo_user_does_not_widen_an_existing_allowlist(self) -> None:
-        first = self.ok_install(extra_env={"SUDO_USER": "alice"})
-        self.assertIn("usermod -aG arltuner alice", first.stdout)
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
         r = self.ok_install(extra_env={"SUDO_USER": "mallory"})
         self.assertEqual(self.toml()["access"]["users"], ["alice"])
-        self.assertNotIn("mallory", r.stdout)  # not put in the group either (the usermod line), not only absent from the list
+        self.assertNotIn("mallory", r.stdout)
 
     def test_an_old_helper_toml_without_access_keeps_its_taint_bits_and_gets_the_invoking_user(self) -> None:
         self.ok_install()
         self.path("/etc/arltuner/helper.toml").write_text("allow_taint_bits = [2, 5]\n")
         self.ok_install(extra_env={"SUDO_USER": "alice"})
-        self.assertEqual(self.toml(), {"allow_taint_bits": [2, 5], "access": {"users": ["alice"], "group": "arltuner"}})
+        self.assertEqual(self.toml(), {"allow_taint_bits": [2, 5], "access": {"users": ["alice"]}})
 
     def test_a_helper_toml_with_a_group_only_allowlist_is_left_alone(self) -> None:
         self.ok_install()
@@ -522,7 +522,7 @@ class AccessAllowlist(InstallCase):
 
         self.ok_install(extra_env={"SUDO_USER": "alice"})
         t = parse_helper_toml(self.path("/etc/arltuner/helper.toml").read_text())
-        self.assertEqual((t.taint_bits, t.access.users, t.access.group, t.idle_exit_s), (frozenset({2}), ("alice",), "arltuner", 600))
+        self.assertEqual((t.taint_bits, t.access.users, t.access.group, t.idle_exit_s), (frozenset({2}), ("alice",), None, 600))
 
     def test_the_old_polkit_action_file_is_removed(self) -> None:
         old = self.path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")
@@ -538,17 +538,12 @@ class AccessAllowlist(InstallCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        def check(group_known: bool = True):
+        def check():
             lstat = lambda p: os.lstat(self.dest / str(p).lstrip("/"))  # noqa: E731
             listdir = lambda p: os.listdir(self.dest / str(p).lstrip("/"))  # noqa: E731
             read = lambda p: (self.dest / str(p).lstrip("/")).read_bytes()  # noqa: E731
 
-            def getgrnam(name):
-                if not group_known:
-                    raise KeyError(name)
-                return object()
-
-            return dict(mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid(), getgrnam=getgrnam))
+            return dict(mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid()))
 
         self.ok_install()
         (self.dest / "run/arltuner").mkdir(parents=True)
@@ -556,7 +551,6 @@ class AccessAllowlist(InstallCase):
         self.assertEqual(list(bad), ["helper.toml is valid and its [access] admits somebody"])
         self.ok_install("--add-user", "alice")
         self.assertEqual({k: v for k, v in check().items() if v}, {})
-        self.assertEqual(list({k: v for k, v in check(group_known=False).items() if v}), ["group arltuner exists (the socket's group)"])
 
 
 class UserLogSeed(InstallCase):
@@ -718,9 +712,9 @@ class SelfcheckOnTheRealInstallTree(InstallCase):
         listdir = lambda p: os.listdir(self.dest / str(p).lstrip("/"))  # noqa: E731
         read = lambda p: (self.dest / str(p).lstrip("/")).read_bytes()  # noqa: E731
         self.assertEqual((self.dest / "usr/lib/arltuner/arltuner-helper").read_bytes(), (REPO / "packaging/arltuner-helper").read_bytes())
-        results = mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid(), getgrnam=lambda name: object())
+        results = mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid())
         self.assertEqual([r for r in results if r[1] is not None], [])
-        self.assertEqual(len(results), 21)
+        self.assertEqual(len(results), 20)
 
 
 if __name__ == "__main__":

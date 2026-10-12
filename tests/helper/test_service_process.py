@@ -48,7 +48,7 @@ class SocketProcessTests(ProcessCase):
         self.procs.append(p)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if os.path.lexists(self.sock) and stat.S_IMODE(os.lstat(self.sock).st_mode) == 0o660:
+            if os.path.lexists(self.sock) and stat.S_IMODE(os.lstat(self.sock).st_mode) == 0o666:
                 time.sleep(0.05)
                 return p
             if p.poll() is not None:
@@ -68,7 +68,7 @@ class SocketProcessTests(ProcessCase):
         self.assertNotIn(b"Traceback", err)
         self.assertIn(b"client connected", err)
 
-    def handed_over(self, mode: int = 0o660) -> subprocess.Popen[bytes]:
+    def handed_over(self, mode: int = 0o666) -> subprocess.Popen[bytes]:
         """A helper started the way the socket unit starts it: the listening socket arrives as fd 3."""
         self.run_dir.mkdir(mode=0o755, exist_ok=True)
         listener = socket.socket(socket.AF_UNIX)
@@ -97,19 +97,27 @@ class SocketProcessTests(ProcessCase):
         self.assertEqual(c.read()["error"]["detail"]["check"], "ACCESS_DENIED")
         c.close()
 
-    def test_a_self_made_socket_with_a_loose_helper_toml_is_not_made(self) -> None:
+    def test_a_self_made_socket_with_a_loose_helper_toml_admits_nobody(self) -> None:
         os.chmod(self.toml, 0o666)
-        p = subprocess.Popen([sys.executable, "-I", str(LAUNCHER), *self.args()], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.tmp)
-        self.procs.append(p)
-        self.assertEqual(p.wait(10), 77)
-        self.assertFalse(os.path.lexists(self.sock))
+        self.start()
+        c = Client(self.sock)
+        self.assertEqual(c.read()["error"]["detail"]["check"], "ACCESS_DENIED")
+        c.close()
 
-    def test_no_group_means_no_self_made_socket(self) -> None:
+    def test_no_group_is_fine_the_socket_is_0666_and_the_allowlist_decides(self) -> None:
         self.write_toml(f'[access]\nusers = ["{my_name()}"]\n')
+        self.start()
+        self.assertEqual(stat.S_IMODE(os.lstat(self.sock).st_mode), 0o666)
+        c = Client(self.sock)
+        self.assertTrue(c.call("1", "preflight")["ok"])
+        c.close()
+
+    def test_an_unknown_group_in_the_allowlist_means_no_socket(self) -> None:
+        self.write_toml(f'[access]\nusers = ["{my_name()}"]\ngroup = "no-such-group-xyz"\n')
         p = subprocess.Popen([sys.executable, "-I", str(LAUNCHER), *self.args()], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.tmp)
         self.procs.append(p)
         self.assertEqual(p.wait(10), 77)
-        self.assertIn(b"no [access] group", p.stderr.read())
+        self.assertIn(b"does not exist", p.stderr.read())
         self.assertFalse(os.path.lexists(self.sock))
 
     def test_a_second_helper_is_refused_by_the_instance_lock_and_leaves_the_first_socket_alone(self) -> None:
@@ -131,10 +139,15 @@ class SocketProcessTests(ProcessCase):
         self.assertTrue(os.path.lexists(self.sock))  # systemd's node, not removed by the helper
         self.assertIn(b"idle for 1 s", p.stderr.read())
 
-    def test_a_world_accessible_handover_is_refused_at_start(self) -> None:
-        p = self.handed_over(0o666)
+    def test_a_handover_that_is_not_a_listening_unix_socket_is_refused_at_start(self) -> None:
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        self.addCleanup(os.close, w)
+        p = subprocess.Popen([sys.executable, "-I", "-c", HANDOVER, str(r), str(LAUNCHER), *self.args()], pass_fds=(r,),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.tmp)
+        self.procs.append(p)
         self.assertEqual(p.wait(10), 77)
-        self.assertIn(b"access to other users", p.stderr.read())
+        self.assertIn(b"not a socket", p.stderr.read())
 
     def test_usage(self) -> None:
         for argv in (["--sim", "--socket-path", str(self.sock)], ["--sim", "--helper-toml", str(self.toml)]):

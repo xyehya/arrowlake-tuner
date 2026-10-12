@@ -36,6 +36,8 @@ class ConnectAgainstTheService(ServiceCase):
         self.assertEqual(ctx.exception.kind, "not_allowed")
         self.assertIn("sudo bash install.sh --add-user alice", str(ctx.exception))
         self.assertIn("allowlist", str(ctx.exception))
+        for stale in ("log out", "sg arltuner", "group"):
+            self.assertNotIn(stale, str(ctx.exception))
 
     def test_a_second_gui_is_told_another_client_is_connected(self) -> None:
         self.serve()
@@ -106,7 +108,7 @@ class ConnectErrors(unittest.TestCase):
         self.assertEqual(ctx.exception.kind, "untrusted")
 
     @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
-    def test_permission_denied_names_the_allowlist_and_the_group_workaround(self) -> None:
+    def test_permission_denied_means_the_socket_is_broken_not_that_the_user_is_unlisted(self) -> None:
         s = socket.socket(socket.AF_UNIX)
         s.bind(str(self.path))
         s.listen(1)
@@ -116,10 +118,11 @@ class ConnectErrors(unittest.TestCase):
             self.connect(user="alice")
         self.assertEqual(ctx.exception.kind, "denied")
         msg = str(ctx.exception)
-        self.assertIn("not in the allowlist", msg)
-        self.assertIn("sudo bash install.sh --add-user alice", msg)
-        self.assertIn("log out and in again", msg)
-        self.assertIn("sg arltuner", msg)
+        self.assertIn("file mode is wrong", msg)
+        self.assertIn("0666", msg)
+        self.assertIn("sudo bash install.sh", msg)
+        for stale in ("log out", "sg arltuner", "--add-user", "allowlist is"):  # the allowlist is the helper's answer (not_allowed), never a connect() EACCES
+            self.assertNotIn(stale, msg)
 
     def test_nothing_listening(self) -> None:
         s = socket.socket(socket.AF_UNIX)

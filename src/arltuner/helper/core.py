@@ -156,7 +156,7 @@ class Helper:
 
     def request_shutdown(self, reason: str) -> None:
         """Stop at the next safe point: the running op's cancel flag is set (a transaction in flight completes), the main loop ends."""
-        self.cfg.log(f"shutting down: {reason}")
+        self.cfg.log(f"{'closing the connection' if self.socket_mode else 'shutting down'}: {reason}")
         cancel = self._cancel
         self._shutdown.set()
         if cancel is not None:
@@ -253,7 +253,7 @@ class Helper:
                 except queue.Empty:
                     continue
                 if frame.kind == "eof":
-                    self.request_shutdown("EOF on stdin")
+                    self.request_shutdown("client disconnected" if self.socket_mode else "EOF on stdin")
                     break
                 self._handle(frame)
         finally:

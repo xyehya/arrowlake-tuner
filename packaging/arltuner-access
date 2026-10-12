@@ -7,7 +7,6 @@
 * never drops an existing allowlist: users are only added, an existing ``group`` is kept;
 * ``--seed-user`` / ``--seed-group``: used only when the file has no allowlist yet (no ``[access]`` users and no group): the first install's user and group;
 * ``--add-user``: always appended (``install.sh --add-user NAME``), once;
-* prints ``seeded: NAME`` when ``--seed-user`` was applied (install.sh then puts exactly that user in the group);
 * the existing file must be valid (``arltuner.helper.settings``); a broken one is reported and left untouched;
 * ``--reseed``: the other settings go back to the defaults (``allow_taint_bits = [2]``), the allowlist stays;
 * a file that already says what was asked is not rewritten; otherwise it is replaced atomically (0644, root:root when run as root).
@@ -94,18 +93,14 @@ def main(argv: list[str]) -> int:
     taint = frozenset({2}) if (reseed or old_text is None) else cur.taint_bits
     users = list(cur.access.users)
     group = cur.access.group
-    seeded = None
     if cur.access.empty:  # no allowlist yet: the first install's user and group
         if seed_user and seed_user not in users:
             users.append(seed_user)
-            seeded = seed_user
         group = seed_group
     for name in add:
         if name not in users:
             users.append(name)
     new = HelperToml(taint, Access(tuple(users), group), 600 if reseed or old_text is None else cur.idle_exit_s)
-    if seeded:
-        print(f"seeded: {seeded}")
     if old_text is not None and not reseed and new == cur:
         print(f"{path}: access unchanged ({', '.join(new.access.users) or 'nobody'}{'; group ' + new.access.group if new.access.group else ''})")
         return 0

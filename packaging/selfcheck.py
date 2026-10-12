@@ -3,9 +3,9 @@
 
 It asks the question the root helper will ask at start-up (SPEC 4.4): is everything it will load or open root-owned, not group/world-writable,
 free of symlinks, with root-owned parents? It reuses ``arltuner.helper.trust`` (the helper's own checks) and adds what only the install can know:
-the launcher is executable, the systemd socket + service units are present and pin the launcher and the socket's owner / group / mode, the group they name
-exists, no polkit action file is left over from the old install, ``helper.toml`` has an ``[access]`` that admits somebody, the audit log is 0600.
-Pure over injectable ``lstat_fn`` / ``listdir_fn`` / ``read_fn`` / ``getgrnam`` / ``root_uid``: tests feed fake stat results. Exit 0: all checks passed;
+the launcher is executable, the systemd socket + service units are present and pin the launcher and the socket's owner / mode (0666: the peer check is the
+gate), no polkit action file is left over from the old install, ``helper.toml`` has an ``[access]`` that admits somebody, the audit log is 0600.
+Pure over injectable ``lstat_fn`` / ``listdir_fn`` / ``read_fn`` / ``root_uid``: tests feed fake stat results. Exit 0: all checks passed;
 1: at least one failed (each is named); the install is then NOT usable and ``uninstall.sh`` removes it.
 """
 from __future__ import annotations
@@ -26,7 +26,6 @@ OLD_POLKIT_FILE = Path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.he
 UNIT_DIRS = (Path("/etc/systemd/system"), Path("/usr/lib/systemd/system"))  # install.sh uses the first; a distribution package may use the second
 SOCKET_UNIT, SERVICE_UNIT = "arltuner-helper.socket", "arltuner-helper.service"
 SOCKET_PATH = Path("/run/arltuner/helper.sock")
-SOCKET_GROUP = "arltuner"
 EXEC_START = f"/usr/bin/python3 -I {HELPER} --device --socket"
 TMPFILES_FILE = Path("/usr/lib/tmpfiles.d/arltuner.conf")
 ETC_DIR = Path("/etc/arltuner")
@@ -76,12 +75,12 @@ def unit_sections(data: bytes) -> dict[str, dict[str, list[str]]]:
 
 
 def check_socket_unit_text(data: bytes) -> None:
-    """``ValueError`` unless the socket unit listens on exactly ``/run/arltuner/helper.sock``, owned by root, group ``arltuner``, mode 0660 (no access for
-    "other"), and does not hand each connection to its own service instance (``Accept=no``)."""
+    """``ValueError`` unless the socket unit listens on exactly ``/run/arltuner/helper.sock``, owned by root, mode 0666 (D-043 amendment: the helper's peer check
+    is the gate, so the group is irrelevant), and does not hand each connection to its own service instance (``Accept=no``)."""
     sock = unit_sections(data).get("Socket")
     if sock is None:
         raise ValueError("no [Socket] section")
-    for key, want in (("ListenStream", [str(SOCKET_PATH)]), ("SocketUser", ["root"]), ("SocketGroup", [SOCKET_GROUP]), ("SocketMode", ["0660"])):
+    for key, want in (("ListenStream", [str(SOCKET_PATH)]), ("SocketUser", ["root"]), ("SocketMode", ["0666"])):
         if sock.get(key) != want:
             raise ValueError(f"{key} is {sock.get(key)}, must be exactly {want}")
     if sock.get("Accept", ["no"]) != ["no"]:
@@ -120,7 +119,6 @@ def selfcheck(
     listdir_fn: Callable[[str], list[str]] = os.listdir,
     read_fn: Callable[[Path], bytes] = _read,
     root_uid: int = 0,
-    getgrnam: Callable[[str], Any] | None = None,
 ) -> list[Result]:
     from arltuner.helper.trust import TrustError, check_code_tree, check_trusted_path
 
@@ -196,18 +194,6 @@ def selfcheck(
     unit("systemd socket unit arltuner-helper.socket", SOCKET_UNIT, check_socket_unit_text)
     unit("systemd service unit arltuner-helper.service", SERVICE_UNIT, check_service_unit_text)
 
-    def group_exists() -> None:
-        lookup = getgrnam
-        if lookup is None:
-            import grp
-
-            lookup = grp.getgrnam
-        try:
-            lookup(SOCKET_GROUP)
-        except KeyError:
-            raise ValueError(f"the group {SOCKET_GROUP!r} named by the socket unit does not exist (groupadd -r {SOCKET_GROUP})") from None
-
-    run(f"group {SOCKET_GROUP} exists (the socket's group)", group_exists)
     run("no old polkit action file", lambda: check_old_polkit_gone(lstat_fn))
     path("tmpfiles.d file", TMPFILES_FILE)
     path("policy /etc/arltuner/policy.toml", ETC_DIR / "policy.toml")

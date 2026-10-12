@@ -206,4 +206,4 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   process of an allowlisted user can drive the helper without a prompt. Compensations: guard + policy limits, allowlist, one transaction at a
   time, read-back, health gate, audit log, read-only web scope, idle exit, nothing applied on its own (autostart OD-3/OD-4 stays unsigned).
   Supersedes the pkexec/polkit parts of D-029 (root argv: exactly `--device` or `--device --socket`), D-028 and D-042; the polkit action
-  file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go.
+  file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go. 2026-10-12 amendment: socket 0666; the peer-cred allowlist is the gate, so a newly allowed user needs no re-login; the group is optional.

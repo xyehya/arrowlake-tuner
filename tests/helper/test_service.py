@@ -102,13 +102,13 @@ class ServiceCase(HelperCase):
     def toml(self, **kw: Any) -> HelperToml:
         return HelperToml(access=kw.pop("access", Access((my_name(),))), **kw)
 
-    def serve(self, settings=None, *, activated: bool = False, group: str | None = None, cfg=None, peercred=None, lookups=None, poll_s: float = 0.02,
+    def serve(self, settings=None, *, activated: bool = False, group: str | None = "mine", cfg=None, peercred=None, lookups=None, poll_s: float = 0.02,
               extra_ops=None) -> Service:
         if extra_ops:
             cfg = cfg or self.config(extra_ops=extra_ops)
         helper = Helper(cfg or self.config())
         loader = settings if callable(settings) else (lambda s=settings or self.toml(): s)
-        euid, grp_name = os.geteuid(), group or my_group()
+        euid, grp_name = os.geteuid(), (my_group() if group == "mine" else group)
         kw: dict[str, Any] = {} if peercred is None else {"peercred": peercred}
         svc = Service(
             helper, lambda: create_socket(self.path, group=grp_name, euid=euid, trust_parents=False), path=self.path, settings_loader=loader, activated=activated,
@@ -122,7 +122,7 @@ class ServiceCase(HelperCase):
         while time.monotonic() < deadline:
             try:
                 probe = os.lstat(self.path)
-                if stat.S_ISSOCK(probe.st_mode) and stat.S_IMODE(probe.st_mode) == 0o660:
+                if stat.S_ISSOCK(probe.st_mode) and stat.S_IMODE(probe.st_mode) == 0o666:
                     break
             except OSError:
                 pass
@@ -362,7 +362,8 @@ class DisconnectTests(ServiceCase):
         c1.send({"id": "d", "op": "vf.dump", "args": {"cpus": "0"}})
         self.assertTrue(sim.parked.wait(T))
         c1.close()  # the client is gone while a mailbox transaction is in flight
-        self.wait(lambda: any("EOF" in line for line in self.logs), "the EOF to be noticed")
+        self.wait(lambda: any("closing the connection: client disconnected" in line for line in self.logs), "the disconnect to be noticed")
+        self.assertFalse([line for line in self.logs if "EOF on stdin" in line or "shutting down" in line])  # socket-mode wording (the process is not stopping)
         err = self.refusal(self.connect())  # the op is still finishing: still one client's worth of helper
         self.assertEqual(err["detail"], {"check": CLIENT_BUSY})
         self.assertIsNotNone(svc.helper.machine.running)
@@ -461,7 +462,7 @@ class SocketCreationTests(unittest.TestCase):
         s = self.make(chown_fn=chown, chmod_fn=chmod)
         self.assertEqual(seen, {"mode_at_chown": 0o600, "mode_at_chmod": 0o600, "connect_before_listen": "refused"})
         st = os.lstat(self.path)
-        self.assertEqual((stat.S_IMODE(st.st_mode), st.st_gid, stat.S_ISSOCK(st.st_mode)), (0o660, grp.getgrnam(my_group()).gr_gid, True))
+        self.assertEqual((stat.S_IMODE(st.st_mode), st.st_gid, stat.S_ISSOCK(st.st_mode)), (0o666, grp.getgrnam(my_group()).gr_gid, True))
         self.assertTrue(s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN))
 
     def test_the_process_umask_is_restored(self) -> None:
@@ -518,11 +519,20 @@ class SocketCreationTests(unittest.TestCase):
             self.make(trust_parents=True, euid=0, lstat_fn=lambda p: types.SimpleNamespace(st_uid=1000, st_mode=stat.S_IFDIR | 0o755))
         self.assertFalse(os.path.lexists(self.path))
 
-    def test_no_group_or_an_unknown_group_means_no_socket(self) -> None:
-        for group in (None, "", "no-such-group-xyz"):
-            with self.subTest(group=group), self.assertRaises(ServiceError):
-                self.make(group=group)
+    def test_an_unknown_group_means_no_socket(self) -> None:
+        with self.assertRaises(ServiceError):
+            self.make(group="no-such-group-xyz")
         self.assertFalse(os.path.lexists(self.path))
+
+    def test_the_group_is_optional_the_socket_is_still_0666_and_never_chowned(self) -> None:
+        chowned: list[Any] = []
+        for group in (None, ""):
+            with self.subTest(group=group):
+                self.path.unlink(missing_ok=True)
+                s = self.make(group=group, chown_fn=lambda *a, **k: chowned.append(a))
+                self.assertEqual(stat.S_IMODE(os.lstat(self.path).st_mode), 0o666)
+                self.assertTrue(s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN))
+        self.assertEqual(chowned, [])
 
 
 @unittest.skipUnless(POSIX, "Unix sockets")
@@ -550,15 +560,21 @@ class SocketActivationTests(unittest.TestCase):
             s.listen(2)
         return s, path
 
+    def test_a_handed_over_socket_is_adopted_whatever_its_mode(self) -> None:
+        for mode in (0o666, 0o660, 0o600):
+            s, _ = self.make_listener(mode)
+            got = adopt_socket(os.dup(s.fileno()), euid=os.geteuid())  # the peer check is the gate, not the node's mode (D-043 amendment)
+            self.addCleanup(got.close)
+
     def test_a_handed_over_socket_is_adopted(self) -> None:
-        s, _ = self.make_listener(0o660)
+        s, _ = self.make_listener(0o666)
         fd = os.dup(s.fileno())
         got = adopt_socket(fd, euid=os.geteuid())
         self.addCleanup(got.close)
         self.assertFalse(os.get_inheritable(got.fileno()))
 
     def test_unsafe_handovers_are_refused(self) -> None:
-        for label, mode, listen, euid_add in (("world accessible", 0o666, True, 0), ("other readable", 0o664, True, 0), ("not listening", 0o660, False, 0), ("wrong owner", 0o660, True, 1)):
+        for label, mode, listen, euid_add in (("not listening", 0o666, False, 0), ("wrong owner", 0o666, True, 1)):
             with self.subTest(label):
                 s, _ = self.make_listener(mode, listen=listen)
                 fd = os.dup(s.fileno())

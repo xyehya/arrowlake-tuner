@@ -387,17 +387,14 @@ class HelperServiceTests(FakeRoot):
         r = self.run_pf().get("helper_service")
         self.assertEqual((r.status, r.reason), (Status.READ_ONLY, "/run/arltuner/helper.sock is not a socket"))
 
-    def test_a_socket_others_can_reach_is_not_ok(self):
-        for mode in (0o666, 0o664, 0o662, 0o661):
+    def test_the_socket_mode_is_not_judged_0666_and_0660_both_pass(self):
+        """D-043 amendment: the peer check is the gate; 0666 is the shipped mode, 0660 an operator's choice."""
+        for mode in (0o666, 0o660, 0o600):
             with self.subTest(mode=oct(mode)):
                 self.make_socket(mode)
                 r = self.run_pf().get("helper_service")
-                self.assertEqual(r.status, Status.READ_ONLY)
-                self.assertIn("other users", r.reason)
-
-    def test_a_socket_of_root_only_mode_0600_is_fine(self):
-        self.make_socket(0o600)
-        self.assertEqual(self.status("helper_service"), Status.PASS)
+                self.assertEqual(r.status, Status.PASS)
+                self.assertIn(f"{mode:04o}", r.reason)
 
     def test_helper_toml_missing_or_without_an_allowlist_or_broken(self):
         cases = {"missing": None, "no access": "allow_taint_bits = [2]\n", "empty": "[access]\nusers = []\n", "broken": "[access\n", "unknown key": "[access]\nusr = [\"a\"]\n"}
