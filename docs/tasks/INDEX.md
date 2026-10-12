@@ -37,7 +37,7 @@
 | G-132 | measure/stress from R-001: min=max pinning, no_turbo note, cap_granularity, user_cap, stress EPP | lnx | T0 | **merged** 2026-10-12 | G-131 |
 | G-133 | Tune: OC ratio model (ratio first, target gated), live policy limits, All-Core/Per-Core labels, no turbo text in unit cards | lnx | T0 | in progress 2026-10-12 | G-132 |
 | G-134 | policy "auto" ratio ceiling = 0x1C fused max + 3 (D-038) | lnx | T0 | **merged** 2026-10-12 | — |
-| G-135 | user guide docs/guide/ (documenter agent, own NOTES.md memory) | lnx | T0 | in progress 2026-10-12 | — |
+| G-135 | user guide docs/guide/ (documenter agent, own NOTES.md memory) | lnx | T0 | **merged** 2026-10-12 (rev 1; recheck after G-133) | — |
 | G-136 | README screenshots: capture tool (sim-tested) + gallery; live capture by orchestrator | lnx | T0/T1 | in progress 2026-10-12 | G-133 for live shots |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
