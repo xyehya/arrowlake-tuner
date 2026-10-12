@@ -28,5 +28,8 @@
 | G-124 | no-OC-point OC words always target 0; plan steps = sent ops | lnx | T0 | **merged** 2026-10-12 | G-122 |
 | G-125 | final polish: OC point in Simple grid, current caveat texts, no false 'not read' warning, unit cell | lnx | T0 | **merged** 2026-10-12 | G-124 |
 | G-126 | OC ratio raise lifts scaling_max_freq (and lowers on revert), respecting user caps and journals | lnx | T0 | **merged** 2026-10-12 | G-125 |
+| G-127 | Tune page live truth (D-036): plain button names, read time, favored ★ live, reach display, labelled predictions, no lore | lnx | T0 | ready | — |
+| G-128 | backend live topology/limits/points (D-036): sysfs topology + favored, live point ratios/turbo/limits, no 285K fingerprint, lore out | lnx | T0 | ready | — |
+| G-129 | repo/install de-personalisation (D-036): user-owned accepted state, author profiles/policies/captures out | lnx | T0 | proposed | G-128 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

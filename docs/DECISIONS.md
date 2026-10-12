@@ -141,3 +141,11 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   V target 0 ("XTU never sends one") — an orchestrator choice, not a hardware fact. Measured 2026-10-11: with no OC point (OC ratio ≤ top fused
   ratio) the hardware drops a written target (`0xFEC5B439` → `0xFEC00039`), so the only verifiable whole-curve offset word there has target 0.
   Allowed only when ratio ≤ the kind's top fused ratio (P 57 / E 46) and all other bounds hold; a zero target above it (OC point) stays refused.
+- **D-036 · 2026-10-12 · Live data only; no reference-machine lore at runtime (operator).** Operator: "make sure all the data is being read in
+  realtime from the system simulating no previous knowledge or tests we did" (public GitHub project). Allowed sources for anything shown or used
+  to decide: (1) live mailbox/MSR reads, (2) live sysfs/CPUID/hwmon, (3) the user's own data on this machine (curves, profiles, accepted state),
+  always labelled with name + date, (4) architecture facts valid for every Arrow Lake-S part (registers.md, Intel docs). Reference-machine
+  results (285K fused words, topology 8P+16E, favored P0/P3, point ratios, E 40× errors, VccIA margin, the operator's tuning/policies) become
+  live-derived, a labelled community/reference hint, a simulator/test fixture, or are removed. Favored cores: P-cores with the highest
+  `acpi_cppc/highest_perf` (fallback `cpuinfo_max_freq`), none if all equal; cross-checked with `0x1C` after a read. Board Vcore channel stays a
+  per-board table keyed by DMI board name (labels are generic, not discoverable). Work: G-127 (Tune page), G-128 (backend), G-129 (repo/install).
