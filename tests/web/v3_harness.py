@@ -16,6 +16,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 from arltuner.web.server import Config, WebServer  # noqa: E402
 from tests.web.fake_helper import FakeHelper, preflight_report  # noqa: E402
+from tests.web.fake_v3 import UNIT_CPUS  # noqa: E402
 
 
 def tele_values(t: float) -> dict:
@@ -23,15 +24,16 @@ def tele_values(t: float) -> dict:
         return {"value": v, "unit": unit, "source": "fake", "status": "ok"}
 
     cores = {}
-    for cpu in range(24):
-        kind = "P" if cpu < 8 else "E"
+    kinds = {c: ("P" if u.startswith("P") else "E") for u, cpus in UNIT_CPUS.items() for c in cpus}   # the simulated layout (default 8P + 16E = cpus 0..23)
+    for cpu in sorted(kinds):
+        kind = kinds[cpu]
         base = 5400 if kind == "P" else 4300
         load = 0.5 + 0.5 * math.sin(t / 3.0 + cpu)
         cores[str(cpu)] = {"name": ("P-Core %d" % cpu) if kind == "P" else ("E-Core %d" % cpu),
                            "mhz": ok(round(base * (0.35 + 0.65 * load) + random.uniform(-20, 20), 1), "MHz"),
                            "busy": ok(round(100 * load, 1), "%"), "vid": ok(round(0.8 + 0.5 * load, 3), "V"), "ratio": ok(round(base * (0.35 + 0.65 * load) / 100), "x")}
     temps = {"Package id 0": {**ok(48 + 10 * math.sin(t / 7), "C"), "name": "Package"}}
-    for cpu in range(8):
+    for cpu in [c for c in sorted(kinds) if kinds[c] == "P"]:
         temps["Core %d" % cpu] = {**ok(44 + 8 * math.sin(t / 5 + cpu), "C"), "name": "Core %d" % cpu, "cpu": cpu}
     return {"ts": time.time(), "cores": cores, "temps": temps, "vcore": ok(1.12 + 0.05 * math.sin(t / 4), "V"),
             "power": {"package": ok(95 + 40 * math.sin(t / 3), "W"), "core": ok(70 + 35 * math.sin(t / 3), "W")},
@@ -39,8 +41,10 @@ def tele_values(t: float) -> dict:
             "limit_reasons_raw": ok(0, "raw")}
 
 
-def start(measure_delay: float = 0.0, apply_delay: float = 0.0, seed: bool = True, stop: threading.Event | None = None):
+def start(measure_delay: float = 0.0, apply_delay: float = 0.0, seed: bool = True, stop: threading.Event | None = None, layout: tuple | None = None):
     fake = FakeHelper()
+    if layout is not None:   # G-130: (p_cores, [[cpus of E-cluster 0], ...]) instead of the 8P + 4 x 4E reference layout
+        fake.set_layout(*layout)
     fake.preflight_result = preflight_report("write")
     fake.measure_delay = measure_delay
     fake.apply_delay = apply_delay

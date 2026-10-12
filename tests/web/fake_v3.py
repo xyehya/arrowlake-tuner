@@ -36,6 +36,17 @@ from datetime import datetime, timezone
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
 UNITS = [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]
 UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)}}
+
+
+def set_layout(p_cores: int = 8, e_clusters: list[list[int]] | None = None) -> None:
+    """The CPU layout the fake simulates, in place (UNITS / UNIT_CPUS are module globals): ``p_cores`` P-cores on cpus 0..n-1 and the E-clusters as cpu lists
+    (default: four clusters of four from cpu 8, the 8P+16E reference layout). G-130: e.g. ``set_layout(6, [[6, 7, 8, 9], [10, 11, 12, 13]])`` = 6P + 2 E-clusters."""
+    clusters = [list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)] if e_clusters is None else [list(c) for c in e_clusters]
+    UNITS[:] = [f"P{i}" for i in range(p_cores)] + [f"EC{i}" for i in range(len(clusters))]
+    UNIT_CPUS.clear()
+    UNIT_CPUS.update({**{f"P{i}": [i] for i in range(p_cores)}, **{f"EC{i}": c for i, c in enumerate(clusters)}})
+
+
 DEFAULT_FAVORED = ("P0", "P3")   # a simulator fixture, not the page's knowledge: the P-cores the fake reports as favored; FakeHelper.favored changes it
 FAVORED = DEFAULT_FAVORED
 TOPOLOGY = {"source": "acpi_cppc", "favored": None}   # what preflight's topology says: favored_source (also with no favored core: the source judged every P-core equal; None = no source
@@ -166,8 +177,6 @@ def _entry(unit: str, p: dict) -> dict:
 
 
 TURBO_COUNTS = {"P": [1, 2, 3, 4, 5, 6, 7, 8], "E": [1, 2, 3, 4, 6, 8, 12, 16]}   # 0x1AE / 0x651 (read-only by policy)
-VCCIA_OFFSET_V = 0.105   # F6: ~ +100-110 mV [MEASURED lnx 2026-10-03, hypothesis on 3+ points]
-RING_V = 1.20
 
 
 def fused_of(unit: str) -> dict:
@@ -236,7 +245,15 @@ class V3Ops:
         global FAVORED
         FAVORED = tuple(units)
 
+    def set_layout(self, p_cores: int = 8, e_clusters: list[list[int]] | None = None) -> None:
+        """Switch the simulated CPU layout (see module ``set_layout``) and rebuild the state derived from the unit list."""
+        set_layout(p_cores, e_clusters)
+        self.tuning = initial_tuning()
+        self.accepted = copy.deepcopy(self.tuning)
+        self.fused_vt = {u: round(stock_vid(u, unit_ratios(u)[-1]) + 0.01, 4) for u in UNITS}
+
     def _init_v3(self) -> None:
+        set_layout()
         self.favored = DEFAULT_FAVORED
         TOPOLOGY.update(source="acpi_cppc", favored=None)
         self.topology_enabled = True      # G-128 contract: preflight carries ``topology``; False simulates a helper without it
@@ -696,14 +713,14 @@ class V3Ops:
         return out
 
     def _vccia(self, new: dict, turbo_new: dict) -> dict | None:
-        """F6 on the fake, in the shape of the real helper: the highest voltage the units may request with every core loaded (+ ring 1.20 V) plus ~105 mV, the 1-2 core
-        case as ``light_load`` and the state now as ``before_v``; None without a baseline curve."""
+        """F6 on the fake, in the shape of the G-128 helper: the highest VID any unit requests with every core loaded (no ring floor, no regulator margin: ``margin_v`` and
+        ``contributors.ring`` are null), the 1-2 core case as ``light_load`` and the state now as ``before_v``; None without a baseline curve."""
         base = self._baseline()
         if base is None:
             return None
 
         def scenario(state: dict, tables: dict, idx: int) -> tuple:
-            cands = [("ring", 40, RING_V)]
+            cands = []
             for u in UNITS:
                 pred = predict_unit(base, u, state[u]["points"])
                 pts = sorted((p["ratio"], pred[p["point"]]["effective_v"]) for p in state[u]["points"] if pred.get(p["point"], {}).get("effective_v") is not None)
@@ -725,13 +742,13 @@ class V3Ops:
         who, cands = scenario(new, tabs_new, 7)
         light, _ = scenario(new, tabs_new, 0)
         was, _ = scenario(self.tuning, tabs_now, 7)
-        best = {k: max((c for c in cands if c[0] != "ring" and kind_of(c[0]) == k), key=lambda c: c[2], default=None) for k in ("P", "E")}
-        return {"predicted_v": round(who[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": who[0], "ratio": who[1]}, "label": "prediction", "active_cores": "all",
-                "margin_v": VCCIA_OFFSET_V,
+        best = {k: max((c for c in cands if kind_of(c[0]) == k), key=lambda c: c[2], default=None) for k in ("P", "E")}
+        return {"predicted_v": round(who[2], 4), "set_by": {"unit": who[0], "ratio": who[1]}, "label": "highest requested VID among units", "active_cores": "all",
+                "margin_v": None,
                 "contributors": {**{k: (None if c is None else {"unit": c[0], "ratio": c[1], "v": round(c[2], 4)}) for k, c in best.items()},
-                                 "ring": {"unit": "ring", "ratio": 40, "v": RING_V}},
-                "before_v": round(was[2] + VCCIA_OFFSET_V, 4),
-                "light_load": {"predicted_v": round(light[2] + VCCIA_OFFSET_V, 4), "set_by": {"unit": light[0], "ratio": light[1]}, "active_cores": "1-2"}}
+                                 "ring": None},
+                "before_v": round(was[2], 4),
+                "light_load": {"predicted_v": round(light[2], 4), "set_by": {"unit": light[0], "ratio": light[1]}, "active_cores": "1-2"}}
 
     def _apply_rows(self, rid, new: dict, rows: list, warnings: list, written: dict) -> bool:
         """Apply plan rows to ``new``; True (after sending the refusal) if a row is out of policy."""
