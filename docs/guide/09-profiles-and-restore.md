@@ -134,6 +134,10 @@ particular chip are built in, so the Windows restore is meant to work on any Arr
   **Profiles** press **Record CPU fingerprint for Windows** (helper op `profiles.fingerprint`). It needs a **read this boot** (Tune, Read ratios & voltages), writes only
   `fingerprint.json` next to the existing accepted state (the accepted tuning and its words are not touched, nothing is written to the CPU) and reports `complete` or
   `incomplete: <why>`. An incomplete fingerprint is written all the same, and the Windows restore refuses it.
+- The Windows side refuses, before any write: no `fingerprint.json` or one without CPU identity or without a fused word for every P-core and E-cluster; another CPU (vendor, family,
+  model, brand) than the one recorded; a layout that differs (logical-processor counts per class, E-cluster sizes, processor groups other than 0, no L2 data); a P-core word read twice or
+  not recorded; an E-cluster reading another word than recorded (`docs/RUNBOOK-win.md`). The command-line `read-vf` and `read` with `--device-win` send one request and run no identity check
+  (they print a note); `apply`, `point-offset` and `vf-dump` settle the map first.
 - **Set as accepted** also refuses `STALE_READ` ("read again first") when the audit log shows a mailbox or plain MSR write after the read it would record, so the accepted
   words are what the CPU really holds.
 
@@ -148,7 +152,8 @@ particular chip are built in, so the Windows restore is meant to work on any Arr
 ### The admin-only directory (G-142, D-042)
 The script runs elevated, so everything that decides what it does must be writable only by Administrators and SYSTEM. That is `%ProgramData%\arltuner` (owner
 Administrators, ACL Administrators + SYSTEM; no path component may be a junction or symlink). It holds the driver, `accepted\` (the copy of `/etc/arltuner/accepted`,
-including `fingerprint.json`), `policy.toml`, the audit log `audit.jsonl` and the run's read-back file. The scripts refuse a `-From` or `-Policy` outside such a directory.
+including `fingerprint.json`), `policy.toml`, the audit log `audit.jsonl` and the run's read-back file. The scripts refuse a `-From` or `-Policy` outside such a directory. Copy the accepted state in from an Administrator terminal (for example `xcopy /e /i <where you put it> %ProgramData%\arltuner\accepted`).
+Copies of earlier versions under `%LOCALAPPDATA%\arltuner` are no longer read: delete the old driver copy and move the accepted state.
 
 ```
 # once per Windows install (elevated PowerShell, in the repository)

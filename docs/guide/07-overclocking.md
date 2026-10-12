@@ -20,10 +20,10 @@ ratio first". The OC box reads:
 | OC ratio set | Box text | Adaptive voltage |
 |---|---|---|
 | none, or not above what the unit runs at stock | "No OC ratio configured" | disabled |
-| P-core only: above its stock maximum but not above its top fused point | "OC ratio r x, uses fused point n (offset only)" | disabled |
-| above the top fused point | "OC point n, r x, adaptive V" | enabled |
+| P-core only: above its stock maximum but not above its top fused point | "OC ratio r× · uses fused point n (offset only)" | disabled |
+| above the top fused point | "OC point n · r× · adaptive V" | enabled |
 
-"Stock maximum" is the unit's fused ratio from mailbox command `0x1C` (read live; on the reference chip favored P-cores 57x, other P-cores 55x, E 46x for
+Each unit's header line summarises the state: offsets range, "OC ratio: none" (or the ratio) and "runs up to N×" (from the turbo table read from the CPU; the tooltip says where). "Stock maximum" is the unit's fused ratio from mailbox command `0x1C` (read live; on the reference chip favored P-cores 57x, other P-cores 55x, E 46x for
 the OC logic). The dropdown starts with "No OC ratio" (selectable only while the unit has none) and then offers stock maximum + 1 up to the policy's
 ratio ceiling. **An OC ratio cannot be cleared at runtime**; a cold boot clears it [MEASURED lnx 2026-10-11, tuning-results.md].
 
