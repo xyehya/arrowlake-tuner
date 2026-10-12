@@ -1,0 +1,19 @@
+# arltuner root helper: the socket the GUI connects to (D-043). Socket activation: systemd owns this socket and starts
+# arltuner-helper.service on the first connect; the helper exits again after ~10 idle minutes (idle_exit_s in /etc/arltuner/helper.toml).
+# The socket is connectable by everyone (mode 0666, D-043 amendment 2026-10-12): the gate is the helper's own SO_PEERCRED check of every
+# connection against [access] in /etc/arltuner/helper.toml (a user listed there is admitted at once, no re-login; root only if listed by name).
+# /run/arltuner stays root 0755, so nobody can replace the socket.
+[Unit]
+Description=arrowlake-tuner helper socket
+Documentation=https://github.com/xyehya/arrowlake-tuner
+
+[Socket]
+ListenStream=/run/arltuner/helper.sock
+SocketUser=root
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

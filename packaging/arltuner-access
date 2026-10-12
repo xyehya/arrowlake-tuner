@@ -1,0 +1,137 @@
+#!/usr/bin/python3 -I
+"""Edit the [access] allowlist of /etc/arltuner/helper.toml (G-144, D-043). Installed to /usr/lib/arltuner/arltuner-access and run by ``install.sh``
+(as root, ``-I``, from the installed tree; ``install.sh --add-user NAME`` calls it). Standard library plus the installed ``arltuner.helper.settings``.
+
+    arltuner-access FILE [--seed-user NAME] [--seed-group NAME] [--add-user NAME]... [--reseed]
+
+* never drops an existing allowlist: users are only added, an existing ``group`` is kept;
+* ``--seed-user`` / ``--seed-group``: used only when the file has no allowlist yet (no ``[access]`` users and no group): the first install's user and group;
+* ``--add-user``: always appended (``install.sh --add-user NAME``), once;
+* the existing file must be valid (``arltuner.helper.settings``); a broken one is reported and left untouched;
+* ``--reseed``: the other settings go back to the defaults (``allow_taint_bits = [2]``), the allowlist stays;
+* a file that already says what was asked is not rewritten; otherwise it is replaced atomically (0644, root:root when run as root).
+
+Exit 0: done / unchanged; 1: refused (named on stderr).
+"""
+import json
+import os
+import pwd
+import re
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(os.path.abspath(__file__)).parent))  # -I removes the script directory: the installed tree is the only source
+
+from arltuner.helper.settings import Access, HelperToml, parse_helper_toml  # noqa: E402
+
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,31}\$?")
+HEADER = (
+    "# arltuner root helper settings (read as root; trust-checked at every use). Keys: allow_taint_bits, idle_exit_s, [access].\n"
+    "# The first MSR write of a boot sets kernel taint bit 2 (CPU_OUT_OF_SPEC): expected [MEASURED lnx 2026-10-07, docs/knowledge/linux-path.md].\n"
+    "# [access] is who may use the helper socket (/run/arltuner/helper.sock): users by name, and/or members of a group. Empty = nobody.\n"
+    "# Add a user with:  sudo bash install.sh --add-user NAME   (takes effect at the next connection, no restart needed)\n"
+    "# idle_exit_s: the socket-activated helper exits after this many idle seconds (0 = never; default 600).\n"
+)
+
+
+def is_uid0(name: str) -> bool:
+    """True if the name is an account with uid 0 (``root`` or an alias): never added to the allowlist by this tool. An unknown name is not (it may be created later)."""
+    try:
+        return pwd.getpwnam(name).pw_uid == 0
+    except (KeyError, OSError):
+        return False
+
+
+def render(t: HelperToml, *, idle_set: bool) -> str:
+    lines = [HEADER.rstrip("\n"), f"allow_taint_bits = {json.dumps(sorted(t.taint_bits))}"]
+    if idle_set:
+        lines.append(f"idle_exit_s = {t.idle_exit_s}")
+    lines.append("")
+    lines.append("[access]")
+    lines.append(f"users = {json.dumps(list(t.access.users))}")
+    if t.access.group:
+        lines.append(f"group = {json.dumps(t.access.group)}")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0].startswith("-"):
+        print(__doc__, file=sys.stderr)
+        return 1
+    path, rest = Path(argv[0]), argv[1:]
+    add: list[str] = []
+    seed_user = seed_group = None
+    reseed = False
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("--add-user", "--seed-user", "--seed-group") and i + 1 < len(rest):
+            value = rest[i + 1]
+            if not NAME.fullmatch(value):
+                print(f"arltuner-access: {value!r} is not a valid user/group name", file=sys.stderr)
+                return 1
+            if a in ("--add-user", "--seed-user"):
+                if value == "root" or is_uid0(value):
+                    print(f"arltuner-access: {value!r} is uid 0: root is not added to the allowlist by this tool (edit helper.toml by hand if you really want that)", file=sys.stderr)
+                    return 1
+            if a == "--add-user":
+                add.append(value)
+            elif a == "--seed-user":
+                seed_user = value
+            else:
+                seed_group = value
+            i += 2
+        elif a == "--reseed":
+            reseed = True
+            i += 1
+        else:
+            print(f"arltuner-access: unknown argument {a!r}", file=sys.stderr)
+            return 1
+    try:
+        old_text = path.read_text(encoding="utf-8") if path.exists() else None
+    except OSError as exc:
+        print(f"arltuner-access: cannot read {path}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        cur = parse_helper_toml(old_text, str(path)) if old_text is not None else HelperToml(taint_bits=frozenset({2}))
+    except ValueError as exc:
+        print(f"arltuner-access: {exc}; the file is left as it is (fix or remove it, then run again)", file=sys.stderr)
+        return 1
+    idle_set = old_text is not None and "idle_exit_s" in old_text and not reseed
+    taint = frozenset({2}) if (reseed or old_text is None) else cur.taint_bits
+    users = list(cur.access.users)
+    group = cur.access.group
+    if cur.access.empty:  # no allowlist yet: the first install's user and group
+        if seed_user and seed_user not in users:
+            users.append(seed_user)
+        group = seed_group
+    for name in add:
+        if name not in users:
+            users.append(name)
+    new = HelperToml(taint, Access(tuple(users), group), 600 if reseed or old_text is None else cur.idle_exit_s)
+    if old_text is not None and not reseed and new == cur:
+        print(f"{path}: access unchanged ({', '.join(new.access.users) or 'nobody'}{'; group ' + new.access.group if new.access.group else ''})")
+        return 0
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(render(new, idle_set=idle_set))
+        os.chmod(tmp, 0o644)
+        if os.geteuid() == 0:
+            os.chown(tmp, 0, 0)
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"arltuner-access: cannot write {path}: {exc}", file=sys.stderr)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return 1
+    print(f"{path}: access now {', '.join(new.access.users) or 'nobody'}{'; group ' + new.access.group if new.access.group else ''}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

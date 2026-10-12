@@ -12,8 +12,11 @@ from __future__ import annotations
 import collections
 import ctypes
 import json
+import os
 import queue
 import socket
+import stat
+import struct
 import subprocess
 import threading
 from typing import Any, BinaryIO, Callable
@@ -30,6 +33,15 @@ class HelperUnavailable(Exception):
 
 class HelperTimeout(Exception):
     """No response within the timeout (the helper may still be working; watch the events)."""
+
+
+class HelperConnectError(Exception):
+    """The helper socket cannot be used; ``str(exc)`` says what to do about it. ``kind``: ``missing`` | ``untrusted`` | ``denied`` (no permission on the
+    socket file: the node's mode is wrong) | ``not_allowed`` / ``busy`` (the helper's framed refusal) | ``unavailable`` | ``closed`` | ``timeout``."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class RequestTooLarge(Exception):
@@ -66,6 +78,7 @@ class HelperLink:
         self._wq: queue.Queue[bytes | None] = queue.Queue(maxsize=WRITE_QUEUE)
         self._seq = 0
         self._alive = True
+        self.refusal: dict[str, Any] | None = None  # the helper's framed ``REFUSED`` line with a null id (not allowed / another client), if it sent one
         self._thread = threading.Thread(target=self._read_loop, name="helperlink-reader", daemon=True)
         self._wthread = threading.Thread(target=self._write_loop, name="helperlink-writer", daemon=True)
 
@@ -200,6 +213,10 @@ class HelperLink:
                     cb = self._pending.pop(rid, None)
                 if cb is not None:
                     cb(rid, obj)
+            elif rid is None and obj.get("ok") is False and isinstance(obj.get("error"), dict) and obj["error"].get("code") == "REFUSED":
+                with self._lock:
+                    if self.refusal is None:  # the socket service's one line before it closes (D-043); kept for the connect error
+                        self.refusal = obj["error"]
             return
         name = obj.get("event")
         if isinstance(name, str):
@@ -258,8 +275,8 @@ class SocketWriter:
 
 def spawn_helper(cmd: list[str]) -> tuple[subprocess.Popen, HelperLink]:
     """Start the helper process with a ``socketpair`` as its stdin and stdout instead of two pipes. A same-user process can reopen a pipe through
-    ``/proc/<pid>/fd/N`` and speak to the helper as the GUI; a socket cannot be opened that way (ENXIO). Works for pkexec and ``sudo``: they pass
-    fds 0/1 on unchanged."""
+    ``/proc/<pid>/fd/N`` and speak to the helper as the GUI; a socket cannot be opened that way (ENXIO). The development / simulator path
+    (``--helper CMD``); the installed helper is reached through :func:`connect_helper`."""
     mine, theirs = socket.socketpair()
     try:
         proc = subprocess.Popen(cmd, stdin=theirs.fileno(), stdout=theirs.fileno(), bufsize=0)
@@ -270,6 +287,79 @@ def spawn_helper(cmd: list[str]) -> tuple[subprocess.Popen, HelperLink]:
         theirs.close()
     rfile = mine.makefile("rb")  # buffered: readline(limit) without a recv per byte; ``mine`` itself stays open for the writer
     return proc, HelperLink(rfile, SocketWriter(mine)).start()
+
+
+HELPER_SOCKET = "/run/arltuner/helper.sock"  # = arltuner.helper.service.SOCKET_PATH (the GUI does not import the root helper's code)
+HANDSHAKE_S = 20.0  # socket activation starts the helper on the first connect; its start (lock, journal recovery) is quick, but never unbounded
+
+
+def _whoami() -> str:
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        return os.environ.get("USER") or "YOURNAME"
+
+
+def connect_helper(
+    path: str = HELPER_SOCKET, *, timeout: float = HANDSHAKE_S, lstat_fn: Callable[[str], Any] = os.lstat, owner_uid: int = 0, user: str | None = None,
+) -> HelperLink:
+    """Connect to the root helper service (D-043) and prove the link works. The node must be a socket owned by ``owner_uid`` (root) and, once connected, the
+    peer's credentials (``SO_PEERCRED`` on our end) must say the listener is ``owner_uid`` too; then the first request
+    (``preflight``, read-only) is the handshake: either it is answered (the helper admitted this user) or the helper's framed refusal / EOF explains why not.
+    Raises :class:`HelperConnectError` with a message that names the fix."""
+    who = user or _whoami()
+    try:
+        st = lstat_fn(path)
+    except FileNotFoundError:
+        raise HelperConnectError("missing", f"the helper is not installed or not started: {path} does not exist. Run: sudo bash install.sh (it enables arltuner-helper.socket)") from None
+    except OSError as exc:
+        raise HelperConnectError("missing", f"cannot look at {path}: {exc.strerror or exc}") from None
+    if not stat.S_ISSOCK(st.st_mode) or st.st_uid != owner_uid:
+        raise HelperConnectError("untrusted", f"{path} is not a socket owned by root; not connecting to it")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(path)
+    except PermissionError:
+        sock.close()
+        raise HelperConnectError(
+            "denied", f"permission denied on the helper socket {path}: its file mode is wrong (it should be root-owned, mode 0666; the helper's allowlist "
+            f"decides who may use it). Reinstall to repair it: sudo bash install.sh") from None
+    except ConnectionRefusedError:
+        sock.close()
+        raise HelperConnectError("unavailable", f"nothing is listening on {path}: start it with: sudo systemctl enable --now arltuner-helper.socket") from None
+    except OSError as exc:
+        sock.close()
+        raise HelperConnectError("unavailable", f"cannot connect to {path}: {exc.strerror or exc}") from None
+    try:  # the other end must be root (the credentials of the process that listens on the node): never hand requests to a look-alike
+        pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+        if uid != owner_uid:
+            sock.close()
+            raise HelperConnectError("untrusted", f"the process listening on {path} is uid {uid}, not root; not talking to it")
+    except OSError as exc:
+        sock.close()
+        raise HelperConnectError("untrusted", f"cannot verify who listens on {path} ({exc.strerror or exc}); not talking to it") from None
+    link = HelperLink(sock.makefile("rb"), SocketWriter(sock)).start()
+    try:
+        link.call("preflight", {}, timeout=timeout)
+    except HelperUnavailable:
+        link._thread.join(2.0)  # the framed refusal arrives before the EOF; let the reader finish so it is not missed when the writer failed first
+        refusal = link.refusal
+        link.close()
+        if refusal is not None:
+            check = (refusal.get("detail") or {}).get("check") if isinstance(refusal.get("detail"), dict) else None
+            if check == "CLIENT_BUSY":
+                raise HelperConnectError("busy", "another client is connected to the helper (another arltuner GUI?). Close it, then start this one again.") from None
+            if check == "ACCESS_DENIED":
+                raise HelperConnectError(
+                    "not_allowed", f"the helper refused this user: not in the allowlist (/etc/arltuner/helper.toml). Run: sudo bash install.sh --add-user {who}") from None
+            raise HelperConnectError("not_allowed", f"the helper refused the connection: {refusal.get('message', 'no reason given')}") from None
+        raise HelperConnectError("closed", "the helper closed the connection right away (it may have refused to start). See: journalctl -u arltuner-helper -n 30") from None
+    except HelperTimeout:
+        link.close()
+        raise HelperConnectError("timeout", f"the helper did not answer within {timeout:.0f} s. See: journalctl -u arltuner-helper -n 30") from None
+    return link
 
 
 def set_undumpable() -> bool:

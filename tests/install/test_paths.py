@@ -320,19 +320,24 @@ class GuiDefaults(unittest.TestCase):
         cls.gui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.gui)
 
-    def test_helper_command_is_pkexec_of_the_installed_launcher_with_only_device(self) -> None:
-        self.assertEqual(self.gui.default_helper_command(isfile=lambda p: True), ["pkexec", "/usr/lib/arltuner/arltuner-helper", "--device"])
+    def test_the_default_helper_is_the_service_socket_when_it_exists(self) -> None:
+        self.assertEqual(self.gui.default_helper_socket(lexists=lambda p: True), "/run/arltuner/helper.sock")
 
-    def test_no_installed_helper_means_no_default_helper(self) -> None:
-        self.assertIsNone(self.gui.default_helper_command(isfile=lambda p: False))
+    def test_no_socket_means_no_default_helper(self) -> None:
+        self.assertIsNone(self.gui.default_helper_socket(lexists=lambda p: False))
 
-    def test_only_the_exact_installed_path_is_probed(self) -> None:
+    def test_only_the_exact_socket_path_is_probed(self) -> None:
         seen: list[str] = []
-        self.gui.default_helper_command(isfile=lambda p: seen.append(p) or False)
-        self.assertEqual(seen, [str(config.INSTALLED_HELPER)])
+        self.gui.default_helper_socket(lexists=lambda p: seen.append(p) or False)
+        self.assertEqual(seen, [str(config.INSTALLED_SOCKET)])
+
+    def test_no_pkexec_anywhere_in_the_gui(self) -> None:
+        text = (REPO / "tools" / "arltuner-gui.py").read_text(encoding="utf-8")
+        self.assertNotIn("pkexec", text.replace("no polkit", ""))
+        self.assertFalse(hasattr(self.gui, "default_helper_command"))
 
     def test_constants_match_config(self) -> None:
-        self.assertEqual(self.gui.INSTALLED_HELPER, str(config.INSTALLED_HELPER))
+        self.assertEqual(self.gui.HELPER_SOCKET, str(config.INSTALLED_SOCKET))
         self.assertEqual(self.gui.INSTALLED_WEB_DIR, config.INSTALLED_WEB_DIR)
 
     def test_web_root_prefers_the_checkout_then_the_installed_directory(self) -> None:

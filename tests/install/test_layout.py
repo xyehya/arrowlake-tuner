@@ -79,8 +79,10 @@ class InstallLayout(InstallCase):
             {
                 "usr/lib/arltuner/arltuner-helper": 0o755,
                 "usr/lib/arltuner/arltuner-selfcheck": 0o755,
+                "usr/lib/arltuner/arltuner-access": 0o755,
                 "usr/lib/arltuner/platforms/arl-s.toml": 0o644,
-                "usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy": 0o644,
+                "etc/systemd/system/arltuner-helper.socket": 0o644,
+                "etc/systemd/system/arltuner-helper.service": 0o644,
                 "usr/lib/tmpfiles.d/arltuner.conf": 0o644,
                 "etc/arltuner/policy.toml": 0o644,
                 "etc/arltuner/helper.toml": 0o644,
@@ -110,7 +112,9 @@ class InstallLayout(InstallCase):
 
     def test_seeded_config_comes_from_the_repo(self) -> None:
         self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / DEFAULT_POLICY).read_bytes())  # D-036: the seed is the generic default
-        self.assertEqual(tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text()), {"allow_taint_bits": [2]})
+        # no invoking user in this run (no SUDO_USER): the allowlist is there but empty - nobody is admitted until --add-user (fail closed)
+        self.assertEqual(tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text()), {"allow_taint_bits": [2], "access": {"users": []}})
+        self.assertIn("nobody is allowed to use the helper yet", self.result.stderr)
 
     def test_a_fresh_install_has_no_accepted_state(self) -> None:
         """D-036: the accepted state is the user's; nothing from the repo (or any reference machine) is installed as one."""
@@ -128,11 +132,26 @@ class InstallLayout(InstallCase):
         for script in ("install.sh", "uninstall.sh"):
             self.assertNotIn("cap 600", (REPO / script).read_text(), script)
 
-    def test_the_polkit_action_and_tmpfiles_are_the_packaging_files(self) -> None:
-        self.assertEqual(
-            self.path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy").read_bytes(),
-            (REPO / "packaging" / "io.github.arrowlake-tuner.helper.policy").read_bytes(),
-        )
+    def test_the_units_and_tmpfiles_are_the_packaging_files_and_there_is_no_polkit(self) -> None:
+        for name in ("arltuner-helper.socket", "arltuner-helper.service"):
+            self.assertEqual(self.path(f"/etc/systemd/system/{name}").read_bytes(), (REPO / "packaging" / name).read_bytes(), name)
+        self.assertEqual(self.path("/usr/lib/tmpfiles.d/arltuner.conf").read_bytes(), (REPO / "packaging" / "arltuner.tmpfiles.conf").read_bytes())
+        self.assertFalse(os.path.lexists(self.path("/usr/share/polkit-1")), "no polkit directory is created")
+        self.assertFalse((REPO / "packaging" / "io.github.arrowlake-tuner.helper.policy").exists())
+
+    def test_nothing_in_the_install_scripts_or_packaging_mentions_pkexec_as_a_requirement(self) -> None:
+        for rel in ("install.sh", "uninstall.sh", "packaging/arltuner-helper", "packaging/arltuner-helper.socket", "packaging/arltuner-helper.service"):
+            text = (REPO / rel).read_text()
+            self.assertNotIn("auth_admin", text, rel)
+            self.assertNotIn("polkit-1/rules", text, rel)
+            if rel.startswith("packaging/"):
+                self.assertNotRegex(text, r"(?m)^[^#\n]*pkexec", rel)  # only comments may name the old mechanism (install.sh still recognises an old pkexec-started helper to stop it)
+
+    def test_without_systemd_pid1_or_a_real_root_nothing_live_is_touched(self) -> None:
+        out = self.result.stdout
+        self.assertNotIn("systemctl", out)
+        self.assertNotIn("groupadd", out)
+        self.assertNotIn("usermod", out)
         self.assertEqual(self.path("/usr/lib/tmpfiles.d/arltuner.conf").read_bytes(), (REPO / "packaging" / "arltuner.tmpfiles.conf").read_bytes())
 
     def test_installed_tree_passes_the_helpers_own_trust_check_modulo_ownership(self) -> None:
@@ -342,6 +361,129 @@ def run_bash(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", "-c", prelude + script], capture_output=True, text=True, cwd=cwd, env={"PATH": os.environ["PATH"]}, timeout=60)
 
 
+class AccessTool(InstallCase):
+    """packaging/arltuner-access, called directly: it refuses uid 0 whatever the account is called."""
+
+    def load(self):
+        from importlib.machinery import SourceFileLoader
+        from importlib.util import module_from_spec, spec_from_loader
+
+        sys.path.insert(0, str(REPO / "src"))
+        self.addCleanup(sys.path.remove, str(REPO / "src"))
+        loader = SourceFileLoader("arltuner_access_tool", str(REPO / "packaging" / "arltuner-access"))
+        mod = module_from_spec(spec_from_loader("arltuner_access_tool", loader))
+        loader.exec_module(mod)
+        return mod
+
+    def test_an_alias_of_root_is_refused_by_uid_not_by_name(self) -> None:
+        import contextlib
+        import io
+        import types
+        from unittest import mock
+
+        mod = self.load()
+        target = self.tmp / "helper.toml"
+        with mock.patch.object(mod.pwd, "getpwnam", lambda n: types.SimpleNamespace(pw_uid=0 if n == "toor" else 1000)):
+            for flag in ("--add-user", "--seed-user"):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(mod.main([str(target), flag, "toor"]), 1)
+                self.assertIn("uid 0", err.getvalue())
+                self.assertFalse(target.exists())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mod.main([str(target), "--add-user", "alice"]), 0)
+        self.assertIn('"alice"', target.read_text())
+
+    def test_capitalised_names_are_fine_and_junk_is_not(self) -> None:
+        import contextlib
+        import io
+
+        mod = self.load()
+        target = self.tmp / "helper.toml"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mod.main([str(target), "--add-user", "Alice.B"]), 0)
+        for junk in ("a b", 'a"b', "-x", "a\nb", "1a"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(mod.main([str(target), "--add-user", junk]), 1, junk)
+
+
+class StrictHelperPids(InstallCase):
+    """Only the REAL helper is ever signalled by the installer: uid 0, exe = the system python3, argv exactly the unit's / the old launcher's."""
+
+    def procs(self, **cmdlines: list[str]) -> Path:
+        proc = self.tmp / "proc"
+        py = self.tmp / "python3-real"
+        py.write_text("")
+        for pid, argv in cmdlines.items():
+            d = proc / pid.lstrip("p")
+            d.mkdir(parents=True)
+            (d / "cmdline").write_bytes(b"".join(a.encode() + b"\0" for a in argv))
+            (d / "exe").symlink_to(py)
+        (proc / "99").mkdir()
+        (proc / "99" / "cmdline").write_bytes(b"/usr/bin/python3\0-I\0/usr/lib/arltuner/arltuner-helper\0--device\0")  # no exe link: unverifiable
+        return proc
+
+    def pids(self, proc: Path, *, uid: int | None = None, exe_ok: bool = True) -> list[str]:
+        py = str(self.tmp / "python3-real") if exe_ok else "/nonexistent/python"
+        script = (
+            f'PROC_ROOT={proc}\nHELPER_PY={py}\nHELPER_UID={os.getuid() if uid is None else uid}\n'
+            + bash_function("strict_helper_pids") + "\nstrict_helper_pids"
+        )
+        r = run_bash(script, self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return sorted(r.stdout.split())
+
+    PY = "/usr/bin/python3"
+    LAUNCHER = "/usr/lib/arltuner/arltuner-helper"
+
+    def test_the_real_helper_forms_are_found(self) -> None:
+        proc = self.procs(p10=[self.PY, "-I", self.LAUNCHER, "--device"], p11=[self.PY, "-I", self.LAUNCHER, "--device", "--socket"])
+        self.assertEqual(self.pids(proc), ["10", "11"])
+
+    def test_everything_else_is_not_the_helper(self) -> None:
+        proc = self.procs(
+            p20=["pkexec", self.LAUNCHER, "--device"], p21=[self.PY, "-I", self.LAUNCHER, "--device", "--sim"], p22=["python3", "-I", self.LAUNCHER, "--device"],
+            p23=[self.PY, self.LAUNCHER, "--device"], p24=[self.PY, "-I", self.LAUNCHER, "--socket", "--device"], p25=[self.PY, "-I", "/home/u/x/arltuner-helper", "--device"],
+            p26=["vim", self.LAUNCHER], p27=[self.PY, "-I", self.LAUNCHER, "--device", "--socket", "x"], p28=["sudo", self.PY, "-I", self.LAUNCHER, "--device"],
+            p29=[self.PY, "-I", self.LAUNCHER, "--device", "--socket-path=/tmp/s"], p30=["/home/u/arltuner-helper.py", "--sim"],
+        )
+        self.assertEqual(self.pids(proc), [])
+
+    def test_a_process_of_another_user_or_another_exe_is_never_signalled(self) -> None:
+        proc = self.procs(p10=[self.PY, "-I", self.LAUNCHER, "--device"])
+        self.assertEqual(self.pids(proc, uid=os.getuid() + 1), [])  # the proc entry belongs to somebody who is not the expected root
+        self.assertEqual(self.pids(proc, exe_ok=False), [])  # argv is just text: the binary must be the system python
+
+    def test_the_stop_comes_late_and_a_failed_install_restores_the_socket(self) -> None:
+        text = (REPO / "install.sh").read_text()
+        stop, swap = text.index('systemctl stop arltuner-helper.socket arltuner-helper.service'), text.index('swap_dir "$NEW" "$LIB"\n\n# --- 2.')
+        compile_, sanity = text.index('-m compileall'), text.index("# --- sanity: sources")
+        self.assertTrue(sanity < compile_ < stop < swap, "stop the helper after the checks and the compile, right before the code swap")
+        self.assertIn("trap cleanup EXIT", text)
+        self.assertEqual(text.count("systemctl stop arltuner-helper.socket"), 1)
+
+    def stub_systemctl(self) -> tuple[Path, Path]:
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        log = self.tmp / "systemctl.log"
+        log.unlink(missing_ok=True)
+        stub = bin_dir / "systemctl"
+        stub.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+        stub.chmod(0o755)
+        return bin_dir, log
+
+    def run_cleanup(self, *, stopped: int, rc: int) -> list[str]:
+        bin_dir, log = self.stub_systemctl()
+        script = f'NEW=$PWD/n WEB=$PWD/w ETC=$PWD/e STATE=$PWD/s\nSTOPPED_SOCKET={stopped}\n' + bash_function("cleanup") + f'\nPATH={bin_dir}:$PATH\nset +e\n(exit {rc})\ncleanup'
+        r = run_bash(script.replace("set -e", ""), self.tmp)
+        return log.read_text().split("\n")[:-1] if log.exists() else []
+
+    def test_cleanup_restarts_the_previous_socket_only_after_a_failure_and_only_if_it_was_stopped(self) -> None:
+        self.assertEqual(self.run_cleanup(stopped=1, rc=1), ["start arltuner-helper.socket"])
+        self.assertEqual(self.run_cleanup(stopped=0, rc=1), [])
+        self.assertEqual(self.run_cleanup(stopped=1, rc=0), [])
+
+
 class SourceTreeAttacks(InstallCase):
     def test_a_symlinked_source_directory_is_refused_and_nothing_is_installed(self) -> None:
         for rel in ("src", "src/arltuner", "platforms", "web", "packaging", "policies"):
@@ -433,6 +575,117 @@ class ShellFunctions(InstallCase):
         self.assertFalse((self.tmp / "b.txt").is_symlink())
 
 
+class AccessAllowlist(InstallCase):
+    """D-043: the [access] allowlist of /etc/arltuner/helper.toml and the group, as install.sh writes them."""
+
+    def toml(self) -> dict:
+        return tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text())
+
+    def test_the_invoking_user_is_seeded_without_any_group_on_a_fresh_install(self) -> None:
+        r = self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.assertEqual(self.toml(), {"allow_taint_bits": [2], "access": {"users": ["alice"]}})  # D-043 amendment: no group, no usermod, no re-login
+        self.assertEqual(self.mode("/etc/arltuner/helper.toml"), 0o644)
+        self.assertNotIn("usermod", r.stdout + r.stderr)
+        self.assertNotIn("nobody is allowed", r.stderr)
+
+    def test_add_user_appends_and_is_idempotent_and_never_drops_the_others(self) -> None:
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.ok_install("--add-user", "bob")
+        self.ok_install("--add-user", "bob", "--add-user", "carol")
+        self.assertEqual(self.toml()["access"], {"users": ["alice", "bob", "carol"]})
+        before = self.path("/etc/arltuner/helper.toml").read_bytes()
+        self.ok_install("--add-user", "carol")
+        self.assertEqual(self.path("/etc/arltuner/helper.toml").read_bytes(), before)
+
+    def test_a_rerun_with_another_sudo_user_does_not_widen_an_existing_allowlist(self) -> None:
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        r = self.ok_install(extra_env={"SUDO_USER": "mallory"})
+        self.assertEqual(self.toml()["access"]["users"], ["alice"])
+        self.assertNotIn("mallory", r.stdout)
+
+    def test_an_old_helper_toml_without_access_keeps_its_taint_bits_and_gets_the_invoking_user(self) -> None:
+        self.ok_install()
+        self.path("/etc/arltuner/helper.toml").write_text("allow_taint_bits = [2, 5]\n")
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.assertEqual(self.toml(), {"allow_taint_bits": [2, 5], "access": {"users": ["alice"]}})
+
+    def test_a_helper_toml_with_a_group_only_allowlist_is_left_alone(self) -> None:
+        self.ok_install()
+        text = 'allow_taint_bits = [2]\n[access]\ngroup = "wheel"\n'
+        self.path("/etc/arltuner/helper.toml").write_text(text)
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.assertEqual(self.path("/etc/arltuner/helper.toml").read_text(), text)
+
+    def test_reseed_resets_the_taint_bits_but_keeps_the_allowlist(self) -> None:
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.path("/etc/arltuner/helper.toml").write_text('allow_taint_bits = [9]\nidle_exit_s = 30\n[access]\nusers = ["alice", "bob"]\n')
+        self.ok_install("--reseed-config", extra_env={"SUDO_USER": "alice"})
+        self.assertEqual(self.toml(), {"allow_taint_bits": [2], "access": {"users": ["alice", "bob"]}})
+
+    def test_a_broken_helper_toml_is_reported_and_left_untouched(self) -> None:
+        self.ok_install()
+        self.path("/etc/arltuner/helper.toml").write_text("not [ toml\n")
+        r = self.install("--add-user", "bob")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("left as it is", r.stderr)
+        self.assertEqual(self.path("/etc/arltuner/helper.toml").read_text(), "not [ toml\n")
+
+    def test_bad_user_names_are_refused_before_anything_is_written(self) -> None:
+        for bad in ("root", "a b", "-x", "", 'x"y', "a;b", "../etc", "1abc", "a" * 40):
+            with self.subTest(bad=bad):
+                r = self.install("--add-user", bad)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(list(self.dest.iterdir()), [])
+        r = self.install("--add-user")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("needs a user name", r.stderr)
+
+    def test_a_bad_sudo_user_is_refused_before_anything_is_written_and_a_capitalised_one_is_fine(self) -> None:
+        for bad in ("a b", 'x"y', "a;b", "../etc", "$(id)", "-rf", "a\nb"):
+            with self.subTest(bad=bad):
+                r = self.install(extra_env={"SUDO_USER": bad})
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("not a plain user name", r.stderr)
+                self.assertEqual(list(self.dest.iterdir()), [])
+        self.ok_install(extra_env={"SUDO_USER": "John.Smith"})
+        self.assertEqual(self.toml()["access"]["users"], ["John.Smith"])
+
+    def test_the_installed_helper_toml_passes_the_helpers_own_parser(self) -> None:
+        from arltuner.helper.settings import parse_helper_toml
+
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
+        t = parse_helper_toml(self.path("/etc/arltuner/helper.toml").read_text())
+        self.assertEqual((t.taint_bits, t.access.users, t.access.group, t.idle_exit_s), (frozenset({2}), ("alice",), None, 600))
+
+    def test_the_old_polkit_action_file_is_removed(self) -> None:
+        old = self.path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")
+        old.parent.mkdir(parents=True)
+        old.write_text("<policyconfig/>")
+        r = self.ok_install()
+        self.assertFalse(os.path.lexists(old))
+        self.assertIn("removed the old polkit action", r.stdout)
+        self.assertTrue(old.parent.is_dir(), "the directory belongs to polkit, not to us")
+
+    def test_the_selfcheck_passes_with_an_allowlist_and_fails_without(self) -> None:
+        spec = importlib.util.spec_from_file_location("arltuner_selfcheck_g144", REPO / "packaging" / "selfcheck.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def check():
+            lstat = lambda p: os.lstat(self.dest / str(p).lstrip("/"))  # noqa: E731
+            listdir = lambda p: os.listdir(self.dest / str(p).lstrip("/"))  # noqa: E731
+            read = lambda p: (self.dest / str(p).lstrip("/")).read_bytes()  # noqa: E731
+
+            return dict(mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid()))
+
+        self.ok_install()
+        (self.dest / "run/arltuner").mkdir(parents=True)
+        bad = {k: v for k, v in check().items() if v}
+        self.assertEqual(list(bad), ["helper.toml is valid and its [access] admits somebody"])
+        self.ok_install("--add-user", "alice")
+        self.assertEqual({k: v for k, v in check().items() if v}, {})
+
+
 class UserLogSeed(InstallCase):
     def me(self) -> tuple[str, str]:
         import pwd
@@ -506,10 +759,14 @@ class Uninstall(InstallCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r
 
-    def test_uninstall_removes_code_polkit_and_web_but_keeps_config_the_audit_log_and_the_lock_directory_setup(self) -> None:
+    def test_uninstall_removes_code_units_and_web_but_keeps_config_the_audit_log_and_the_lock_directory_setup(self) -> None:
+        old = self.path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")
+        old.parent.mkdir(parents=True)
+        old.write_text("<policyconfig/>")
         r = self.uninstall()
-        for gone in ("/usr/lib/arltuner", "/usr/share/arltuner", "/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy"):
-            self.assertFalse(self.path(gone).exists(), gone)
+        for gone in ("/usr/lib/arltuner", "/usr/share/arltuner", "/etc/systemd/system/arltuner-helper.socket", "/etc/systemd/system/arltuner-helper.service",
+                     "/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy"):
+            self.assertFalse(os.path.lexists(self.path(gone)), gone)
         # G-108: the CLI still counts as installed (policy.toml stays), so it still needs its lock directory and the tmpfiles.d file that recreates it at boot
         self.assertTrue(self.path("/usr/lib/tmpfiles.d/arltuner.conf").is_file())
         self.assertTrue(self.path("/run/arltuner").is_dir())
@@ -519,6 +776,11 @@ class Uninstall(InstallCase):
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "per-user log\n")
         self.assertTrue(self.path("/etc/arltuner/policy.toml").is_file())
         self.assertIn("--purge", r.stdout)
+
+    def test_a_plain_uninstall_keeps_the_allowlist(self) -> None:
+        self.ok_install("--add-user", "alice")
+        self.uninstall()
+        self.assertEqual(tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text())["access"]["users"], ["alice"])
 
     def test_uninstall_is_idempotent(self) -> None:
         self.uninstall()
@@ -574,7 +836,7 @@ class Uninstall(InstallCase):
 
 class SelfcheckOnTheRealInstallTree(InstallCase):
     def test_every_selfcheck_item_passes_on_the_destdir_tree_with_the_test_user_as_root(self) -> None:
-        self.ok_install()
+        self.ok_install(extra_env={"SUDO_USER": "alice"})
         (self.dest / "run/arltuner").mkdir(parents=True)  # tmpfiles.d's job on a real system
         spec = importlib.util.spec_from_file_location("arltuner_selfcheck", REPO / "packaging" / "selfcheck.py")
         mod = importlib.util.module_from_spec(spec)
@@ -585,7 +847,7 @@ class SelfcheckOnTheRealInstallTree(InstallCase):
         self.assertEqual((self.dest / "usr/lib/arltuner/arltuner-helper").read_bytes(), (REPO / "packaging/arltuner-helper").read_bytes())
         results = mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid())
         self.assertEqual([r for r in results if r[1] is not None], [])
-        self.assertGreaterEqual(len(results), 12)
+        self.assertEqual(len(results), 21)
 
 
 if __name__ == "__main__":

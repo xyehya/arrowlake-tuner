@@ -15,14 +15,17 @@ spec.loader.exec_module(selfcheck)
 
 EXE = stat.S_IFREG | 0o755
 PRIVATE = stat.S_IFREG | 0o600
-POLKIT = (REPO / "packaging" / "io.github.arrowlake-tuner.helper.policy").read_bytes()
+SOCKET_UNIT = (REPO / "packaging" / "arltuner-helper.socket").read_bytes()
+SERVICE_UNIT = (REPO / "packaging" / "arltuner-helper.service").read_bytes()
+HELPER_TOML = b'allow_taint_bits = [2]\n[access]\nusers = ["yk"]\ngroup = "arltuner"\n'
 LAUNCHER = (REPO / "packaging" / "arltuner-helper").read_bytes()
 CODE_TREE = "code tree /usr/lib/arltuner (top level, arltuner/, platforms/, every dir and file, __pycache__ included)"
 
 GOOD: dict[str, tuple[int, int]] = {
     "/": (0, DIR), "/usr": (0, DIR), "/usr/lib": (0, DIR), "/usr/share": (0, DIR), "/usr/share/polkit-1": (0, DIR), "/usr/share/polkit-1/actions": (0, DIR),
     "/usr/lib/tmpfiles.d": (0, DIR), "/usr/lib/tmpfiles.d/arltuner.conf": (0, FILE),
-    "/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy": (0, FILE),
+    "/etc/systemd": (0, DIR), "/etc/systemd/system": (0, DIR), "/etc/systemd/system/arltuner-helper.socket": (0, FILE),
+    "/etc/systemd/system/arltuner-helper.service": (0, FILE),
     "/usr/lib/arltuner": (0, DIR), "/usr/lib/arltuner/arltuner-helper": (0, EXE), "/usr/lib/arltuner/arltuner-selfcheck": (0, EXE),
     "/usr/lib/arltuner/arltuner": (0, DIR), "/usr/lib/arltuner/arltuner/__init__.py": (0, FILE),
     "/usr/lib/arltuner/arltuner/__pycache__": (0, DIR), "/usr/lib/arltuner/arltuner/__pycache__/__init__.cpython-314.pyc": (0, FILE),
@@ -34,29 +37,34 @@ GOOD: dict[str, tuple[int, int]] = {
 }
 
 
-def run(tree, polkit: bytes = POLKIT, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None) -> dict[str, str | None]:
+def run(tree, launcher: bytes = LAUNCHER, files: dict[str, bytes] | None = None) -> dict[str, str | None]:
+    contents = {
+        str(selfcheck.HELPER): launcher,
+        "/etc/systemd/system/arltuner-helper.socket": SOCKET_UNIT,
+        "/etc/systemd/system/arltuner-helper.service": SERVICE_UNIT,
+        "/etc/arltuner/helper.toml": HELPER_TOML,
+    } | (files or {})
+
     def read(p) -> bytes:
-        p = str(p)
-        if p in (files or {}):
-            return files[p]
-        return launcher if p == str(selfcheck.HELPER) else polkit
+        return contents[str(p)]
 
     results = selfcheck.selfcheck(lstat_fn=fake_lstat(tree), listdir_fn=fake_listdir(tree), read_fn=read)
     return dict(results)
 
 
-def failures(tree, polkit: bytes = POLKIT, **kw) -> dict[str, str]:
-    return {k: v for k, v in run(tree, polkit, **kw).items() if v is not None}
+def failures(tree, **kw) -> dict[str, str]:
+    return {k: v for k, v in run(tree, **kw).items() if v is not None}
 
 
 class Good(unittest.TestCase):
     def test_a_correct_install_passes_every_check(self) -> None:
         results = run(GOOD)
         self.assertEqual({k: v for k, v in results.items() if v}, {})
-        self.assertGreaterEqual(len(results), 14)
+        self.assertEqual(len(results), 21)
+        self.assertFalse([k for k in results if "polkit" in k and "old" not in k])  # no polkit action/rules checks any more, only "no old polkit action file"
 
-    def test_optional_files_may_be_absent(self) -> None:
-        tree = {k: v for k, v in GOOD.items() if k not in ("/etc/arltuner/helper.toml", "/var/lib/arltuner/audit.jsonl")}
+    def test_the_audit_log_may_be_absent(self) -> None:
+        tree = {k: v for k, v in GOOD.items() if k != "/var/lib/arltuner/audit.jsonl"}
         self.assertEqual(failures(tree), {})
 
     def test_the_accepted_state_is_optional(self) -> None:
@@ -130,18 +138,61 @@ class Damage(unittest.TestCase):
         tree = GOOD | {"/usr/lib/python3.old.1": (0, DIR), "/usr/lib/foo.new.2": (0, DIR)}
         self.assertEqual(failures(tree), {})
 
-    def test_a_polkit_rule_mentioning_the_action_is_flagged(self) -> None:
-        rule = b'polkit.addRule(function(a, s) { if (a.id == "io.github.arrowlake-tuner.helper") return polkit.Result.YES; });'
-        for d in ("/etc/polkit-1/rules.d", "/usr/share/polkit-1/rules.d"):
-            tree = GOOD | {d: (0, DIR), f"{d}/49-x.rules": (0, FILE), f"{d}/50-other.rules": (0, FILE)}
-            label, why = self.only(tree, files={f"{d}/49-x.rules": rule, f"{d}/50-other.rules": b"// unrelated"})
-            self.assertIn("polkit rules.d", label)
-            self.assertIn("49-x.rules", why)
-            self.assertNotIn("50-other", why)
+    def test_the_old_polkit_action_file_must_be_gone(self) -> None:
+        tree = GOOD | {"/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy": (0, FILE)}
+        label, why = self.only(tree)
+        self.assertEqual(label, "no old polkit action file")
+        self.assertIn("must be removed", why)
 
-    def test_unrelated_polkit_rules_are_fine(self) -> None:
-        tree = GOOD | {"/etc/polkit-1/rules.d": (0, DIR), "/etc/polkit-1/rules.d/50-default.rules": (0, FILE)}
-        self.assertEqual(failures(tree, files={"/etc/polkit-1/rules.d/50-default.rules": b"// wheel may do things"}), {})
+    def test_unit_files_are_required(self) -> None:
+        for name in ("socket", "service"):
+            tree = {k: v for k, v in GOOD.items() if not k.endswith("." + name)}
+            label, why = self.only(tree)
+            self.assertIn(f"arltuner-helper.{name}", label)
+            self.assertIn("none of", why)
+
+    def test_a_unit_in_usr_lib_systemd_is_found_too(self) -> None:
+        tree = {k: v for k, v in GOOD.items() if not k.endswith(".socket")} | {
+            "/usr/lib/systemd": (0, DIR), "/usr/lib/systemd/system": (0, DIR), "/usr/lib/systemd/system/arltuner-helper.socket": (0, FILE)}
+        self.assertEqual(failures(tree, files={"/usr/lib/systemd/system/arltuner-helper.socket": SOCKET_UNIT}), {})
+
+    def test_a_user_owned_or_group_writable_unit_is_refused_and_not_read(self) -> None:
+        for change in ((1000, FILE), (0, stat.S_IFREG | 0o664)):
+            tree = GOOD | {"/etc/systemd/system/arltuner-helper.service": change}
+            bad = failures(tree)
+            self.assertEqual(list(bad), ["systemd service unit arltuner-helper.service"])
+            self.assertNotIn("systemd service unit arltuner-helper.service: content", run(tree))
+
+    def test_socket_mode_0660_is_accepted_like_preflight_does(self) -> None:
+        selfcheck.check_socket_unit_text(SOCKET_UNIT.replace(b"SocketMode=0666", b"SocketMode=0660"))
+
+    def test_systemd_drop_ins_are_refused_unless_empty_or_absent(self) -> None:
+        for base in ("/etc/systemd/system", "/run/systemd/system", "/usr/lib/systemd/system", "/etc/systemd/system.control"):
+            for unit in ("arltuner-helper.service", "arltuner-helper.socket"):
+                d = f"{base}/{unit}.d"
+                tree = GOOD | {d: (0, DIR), f"{d}/override.conf": (0, FILE), base: (0, DIR)}
+                label, why = self.only(tree)
+                self.assertEqual(label, "no systemd drop-ins for the helper units", d)
+                self.assertIn("override.conf", why)
+                empty = GOOD | {d: (0, DIR), base: (0, DIR)}
+                self.assertEqual(failures(empty), {}, d)  # an empty drop-in directory overrides nothing
+
+    def test_no_group_is_required_any_more(self) -> None:
+        self.assertFalse([k for k in run(GOOD) if "group" in k])
+
+    def test_helper_toml_is_required_and_must_admit_somebody(self) -> None:
+        label, _ = self.only({k: v for k, v in GOOD.items() if k != "/etc/arltuner/helper.toml"})
+        self.assertEqual(label, "helper.toml")
+        for text in (b"allow_taint_bits = [2]\n", b"[access]\nusers = []\n", b"[access\n", b'[access]\nusr = ["a"]\n'):
+            with self.subTest(text=text):
+                label, why = self.only(GOOD, files={"/etc/arltuner/helper.toml": text})
+                self.assertIn("[access]", label)
+        label, why = self.only(GOOD, files={"/etc/arltuner/helper.toml": b"allow_taint_bits = [2]\n"})
+        self.assertIn("--add-user", why)
+
+    def test_users_only_or_group_only_access_is_fine(self) -> None:
+        for text in (b'[access]\nusers = ["a"]\n', b'[access]\ngroup = "arltuner"\n'):
+            self.assertEqual(failures(GOOD, files={"/etc/arltuner/helper.toml": text}), {})
 
     def test_a_missing_launcher(self) -> None:
         bad = failures({k: v for k, v in GOOD.items() if k != "/usr/lib/arltuner/arltuner-helper"})
@@ -189,37 +240,71 @@ class Damage(unittest.TestCase):
         self.assertIn("run dir", label)
 
 
-class PolkitContent(unittest.TestCase):
-    def bad(self, text: bytes) -> str:
+class UnitContent(unittest.TestCase):
+    def bad(self, fn, text: bytes) -> str:
         with self.assertRaises(ValueError) as ctx:
-            selfcheck.check_polkit_text(text)
+            fn(text)
         return str(ctx.exception)
 
-    def test_the_shipped_file_passes(self) -> None:
-        selfcheck.check_polkit_text(POLKIT)
+    def test_the_shipped_units_pass(self) -> None:
+        selfcheck.check_socket_unit_text(SOCKET_UNIT)
+        selfcheck.check_service_unit_text(SERVICE_UNIT)
 
-    def test_auth_admin_keep_is_refused(self) -> None:
-        self.assertIn("auth_admin", self.bad(POLKIT.replace(b"<allow_any>auth_admin<", b"<allow_any>auth_admin_keep<")))
+    def test_the_shipped_units_say_what_the_task_says(self) -> None:
+        sock = selfcheck.unit_sections(SOCKET_UNIT)["Socket"]
+        self.assertEqual((sock["ListenStream"], sock["SocketMode"], sock["SocketUser"], sock["RemoveOnStop"]),
+                         (["/run/arltuner/helper.sock"], ["0666"], ["root"], ["yes"]))
+        self.assertNotIn("SocketGroup", sock)  # the peer check is the gate (D-043 amendment); no group is needed
+        svc = selfcheck.unit_sections(SERVICE_UNIT)["Service"]
+        self.assertEqual(svc["ExecStart"], ["/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket"])
+        self.assertEqual((svc["Type"], svc["NoNewPrivileges"]), (["simple"], ["yes"]))
+        self.assertNotIn("Install", selfcheck.unit_sections(SERVICE_UNIT))  # started by the socket, never enabled by itself
 
-    def test_allow_active_yes_is_refused(self) -> None:
-        self.assertIn("allow_active", self.bad(POLKIT.replace(b"<allow_active>auth_admin<", b"<allow_active>yes<")))
+    def test_socket_mode_owner_group_and_path_are_pinned(self) -> None:
+        for old, new in ((b"SocketMode=0666", b"SocketMode=0664"), (b"SocketMode=0666", b"SocketMode=0777"), (b"SocketMode=0666", b"SocketMode=0600"),
+                         (b"SocketUser=root", b"SocketUser=yk"), (b"ListenStream=/run/arltuner/helper.sock", b"ListenStream=/run/user/1000/helper.sock"),
+                         (b"Accept=no", b"Accept=yes")):
+            with self.subTest(new=new):
+                self.assertTrue(self.bad(selfcheck.check_socket_unit_text, SOCKET_UNIT.replace(old, new)))
 
-    def test_another_exec_path_is_refused(self) -> None:
-        self.assertIn("exec.path", self.bad(POLKIT.replace(b"/usr/lib/arltuner/arltuner-helper<", b"/home/dev/arrowlake-tuner/tools/arltuner-helper.py<")))
+    def test_a_second_listener_or_an_unknown_setting_is_refused(self) -> None:
+        self.assertIn("ListenStream", self.bad(selfcheck.check_socket_unit_text, SOCKET_UNIT.replace(b"Accept=no", b"Accept=no\nListenStream=0.0.0.0:80")))
+        self.assertIn("unexpected", self.bad(selfcheck.check_socket_unit_text, SOCKET_UNIT.replace(b"Accept=no", b"Accept=no\nFreeBind=yes")))
 
-    def test_a_second_action_is_refused(self) -> None:
-        extra = POLKIT.replace(b"</policyconfig>", b'<action id="io.github.arrowlake-tuner.other"><defaults/></action></policyconfig>')
-        self.assertIn("exactly one action", self.bad(extra))
+    def test_the_exec_start_is_pinned(self) -> None:
+        pinned = b"ExecStart=/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket"
+        for new in (b"ExecStart=/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device", b"ExecStart=/usr/bin/python3 /usr/lib/arltuner/arltuner-helper --device --socket",
+                    b"ExecStart=/home/dev/checkout/tools/arltuner-helper.py --device --socket",
+                    b"ExecStart=/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket --sim"):
+            with self.subTest(new=new):
+                self.assertIn("ExecStart", self.bad(selfcheck.check_service_unit_text, SERVICE_UNIT.replace(pinned, new)))
 
-    def test_garbage_and_entities_are_refused(self) -> None:
-        self.assertIn("XML", self.bad(b"not xml"))
-        self.assertIn("entity", self.bad(b'<!DOCTYPE x [<!ENTITY a "b">]><policyconfig/>'))
+    def test_a_second_exec_start_is_refused(self) -> None:
+        self.assertIn("ExecStart", self.bad(selfcheck.check_service_unit_text, SERVICE_UNIT + b"ExecStart=/bin/sh\n"))
+
+    def test_settings_that_break_the_helper_or_change_who_runs_it_are_refused(self) -> None:
+        for extra in (b"User=nobody", b"DynamicUser=yes", b"PrivateDevices=yes", b"ProtectKernelTunables=yes", b"ProtectSystem=strict", b"ExecStartPre=/bin/true",
+                      b"Environment=PYTHONPATH=/tmp", b"Group=users", b"InaccessiblePaths=/dev/cpu"):
+            with self.subTest(extra=extra):
+                self.assertIn("must not be set", self.bad(selfcheck.check_service_unit_text, SERVICE_UNIT + extra + b"\n"))
+
+    def test_garbage_is_refused(self) -> None:
+        self.assertIn("unparsable", self.bad(selfcheck.check_service_unit_text, b"[Service]\nnot a setting\n"))
+        self.assertIn("[Service]", self.bad(selfcheck.check_service_unit_text, b"[Unit]\nDescription=x\n"))
+        self.assertIn("[Socket]", self.bad(selfcheck.check_socket_unit_text, b"[Unit]\nDescription=x\n"))
+        self.assertIn("UTF-8", self.bad(selfcheck.check_socket_unit_text, b"\xff\xfe"))
 
     def test_content_is_not_read_when_the_file_fails_the_trust_check(self) -> None:
-        tree = GOOD | {"/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy": (1000, FILE)}
+        tree = GOOD | {"/etc/systemd/system/arltuner-helper.socket": (1000, FILE)}
         results = run(tree)
-        self.assertNotIn("polkit action content", results)
-        self.assertIsNotNone(results["polkit action file"])
+        self.assertNotIn("systemd socket unit arltuner-helper.socket: content", results)
+        self.assertIsNotNone(results["systemd socket unit arltuner-helper.socket"])
+
+    def test_the_unit_constants_match_the_helpers_service(self) -> None:
+        from arltuner.helper import config, service
+
+        self.assertEqual(selfcheck.SOCKET_PATH, service.SOCKET_PATH)
+        self.assertEqual(selfcheck.SOCKET_PATH, config.INSTALLED_SOCKET)
 
     def test_the_constants_match_the_helpers_config(self) -> None:
         from arltuner.helper import config

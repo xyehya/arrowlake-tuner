@@ -198,12 +198,12 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   Design: the root helper listens on `/run/arltuner/helper.sock` (stream, the existing framed protocol), started by a shipped systemd
   socket + service (socket activation via `LISTEN_FDS`), or by `arltuner-helper --device --socket` under any other init (the code does not
   depend on systemd). The GUI connects instead of spawning `pkexec`; `--helper …` stays for the simulator/dev path. **Access:** an allowlist
-  in `/etc/arltuner/helper.toml` (`[access] users`, optional `group`), enforced by the socket's owner/mode (0660 root:arltuner) **and** a
-  `SO_PEERCRED` check per connection (uid in `users` suffices — no re-login needed after install; root is never an invoker for stress).
+  in `/etc/arltuner/helper.toml` (`[access] users`, optional `group`), enforced by a `SO_PEERCRED` check on every connection (the socket
+  node's own mode is set by the 2026-10-12 amendment at the end of this entry; root is never an invoker for stress).
   The peer uid replaces `PKEXEC_UID` (stress child privilege drop, workdir, audit `operator`). One client at a time; on disconnect telemetry
   stops, an op in flight completes its read-back/restore, no new op starts; the service exits after ~10 min idle with no client and no op.
   **Security model change, accepted by the operator's request:** before, elevated access needed a password once per GUI start; now any
   process of an allowlisted user can drive the helper without a prompt. Compensations: guard + policy limits, allowlist, one transaction at a
   time, read-back, health gate, audit log, read-only web scope, idle exit, nothing applied on its own (autostart OD-3/OD-4 stays unsigned).
   Supersedes the pkexec/polkit parts of D-029 (root argv: exactly `--device` or `--device --socket`), D-028 and D-042; the polkit action
-  file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go.
+  file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go. 2026-10-12 amendment: socket 0666; the peer-cred allowlist is the gate, so a newly allowed user needs no re-login; the group is optional.

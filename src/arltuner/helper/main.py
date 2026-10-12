@@ -1,20 +1,21 @@
 """``arltuner-helper``: the launcher around :class:`~arltuner.helper.core.Helper`. Real I/O is built here and only here.
 
-**argv is the trust boundary.** The helper is started by pkexec (SPEC 4.1), and everything after the program name on that command line is chosen by
-the unprivileged caller. So when the effective uid is 0 the helper accepts *no* argv at all (a lone ``--device`` is tolerated, nothing else):
-``--sim`` is refused outright and ``--audit`` / ``--lock`` / ``--policy`` / ``--allow-taint-bit`` are refused by name. As root every path and every
-safety setting comes from installed constants (below) or from a root-owned, trust-checked file:
+**argv is the trust boundary.** The root helper is started by systemd (the shipped socket + service units) or by root by hand, but its argv is still treated
+as input (D-029, D-043): when the effective uid is 0 the only argv accepted is *nothing*, ``--device``, or ``--device --socket`` (the units use the last):
+``--sim`` is refused outright and ``--audit`` / ``--lock`` / ``--policy`` / ``--allow-taint-bit`` / ``--socket-path`` / ``--helper-toml`` are refused by name. As
+root every path and every safety setting comes from installed constants (below) or from a root-owned, trust-checked file:
 
 * policy ``/etc/arltuner/policy.toml``, audit log ``/var/lib/arltuner/audit.jsonl``, accepted state ``/etc/arltuner/accepted/``;
 * lock: ``/run/arltuner/mailbox.lock`` (root-owned 0755 directory made by tmpfiles.d) via the CLI's ``default_lock_path()`` and its D-030 rule: the
   rule sees the installed, trusted ``/etc/arltuner/policy.toml``; a present-but-untrusted one is a named REFUSED (check ``TRUST_PATH``, exit 77);
 * the expected first-write kernel-taint bits: ``/etc/arltuner/helper.toml``, key ``allow_taint_bits = [34]`` (a list of ints 0..63; the file may be
-  absent = none; any other key is refused). Root-owned, not group/world-writable, parents root-owned (SPEC 4.4), checked on every ``vf.dump``.
+  absent = none; the other keys are ``idle_exit_s`` and ``[access]``, see :mod:`arltuner.helper.settings`; any other key is refused). Root-owned, not
+  group/world-writable, parents root-owned (SPEC 4.4), checked on every ``vf.dump`` and at every socket accept.
 
-Packaging (G-106): the polkit action pins ``org.freedesktop.policykit.exec.path`` to ``/usr/lib/arltuner/arltuner-helper``, started as
-``pkexec /usr/lib/arltuner/arltuner-helper --device``. A non-root run (tests, ``--sim``) keeps the argv options; ``--sim`` never applies the D-030 rule
-(simulator runs keep the per-user lock / audit defaults). Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs -
-77 refused to start.
+Packaging (G-106, D-043): ``/usr/lib/arltuner/arltuner-helper --device --socket`` is the ``ExecStart`` of ``arltuner-helper.service`` (socket-activated by
+``arltuner-helper.socket``); without ``--socket`` the protocol runs on stdin/stdout (the dev path). A non-root run (tests, ``--sim``) keeps the argv options
+(``--socket`` then also takes ``--socket-path`` and ``--helper-toml``); ``--sim`` never applies the D-030 rule (simulator runs keep the per-user lock /
+audit defaults). Exit codes: 0 stopped cleanly - 64 usage - 75 another helper runs - 77 refused to start.
 """
 from __future__ import annotations
 
@@ -25,7 +26,6 @@ import secrets
 import shutil
 import sys
 import tempfile
-import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
@@ -37,11 +37,12 @@ from arltuner.topology import Topology, arl_s_285k, synthetic
 from .config import HelperConfig
 from .core import Helper
 from .protocol import REFUSED, Writer, error_response
-from .trust import TrustError, check_code_tree, check_trusted_path, open_checked
+from .settings import load_helper_toml
+from .trust import TrustError, check_code_tree, check_trusted_path
 
 __all__ = [
     "INSTALLED_ACCEPTED_DIR", "INSTALLED_AUDIT", "INSTALLED_HELPER_TOML", "INSTALLED_POLICY", "PortOwningSampler", "build_config", "device_imc", "load_taint_bits",
-    "main", "measure_wiring", "process_main", "root_argv_refusal", "sim_topology",
+    "main", "measure_wiring", "process_main", "root_argv_refusal", "run_socket", "sim_topology",
 ]
 
 EXIT_USAGE = 64
@@ -52,7 +53,8 @@ INSTALLED_AUDIT = Path("/var/lib/arltuner/audit.jsonl")
 INSTALLED_HELPER_TOML = Path("/etc/arltuner/helper.toml")
 INSTALLED_ACCEPTED_DIR = Path("/etc/arltuner/accepted")
 
-_ROOT_FORBIDDEN_NAMED = ("--sim", "--audit", "--lock", "--policy", "--allow-taint-bit", "--state-dir")
+_ROOT_FORBIDDEN_NAMED = ("--sim", "--audit", "--lock", "--policy", "--allow-taint-bit", "--state-dir", "--socket-path", "--helper-toml")
+ROOT_ARGVS = ((), ("--device",), ("--device", "--socket"))
 
 
 class _Usage(Exception):
@@ -68,10 +70,13 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="arltuner-helper", description="arltuner root helper (JSON lines on stdin/stdout). Non-root runs only; as root there is no argv.", add_help=True, allow_abbrev=False)
+    p = _Parser(prog="arltuner-helper", description="arltuner root helper (JSON lines on stdin/stdout, or on a Unix socket with --socket). Non-root runs only; as root there is no argv but --device [--socket].", add_help=True, allow_abbrev=False)
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--sim", action="store_true", help="simulator: no hardware")
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; needs root, a trusted code tree, --policy and --audit)")
+    p.add_argument("--socket", action="store_true", help="serve one client at a time on a Unix socket (/run/arltuner/helper.sock when installed; systemd socket activation is used when it hands one over) instead of stdin/stdout")
+    p.add_argument("--socket-path", metavar="FILE", help="--socket, non-root only: where to listen (default /run/arltuner/helper.sock)")
+    p.add_argument("--helper-toml", metavar="FILE", help="--socket, non-root only: the settings file with [access] (owned by the invoking user; default /etc/arltuner/helper.toml)")
     p.add_argument("--policy", metavar="FILE", help="reviewed policy (--sim defaults to the built-in conservative one)")
     p.add_argument("--audit", metavar="FILE", help="audit log (--sim defaults to $XDG_STATE_HOME/arltuner/audit.jsonl (default ~/.local/state/arltuner/))")
     p.add_argument("--lock", metavar="FILE", help="machine-wide mailbox lock (non-root default: /run/arltuner/mailbox.lock when installed (D-030), else /run/lock/arltuner-mailbox.lock; --sim: always the latter)")
@@ -95,40 +100,25 @@ def sim_topology(args: argparse.Namespace) -> Topology:
 
 
 def root_argv_refusal(argv: Sequence[str]) -> tuple[str, str] | None:
-    """As root, argv must be empty (or exactly ``--device``). Returns ``(check, message)`` for the first thing that is not."""
+    """As root, argv must be empty, exactly ``--device``, or exactly ``--device --socket`` (D-029, D-043). Returns ``(check, message)`` for the first thing that is not."""
     for token in argv:
-        if token == "--device":
+        if token in ("--device", "--socket"):
             continue
         name = token.split("=", 1)[0]
         if name == "--sim":
             return "ROOT_SIM", "--sim is refused when running as root: the simulator is not a way to run the helper with privileges"
         if name in _ROOT_FORBIDDEN_NAMED:
             return "ROOT_ARGV", f"{name} is refused when running as root: paths and safety settings come from installed, root-owned files only (SPEC 4.4)"
-        return "ROOT_ARGV", f"argument {token!r} is refused when running as root: the helper takes no arguments (polkit exec.path, no argv)"
+        return "ROOT_ARGV", f"argument {token!r} is refused when running as root: the helper takes only --device or --device --socket"
+    if tuple(argv) not in ROOT_ARGVS:
+        return "ROOT_ARGV", f"arguments {list(argv)!r} are refused when running as root: the helper takes only --device or --device --socket, once each, in that order"
     return None
 
 
 def load_taint_bits(path: Path | str = INSTALLED_HELPER_TOML, *, lstat_fn: Callable[[str], Any] = os.lstat, root_uid: int = 0) -> frozenset[int]:
     """The expected first-write taint bits from the root-owned ``helper.toml`` (documented in the module docstring). Absent file = none.
-    ``TrustError`` if the path is not trusted, ``ValueError`` if the content is not exactly ``allow_taint_bits = [int, ...]`` (0..63)."""
-    check_trusted_path(path, want="file", must_exist=False, lstat_fn=lstat_fn, root_uid=root_uid)
-    try:
-        fd = open_checked(path, write=False, create=False, euid=root_uid, what="helper.toml")
-    except FileNotFoundError:
-        return frozenset()
-    with os.fdopen(fd, "rb") as handle:
-        data = handle.read(65536)
-    try:
-        doc = tomllib.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise ValueError(f"{path}: not valid TOML: {exc}") from None
-    extra = sorted(set(doc) - {"allow_taint_bits"})
-    if extra:
-        raise ValueError(f"{path}: unknown key(s) {extra}")
-    bits = doc.get("allow_taint_bits", [])
-    if not isinstance(bits, list) or not all(isinstance(b, int) and not isinstance(b, bool) and 0 <= b <= 63 for b in bits):
-        raise ValueError(f"{path}: allow_taint_bits must be a list of integers 0..63")
-    return frozenset(bits)
+    ``TrustError`` if the path is not trusted, ``ValueError`` if the content is not valid (:func:`~arltuner.helper.settings.parse_helper_toml`)."""
+    return load_helper_toml(path, lstat_fn=lstat_fn, root_uid=root_uid).taint_bits
 
 
 def device_imc(interval: float, lstat_fn: Callable[[str], Any] = os.lstat, *, popen: Callable[..., Any] | None = None) -> Any:
@@ -200,7 +190,7 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
             policy_path=Path(args.policy) if args.policy else None,
             port_factory=sim_port,
             topology_fn=lambda: topo,
-            preflight_fn=lambda: preflight(Path("/"), topology=topo),
+            preflight_fn=lambda: preflight(Path("/"), topology=topo, helper_service=False),
             sampler_factory=lambda interval: Sampler(
                 None, topo, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval
             ),
@@ -238,12 +228,13 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
         accepted_dir=INSTALLED_ACCEPTED_DIR if root else None,  # G-106/G-107: EXPECTED-words.txt, trust-checked by the op that reads it
         port_factory=lambda: DevCpuMsrPort(writable=True),
         topology_fn=detect,
-        preflight_fn=lambda: preflight(Path("/")),
+        preflight_fn=lambda: preflight(Path("/"), helper_service=bool(getattr(args, "socket", False))),
         sampler_factory=sampler_factory,
         simulator=False,
         enforce_trust=True,
         health_gate_factory=gate_factory,
-        operator=f"gui:uid{os.environ.get('PKEXEC_UID', 'unknown')}",
+        # socket mode: the connected peer's uid names the operator per connection (Helper.serve); the PKEXEC_UID of the environment is the stdio dev path only
+        operator="helper" if getattr(args, "socket", False) else f"gui:uid{os.environ.get('PKEXEC_UID', 'unknown')}",
         log=log,
     )
 
@@ -266,7 +257,7 @@ def _startup_refusal(args: argparse.Namespace, euid: int) -> str | None:
     if args.sim:
         return None
     if euid != 0:
-        return "--device needs root (start it through pkexec)"
+        return "--device needs root (the arltuner-helper systemd units start it)"
     try:
         check_code_tree(Path(os.path.abspath(__file__)).parent.parent)  # the arltuner package: every dir and file below it
     except TrustError as exc:
@@ -303,9 +294,12 @@ def main(
             bad = root_argv_refusal(argv)
             if bad is not None:
                 return refuse(*bad)
-            args = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[], state_dir=None)
+            args = argparse.Namespace(sim=False, device=True, policy=None, audit=None, lock=None, allow_taint_bit=[], state_dir=None, socket="--socket" in argv,
+                                      socket_path=None, helper_toml=None)
         else:
             args = _parser().parse_args(argv)
+            if (args.socket_path or args.helper_toml) and not args.socket:
+                raise _Usage("--socket-path and --helper-toml need --socket")
             if args.device and (not args.policy or not args.audit):
                 raise _Usage("--device needs an explicit --policy and --audit (root-owned, not group/world-writable)")
         problem = _startup_refusal(args, euid)
@@ -323,10 +317,52 @@ def main(
     scratch = helper.measure_wiring.journal_path.parent if args.sim and not getattr(args, "state_dir", None) else None  # our own mkdtemp: removed on exit
     helper.install_signal_handlers()
     try:
+        if getattr(args, "socket", False):
+            return run_socket(helper, args, euid, log=log, lstat_fn=lstat_fn)
         return helper.run(inp, out)
     finally:
         if scratch is not None:
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+def run_socket(
+    helper: Helper, args: argparse.Namespace, euid: int, *, log: Callable[[str], None], lstat_fn: Callable[[str], Any] = os.lstat,
+    environ: dict[str, str] | None = None, getpid: Callable[[], int] = os.getpid,
+) -> int:
+    """``--socket``: the helper as a service (D-043). Root: the installed socket path and ``/etc/arltuner/helper.toml``, nothing from argv. Non-root (tests,
+    ``--sim``): ``--socket-path`` / ``--helper-toml``, whose files must belong to the invoking user the way root's belong to root."""
+    from .service import SOCKET_PATH, CachedSettings, Service, ServiceError, adopt_socket, create_socket, listen_fds
+
+    env = os.environ if environ is None else environ
+    if euid == 0:
+        sock_path, toml_path = SOCKET_PATH, INSTALLED_HELPER_TOML
+    else:
+        sock_path = Path(args.socket_path) if args.socket_path else SOCKET_PATH
+        toml_path = Path(args.helper_toml) if args.helper_toml else INSTALLED_HELPER_TOML
+    try:
+        fd = listen_fds(env, getpid())
+    except ServiceError as exc:
+        log(f"refused to start: {exc}")
+        return EXIT_REFUSED_TO_START
+    for name in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):  # nothing we start may think it was handed a socket
+        env.pop(name, None)
+
+    def load_settings():  # type: ignore[no-untyped-def]
+        return load_helper_toml(toml_path, lstat_fn=lstat_fn, root_uid=euid, check_parents=euid == 0)
+
+    settings = CachedSettings(load_settings, toml_path, lstat_fn)  # re-read through the trust check only when the file changes
+
+    def make_socket():  # type: ignore[no-untyped-def]
+        if fd is not None:
+            return adopt_socket(fd, euid=euid, lstat_fn=lstat_fn)
+        try:
+            group = settings().access.group  # optional: the node is handed to this group; the peer check is the gate either way
+        except (TrustError, ValueError, OSError) as exc:
+            log(f"helper.toml unreadable ({exc}); the socket is made without a group and nobody is admitted until it is fixed")
+            group = None
+        return create_socket(sock_path, group=group, euid=euid, lstat_fn=lstat_fn, trust_parents=euid == 0)
+
+    return Service(helper, make_socket, path=sock_path, settings_loader=settings, activated=fd is not None, log=log).run()
 
 
 def process_main() -> None:
