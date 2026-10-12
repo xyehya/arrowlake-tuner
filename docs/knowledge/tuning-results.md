@@ -139,3 +139,10 @@ Restore accepted from the same page: 57 words read back as written (P7 `0xF46000
   `scaling_max_freq` to 5.0 GHz on CPUs 12–15: stress ran **49× (4901 MHz), 0 errors, 43 °C**. Reverted (48× @ 1.137, table 48×8, 4.9 GHz).
 - After G-126 [MEASURED lnx 2026-10-12]: `tune.apply` EC1 48→49× reported `cpufreq` 4.9→5.0 GHz on CPUs 12–15 by itself; stress EC1 49× (4901 MHz),
   0 errors; revert 49→48× lowered them to 4.9 GHz. The kernel's `cpuinfo_max_freq` had updated by the time the apply finished.
+
+### Polkit path on the final build [MEASURED lnx 2026-10-12]
+- Real pkexec launch of the installed helper (invoked as root via `sudo pkexec`, so no prompt): helper ran `python3 -I /usr/lib/arltuner/arltuner-helper
+  --device` from the polkit action's exec.path; preflight `writes_allowed: true`. pkexec sets `PKEXEC_UID` itself (`sudo pkexec env` ⇒ `PKEXEC_UID=0`).
+- With PKEXEC_UID=0 `stress.start` is refused: "stress children are never run as root" (`NO_INVOKER`) — the privilege-drop rule reads pkexec's value.
+- The operator's own password-authenticated pkexec run (2026-10-11 16:57 UTC, GUI "Read V/F curve") recorded `operator: gui:uid1000` in the audit log
+  ⇒ pkexec delivers PKEXEC_UID=1000 for the desktop user; with PKEXEC_UID=1000 stress-ng was measured running as `yk` (2026-10-11 ~20:30 UTC).

@@ -52,9 +52,8 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 2. Also verified 2026-10-12: turbo-table writes (P 54× / E 47× all-core, restored), E OC 49× with automatic cpufreq lift (G-126). Open, low
    priority: `write_percore_enable` predicted as worst case; ring/NGU not in scope (SPEC §2); P OC ratio 58× is above the D-032 cap (P 57); light theme dropped; restore scripts still use their checkout
    policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
-3. **Pending operator step:** final build through the real polkit path (`python3 tools/arltuner-gui.py --open`, password) + one Stress screen
-   from the tab, check the child runs as the user (`ps -eo user,args | grep stress`). PKEXEC_UID is set by pkexec [DOC pkexec(1)]; all hardware
-   checks so far used `sudo -n PKEXEC_UID=1000`. Prompt was left open 2026-10-12.
+3. Polkit path verified on the final build (knowledge/tuning-results.md "Polkit path"): real pkexec launch, PKEXEC_UID enforced for stress;
+   operator's own pkexec run delivered uid 1000. Normal start: `python3 tools/arltuner-gui.py --open` (one password).
 4. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
 
 ## How we work
