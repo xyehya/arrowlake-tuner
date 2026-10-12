@@ -1,5 +1,7 @@
 """ts_driver.py carve/hash logic on a synthetic file (no real driver, no Windows calls)."""
+import contextlib
 import hashlib
+import io
 import importlib.util
 import os
 import tempfile
@@ -251,6 +253,9 @@ class StartVerifiesBeforeEverySc(FakeWinCase):
     ``sc start`` on the held file; cleanup on every failure."""
 
     def setUp(self):
+        out = contextlib.redirect_stdout(io.StringIO())   # ts_driver prints sc.exe's answer; keep it out of the test log
+        out.__enter__()
+        self.addCleanup(out.__exit__, None, None, None)
         super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
