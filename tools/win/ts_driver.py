@@ -4,13 +4,14 @@
 The driver is NOT redistributed: it is cut out of the operator's own ThrottleStop.exe (9.7.3) and verified by SHA-256.
 Everything that decides what runs in the kernel lives in ONE admin-only directory, %ProgramData%\\arltuner (owner Administrators, ACL: Administrators + SYSTEM
 only; G-142, D-042): a file a non-admin process can replace must never be what ``sc start`` loads. Elevated commands re-verify the directory's ACL and the
-driver's SHA-256 immediately before every ``sc start``.
+driver's SHA-256 immediately before every ``sc start``; the service loads a NEW uniquely named copy written for that run (O_EXCL), held open
+while it starts, and ``remove`` deletes the service and the copy. No component of the path may be a junction / symlink (reparse point).
   py -3 tools\\win\\ts_driver.py init-dir     # elevated: create + lock down %ProgramData%\\arltuner (also done by carve)
   py -3 tools\\win\\ts_driver.py carve --exe %USERPROFILE%\\Downloads\\ThrottleStop_9.7.3\\ThrottleStop.exe   # elevated: -> %ProgramData%\\arltuner\\ThrottleStop.sys
-  py -3 tools\\win\\ts_driver.py start        # elevated: verify dir + SHA-256, sc create ThrottleStop (kernel, demand) if needed, verify again, sc start
+  py -3 tools\\win\\ts_driver.py start        # elevated: verify dir/ACL/reparse/SHA-256, write a fresh copy, sc create ThrottleStop (kernel, demand), verify again, sc start
   py -3 tools\\win\\ts_driver.py install      # same as start
   py -3 tools\\win\\ts_driver.py status       # service state + can \\\\.\\ThrottleStop be opened
-  py -3 tools\\win\\ts_driver.py remove       # elevated: sc stop + sc delete (the restore scripts do this after every run)
+  py -3 tools\\win\\ts_driver.py remove       # elevated: sc stop + sc delete + delete the per-run copy (the restore scripts do this after every run)
   py -3 tools\\win\\ts_driver.py check-dir DIR   # exit 0 when DIR is admin-only (the restore scripts check the accepted state's directory)
 Evidence: docs/research/win-throttlestop-9.7.3.md (hashes, offset), win-throttlestop-fivr.md section 1 (service/device names).
 """
@@ -20,6 +21,8 @@ import argparse
 import hashlib
 import os
 import re
+import secrets
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -81,39 +84,119 @@ def sddl_admin_only(sddl: str) -> str | None:
     return None if allowed else "no allow entry for Administrators"
 
 
+REPARSE_POINT = 0x400    # FILE_ATTRIBUTE_REPARSE_POINT: symlinks, junctions, mount points
+RUN_NAME = re.compile(r"ThrottleStop-[0-9a-f]{16}\.sys\Z")   # the per-run copies of the driver
+
+
+class Win32:
+    """The thin, replaceable layer over Windows. Everything the checks below decide is decided from what these four methods report, so the decision
+    logic is unit-tested with fakes on Linux (tests/tools_win); the methods themselves are only exercised on Windows (untested there: G-142)."""
+
+    def is_reparse(self, path: Path) -> bool:
+        """True when ``path`` itself is a reparse point (junction, symlink, mount point) or a symlink: it is never followed."""
+        st = os.lstat(path)
+        return bool(getattr(st, "st_file_attributes", 0) & REPARSE_POINT) or stat.S_ISLNK(st.st_mode)
+
+    def sddl(self, path: Path) -> str:
+        """The SDDL of a file or directory as Windows reports it (PowerShell Get-Acl; read-only)."""
+        q = str(path).replace("'", "''")
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", f"(Get-Acl -LiteralPath '{q}').Sddl"], capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise DriverError(f"cannot read the ACL of {path}: {(r.stderr or r.stdout).strip()}")
+        return r.stdout.strip()
+
+    def icacls(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["icacls.exe", *args], capture_output=True, text=True)
+
+    def hold_deny_write(self, path: Path):
+        """Open ``path`` for reading with share mode READ only and keep it open: nobody (admin included) can write, truncate, rename or delete it until the
+        returned object's ``close()``. The service loader may still read it. Off Windows: a plain read handle (no sharing control)."""
+        if os.name != "nt":
+            return open(path, "rb")
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        h = k.CreateFileW(str(path), 0x80000000, 0x1, None, 3, 0x00200000, None)  # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT
+        if h in (None, wintypes.HANDLE(-1).value):
+            raise DriverError(f"cannot hold {path} open (Win32 error {ctypes.get_last_error()})")
+
+        class _Hold:
+            def close(self_, _h=h, _k=k):
+                _k.CloseHandle(_h)
+
+        return _Hold()
+
+
+win = Win32()
+
+
 def dir_sddl(path: Path) -> str:
-    """The SDDL of ``path`` as Windows reports it (PowerShell Get-Acl; read-only)."""
-    q = str(path).replace("'", "''")
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", f"(Get-Acl -LiteralPath '{q}').Sddl"], capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout.strip():
-        raise DriverError(f"cannot read the ACL of {path}: {(r.stderr or r.stdout).strip()}")
-    return r.stdout.strip()
+    return win.sddl(path)
+
+
+def sddl_owner(sddl: str) -> str | None:
+    m = re.match(r"\s*O:(.*?)(?:G:|D:|S:|$)", sddl or "")
+    return m.group(1) if m and m.group(1) else None
+
+
+def check_no_reparse(path: Path) -> None:
+    """No component of ``path`` (the drive root down to the path itself) may be a reparse point: a junction planted earlier would redirect the driver path.
+    Every existing ancestor must also be owned by Administrators / SYSTEM / TrustedInstaller (the drive root and ProgramData are; a user-owned parent is not)."""
+    path = Path(path)
+    chain = [path, *path.parents]
+    for comp in reversed(chain):
+        if str(comp) in ("", ".") or not comp.exists() and not comp.is_symlink():
+            continue
+        if win.is_reparse(comp):
+            raise DriverError(f"{comp} is a reparse point (junction / symlink); refusing to use {path}")
+        if comp != path and comp != comp.parent:   # ancestors: the owner must be trusted (their ACL is the system's, not ours to demand)
+            owner = sddl_owner(win.sddl(comp))
+            if owner not in ADMIN_TRUSTEES:
+                raise DriverError(f"{comp} (a parent of {path}) is owned by {owner}, not by Administrators/SYSTEM; refusing")
 
 
 def check_admin_dir(path: Path, *, get_sddl=None) -> None:
-    """Raise DriverError unless ``path`` exists and is admin-only (owner and ACL)."""
+    """Raise DriverError unless ``path`` is a real directory (no component a reparse point), owned by Administrators/SYSTEM, whose ACL grants nothing to
+    any other principal."""
     path = Path(path)
     if not path.is_dir():
         raise DriverError(f"{path} is not a directory")
+    check_no_reparse(path)
     why = sddl_admin_only((get_sddl or dir_sddl)(path))
     if why:
         raise DriverError(f"{path} is not an admin-only directory ({why}). Refusing to use it: a non-administrator could replace what runs. "
                           f"Inspect it, remove it (rmdir /s /q \"{path}\") and run 'ts_driver.py init-dir' from an Administrator terminal")
 
 
+def check_admin_file(path: Path, *, get_sddl=None) -> None:
+    """Raise DriverError unless ``path`` is a regular file, not a reparse point, owned by Administrators/SYSTEM, with an admin-only ACL."""
+    path = Path(path)
+    if not path.is_file():
+        raise DriverError(f"{path} is not a file")
+    if win.is_reparse(path):
+        raise DriverError(f"{path} is a reparse point; refusing")
+    why = sddl_admin_only((get_sddl or dir_sddl)(path))
+    if why:
+        raise DriverError(f"{path} is not admin-only ({why}); refusing to load it")
+
+
 def icacls(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["icacls.exe", *args], capture_output=True, text=True)
+    return win.icacls(*args)
 
 
 def init_dir(path: Path | None = None, *, run=None, get_sddl=None) -> Path:
-    """Create ``path`` (default ``data_dir()``) and lock it down: owner Administrators, inheritance off, Administrators + SYSTEM full control, nothing else.
-    A directory that already exists is only *checked* (never adopted): one a user pre-created could hold planted entries."""
+    """Create ``path`` (default ``data_dir()``) fresh and lock it down: owner Administrators, inheritance off, Administrators + SYSTEM full control, nothing
+    else. A directory that already exists is only *checked* (real directory, no reparse point in the path, admin owner, admin-only ACL), never adopted: one a
+    user pre-created could hold planted entries or be a junction."""
     path = Path(path) if path else data_dir()
     run = run or icacls
-    if path.exists():
+    if path.exists() or path.is_symlink():
         check_admin_dir(path, get_sddl=get_sddl)
         return path
-    path.mkdir(parents=True)
+    check_no_reparse(path.parent)
+    path.mkdir()   # the parent must exist: no silent creation of a chain
     steps = (("/setowner", "*S-1-5-32-544"), ("/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"), ("/inheritance:r",))
     for step in steps:
         r = run(str(path), *step)
@@ -123,15 +206,37 @@ def init_dir(path: Path | None = None, *, run=None, get_sddl=None) -> Path:
     return path
 
 
-def verify_driver_file(sys_path: Path, *, get_sddl=None) -> None:
-    """The driver at ``sys_path`` is what we think it is: its directory is admin-only and its SHA-256 is DRIVER_SHA256. Called right before ``sc start``."""
-    sys_path = Path(sys_path)
-    check_admin_dir(sys_path.parent, get_sddl=get_sddl)
-    if not sys_path.is_file():
-        raise DriverError(f"{sys_path} not found; run the 'carve' subcommand first")
-    got = sha256_hex(sys_path.read_bytes())
-    if got != DRIVER_SHA256:
-        raise DriverError(f"{sys_path} SHA-256 {got} is not the expected driver; refusing to start it")
+def verify_driver_file(path: Path, *, get_sddl=None, data: bytes | None = None) -> bytes:
+    """Everything that must hold right before the driver is loaded: no reparse point anywhere in the path, an admin-only directory and file (ACL and owner),
+    and the SHA-256 of the bytes actually on disk (read now) equal to DRIVER_SHA256. Returns those bytes."""
+    path = Path(path)
+    check_admin_dir(path.parent, get_sddl=get_sddl)
+    check_admin_file(path, get_sddl=get_sddl)
+    got = path.read_bytes()
+    h = sha256_hex(got)
+    if h != DRIVER_SHA256:
+        raise DriverError(f"{path} SHA-256 {h} is not the expected driver; refusing to start it")
+    return got
+
+
+def write_new_copy(directory: Path, data: bytes) -> Path:
+    """Write ``data`` to a NEW, uniquely named file in ``directory`` (``O_CREAT | O_EXCL``: an existing name, link or planted file makes it fail). The bytes
+    that were written are hashed (not the source): the copy that gets loaded is the copy that was verified."""
+    if sha256_hex(data) != DRIVER_SHA256:
+        raise DriverError("the driver bytes in memory are not the expected driver; refusing to write a copy")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(8):
+        path = Path(directory) / f"ThrottleStop-{secrets.token_hex(8)}.sys"
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return path
+    raise DriverError(f"could not create a new uniquely named file in {directory}")
 
 
 def sha256_hex(data: bytes) -> str:
@@ -165,6 +270,8 @@ def carve(exe: Path, out: Path, *, secure=None) -> Path:
         init_dir(out.parent)
     else:
         out.parent.mkdir(parents=True, exist_ok=True)
+    if (out.exists() or out.is_symlink()) and win.is_reparse(out):
+        raise DriverError(f"{out} is a reparse point; refusing to write through it")
     out.write_bytes(drv)
     return out
 
@@ -228,37 +335,71 @@ def service_binpath() -> str | None:
     return None
 
 
+def _delete_service() -> None:
+    """Stop and delete the ThrottleStop service if there is one, and delete the per-run driver copy it pointed at (only a ``ThrottleStop-<hex>.sys``
+    directly inside the admin-only directory is ever deleted)."""
+    if service_state() is None:
+        return
+    bp = service_binpath()
+    sc("stop", SERVICE)
+    r = sc("delete", SERVICE)
+    if r.returncode != 0:
+        raise DriverError("sc delete failed: " + (r.stdout + r.stderr).strip())
+    _remove_run_copy(bp)
+
+
+def _remove_run_copy(binpath: str | None) -> None:
+    if not binpath:
+        return
+    p = Path(binpath)
+    if RUN_NAME.match(p.name) and _norm_path(str(p.parent)) == _norm_path(str(data_dir())):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 def cmd_install(sys_path: Path) -> int:
-    """Start the driver from the verified admin-only copy. The service is (re)created when absent or when it points anywhere but ``sys_path``;
-    the directory ACL and the SHA-256 are checked before the service is touched AND again immediately before ``sc start``."""
+    """Start the driver for this run: a NEW uniquely named copy of the verified carved driver is written into the admin-only directory, a fresh service points
+    at that copy, and directory / file ACLs, reparse points and the SHA-256 of the bytes on disk are verified again immediately before ``sc start`` while the
+    file is held open (no writer, no rename, no delete). ``remove`` deletes the service and the copy. ``sys_path`` is the carved master copy."""
     need_admin()
-    sys_path = Path(sys_path).resolve()
-    verify_driver_file(sys_path)
-    state = service_state()
-    if state is not None and service_binpath() != _norm_path(str(sys_path)):
-        print(f"service {SERVICE} points at {service_binpath()!r}, not at {sys_path}; removing it")
-        sc("stop", SERVICE)
-        r = sc("delete", SERVICE)
-        if r.returncode != 0:
-            raise DriverError("sc delete of a service pointing elsewhere failed: " + (r.stdout + r.stderr).strip())
-        state = None
-    if state is None:
-        r = sc("create", SERVICE, "type=", "kernel", "start=", "demand", "binPath=", str(sys_path))
+    sys_path = Path(sys_path)
+    master = verify_driver_file(sys_path)          # nothing is touched unless the carved master is the real driver in a trustworthy place
+    _delete_service()                              # per-run service: never reuse one that exists (it may point anywhere)
+    copy = write_new_copy(sys_path.parent, master)
+    created = False
+    hold = None
+    try:
+        verify_driver_file(copy)
+        r = sc("create", SERVICE, "type=", "kernel", "start=", "demand", "binPath=", str(copy.resolve()))
         print(r.stdout.strip() or r.stderr.strip())
         if r.returncode != 0:
             raise DriverError("sc create failed")
-    elif state == "RUNNING":
-        print(f"service {SERVICE} already exists and is RUNNING from {sys_path}; nothing to do")
-        return 0
-    else:
-        print(f"service {SERVICE} exists ({state}); starting it")
-    verify_driver_file(sys_path)   # the check that matters: immediately before sc start, not minutes earlier
-    r = sc("start", SERVICE)
-    out = (r.stdout + r.stderr).strip()
-    print(out)
-    if r.returncode not in (0, 1056):  # 1056 = already running
-        hint = explain_start_failure(out + " " + str(r.returncode))
-        raise DriverError("sc start failed (exit %d)%s" % (r.returncode, "\n" + hint if hint else ""))
+        created = True
+        hold = win.hold_deny_write(copy)           # from here the file cannot be changed under us
+        verify_driver_file(copy)                   # the check that matters: immediately before sc start, on the held file
+        r = sc("start", SERVICE)
+        out = (r.stdout + r.stderr).strip()
+        print(out)
+        if r.returncode not in (0, 1056):          # 1056 = already running
+            hint = explain_start_failure(out + " " + str(r.returncode))
+            raise DriverError("sc start failed (exit %d)%s" % (r.returncode, "\n" + hint if hint else ""))
+    except BaseException:
+        if hold is not None:
+            hold.close()
+            hold = None
+        if created:
+            sc("stop", SERVICE)
+            sc("delete", SERVICE)
+        try:
+            copy.unlink()
+        except OSError:
+            pass
+        raise
+    finally:
+        if hold is not None:
+            hold.close()   # the loaded image keeps the file in use; the loader's own handle prevents deletion until `remove`
     return 0
 
 
@@ -292,9 +433,11 @@ def cmd_remove() -> int:
     if service_state() is None:
         print(f"service {SERVICE} not installed; nothing to do")
         return 0
+    bp = service_binpath()
     print((sc("stop", SERVICE).stdout or "").strip())
     r = sc("delete", SERVICE)
     print((r.stdout or r.stderr).strip())
+    _remove_run_copy(bp)
     return 0 if r.returncode == 0 else 1
 
 

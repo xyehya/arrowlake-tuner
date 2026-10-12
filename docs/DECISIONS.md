@@ -181,8 +181,9 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   code or binaries included; tool-procedure lines left HARDWARE.md. No history rewrite. Meaning of every earlier decision unchanged.
 - **D-042 · 2026-10-12 · Security review fixes (G-142).** An adversarial review of the GUI, helper link and restore scripts produced 14 findings; the
   fixes: (1) The ThrottleStop driver, the Windows accepted state, policy, audit log and read-back file live in `%ProgramData%\arltuner`, owner Administrators,
-  ACL Administrators + SYSTEM only (`ts_driver.py init-dir`, judged from the SDDL); the service is created per run and its directory ACL + the driver's
-  SHA-256 are re-verified immediately before every `sc start`; the RESTORED verdict comes from the run's own vf-dump JSON, not the audit file. Untested on
+  ACL Administrators + SYSTEM only (`ts_driver.py init-dir`, judged from the SDDL; no path component may be a reparse point); each run writes a NEW uniquely named
+  copy of the verified driver (O_EXCL), creates the service on it, holds it open (share READ) and re-verifies directory + file ACL, reparse points and the SHA-256 of the bytes
+  on disk immediately before `sc start`; the service and the copy are deleted after the run; the RESTORED verdict comes from the run's own vf-dump JSON, not the audit file. Untested on
   Windows. (2) The web server binds a random loopback address `127.x.y.z` (fallback `127.0.0.1` with a warning only if that bind fails), so each run has its own
   cookie jar: **cookie isolation supersedes D-028 #1's "accepted" weight, because D-033(d) returns the plan nonce to the client** (a cookie holder could
   otherwise fetch it). Sessions have a scope fixed at `/bootstrap`: `full` (the launcher) or `read` (`scope=read`, used by `tools/screenshots.py`): a read session

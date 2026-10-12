@@ -2,7 +2,7 @@
 No hardware and no helper code. The server's ``OPS`` allowlist is the real one (G-111 / G-112 merged), so every request the page sends is
 schema-checked exactly as it will be against the real helper.
 
-    python3 -m tests.web.v3_harness            # serves on 127.0.0.1, prints the one-time launcher token; Ctrl-C to stop (never starts a helper)
+    python3 -m tests.web.v3_harness            # serves on a random 127.x.y.z, prints the one-time launcher token; Ctrl-C to stop (never starts a helper)
 """
 import math
 import random

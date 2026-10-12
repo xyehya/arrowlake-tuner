@@ -38,10 +38,19 @@ py -3 tools\win\ts_driver.py carve --exe %USERPROFILE%\Downloads\ThrottleStop_9.
 py -3 tools\win\ts_driver.py start
 py -3 tools\win\ts_driver.py status
 ```
-`carve` (elevated) refuses unless the exe is 9.7.3 (SHA-256 `52D86D3D…2BA2`) and the 50,216-byte cut is the TechPowerUp driver (`16F83F05…97F0`), and writes it into the
-admin-only directory. `start` (elevated; `install` is the same) checks the directory's ACL and the file's SHA-256, `sc create ThrottleStop type= kernel start= demand binPath=` the
-admin-only copy when the service is absent or points elsewhere, checks both again **immediately before** `sc start`. `status` must show `RUNNING` and `\\.\ThrottleStop opens OK`.
-`restore_tuning.ps1` does `start` before and `remove` (stop + delete) after every run: no service lingers pointing at a driver file.
+`carve` (elevated) refuses unless the exe is 9.7.3 (SHA-256 `52D86D3D…2BA2`) and the 50,216-byte cut is the TechPowerUp driver (`16F83F05…97F0`), and writes it (the *master*)
+into the admin-only directory. `start` (elevated; `install` is the same), in this order:
+1. checks the directory and the master: **no component of the path is a reparse point** (junction / symlink / mount point; `FILE_ATTRIBUTE_REPARSE_POINT`), every parent is owned by
+   Administrators / SYSTEM / TrustedInstaller, the directory and the file are owned by them with an ACL that grants nothing to anyone else (read from `Get-Acl ... .Sddl`), and the master's
+   SHA-256 is the driver's;
+2. deletes any existing `ThrottleStop` service (and its per-run copy): a service is never reused;
+3. writes the verified bytes to a **new, uniquely named** `ThrottleStop-<16 hex>.sys` next to the master (`O_CREAT | O_EXCL`), and `sc create ThrottleStop type= kernel start= demand binPath=` that copy;
+4. opens the copy with share mode READ only (nobody can write, rename or delete it), and **immediately before `sc start`** repeats every check of step 1 on it, hashing the bytes read from disk;
+5. any failure deletes the service just created and the copy, and nothing is started.
+`status` must show `RUNNING` and `\\.\ThrottleStop opens OK`. `restore_tuning.ps1` does `start` before and `remove` (stop + delete the service **and** its per-run copy) after every run: no service
+or copy lingers. **This whole Windows layer (ACL parsing, reparse checks, icacls, `sc qc` parsing, the held handle) was written on Linux and is UNTESTED on Windows**: its decision logic is unit-tested
+against a fake `Win32` class (tests/tools_win), the real calls run for the first time on your machine; run `ts_driver.py init-dir`, `carve`, `start`, `status`, `remove` once by hand and read the output
+before trusting a restore. A failure of any check is a refusal, never a fallback.
 If start fails with 1275 / 577 / "blocked": see the blocklist / Memory integrity note in §2.
 **After each later boot** run `start` again (or just `restore_tuning.ps1`).
 

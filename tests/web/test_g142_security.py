@@ -189,6 +189,12 @@ class TestScopeFailsClosed(ReadLogin):
         self.assertFalse(self.srv.may_call(sid, "preflight"))
         self.assertEqual(self.call("preflight", cookie=ck)[0], 403)
         self.assertFalse(self.srv.may_call("no-such-session", "preflight"))
+        s = open_sse(self, ck)   # the stream of such a record is the restricted one, not a dropped connection
+        self.assertIn(b"200", read_until(s, b"\r\n").split(b"\r\n")[0])
+        self.fake.progress("w98", 1, 2, 5)
+        self.fake.telemetry()
+        got = read_until(s, b"event: telemetry")
+        self.assertNotIn(b"event: progress", got)
 
     def test_an_error_in_the_scope_check_refuses(self):
         ck = self.login()

@@ -793,7 +793,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if full:
             return self._err(503, "too_many_streams")
         sub = helper.subscribe(sid)
-        full_stream = srv.session_scope(sid) == "full"
+        try:
+            full_stream = srv.session_scope(sid) == "full"
+        except Exception:  # fail closed: a stream whose scope cannot be established carries the dashboard feeds only
+            full_stream = False
         last_write = time.monotonic()
         try:
             self.connection.settimeout(srv.cfg.sse_write_timeout_s)  # a client that stops reading is dropped

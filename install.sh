@@ -88,7 +88,7 @@ helper_pids() {  # PIDs running the helper: argv[0] is the helper itself, or a w
             esac
             case ${a##*/} in
                 arltuner-helper|arltuner-helper.py) echo "$pid"; break ;;
-                python|python3|python3.*|pkexec|sudo|env) continue ;;   # a wrapper around a wrapper (sudo python3 PATH): keep looking for the program
+                python|python3|python3.*|pkexec|sudo|env) continue ;;   # a wrapper around a wrapper (e.g. env then python3 PATH): keep looking for the program
             esac
             break   # any other first non-option argument is the program; later ones are its data
         done

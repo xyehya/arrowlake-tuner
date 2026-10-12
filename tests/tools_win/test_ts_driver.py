@@ -53,7 +53,43 @@ class CarveTests(unittest.TestCase):
 GOOD_SDDL = "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)"
 
 
-class AdminOnlyDirectory(unittest.TestCase):
+class FakeWin:
+    """Stands in for ts_driver.Win32: what Windows would report about reparse points and ACLs, and a record of what the code asked it to do."""
+
+    def __init__(self):
+        self.default_sddl = GOOD_SDDL
+        self.sddls = {}          # str(path) -> SDDL
+        self.reparse = set()     # str(path)
+        self.icacls_calls = []
+        self.icacls_rc = 0
+        self.held = []
+        self.events = []         # ordered log shared with the fake sc in StartVerifies...
+
+    def is_reparse(self, p):
+        return str(p) in self.reparse
+
+    def sddl(self, p):
+        return self.sddls.get(str(p), self.default_sddl)
+
+    def icacls(self, *a):
+        self.icacls_calls.append(a)
+        return types.SimpleNamespace(returncode=self.icacls_rc, stdout="", stderr="denied")
+
+    def hold_deny_write(self, p):
+        self.held.append(str(p))
+        self.events.append("hold")
+        return types.SimpleNamespace(close=lambda: self.events.append("release"))
+
+
+class FakeWinCase(unittest.TestCase):
+    def setUp(self):
+        self.win = FakeWin()
+        saved = ts.win
+        self.addCleanup(lambda: setattr(ts, "win", saved))
+        ts.win = self.win
+
+
+class AdminOnlyDirectory(FakeWinCase):
     """G-142 item 1/4: the driver and the accepted state live in an admin-only directory; the ACL is judged from its SDDL (locale independent)."""
 
     def test_sddl_admin_only_accepts_admins_and_system_only(self):
@@ -132,30 +168,115 @@ class AdminOnlyDirectory(unittest.TestCase):
             os.environ.update(old)
 
 
-class StartVerifiesBeforeEverySc(unittest.TestCase):
-    """cmd_install: directory ACL + SHA-256 are re-verified immediately before ``sc start`` (a swap between create and start is caught)."""
+class ReparseAndAclChecks(FakeWinCase):
+    """Decision logic of the directory / file checks, with a fake Windows."""
+
+    def test_a_reparse_point_anywhere_in_the_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            sub = root / "ProgramData" / "arltuner"
+            sub.mkdir(parents=True)
+            ts.check_admin_dir(sub)
+            for comp in (sub, sub.parent, root):
+                self.win.reparse = {str(comp)}
+                with self.assertRaises(ts.DriverError, msg=str(comp)) as cm:
+                    ts.check_admin_dir(sub)
+                self.assertIn("reparse point", str(cm.exception))
+
+    def test_an_ancestor_owned_by_a_user_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d) / "a" / "b"
+            sub.mkdir(parents=True)
+            self.win.sddls[str(sub.parent)] = "O:S-1-5-21-1-2-3-1001G:DUD:PAI(A;;FA;;;BA)"
+            with self.assertRaises(ts.DriverError) as cm:
+                ts.check_admin_dir(sub)
+            self.assertIn("owned by", str(cm.exception))
+
+    def test_file_checks_acl_owner_and_reparse(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "x.sys"
+            f.write_bytes(b"x")
+            ts.check_admin_file(f)
+            self.win.sddls[str(f)] = "O:BAG:SYD:PAI(A;;FA;;;BA)(A;;FR;;;BU)"
+            with self.assertRaises(ts.DriverError):
+                ts.check_admin_file(f)
+            self.win.sddls[str(f)] = "O:S-1-5-21-1-2-3-1001G:DUD:PAI(A;;FA;;;BA)"
+            with self.assertRaises(ts.DriverError):
+                ts.check_admin_file(f)
+            self.win.sddls.clear()
+            self.win.reparse = {str(f)}
+            with self.assertRaises(ts.DriverError):
+                ts.check_admin_file(f)
+
+    def test_init_dir_refuses_an_existing_reparse_point_without_touching_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.win.reparse = {d}
+            with self.assertRaises(ts.DriverError):
+                ts.init_dir(Path(d))
+            self.assertEqual(self.win.icacls_calls, [])
+
+    def test_init_dir_does_not_create_a_missing_parent_chain(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(OSError):
+                ts.init_dir(Path(d) / "no" / "such" / "arltuner")
+
+    def test_new_copy_is_exclusive_unique_and_of_the_verified_bytes(self):
+        drv = bytes(range(256)) * 4
+        saved = ts.DRIVER_SHA256
+        self.addCleanup(lambda: setattr(ts, "DRIVER_SHA256", saved))
+        ts.DRIVER_SHA256 = H(drv)
+        with tempfile.TemporaryDirectory() as d:
+            a, b = ts.write_new_copy(Path(d), drv), ts.write_new_copy(Path(d), drv)
+            self.assertNotEqual(a, b)
+            self.assertRegex(a.name, r"ThrottleStop-[0-9a-f]{16}\.sys")
+            self.assertTrue(ts.RUN_NAME.match(a.name))
+            self.assertEqual(a.read_bytes(), drv)
+            with self.assertRaises(ts.DriverError):   # bytes that are not the driver are never written
+                ts.write_new_copy(Path(d), b"evil")
+            # O_EXCL: a planted file of the chosen name makes the open fail, it is never overwritten (name collision forced)
+            planted = Path(d) / "ThrottleStop-0000000000000000.sys"
+            planted.write_bytes(b"planted")
+            real = ts.secrets.token_hex
+            ts.secrets.token_hex = lambda n: "0000000000000000"
+            try:
+                with self.assertRaises(ts.DriverError):
+                    ts.write_new_copy(Path(d), drv)
+            finally:
+                ts.secrets.token_hex = real
+            self.assertEqual(planted.read_bytes(), b"planted")
+
+
+class StartVerifiesBeforeEverySc(FakeWinCase):
+    """cmd_install: a NEW copy per run, directory + file ACL, reparse points and the SHA-256 of the bytes on disk re-verified immediately before
+    ``sc start`` on the held file; cleanup on every failure."""
 
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.drv = bytes(range(256)) * 4
-        self.path = Path(self.tmp.name) / "ThrottleStop.sys"
+        self.dir = Path(self.tmp.name) / "arltuner"
+        self.dir.mkdir()
+        self.path = self.dir / "ThrottleStop.sys"      # the carved master
         self.path.write_bytes(self.drv)
-        saved = (ts.DRIVER_SHA256, ts.is_admin, ts.dir_sddl, ts.sc)
-        self.addCleanup(lambda: (setattr(ts, "DRIVER_SHA256", saved[0]), setattr(ts, "is_admin", saved[1]), setattr(ts, "dir_sddl", saved[2]),
-                                 setattr(ts, "sc", saved[3])))
+        saved = (ts.DRIVER_SHA256, ts.is_admin, ts.sc, ts.data_dir)
+        self.addCleanup(lambda: (setattr(ts, "DRIVER_SHA256", saved[0]), setattr(ts, "is_admin", saved[1]), setattr(ts, "sc", saved[2]),
+                                 setattr(ts, "data_dir", saved[3])))
         ts.DRIVER_SHA256 = H(self.drv)
         ts.is_admin = lambda: True
-        self.sddl = GOOD_SDDL
-        ts.dir_sddl = lambda p: self.sddl
+        ts.data_dir = lambda: self.dir
         self.log = []
         self.state = None            # None = no service
         self.binpath = ""
         self.on_create = lambda: None
+        self.on_hold = lambda: None
         ts.sc = self.fake_sc
+        real_hold = self.win.hold_deny_write
+        self.win.hold_deny_write = lambda p: (real_hold(p), self.on_hold())[0]
 
     def fake_sc(self, *a):
         self.log.append(a)
+        self.win.events.append(a[0])
         R = types.SimpleNamespace
         if a[0] == "query":
             return R(returncode=1060 if self.state is None else 0, stdout="" if self.state is None else f"        STATE              : 1  {self.state}\n", stderr="")
@@ -173,46 +294,104 @@ class StartVerifiesBeforeEverySc(unittest.TestCase):
     def ops(self):
         return [a[0] for a in self.log if a[0] in ("create", "start", "delete", "stop")]
 
-    def test_creates_then_verifies_again_then_starts(self):
+    def copies(self):
+        return sorted(p for p in self.dir.iterdir() if ts.RUN_NAME.match(p.name))
+
+    def test_a_new_uniquely_named_copy_is_what_the_service_points_at(self):
         self.assertEqual(ts.cmd_install(self.path), 0)
         self.assertEqual(self.ops(), ["create", "start"])
+        (copy,) = self.copies()
         create = next(a for a in self.log if a[0] == "create")
-        self.assertEqual(create[create.index("binPath=") + 1], str(self.path.resolve()))
+        self.assertEqual(create[create.index("binPath=") + 1], str(copy.resolve()))
+        self.assertNotEqual(copy, self.path)
+        self.assertEqual(copy.read_bytes(), self.drv)
+        ts.cmd_install(self.path)                       # a second run: another copy, the old service replaced
+        self.assertEqual(len(self.copies()), 1)
+        self.assertNotEqual(self.copies()[0], copy)
 
-    def test_a_driver_swapped_between_create_and_start_is_never_started(self):
-        self.on_create = lambda: self.path.write_bytes(b"evil" * 100)
+    def test_the_file_is_held_before_the_last_verification_and_start(self):
+        ts.cmd_install(self.path)
+        ev = self.win.events
+        self.assertLess(ev.index("create"), ev.index("hold"))
+        self.assertLess(ev.index("hold"), ev.index("start"))
+
+    def test_a_driver_swapped_after_create_is_never_started_and_cleaned_up(self):
+        self.on_create = lambda: self.copies()[0].write_bytes(b"evil" * 100)
         with self.assertRaises(ts.DriverError) as cm:
             ts.cmd_install(self.path)
         self.assertIn("not the expected driver", str(cm.exception))
         self.assertNotIn("start", self.ops())
+        self.assertEqual(self.copies(), [])
+        self.assertIn("delete", self.ops())              # the service created for this run is deleted again
+
+    def test_a_swap_between_hold_and_start_is_caught_by_the_last_verification(self):
+        self.on_hold = lambda: self.copies()[0].write_bytes(b"evil" * 100)
+        with self.assertRaises(ts.DriverError):
+            ts.cmd_install(self.path)
+        self.assertNotIn("start", self.ops())
+        self.assertEqual(self.copies(), [])
 
     def test_a_directory_that_stopped_being_admin_only_is_never_started(self):
         def loosen():
-            self.sddl = "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;BU)"
+            self.win.default_sddl = "O:BAG:SYD:PAI(A;OICI;FA;;;BA)(A;OICI;FA;;;BU)"
         self.on_create = loosen
         with self.assertRaises(ts.DriverError):
             ts.cmd_install(self.path)
         self.assertNotIn("start", self.ops())
 
-    def test_a_wrong_file_or_directory_is_refused_before_any_service_change(self):
+    def test_a_directory_turned_into_a_junction_is_never_started(self):
+        self.on_create = lambda: self.win.reparse.add(str(self.dir))
+        with self.assertRaises(ts.DriverError):
+            ts.cmd_install(self.path)
+        self.assertNotIn("start", self.ops())
+
+    def test_a_wrong_master_or_directory_is_refused_before_any_service_change(self):
         self.path.write_bytes(b"x")
         with self.assertRaises(ts.DriverError):
             ts.cmd_install(self.path)
         self.path.write_bytes(self.drv)
-        self.sddl = "O:S-1-5-21-1-2-3-1001G:DUD:PAI(A;;FA;;;BA)"
+        self.win.sddls[str(self.dir)] = "O:S-1-5-21-1-2-3-1001G:DUD:PAI(A;;FA;;;BA)"
+        with self.assertRaises(ts.DriverError):
+            ts.cmd_install(self.path)
+        self.win.sddls.clear()
+        self.win.reparse = {str(self.path)}
         with self.assertRaises(ts.DriverError):
             ts.cmd_install(self.path)
         self.assertEqual(self.ops(), [])
+        self.assertEqual(self.copies(), [])
 
-    def test_a_service_pointing_elsewhere_is_deleted_and_recreated_from_the_verified_copy(self):
-        self.state, self.binpath = "STOPPED", r"\??\C:\Users\x\AppData\Local\arltuner\ThrottleStop.sys"
+    def test_an_existing_service_is_never_reused_it_is_deleted_with_its_copy(self):
+        old = ts.write_new_copy(self.dir, self.drv)
+        self.state, self.binpath = "STOPPED", str(old)
         ts.cmd_install(self.path)
         self.assertEqual(self.ops(), ["stop", "delete", "create", "start"])
+        self.assertFalse(old.exists())
+        self.assertEqual(len(self.copies()), 1)
 
-    def test_a_service_already_pointing_at_the_copy_is_reused(self):
-        self.state, self.binpath = "STOPPED", str(self.path.resolve())
+    def test_a_failed_start_deletes_the_service_and_the_copy(self):
+        orig = self.fake_sc
+
+        def failing(*a):
+            r = orig(*a)
+            return types.SimpleNamespace(returncode=1275, stdout="blocked", stderr="") if a[0] == "start" else r
+        ts.sc = failing
+        with self.assertRaises(ts.DriverError):
+            ts.cmd_install(self.path)
+        self.assertEqual(self.copies(), [])
+        self.assertIsNone(self.state)
+
+    def test_remove_deletes_the_service_and_only_its_own_run_copy(self):
         ts.cmd_install(self.path)
-        self.assertEqual(self.ops(), ["start"])
+        (copy,) = self.copies()
+        other = self.dir / "notes.sys"
+        other.write_bytes(b"keep")
+        self.assertEqual(ts.cmd_remove(), 0)
+        self.assertFalse(copy.exists())
+        self.assertTrue(other.exists())
+        self.assertTrue(self.path.exists())              # the carved master stays
+        self.state, self.binpath = "STOPPED", str(other)  # a service pointing at some other file: that file is not ours to delete
+        ts.cmd_remove()
+        self.assertTrue(other.exists())
 
     def test_not_elevated_does_nothing(self):
         ts.is_admin = lambda: False
@@ -236,6 +415,9 @@ class StartVerifiesBeforeEverySc(unittest.TestCase):
         ts.carve(src, out, secure=True)
         self.assertEqual(seen, [out.parent])
         self.assertEqual(out.read_bytes(), self.drv)
+        self.win.reparse = {str(out)}
+        with self.assertRaises(ts.DriverError):          # a pre-planted link at the output name is not written through
+            ts.carve(src, out, secure=True)
 
 
 class WindowsScriptsAreAdminOnly(unittest.TestCase):
