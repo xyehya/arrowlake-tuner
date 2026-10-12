@@ -46,7 +46,7 @@
 | G-141 | backend fixes from the code review (plan/guard ratio context, pacing, journals, turbo fold, ceilings, accept, fingerprint op, 0600) | lnx | T0 | **merged** 2026-10-12 | — |
 | G-142 | security review fixes (Windows driver path, loopback cookie isolation + read scope, -I restore, socketpair, caps, NaN) | lnx/win | T0 | **merged** 2026-10-12 | — |
 | G-143 | guide updated to the shipped code (documenter); USER-GUIDE.md pointer | lnx | T0 | **merged** 2026-10-12 | G-133..G-142 |
-| G-144 | no polkit: helper as a root socket service (systemd socket activation or manual), SO_PEERCRED allowlist (D-043) | lnx | T0/T1 | in progress 2026-10-12 | — |
-| G-145 | knowledge docs review (Opus): general ARL-S facts only, chip data to examples/reference-285k/notes, favored-cores revamp | lnx | T0 | queued after G-144 | G-144 |
+| G-144 | no polkit: helper as a root socket service (systemd socket activation or manual), SO_PEERCRED allowlist (D-043) | lnx | T0/T1 | **merged** 2026-10-12 (live-verified) | — |
+| G-145 | knowledge docs review (Opus): general ARL-S facts only, chip data to examples/reference-285k/notes, favored-cores revamp | lnx | T0 | in progress 2026-10-12 | G-144 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
