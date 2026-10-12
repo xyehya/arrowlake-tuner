@@ -35,7 +35,7 @@ choosing between equivalent implementations · re-dispatching or cancelling work
 safety or an operator decision (note them in the SPEC changelog line at the top).
 
 ## §4 Stop and ask the operator
-- **Any hardware access** (mailbox request incl. reads, `wrmsr`, cpufreq caps, installing the helper as root, polkit files) — explicit go-ahead
+- **Any hardware access** (mailbox request incl. reads, `wrmsr`, cpufreq caps, installing the helper as root, helper service/allowlist files) — explicit go-ahead
   per sitting (AGENTS.md, SAFETY.md).
 - Changing a policy limit, a guard rule, SAFETY.md, or anything in SPEC §1 / §14 (operator decisions); signing D-021.
 - Downloads or installs (name, source, size); new third-party dependencies (stdlib-only rule, D-012).

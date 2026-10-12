@@ -224,7 +224,7 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     `health`: `delta` if the health snapshot differs (`health.diff`), `mce_new > 0`, or the kernel log / snapshot could not be read (never called clean unread).
     `progress` event every 2 s: `{event: "progress", op_id, elapsed_s, of_s, errors}`. Cancel is a result with `stopped_by: "cancel"`, not `CANCELLED`.
     Errors: `BAD_REQUEST` (args; `memory_mb` out of range ⇒ `detail.check = "MEM_RANGE"`), `BUSY` (any other op running), `REFUSED` with `detail.check` in
-    `NO_INVOKER` (no/unknown/root `PKEXEC_UID`), `TOOL_MISSING`, `TRUST_PATH`, `MEM_RANGE` (too little memory), `NO_CPUFREQ`, `STALE_JOURNAL`, `CAP_WRITE`,
+    `NO_INVOKER` (no/unknown/root invoker: the socket peer uid since G-144; `PKEXEC_UID` on the stdio dev path only), `TOOL_MISSING`, `TRUST_PATH`, `MEM_RANGE` (too little memory), `NO_CPUFREQ`, `STALE_JOURNAL`, `CAP_WRITE`,
     `SPAWN`; `INTERNAL` `RESTORE_FAILED` if cpufreq could not be put back (journal kept; the result is stored first).
   - **`stress.stop {}`** ⇒ `{cancelled: bool, state, op_id?}` (cancels only a running `stress.start`; otherwise `cancelled: false`). **`stress.list {}`** ⇒
     `{results: [summary row]}` newest first, at most 50: `{id, kind, started, ended, duration_s, elapsed_s, stopped_by, errors, cap_valid, health, mce_new,

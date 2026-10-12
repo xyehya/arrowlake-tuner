@@ -85,3 +85,10 @@ Causality unproven; the mailbox burst was the only identified low-level mutation
 A per-core apply is **2 + 7n operations** (`0x14`; per CPU `0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27`; plus `0x15` when bit 3 is clear), each a WRMSR to MSR 0x150 (historical, at the code-default dwell and cap): **one P core = 9 operations (≈ 9 minutes at the 60 s dwell, ≈ 11 mailbox WRMSRs including guard read-backs)**; two P cores or any E cluster (4 CPUs) exceed the default per-boot cap of 12, so the operator must raise `max_operations_per_session` / `max_operations_per_boot` in a reviewed policy for that session. The guard's `0x1C`/`0x26` read-backs are extra and not in XTU's sequence.
 
 T-022 numbers (the plan budget counts read-backs): **one P core = 13 mailbox WRMSRs; an E-cluster raise = 53**; the default per-boot cap of 12 covers not even one P core, so every real session needs a reviewed policy with higher `max_operations_per_session` / `max_operations_per_boot`. Raises go in small verified steps (ratio +1, V +20 mV per step by default), one human-attended session per step, with a stability check between steps.
+
+## Helper access (D-043, 2026-10-12)
+The root helper is a socket service (`/run/arltuner/helper.sock`); there is no password prompt. The gate is the kernel-reported peer uid
+(`SO_PEERCRED`) checked against `[access]` in `/etc/arltuner/helper.toml` on every connection (root only if listed by name; fail closed).
+Any process of an allowed user can drive the helper without a prompt — the trade the operator chose for a frictionless, distro-neutral setup.
+What still protects the hardware: the guard and the policy limits, the allowlist of requests, one client and one mailbox transaction at a time,
+read-back of every write, the health gate, the audit log, the idle exit, and nothing is ever applied on its own.

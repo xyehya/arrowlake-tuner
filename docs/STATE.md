@@ -4,7 +4,7 @@ _Updated: 2026-10-12 · lnx · public-readiness pass done (operator goal: fine-t
 private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
 
 ## Where we are
-- **App:** local web GUI (Dashboard, Curves, Tune, Stress, Profiles, System, Audit) + root helper via polkit + CLI; Linux. Windows: restore of the
+- **App:** local web GUI (Dashboard, Curves, Tune, Stress, Profiles, System, Audit) + root helper as a socket service (no polkit, D-043) + CLI; Linux. Windows: restore of the
   accepted state only (`tools/win/`, **never run on Windows from this repo**).
 - **Public project (D-036):** everything is read live from the user's CPU (topology, fused points, favored cores, limits). Reference-machine
   numbers live only in `examples/reference-285k/`, `docs/knowledge/` (tagged) and the simulator model.
