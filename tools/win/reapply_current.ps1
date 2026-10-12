@@ -10,7 +10,7 @@ param([switch]$Check, [string]$From = (Join-Path $env:LOCALAPPDATA 'arltuner\acc
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $repo
-$lm = Join-Path $env:LOCALAPPDATA 'linuxmon'
+$lm = Join-Path $env:LOCALAPPDATA 'arltuner'
 New-Item -ItemType Directory -Force -Path $lm, 'captures\win' | Out-Null
 $audit = Join-Path $lm 'audit.jsonl'
 

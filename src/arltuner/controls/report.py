@@ -1,7 +1,7 @@
 """Results and text output of the controls: ``StepResult`` / ``ApplyReport`` and the plain-text renderers.
 
 Pure formatting, no I/O, ASCII only (the CLI still makes its output streams tolerant of other characters). Facts:
-``docs/research/registers.md`` ("V/F data word": volts = raw/1024, offset LSB = 1/1024 V, so integer mV snaps to the nearest 1/1024 V;
+``docs/knowledge/registers.md`` ("V/F data word": volts = raw/1024, offset LSB = 1/1024 V, so integer mV snaps to the nearest 1/1024 V;
 "Return codes"); rules: ``docs/SAFETY.md`` ("Write-session protocol" step 5 "Revert path", "Linux specifics": every MSR write taints the
 kernel). T-021 / D-015: offsets are shown as *runtime* and *effective* (assumed BIOS per-core offset + runtime; the runtime offset adds
 to the BIOS one, ``[MEASURED win 2026-10-01]``).

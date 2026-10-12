@@ -1,7 +1,7 @@
 """The real MSR port: ``/dev/cpu/N/msr`` (Linux ``msr`` driver). Written here, exercised by the suite ONLY against fake
 files in temp directories (docs/tasks/T-011); the suite never opens the default root.
 
-Facts used (``docs/research/registers.md`` "MSRs" table, "OC mailbox -- request model"): an MSR access is a 64-bit
+Facts used (``docs/knowledge/registers.md`` "MSRs" table, "OC mailbox -- request model"): an MSR access is a 64-bit
 little-endian ``pread``/``pwrite`` at file offset = MSR number on ``<root>/<cpu>/msr``; every OC-mailbox request, reads
 included, is a WRMSR (hardware-write tier, docs/SAFETY.md). Therefore:
 

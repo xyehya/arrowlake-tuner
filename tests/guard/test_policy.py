@@ -1,7 +1,7 @@
 """T-013 policy tests: default M1 policy, strict TOML loading, and the write predicates (the T-021 additions -- session facts,
 D-015 floor, 0x1D / 0x27 checks -- are in test_measured_checks.py).
 
-Facts: docs/research/registers.md ("V/F data word", "Mailbox commands"); bounds: docs/tasks/T-013-guard.md "Policy".
+Facts: docs/knowledge/registers.md ("V/F data word", "Mailbox commands"); bounds: docs/tasks/T-013-guard.md "Policy".
 """
 from __future__ import annotations
 

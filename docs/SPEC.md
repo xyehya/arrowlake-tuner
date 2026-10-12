@@ -1,6 +1,6 @@
 # SPEC — arrowlake-tuner v1 (Linux local web GUI + Windows PowerShell restore) · v2 DRAFT 2026-10-08
 
-_v1 draft: `linuxmon@b01f78a:docs/SPEC-gui.md`. v2.1 (2026-10-08, D-027): §4.2 SSE uses `Sec-Fetch-Site` instead of a required Origin; long ops 202 + SSE. v2 folds in the review `docs/review/2026-10-08-spec-v1-review.md` (37 findings; numbers cited as R#).
+_v1 was an early draft (superseded). v2.1 (2026-10-08, D-027): §4.2 SSE uses `Sec-Fetch-Site` instead of a required Origin; long ops 202 + SSE. v2 folds in the review `docs/review/2026-10-08-spec-v1-review.md` (37 findings; numbers cited as R#).
 Open operator decisions are marked **OD-n** (§14) and block the phase named there. Phases: §12 / `docs/ROADMAP.md`. Tasks: just-in-time._
 
 ## 1. Operator decisions (2026-10-08)
@@ -71,7 +71,7 @@ never trusted for limits. Helper code is never executed from `~/.local` or a git
 `cancel` takes effect **between** mailbox transactions only. On EOF / SIGTERM / SIGHUP: finish the current transaction, stop the apply at a safe
 point, restore frequency caps from the journal, kill stress children, exit.
 ### 4.6 Concurrency, progress, budget (R17–R20)
-- One machine-wide lock `/run/lock/linuxmon-mailbox.lock` (the CLI's existing default, kept so CLI and GUI exclude each other).
+- One machine-wide lock `/run/lock/arltuner-mailbox.lock` for uninstalled runs (the CLI's default, D-041; so CLI and GUI exclude each other).
 - Helper state machine `idle | planning | applying | capped | stressing`; conflicting requests get a named refusal. Operations are addressed by id:
   a reload or second tab re-attaches to the running operation, never repeats or cancels it.
 - Apply shows step progress, ops used / per-boot budget (600, from the audit log) before CONFIRM; Apply is disabled with the reason if the plan does
@@ -87,7 +87,7 @@ Every control is shown; a control is **writable only after its gate is recorded*
 | E OC-point target voltage | profiles + policy `v_target_max_mv` | **written once** (1.165 V, same run) | same as above |
 | P OC ratio (`0x11`) + `0x1D` | library + simulator | **written once, ungated**: Windows 2026-10-06, P0 58× at V target 1429.69 mV, read back equal; no stability result; cleared by reboot | G5: supervised re-apply → measured clock → D-019 gate |
 | P turbo table `0x1AD` | T-023 code built | **written once, ungated** (same 10-06 test: `0x373737373737393A`) | G5: supervised write + read-back + gate |
-| P OC-point target voltage raise | library; accepted policy has no P ceiling (= fused) | **written once, ungated** (same test, policy `linuxmon:session-2026-10-06-p0-58.toml`) | operator adds a P ceiling to the root policy by hand, then G5 gate |
+| P OC-point target voltage raise | library; accepted policy has no P ceiling (= fused) | **written once, ungated** (same test, the 2026-10-06 session policy) | operator adds a P ceiling to the root policy by hand, then G5 gate |
 | Ring offset | `point-offset` P1 2 | 40× point needs policy P2 9 | read-only in v1 |
 
 ## 6. Screens
@@ -113,7 +113,7 @@ Every control is shown; a control is **writable only after its gate is recorded*
 
 ## 8. Live telemetry (O-5, R12–R14)
 Readers re-implemented here from documented facts (`docs/knowledge/linux-path.md`; new rows go to `docs/knowledge/telemetry-sources.md`: value,
-source, privilege, package, platform-specific?). The operator's turbostat/turbostat+ repos are reference only — facts in, no code copied.
+source, privilege, package, platform-specific?). The operator's separate monitoring tools are reference only — facts in, no code copied.
 - Values: per-core MHz/busy (APERF/MPERF `0xE8/0xE7`), core VID (`0x198` — semantics on ARL to confirm), temps (coretemp hwmon / `0x19C`/`0x1B1`),
   package/core power (RAPL powercap; readability differs by distro), throttle reasons, **Vcore via hwmon** (board-specific, read-only files; no direct
   Super-I/O access — R31 partly rejected: it is the operator's key number), DRAM GB/s (one long-lived `perf stat -I 1000` on `uncore_imc_free_running`,
@@ -180,4 +180,4 @@ budget shared with the CLI via the audit log (OD-1 moves it to `/var/lib`: the C
 | OD-2 | Python ≥ 3.12 (excludes Ubuntu 22.04, Debian 12) or ≥ 3.11 | **yes (D-024)** | — |
 | OD-3 | Autostart applies only a profile with a recorded gate (today p-step7) | deferred to G6 | G6 |
 | OD-4 | Sign D-021 (unattended autostart, §10) | deferred to G6 | G6 |
-| OD-5 | GitHub remote: private repo `xyehya/arrowlake-tuner`; public later after a privacy scrub? | **yes (D-024)** | — |
+| OD-5 | GitHub remote: `xyehya/arrowlake-tuner` (https://github.com/xyehya/arrowlake-tuner); public after a privacy scrub (G-140)? | **yes (D-024)** | — |

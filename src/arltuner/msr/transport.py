@@ -1,6 +1,6 @@
 """The OC-mailbox transaction: poll idle -> WRMSR request -> poll done -> decode. Deliberately dumb.
 
-Sequence and limits follow what Intel's own driver does (``docs/research/registers.md`` "OC mailbox -- request model",
+Sequence and limits follow what Intel's own driver does (``docs/knowledge/registers.md`` "OC mailbox -- request model",
 "XTU/IPF sequence (T-005)": read MSR 0x150 until bit 63 = 0 in 10 ms steps with a ~10 s cap, timeout => abort WITHOUT
 writing, WRMSR, poll again, no retry, no rollback). Every mailbox request, reads included, is a WRMSR, so the ONLY
 caller of ``MailboxTransport.transact`` must be ``arltuner.guard`` (docs/ARCHITECTURE.md). This module contains no

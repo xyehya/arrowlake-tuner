@@ -1,19 +1,19 @@
 # RUNBOOK — applying the accepted profile on Windows 11 (`win`)
 
-> Carried over 2026-10-08 from `linuxmon@b01f78a` (`~/AI/linuxmon`). Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here live in that repo (see `docs/PROVENANCE.md`); "linuxmon" = this project's former name.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
-How the operator loads ThrottleStop's signed driver, re-applies the accepted tuning (`profiles/CURRENT`) through `linuxmon --device-win`, then benchmarks.
+How the operator loads ThrottleStop's signed driver, re-applies the accepted tuning (`profiles/CURRENT`) through `arltuner --device-win`, then benchmarks.
 Rules behind it: `AGENTS.md`, `docs/SAFETY.md`. Driver facts: `docs/research/win-throttlestop-fivr.md` §1, `win-throttlestop-9.7.3.md`.
-All paths relative to the repo (`C:\Users\yk\AI\arrowlake-tuner`). Use an **elevated** PowerShell (Run as administrator). `py -3` below = `python` if you have no launcher.
-The driver is never stored in the repo: it is carved from your own `ThrottleStop.exe` (hash-verified) into `%LOCALAPPDATA%\linuxmon\ThrottleStop.sys`.
+All paths relative to the repo (`%USERPROFILE%\AI\arrowlake-tuner`). Use an **elevated** PowerShell (Run as administrator). `py -3` below = `python` if you have no launcher.
+The driver is never stored in the repo: it is carved from your own `ThrottleStop.exe` (hash-verified) into `%LOCALAPPDATA%\arltuner\ThrottleStop.sys`.
 
 ## 0. Before any sitting
-- Operator at the machine, explicit go-ahead. Only linuxmon may write the mailbox: no ThrottleStop GUI, OCCT, XTU client or HWiNFO running (HWiNFO read-only is tolerated but close it for the first apply).
+- Operator at the machine, explicit go-ahead. Only arltuner may write the mailbox: no ThrottleStop GUI, OCCT, XTU client or HWiNFO running (HWiNFO read-only is tolerated but close it for the first apply).
 - Warm or cold boot clears every per-point offset (re-apply after **every** boot). BIOS must already hold the settings in §6.
 
 ## 1. Get the repo
 ```
-cd C:\Users\yk\AI\arrowlake-tuner          # first time: git clone <private GitHub URL> C:\Users\yk\AI\arrowlake-tuner
+cd %USERPROFILE%\AI\arrowlake-tuner          # first time: git clone https://github.com/xyehya/arrowlake-tuner %USERPROFILE%\AI\arrowlake-tuner
 git pull
 ```
 
@@ -26,7 +26,7 @@ Fix every `FIX` line. The driver needs **Memory integrity OFF** and the **Micros
 
 ## 3. Driver (carve + install once per Windows install)
 ```
-py -3 tools\win\ts_driver.py carve --exe C:\Users\yk\Downloads\ThrottleStop_9.7.3\ThrottleStop.exe
+py -3 tools\win\ts_driver.py carve --exe %USERPROFILE%\Downloads\ThrottleStop_9.7.3\ThrottleStop.exe
 py -3 tools\win\ts_driver.py install
 py -3 tools\win\ts_driver.py status
 ```
@@ -91,6 +91,6 @@ Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go t
   all read; an E cluster reading another word than recorded.
 - **Health bracket:** new WHEA-Logger events in the System log during a session ⇒ fail (Windows' stand-in for the Linux taint/MCE check).
 - `reapply_current.ps1` records each apply with `Start-Transcript` (Windows PowerShell 5.1 may not capture native output in a transcript); the complete
-  record of every request is the audit log `%LOCALAPPDATA%\linuxmon\audit.jsonl`.
+  record of every request is the audit log `%LOCALAPPDATA%\arltuner\audit.jsonl`.
 - Untested on real Windows: the first run of `reapply_current.ps1 -Check` (read-only) is the bring-up test. If the driver's RDMSR returns a size other than
   8 bytes, or pinning fails, it stops with an error — nothing is written.

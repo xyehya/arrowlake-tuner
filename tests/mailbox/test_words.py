@@ -1,4 +1,4 @@
-"""T-010 golden vectors for arltuner.mailbox.words (source: docs/research/registers.md, "OC mailbox -- request model")."""
+"""T-010 golden vectors for arltuner.mailbox.words (source: docs/knowledge/registers.md, "OC mailbox -- request model")."""
 import ast
 import inspect
 import random

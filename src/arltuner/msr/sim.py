@@ -1,8 +1,7 @@
 """``SimMsrPort``: a deterministic software model of the per-CPU OC mailbox (MSR 0x150) -- a TEST DOUBLE.
 
 **Every numeric default in this module is SIM-ONLY.** The defaults are modelled on the XTU UI / values logged on this
-machine (``docs/research/registers.md`` "V/F data word", "Measured on this machine", ``docs/research/
-lnx-turbostat-plus-facts.md``) so golden sequences look realistic, but they are NOT hardware facts and must never be
+machine (``docs/knowledge/registers.md`` "V/F data word", "Measured on this machine") so golden sequences look realistic, but they are NOT hardware facts and must never be
 copied into production code or a write allowlist. Rule behaviour (which rc is returned for which violation) is the
 simulator's own model, chosen so the guard/controls/CLI can be tested against every refusal path; real pcode may differ.
 

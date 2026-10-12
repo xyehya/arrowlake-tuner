@@ -1,4 +1,4 @@
-"""T-010 golden vectors for arltuner.mailbox.vf (source: docs/research/registers.md, "V/F data word")."""
+"""T-010 golden vectors for arltuner.mailbox.vf (source: docs/knowledge/registers.md, "V/F data word")."""
 import dataclasses
 import random
 import unittest

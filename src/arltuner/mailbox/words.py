@@ -1,6 +1,6 @@
 """OC-mailbox request/response words: pure pack/unpack, no I/O.
 
-Source of every fact here: ``docs/research/registers.md``, section "OC mailbox -- request model (from XTU)".
+Source of every fact here: ``docs/knowledge/registers.md``, section "OC mailbox -- request model (from XTU)".
 Status tag: ``decomp`` (wire packing decoded from XTU's ``ipf_cpu.sys`` and ThrottleStop 9.7.3; matches
 FSP/V0LTpwn/kernel ``doc``). Not yet MEASURED on this CPU, so nothing here is a write allowlist entry.
 

@@ -1,7 +1,7 @@
 """Read-only health snapshot: the taint integer, the PCI device set, the module set (+ informational thermal/MCE values).
 
-This is arltuner's own copy of the turbostat+ "health bracket" (``docs/research/lnx-turbostat-plus-facts.md``, "Safety lessons
-to inherit": taint integer + set bits, PCI device set, module set), required by ``docs/SAFETY.md`` "Mailbox-session
+This is arltuner's own implementation of the "health bracket" from earlier research on the reference machine (safety lessons
+to inherit: taint integer + set bits, PCI device set, module set), required by ``docs/SAFETY.md`` "Mailbox-session
 discipline": *after each transaction, check kernel/RAS/PCI health before the next; acceptance = a CLEAN delta*. Two snapshots are
 compared by :func:`arltuner.health.gate.diff`.
 
@@ -14,7 +14,7 @@ Reads only, and only under ``root`` (``/`` in production; tests always pass a fa
   informational, never part of a verdict (an unreadable value is skipped, not an error).
 
 The only write this module ever performs is :func:`save_snapshot` creating a NEW file (``O_CREAT | O_EXCL``, never overwriting).
-No subprocess, no sleep, no network. Taint *letters* are deliberately not decoded (bit indices only, as in turbostat+); sticky
+No subprocess, no sleep, no network. Taint *letters* are deliberately not decoded (bit indices only); sticky
 bits are never cleared.
 """
 from __future__ import annotations
@@ -130,7 +130,7 @@ def _read_pci(root: Path) -> frozenset[str]:
         names = os.listdir(path)
     except OSError as exc:
         raise HealthError(f"cannot list PCI devices ({path}): {exc!r}") from exc
-    if not names:  # a check that examined nothing looks like a clean negative (turbostat+ TRAPS): sysfs not mounted, container...
+    if not names:  # a check that examined nothing looks like a clean negative (a known trap): sysfs not mounted, container...
         raise HealthError(f"PCI device directory {path} is empty; refusing to treat 'nothing seen' as healthy")
     return frozenset(names)
 

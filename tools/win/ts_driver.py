@@ -2,7 +2,7 @@
 """ts_driver.py - carve and manage ThrottleStop's signed kernel driver (host win, stdlib only).
 
 The driver is NOT redistributed: it is cut out of the operator's own ThrottleStop.exe (9.7.3) and verified by SHA-256.
-  py -3 tools\\win\\ts_driver.py carve --exe C:\\Users\\yk\\Downloads\\ThrottleStop_9.7.3\\ThrottleStop.exe   # -> %LOCALAPPDATA%\\linuxmon\\ThrottleStop.sys
+  py -3 tools\\win\\ts_driver.py carve --exe %USERPROFILE%\\Downloads\\ThrottleStop_9.7.3\\ThrottleStop.exe   # -> %LOCALAPPDATA%\\arltuner\\ThrottleStop.sys
   py -3 tools\\win\\ts_driver.py install      # elevated: sc create ThrottleStop (kernel, demand) + sc start
   py -3 tools\\win\\ts_driver.py status       # service state + can \\\\.\\ThrottleStop be opened
   py -3 tools\\win\\ts_driver.py remove       # elevated: sc stop + sc delete
@@ -31,7 +31,7 @@ class DriverError(Exception):
 
 def default_sys_path() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "linuxmon" / "ThrottleStop.sys"
+    return Path(base) / "arltuner" / "ThrottleStop.sys"
 
 
 def sha256_hex(data: bytes) -> str:
@@ -174,7 +174,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("carve", help="cut the driver out of ThrottleStop.exe 9.7.3 (hash-verified)")
     c.add_argument("--exe", required=True, type=Path)
-    c.add_argument("--out", type=Path, default=None, help="default %%LOCALAPPDATA%%\\linuxmon\\ThrottleStop.sys")
+    c.add_argument("--out", type=Path, default=None, help="default %%LOCALAPPDATA%%\\arltuner\\ThrottleStop.sys")
     i = sub.add_parser("install", help="sc create + sc start (elevated)")
     i.add_argument("--sys", dest="sys_path", type=Path, default=None)
     sub.add_parser("status")

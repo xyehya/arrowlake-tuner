@@ -41,7 +41,7 @@ The first installed GUI run (2026-10-11, STATE) showed four gaps. Close them so 
 - Helper: device sampler owns an `ImcStat` with the hardened spawn (fake popen asserts argv[0] `/usr/bin/perf`, env, cwd); stop terminates it;
   trust failure ⇒ unavailable reading, no spawn. `--sim` unchanged.
 - Temp-name mapping tested with the measured core_id table; page renders mapped names.
-- `python3 tools/run_tests.py` green. No hardware access, no `sudo`, never read `~/AI/turbostat*`.
+- `python3 tools/run_tests.py` green. No hardware access, no `sudo`.
 
 ## Non-goals
 Decoding 0x6B0 limit reasons; other nct6686 rails (VccSA etc.) as metrics; GPU; any mailbox op.

@@ -16,7 +16,7 @@ _Updated: 2026-10-12 · lnx · **D-036 live data only**: G-127 (Tune page truth,
 - **Sequencing (D-030):** before install, CLI keeps legacy lock/audit paths; after the install go-ahead (T1), the *following* restore is the first
   run on `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl`. The helper refuses to run from a checkout ⇒ first real helper run needs
   the install. Each is a separate operator go-ahead.
-- **Remote:** private GitHub `xyehya/arrowlake-tuner` (`origin`). linuxmon = read-only archive (`docs/PROVENANCE.md`).
+- **Remote:** GitHub `xyehya/arrowlake-tuner` (`origin`), https://github.com/xyehya/arrowlake-tuner.
 
 ## Accepted tuning (reference machine) — p-step7 + E split3, BIOS LLC 6 (D-019)
 `profiles/CURRENT`: `e-p6-split3` → `p-boot-ramp` → `p-step7`; words `profiles/EXPECTED-words.txt`. Gate passed on Windows (2026-10-04) and Linux
@@ -32,8 +32,8 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 ## After every boot (cold boot clears all offsets; warm keeps CPUs 1–7 + E, CPU 0 reset)
 - **Linux:** `cd ~/AI/arrowlake-tuner && bash tools/lnx/restore_tuning.sh` → type `CONFIRM` once → "RESTORED: all cores/clusters match".
 - **Windows:** elevated `powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1` (or `Restore-Tuning.cmd`) → CONFIRM once.
-  Needs the repo on Windows (`git clone https://github.com/xyehya/arrowlake-tuner C:\Users\yk\AI\arrowlake-tuner`) and Python (`py -3`).
-- Per-boot budget 600 mailbox ops, shared with the old linuxmon CLI via the same audit log (D-022).
+  Needs the repo on Windows (`git clone https://github.com/xyehya/arrowlake-tuner %USERPROFILE%\AI\arrowlake-tuner`) and Python (`py -3`).
+- Per-boot budget 600 mailbox ops, counted from the audit log (`/var/lib/arltuner/audit.jsonl` when installed, D-030).
 
 ## Open decisions (block the phase named) — SPEC §14
 | # | Question | Proposed | Blocks |
@@ -42,7 +42,7 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
 | OD-2 | Python ≥ 3.12 | **yes (D-024)** | — |
 | OD-3 | Autostart applies only a profile with a recorded gate | deferred: agree when G6 starts | G6 |
 | OD-4 | Sign D-021 (unattended autostart) | deferred: agree when G6 starts | G6 |
-| OD-5 | GitHub remote `xyehya/arrowlake-tuner`, private | **yes (D-024)** — remote `origin` | — |
+| OD-5 | GitHub remote `xyehya/arrowlake-tuner` | **yes (D-024)** — remote `origin` | — |
 
 ## Next
 1. **Done 2026-10-11/12 [MEASURED]** (`knowledge/tuning-results.md`): reads (preflight, memory MCHBAR, tune.read with fused/turbo, Quick + Dense
@@ -53,7 +53,7 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
    priority: `write_percore_enable` predicted as worst case; ring/NGU not in scope (SPEC §2); P OC ratio 58× is above the D-032 cap (P 57); light theme dropped; restore scripts still use their checkout
    policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
 3. Polkit path verified on the final build (knowledge/tuning-results.md "Polkit path"): real pkexec launch, PKEXEC_UID enforced for stress;
-   operator's own pkexec run delivered uid 1000; 2026-10-12 operator-authenticated start ⇒ Stress P1 30 s, child ran as `yk`, 0 errors,
+   operator's own pkexec run delivered uid 1000; 2026-10-12 operator-authenticated start ⇒ Stress P1 30 s, child ran as the desktop user, 0 errors,
    0 MCE (**done**). Normal start: `python3 tools/arltuner-gui.py --open` (one password).
 4. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
 

@@ -7,9 +7,9 @@ lead engineer would take. It keeps **its own context clean** so it holds oversig
 ## Roles
 | Role | Who | Does | Never |
 |---|---|---|---|
-| Operator | yk | decides what §4 lists; performs/approves hardware steps; BIOS | — |
+| Operator | the human | decides what §4 lists; performs/approves hardware steps; BIOS | — |
 | Orchestrator | top-level session (Opus) | plan, task files, dispatch, review, merge, docs, decisions (§3), hardware steps after a go-ahead | write feature code itself beyond small fixes; read large files/logs into its context when a worker can summarise them |
-| Worker | `Agent` with `model: "sonnet"`, `effort: "high"`, `isolation: "worktree"` | implement one task in its **Owns** paths, write tests, run `python3 tools/run_tests.py`, report ≤ 300 words | touch hardware (simulator / fake sysfs only); read `~/AI/turbostat*`; merge to `main`; edit files it does not own |
+| Worker | `Agent` with `model: "sonnet"`, `effort: "high"`, `isolation: "worktree"` | implement one task in its **Owns** paths, write tests, run `python3 tools/run_tests.py`, report ≤ 300 words | touch hardware (simulator / fake sysfs only); read anything outside this repository; merge to `main`; edit files it does not own |
 | Reviewer | `Agent` with `model: "sonnet"`, `effort: "high"`, read-only | adversarial review of a merged-candidate diff or a design | edit files |
 | Advisor | the `advisor` tool (stronger model) | second opinion | — |
 

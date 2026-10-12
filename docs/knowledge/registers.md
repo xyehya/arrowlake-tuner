@@ -1,9 +1,9 @@
 # Registers, MSRs, mailbox commands — single source of truth
 
-> Carried over 2026-10-08 from `linuxmon@b01f78a` (`~/AI/linuxmon`). Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here live in that repo (see `docs/PROVENANCE.md`); "linuxmon" = this project's former name.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository; the facts are kept with their evidence tags.
 
 Status legend: `decomp` = read from Intel's own XTU code (worker-produced in T-001/T-002, orchestrator spot-checked; usable as a constant only after a MEASURED readback on this CPU) ·
-`doc` = primary public source · `lead` = COMMUNITY/UNVERIFIED (never a constant) · `seen` = observed on this machine · `measured` = read on this machine by the operator's own read-only tool (turbostat+ capture 2026-09-29, `lnx-turbostat-plus-facts.md`) · `trace` = recorded from OCCT/HWiNFO mailbox traces on this machine (corroboration).
+`doc` = primary public source · `lead` = COMMUNITY/UNVERIFIED (never a constant) · `seen` = observed on this machine · `measured` = read on this machine by the operator's own read-only monitoring tool (capture 2026-09-29) · `trace` = recorded from OCCT/HWiNFO mailbox traces on this machine (corroboration).
 **Nothing here is on any write allowlist.** An entry joins the allowlist only via a DECISIONS.md entry plus a MEASURED read on this CPU.
 Evidence trails: `win-xtu-decompile-mailbox.md` (T-001), `win-xtu-decompile-controls.md` (T-002), `win-xtu-inventory.md`, `win-xtu-ui-catalogue.md`, `lnx-interfaces.md`.
 
@@ -30,7 +30,7 @@ XTU builds a request tuple `(cmd u8, P1 u8, P2 u8, data u32, scope)` and hands i
 ThrottleStop uses the same word (`decomp`): display ratio = `w&0xFF`, target = `((w>>8)&0xFFF)/1024` V, mode = `w&0x100000` (Static), offset sign-extended 11 bit ×1000/1024 mV; mV→raw = `(mV·1024+512)/1000` (round half up on magnitude), −50 mV → raw 51 → `0xF9A00000`.
 Its offset slider spans ±128 / ±256 / −1024…+1023 raw (≈ ±125 mV, ±250 mV, −1000…+999 mV).
 Checks against XTU's UI `seen`: E-Core 12 override 1.137 V = 0x48C; P0 1.426 V ≈ 0x5B4; P4 1.316 V ≈ 0x544; logged `SET 0x11 0x0004A02D` = ratio 45, V target 1.156 V, offset 0, adaptive.
-**Third confirmation `trace` (OCCT/HWiNFO mailbox traces on this machine, `lnx-turbostat-plus-facts.md`):** `0x03400030` = point 4 / 48×, `0x03400039` = point 8 / 57× with offset raw 26 (+25.39 mV) and **V-target field 0** (an offset-only write, like ThrottleStop's V/F-point writes that send "offset bits only"; corrected by T-010 — bits [19:8] of `0x03400030` are 0, not 0x400) — **per-V/F-point offsets exist and were written (P2 = point index)**;
+**Third confirmation `trace` (OCCT/HWiNFO mailbox traces on this machine):** `0x03400030` = point 4 / 48×, `0x03400039` = point 8 / 57× with offset raw 26 (+25.39 mV) and **V-target field 0** (an offset-only write, like ThrottleStop's V/F-point writes that send "offset bits only"; corrected by T-010 — bits [19:8] of `0x03400030` are 0, not 0x400) — **per-V/F-point offsets exist and were written (P2 = point index)**;
 ring (domain 2) 40× target `0x4C8` = 1195.31 mV; NGU (domain 7) 34× `0x4BD` = 1184.57 mV; `cmd 0x1C` high byte = fused max ratio (E 46×, P 55×/57×); `cmd 0x16` IccMax 425 A before / 400 A after a CMOS clear (GT VR 45 A); `cmd 0x04` raw `0x84002000`; domain 6 = memory subsystem (ratios 0,32,84,96).
 **XTU's write procedure** (a description of behaviour, not a recipe): (1) package scope: read cmd 0x14 (P1=0,P2=0); if bit 3 ("PerCore Voltage Enable") is 0, write cmd 0x15 with `old|8`; restore afterwards. (2) core scope: read 0x10 → patch only the wanted bit-slices →
 write whole word with 0x11 (read-modify-write; for P2≠0 the read word is masked `&0xFFFFFF00`). (3) a ratio write also writes cmd 0x1D (P1=0,P2=0) with data = ratio (favored-core word, no RMW). (4) cores whose merged words are equal share one action. (5) re-read all per-core fields.
@@ -97,7 +97,7 @@ ARL-S constants in XTU `decomp`: 8 P-cores (max 32 E capacity, 16 present), 8 tu
 | 0x1AE / 0x651 | probed (with 0x650) by ThrottleStop on ARL; if they answer it enables turbo-ratio write paths (writes 0x1AD/0x1AE/0x650/0x651). MEASURED 2026-09-29: readable; 0x1AE = P bucket core counts 1..8, 0x651 = E bucket core counts 1,2,3,4,6,8,12,16 | `measured` | resolved |
 | 0x1FC | **bit 19 = energy-efficiency turbo** (IPF DSP `decomp`, replaces the earlier unsourced "bit 20" claim); bits 0/1/23 seen in ThrottleStop (meaning not recorded) — bit 20 "OC lock" claim remains unsourced | | do not use |
 
-## Measured on this machine (turbostat+ capture `2026-09-29-bios340`, BIOS 3.40) `measured` — full table and CPU map in `lnx-turbostat-plus-facts.md`
+## Measured on this machine (read-only capture `2026-09-29-bios340`, BIOS 3.40) `measured`
 0x1AD = `0x3737373737373939` → P ratios by bucket 57,57,55,55,55,55,55,55 (LSB first; matches XTU) · 0x1AE = `0x0807060504030201` · 0x650 = `0x3030303030303030` (E 48×8) · 0x651 = `0x100c080604030201` ·
 0x610 = `0x0042893800e38938` → PL1 295 W/224 s, PL2 295 W · 0x606 units 0.125 W, 2^-14 J, 2^-10 s · 0x614 TDP 125 W · **0x601 = 0xd48 → 425 A (PL4/TDC design current, not IccMax)** · 0x620 = `0x828` (ring 8…40×), 0x621 cur 40× ·
 0x1A2 = `0x80691400` (Tjmax 105, TCC offset 0, bit 31 set) · 0xE2 = `0x74008008` · 0x770 = 1 · **0x198: requested VID = `[47:32]`/8192 V; ratio = `[15:8]`**.

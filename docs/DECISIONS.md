@@ -1,6 +1,6 @@
 # Decisions (append-only; one short entry each)
 
-> Carried over 2026-10-08 from `linuxmon@b01f78a` (`~/AI/linuxmon`). Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here live in that repo (see `docs/PROVENANCE.md`); "linuxmon" = this project's former name.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, not editing.
 
@@ -19,27 +19,27 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   consumed on Linux.
 - **D-006 · 2026-09-30 · Language of the app: OPEN.** Existing reader code is Python; the control layer's language is
   decided after the register/mailbox mechanics are known.
-- **D-007 · 2026-09-30 · Sync via private GitHub.** The existing Fedora readers repo and this repo travel between hosts
-  through private GitHub remote(s). Repo names/URLs TBD; creating a remote and pushing needs the human's go-ahead each time.
+- **D-007 · 2026-09-30 · Sync via GitHub.** The existing Fedora readers repo and this repo travel between hosts
+  through GitHub remote(s) (this one: https://github.com/xyehya/arrowlake-tuner). Creating a remote and pushing needs the human's go-ahead each time.
 - **D-008 · 2026-09-30 · Third-party tuning binaries are static-analysis only.** ThrottleStop (and any similar tool with
   its own kernel driver) is analysed offline under git-ignored `captures/thirdparty/`; agents never launch it. Launching it
   is a human T2 action.
 - **D-009 · 2026-09-30 · ~~M1 voltage semantics~~ — SUPERSEDED by D-016 (2026-10-01): its "undervolt-first / no overvolt / ratio at or below stock" limit is removed; its hardware facts (only the OC-ratio point takes an adaptive voltage, fused points take offsets only) still hold.** Original text (from the user): On Arrow Lake only the OC-ratio point takes an adaptive voltage; fused lower points accept offsets only. M1 therefore exposes per P-core / per E-cluster:
   ratio limit, adaptive OC-point voltage, offset (primary undervolt control). Static/override mode, Power-Gate mode and absolute voltages for fused points are out of scope; M1 is undervolt-first (no overvolt).
   Per-point offsets are a stretch goal pending a measured probe. — Matches the hardware topology (`docs/research/arl-voltage-topology.md`) and XTU's own controls.
-- **D-010 · 2026-09-30 · turbostat+ relationship and access.** The operator's `turbostat+` (read-only monitor) and linuxmon (tuner) are separate projects; linuxmon borrows facts and decoders with attribution. Access to the copied repo is
-  **orchestrator-only, read-only**; workers never touch it. Its read-only / no-Tier-4 rules are not inherited here. Open for the operator: whether linuxmon later imports its read layer or consumes its captures.
+- **D-010 · 2026-09-30 · Relationship to the operator's monitoring tools.** The operator's read-only monitoring tools and this tuner are separate projects; the tuner borrows facts and decoders with attribution. Access to those repositories is
+  **orchestrator-only, read-only**; workers never touch them (since D-041 workers use only this repository). Their read-only / no-Tier-4 rules are not inherited here. Open for the operator: whether the tuner later imports their read layer or consumes their captures.
 - **D-011 · 2026-09-30 · Mailbox discipline.** Mailbox transactions are single, human-attended, bracketed by health snapshots with a dwell; no sweeps. — 2026-08-26 incident (`docs/SAFETY.md`).
-- **D-012 · 2026-09-30 · App language: Python ≥ 3.12, standard library only** (resolves D-006). Same language as the operator's readers/turbostat+; stdlib-only keeps privileged code auditable; `unittest` (no pytest install); `tomllib` for profiles.
+- **D-012 · 2026-09-30 · App language: Python ≥ 3.12, standard library only** (resolves D-006). Same language as the operator's existing readers; stdlib-only keeps privileged code auditable; `unittest` (no pytest install); `tomllib` for profiles.
   The mailbox layer is isolated so a later port is possible. Set by the orchestrator on the operator's "proceed"; revisit on request.
 - **D-013 · 2026-09-30 · Build the core on Windows against a simulator; hardware later.** Phase P1 (codec → topology/profiles → MSR port + simulator + transport → guard → controls/CLI) needs no hardware and runs in worktrees on `win`; Linux bring-up (T-007) follows.
   T-003 (Linux baseline) is **deferred**: the operator reported the facts it would establish (kernel 7.2, Secure Boot off, `msr` present, OC unlocked, UVP disabled, OCCT only runs when opened manually); its flag-MSR reads fold into the T-007 pre-flight.
-- **D-014 · 2026-10-01 · Verify on Windows first, Linux last (from the operator).** Before linuxmon sends any hardware traffic on Fedora: (1) derive from the Windows tools (XTU/IPF, ThrottleStop, decompiles) the complete list of reads/writes — mailbox, MSR, MMIO, PCI — the product needs (the **access manifest**, T-017);
-  (2) observe XTU performing them live on Windows by a **passive trace** of its IPF IOCTL stream (T-018 decoder, T-019 capture script, T-020 sessions; the human drives XTU, the trace is decoded offline), so requests *and* hardware responses are MEASURED on this CPU; (3) test linuxmon's planner/codec against the traced sequences; (4) document; (5) only then replay the verified subset on Fedora.
+- **D-014 · 2026-10-01 · Verify on Windows first, Linux last (from the operator).** Before arltuner sends any hardware traffic on Fedora: (1) derive from the Windows tools (XTU/IPF, ThrottleStop, decompiles) the complete list of reads/writes — mailbox, MSR, MMIO, PCI — the product needs (the **access manifest**, T-017);
+  (2) observe XTU performing them live on Windows by a **passive trace** of its IPF IOCTL stream (T-018 decoder, T-019 capture script, T-020 sessions; the human drives XTU, the trace is decoded offline), so requests *and* hardware responses are MEASURED on this CPU; (3) test arltuner's planner/codec against the traced sequences; (4) document; (5) only then replay the verified subset on Fedora.
   Supersedes the D-013 ordering "P2 Linux bring-up next": T-007 is deferred and re-baselined on the Windows-measured values. Windows-side hardware writes stay human-only (XTU "Apply" by the operator); agents only observe, and never attach to or launch anything except their own self-test process.
-- **D-015 · 2026-10-01 · linuxmon writes the way XTU was measured to write; offset budget counts the BIOS offset.** From the Windows XTU traces (`win-xtu-live-trace.md`): a per-core Apply sends `0x11` (full word: ratio = `0x1C[7:0]` or the non-zero baseline ratio, V target = fused `0x09 P1=0x11` voltage, adaptive, only the offset changed), `0x1D` (= ratio) and `0x27` (= the `0x26` read), never a ratio/V target of 0. linuxmon's planner/guard/simulator follow that shape (T-021); every field remains `[UNVERIFIED]` on Linux until read back.
+- **D-015 · 2026-10-01 · arltuner writes the way XTU was measured to write; offset budget counts the BIOS offset.** From the Windows XTU traces (`win-xtu-live-trace.md`): a per-core Apply sends `0x11` (full word: ratio = `0x1C[7:0]` or the non-zero baseline ratio, V target = fused `0x09 P1=0x11` voltage, adaptive, only the offset changed), `0x1D` (= ratio) and `0x27` (= the `0x26` read), never a ratio/V target of 0. arltuner's planner/guard/simulator follow that shape (T-021); every field remains `[UNVERIFIED]` on Linux until read back.
   The runtime offset adds to the BIOS per-core V/F offset (P-Core 0: ≈ −40…−50 mV; −15 mV runtime → VID −14 mV), so the guard budgets the **effective** undervolt: default `effective_offset_floor_mv = −100` with `assumed_bios_offset_mv = {P: −50, E: 0}` ⇒ runtime floor P −50 mV, E −100 mV; overridable only in a reviewed policy file. Orchestrator's conservative default; the operator can change it.
-- **D-016 · 2026-10-01 · Scope: full per-core control, both directions (from the operator; supersedes D-009's undervolt-first limit).** linuxmon controls, per P-core and per E-cluster, **ratio, adaptive OC-point voltage (raise or lower) and V/F offset (either sign)** — "the whole point": the BIOS shows no E-core voltages or V/F curves and offers a per-core V/F offset for P-cores only.
+- **D-016 · 2026-10-01 · Scope: full per-core control, both directions (from the operator; supersedes D-009's undervolt-first limit).** arltuner controls, per P-core and per E-cluster, **ratio, adaptive OC-point voltage (raise or lower) and V/F offset (either sign)** — "the whole point": the BIOS shows no E-core voltages or V/F curves and offers a per-core V/F offset for P-cores only.
   **E-core and P-core turbo ratio tables** (MSR `0x1AD/0x1AE/0x650/0x651`; also visible in the BIOS, but a worthwhile addition) join later, behind a guarded non-mailbox MSR write path. **Unchanged:** static/override mode and Power-Gate mode stay out of scope unless the operator asks; absolute voltages for fused points are not settable; hardware writes only by the human + orchestrator under the `SAFETY.md` session protocol.
   **Safety moves from direction to bounds.** The guard stops refusing a change for being an increase and enforces an explicit, reviewed policy instead: per-kind ratio ceiling · adaptive V-target ceiling (hardware maximum from `0x28`: E ≈ 1.355 V, P ≈ 1.625 V on this CPU) · offset floor/ceiling counting the BIOS offset (D-015) · per-operation step limits (ratio, mV) · dwell, session and per-boot caps · health bracket · read-back · revert path. **Shipped default ceilings equal today's fused/baseline values; the operator raises them deliberately in a reviewed policy file** (so an overclock is always a human-set number, never a default). Raising ratio and voltage together is done voltage-first, as XTU does. Implemented by T-022 after T-021 (the code still has the old undervolt-only check until then).
   *D-016 implementation choices (T-022, merged; the operator may change any of them in a reviewed policy file):* default `max_ratio_step` 1, `max_v_step_mv` 20 (symmetric: also limits drops), `max_offset_step_mv` 25 (so `-30 mV` on a P core is reached as `-25` then `-5`, two sessions); `offset_ceiling_mv` default 0 with a +100 mV sanity bound; sanity bounds ratio P 62 / E 60, V target P 1625 mV / E 1355 mV; `0x28` is read only when the V target rises above the no-raise value; a rising ratio and V target are two `0x11` words, **voltage first** (falling: frequency first) and the guard refuses one `0x11` that moves both the same way; a step beyond the limits stops the plan with `NeedsRamp` and prints the next allowed profile; read-backs count in the plan's WRMSR budget (53 for an E-cluster raise, 13 for one P core) but not in the guard's counters.
@@ -69,17 +69,16 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
 
 ## arrowlake-tuner (new repo, 2026-10-08)
 - **D-022 · 2026-10-08 · New repo `arrowlake-tuner` for the product (from the operator).** The GUI (Linux) + PowerShell restore (Windows) continue
-  here; `linuxmon` stays as the research/evidence archive (read-only, `docs/PROVENANCE.md`). Package renamed `linuxmon` → `arltuner`, env flag
-  `LINUXMON_ALLOW_MAILBOX` → `ARLTUNER_ALLOW_MAILBOX`. Kept on purpose: audit log `~/.local/state/linuxmon/audit.jsonl` (Windows
-  `%LOCALAPPDATA%\linuxmon\`) and lock `/run/lock/linuxmon-mailbox.lock`, so the per-boot op cap and the lock stay shared with the old CLI.
-  Fresh git history; source commit `linuxmon@b01f78a`.
+  here; the earlier research repository is archived and not part of this repository. The package and the env flag took the new names
+  (`ARLTUNER_ALLOW_MAILBOX`). Initially the per-user audit log and lock kept the earlier tool's names so the per-boot op cap and the lock stayed shared with the
+  old CLI; D-041 renamed them. Fresh git history.
 - **D-023 · 2026-10-08 · Product decisions O-1…O-8 (from the operator)** — `docs/SPEC.md` §1: any Linux distro; Windows PowerShell only; stdlib Python +
   local web UI; unprivileged GUI + polkit root helper; diff + one CONFIRM per apply; embedded telemetry and stress screens; all controls in v1
   behind hardware gates; autostart option (off / with CONFIRM / unattended) subject to D-021.
 - **D-021 · DRAFT, NOT SIGNED · Unattended autostart apply.** Text: `docs/SPEC.md` §10. Signing it supersedes, for that mode only: SAFETY.md step 5,
   AGENTS.md per-sitting go-ahead, D-020/D-020a "never unattended", `tools/lnx/orchestrator_confirm.py` "never scheduled", the env-flag rule.
 - **D-024 · 2026-10-08 · OD-1, OD-2, OD-5 resolved (from the operator).** Root-owned install for the helper, policy, audit log and accepted state,
-  also during development (SPEC §4.4/§11); Python ≥ 3.12; private GitHub `xyehya/arrowlake-tuner`. OD-3/OD-4 (autostart scope, D-021) deferred to
+  also during development (SPEC §4.4/§11); Python ≥ 3.12; GitHub `xyehya/arrowlake-tuner`. OD-3/OD-4 (autostart scope, D-021) deferred to
   G6. BIOS PL1 = 250 W (operator; resolves the 295/250 conflict in the records).
 - **D-025 · 2026-10-08 · Autonomous orchestration (from the operator).** The top-level session orchestrates the project A to Z: Sonnet workers
   (worktrees) do all coding and test runs, read-only Sonnet reviewers check security-relevant work, the orchestrator reviews/merges/decides and
@@ -103,11 +102,10 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   and the taint-bit allowance are root-owned constants (`/etc/arltuner/helper.toml`); file opens symlink/FIFO/hardlink-safe (guard lock/audit too).
   Carried: `check_code_tree` is a tripwire (runs after import) — the gate is G-106's polkit `exec.path` with no argv; lock stays in `/run/lock` (DoS
   only) until G-106; latent: a future non-long write op would skip `machine.begin` — G2 must mark write ops long or fix the gate.
-- **D-030 · 2026-10-08 · Path migration rule + G1 tail.** CLI and helper switch from the legacy lock/audit (`/run/lock/linuxmon-mailbox.lock`,
-  `~/.local/state/linuxmon/audit.jsonl`) to `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl` **only when installed**: the CLI treats
+- **D-030 · 2026-10-08 · Path migration rule + G1 tail.** CLI and helper switch from the per-user dev lock/audit (D-041 names them) to `/run/arltuner/mailbox.lock` + `/var/lib/arltuner/audit.jsonl` **only when installed**: the CLI treats
   "installed" = `/etc/arltuner/policy.toml` present and passing the helper's trust check; present-but-untrusted ⇒ named refusal, never fallback; absent
-  ⇒ legacy unchanged. No two-lock transition (a user-owned legacy log read for the cap would be truncatable ⇒ cap bypass). `install.sh` seeds the new
-  audit log from the legacy one (root 0600) so the per-boot count survives a mid-boot install; tmpfiles.d creates `/run/arltuner` (0755 root).
+  ⇒ per-user paths unchanged. No two-lock transition (a user-owned per-user log read for the cap would be truncatable ⇒ cap bypass). `install.sh` seeds the new
+  audit log from the invoking user's per-user one (root 0600) so the per-boot count survives a mid-boot install; tmpfiles.d creates `/run/arltuner` (0755 root).
   Consequence: the first restore after the install go-ahead is the first run on the new paths. Dashboard budget/accepted data come from the helper
   (contract 8 addendum G-107).
 - **D-031 · 2026-10-08 · G-106 install merged (2 review rounds); operator CLI path stays as is.** `install.sh` copies only, runs only the installed
@@ -171,3 +169,13 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
 - **D-040 · 2026-10-12 · One-off: the G-136 worker captures the README images on the live GUI (operator).** Operator: "i asked u to run an
   agent before that for the screenshots". Scope: `tools/arltuner-gui.py` (launcher reissue) and `tools/screenshots.py` only, with its click
   allowlist and read-only API gate unchanged (no mailbox, no writes). Other workers keep the AGENTS.md rule.
+- **D-041 · 2026-10-12 · Public scrub: no names or paths that point outside the repository (from the operator).** The repository goes public, so a reader
+  must never meet a reference to a private repo, a personal path or the earlier tool's name. (1) The uninstalled/dev audit log is
+  `$XDG_STATE_HOME/arltuner/audit.jsonl` (default `~/.local/state/arltuner/`; Windows `%LOCALAPPDATA%\arltuner\`) and the dev lock
+  `/run/lock/arltuner-mailbox.lock` (else the temp dir); the earlier names (`~/.local/state/linuxmon/audit.jsonl`, `linuxmon-mailbox.lock`) and the
+  legacy fallback are gone; the installed paths of D-030 are unchanged. `install.sh` still seeds `/var/lib/arltuner/audit.jsonl` once from the invoking
+  user's per-user log (now the arltuner path). The ThrottleStop driver is carved to `%LOCALAPPDATA%\arltuner\ThrottleStop.sys`. (2) Workers use only this
+  repository; D-010's access rule for the operator's private monitoring repos stays orchestrator-only. (3) Citations of the earlier research are
+  neutral ("earlier research on the reference machine"; evidence tags stay); `docs/PROVENANCE.md` is deleted. (4) Personal paths became `~`, `$HOME` or
+  `%USERPROFILE%`. (5) README states that register facts came from measurement and from studying vendor tools for interoperability, with no vendor
+  code or binaries included; tool-procedure lines left HARDWARE.md. No history rewrite. Meaning of every earlier decision unchanged.

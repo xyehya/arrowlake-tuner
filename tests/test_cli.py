@@ -126,7 +126,7 @@ def forbidden_port() -> object:
 
 
 def not_installed(path: str):
-    """An ``lstat`` for a machine without ``/etc/arltuner`` (D-030: the CLI then keeps the legacy lock / audit paths)."""
+    """An ``lstat`` for a machine without ``/etc/arltuner`` (D-030: the CLI then keeps the per-user lock / audit paths)."""
     raise FileNotFoundError(path)
 
 
@@ -454,14 +454,18 @@ class Apply(CliCase):
         self.assertIn("policy error", err)
         self.nothing_sent()
 
-    def test_a_default_audit_path_is_a_state_directory_file(self) -> None:  # G-106: not installed (no /etc/arltuner/policy.toml) => legacy
-        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}, lstat_fn=not_installed), Path("/home/x/.local/state/linuxmon/audit.jsonl"))
-        self.assertEqual(cli.default_audit_path({"USERPROFILE": "C:/Users/x"}, lstat_fn=not_installed), Path("C:/Users/x/.local/state/linuxmon/audit.jsonl"))
+    def test_a_default_audit_path_is_a_state_directory_file(self) -> None:  # G-106: not installed (no /etc/arltuner/policy.toml) => per-user
+        self.assertEqual(cli.default_audit_path({"HOME": "/home/x"}, lstat_fn=not_installed), Path("/home/x/.local/state/arltuner/audit.jsonl"))
+        self.assertEqual(cli.default_audit_path({"USERPROFILE": "C:/Users/x"}, lstat_fn=not_installed), Path("C:/Users/x/.local/state/arltuner/audit.jsonl"))
+
+    def test_an_absolute_xdg_state_home_decides_the_default_audit_path(self) -> None:  # D-041
+        self.assertEqual(cli.default_audit_path({"HOME": "/home/x", "XDG_STATE_HOME": "/s"}, lstat_fn=not_installed), Path("/s/arltuner/audit.jsonl"))
+        self.assertEqual(cli.default_audit_path({"HOME": "/home/x", "XDG_STATE_HOME": "rel"}, lstat_fn=not_installed), Path("/home/x/.local/state/arltuner/audit.jsonl"))
 
     def test_a_default_lock_path_is_run_lock_when_it_exists(self) -> None:
-        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock", lstat_fn=not_installed), Path("/run/lock/linuxmon-mailbox.lock"))
+        self.assertEqual(cli.default_lock_path(isdir=lambda p: p == "/run/lock", lstat_fn=not_installed), Path("/run/lock/arltuner-mailbox.lock"))
         fallback = cli.default_lock_path(isdir=lambda p: False, lstat_fn=not_installed)
-        self.assertEqual(fallback.name, "linuxmon-mailbox.lock")
+        self.assertEqual(fallback.name, "arltuner-mailbox.lock")
         self.assertEqual(fallback.parent, Path(tempfile.gettempdir()))
 
     def test_every_apply_request_goes_through_the_guard(self) -> None:

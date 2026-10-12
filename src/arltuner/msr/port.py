@@ -1,7 +1,7 @@
 """The MSR port abstraction (Contract 4, docs/ARCHITECTURE.md): errors, the ``MsrPort`` protocol, argument checks.
 
 No I/O here. A port reads/writes one 64-bit MSR on one Linux CPU; it knows nothing about the OC mailbox
-(``docs/research/registers.md`` "OC mailbox -- request model": every mailbox request, reads included, is a WRMSR to
+(``docs/knowledge/registers.md`` "OC mailbox -- request model": every mailbox request, reads included, is a WRMSR to
 MSR 0x150 -- that framing lives in ``transport.py``). Policy (what may be written) is not here either: that is
 ``arltuner.guard`` (T-013).
 

@@ -5,7 +5,7 @@
 
 Default: the T-023 readable set (guard.policy.PLAIN_MSR_READABLE) on CPU 0 and one CPU per E-cluster: 0x1AD / 0x1AE (P turbo ratios /
 bucket counts), 0x650 / 0x651 (E turbo ratios / bucket counts), 0xCE (PLATFORM_INFO), 0x194 (FLEX_RATIO: [20] OC lock), plus 0x198
-(PERF_STATUS: [15:8] ratio, [47:32]/8192 requested VID). Decodes are in docs/research/registers.md. Any other MSR is refused, so this can
+(PERF_STATUS: [15:8] ratio, [47:32]/8192 requested VID). Decodes are in docs/knowledge/registers.md. Any other MSR is refused, so this can
 never become a blind sweep.
 """
 

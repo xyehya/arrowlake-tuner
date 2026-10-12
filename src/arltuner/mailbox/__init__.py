@@ -1,6 +1,6 @@
 """Pure OC-mailbox codec (no I/O, no hardware): request/response words, the V/F data word, command/domain/RC enums.
 
-Facts: ``docs/research/registers.md``. Contracts: ``docs/ARCHITECTURE.md`` Contract 1 + 2.
+Facts: ``docs/knowledge/registers.md``. Contracts: ``docs/ARCHITECTURE.md`` Contract 1 + 2.
 """
 from __future__ import annotations
 

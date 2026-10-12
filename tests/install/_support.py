@@ -57,7 +57,7 @@ def copy_checkout(dest: Path, *, open_modes: bool = False) -> Path:
 
 
 def run_script(
-    script: Path, *args: str, destdir: Path | None, legacy_audit: Path | None = None, umask: int | None = None, cwd: Path | None = None, extra_env: dict[str, str] | None = None
+    script: Path, *args: str, destdir: Path | None, user_audit: Path | None = None, umask: int | None = None, cwd: Path | None = None, extra_env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run install.sh / uninstall.sh. SAFETY: always with a DESTDIR, so a test can never touch the real system."""
     assert destdir is not None and destdir.is_absolute(), "tests never run the install scripts without a DESTDIR"
@@ -65,8 +65,8 @@ def run_script(
     fake_proc = destdir.parent / "fake-proc"  # never scan the real /proc: a running helper (dev GUI, sim) must not fail install tests
     fake_proc.mkdir(exist_ok=True)
     env["ARLTUNER_PROC"] = str(fake_proc)
-    if legacy_audit is not None:
-        env["ARLTUNER_LEGACY_AUDIT"] = str(legacy_audit)
+    if user_audit is not None:
+        env["ARLTUNER_USER_AUDIT"] = str(user_audit)
     env.update(extra_env or {})
     return subprocess.run(
         ["bash", str(script), *args], env=env, cwd=cwd, capture_output=True, text=True, timeout=300,

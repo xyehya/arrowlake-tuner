@@ -1,6 +1,6 @@
 # Hardware safety protocol
 
-> Carried over 2026-10-08 from `linuxmon@b01f78a` (`~/AI/linuxmon`). Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here live in that repo (see `docs/PROVENANCE.md`); "linuxmon" = this project's former name.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 Applies to every host. Failure modes to design against: system hang/crash, silent instability (data corruption),
 persistent settings that survive reboot, kernel taint, and hardware stress from over-voltage or over-current.
@@ -52,7 +52,7 @@ Volatility is an assumption until measured: the first write of any kind is treat
 - Still no blind sweeps (noise, MMIO/PCI side effects): only allowlisted reads.
 - Source: `docs/research/lnx-interfaces.md` §5 (verify on the actual install before relying).
 
-## Mailbox-session discipline (lesson of the 2026-08-26 incident, from the operator's turbostat+ repo)
+## Mailbox-session discipline (lesson of the 2026-08-26 incident, from the operator's earlier monitoring tooling)
 _2026-10-11 (D-032): numeric limits (caps, dwell, steps, floor) are the operator's advanced-user policy; the one-at-a-time rule, health
 bracket, audit and guard below still apply._
 A broad OC-mailbox *Get* sweep (`WRMSR 0x150`) was followed ~5.5 min later by an abrupt boot end (no panic/MCE/AER/watchdog/thermal trip) and, on the next warm boot, a lost PCI device (Intel BE200) until **AC power was physically removed**.
@@ -62,8 +62,8 @@ Causality unproven; the mailbox burst was the only identified low-level mutation
   confirm a **cold-power recovery plan** (AC removal; a driver reload is not enough); the human is present.
 - **Health bracket:** `health_snapshot` before and after (taint integer + set bits, PCI device set, module set, watched kernel-log lines); acceptance = `CLEAN` delta. The taint baseline already carries `CPU_OUT_OF_SPEC` from earlier OCCT runs — compare against the recorded baseline word, never zero.
 - Never clear sticky thermal/limit bits; one owner per shared controller.
-- The first mailbox transaction ever sent from linuxmon is a single core-pinned `cmd 0x10` read on one CPU (spec: T-007, after T-003), followed by a dwell and a health delta — not a batch.
-- **Limits survive process boundaries (T-016):** the guard reads the audit log (`~/.local/state/linuxmon/audit.jsonl`) before every operation: a **cross-process dwell** (`min_dwell_s`, default 60 s since the last attempt by *any* process; a future-dated last attempt is refused) and a **per-boot cap** (`max_operations_per_boot`, default 12; reads count, read-backs don't). `apply` budgets the whole plan against the remaining per-boot operations **before sending anything**, so it cannot stop half-way on `BOOT_LIMIT`.
+- The first mailbox transaction ever sent from arltuner is a single core-pinned `cmd 0x10` read on one CPU (spec: T-007, after T-003), followed by a dwell and a health delta — not a batch.
+- **Limits survive process boundaries (T-016):** the guard reads the audit log (`/var/lib/arltuner/audit.jsonl` when installed, else `$XDG_STATE_HOME/arltuner/audit.jsonl`, D-041) before every operation: a **cross-process dwell** (`min_dwell_s`, default 60 s since the last attempt by *any* process; a future-dated last attempt is refused) and a **per-boot cap** (`max_operations_per_boot`, default 12; reads count, read-backs don't). `apply` budgets the whole plan against the remaining per-boot operations **before sending anything**, so it cannot stop half-way on `BOOT_LIMIT`.
 - **`AUDIT_UNAVAILABLE` means the log cannot be evaluated, so nothing is sent.** Recovery is a human act: inspect the file, remove only a malformed line (a crash-truncated *last* line is tolerated; one that later gets a record appended becomes a malformed middle line); **never delete or truncate the log to get past a refusal** — that would erase the history the limits rely on. Reboot = new per-boot count, but the dwell still applies.
 
 ## Windows-side rules (`win`)
@@ -73,7 +73,7 @@ Causality unproven; the mailbox burst was the only identified low-level mutation
   prefer user-mode/observation methods first.
 - Agents never launch ThrottleStop, XTU, HWiNFO or OCCT. Those tools carry MSR/MMIO-capable drivers; launching is a human
   action (T2). ThrottleStop/XTU/HWiNFO driver features must not run concurrently (mailbox races).
-- Third-party binaries live under `captures/thirdparty/` (git-ignored). Analyse statically (hash, PE parse, strings, Ghidra).
+- Third-party binaries live under `captures/thirdparty/` (git-ignored). Analyse statically (hash, PE parse, strings).
 
 ## Operation budget of one apply (T-021, 2026-10-01)
 A per-core apply is **2 + 7n operations** (`0x14`; per CPU `0x10, 0x1C, 0x09, 0x26, 0x11, 0x1D, 0x27`; plus `0x15` when bit 3 is clear), each a WRMSR to MSR 0x150: **one P core = 9 operations (≈ 9 minutes at the 60 s dwell, ≈ 11 mailbox WRMSRs including guard read-backs)**; two P cores or any E cluster (4 CPUs) exceed the default per-boot cap of 12, so the operator must raise `max_operations_per_session` / `max_operations_per_boot` in a reviewed policy for that session. The guard's `0x1C`/`0x26` read-backs are extra and not in XTU's sequence.

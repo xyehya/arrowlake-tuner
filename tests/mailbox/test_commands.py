@@ -1,4 +1,4 @@
-"""T-010 golden vectors for arltuner.mailbox.commands (source: docs/research/registers.md, "Mailbox commands" + "Return codes")."""
+"""T-010 golden vectors for arltuner.mailbox.commands (source: docs/knowledge/registers.md, "Mailbox commands" + "Return codes")."""
 import unittest
 
 from arltuner.mailbox.commands import WRITE_COMMANDS, Cmd, Domain, Rc, is_write, rc_name

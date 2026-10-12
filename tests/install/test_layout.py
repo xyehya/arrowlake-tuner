@@ -48,10 +48,10 @@ class InstallCase(unittest.TestCase):
         self.tmp = Path(tmp.name)
         self.dest = self.tmp / "root"
         self.dest.mkdir()
-        self.legacy = self.tmp / "legacy-audit.jsonl"
+        self.user_log = self.tmp / "user-audit.jsonl"
 
     def install(self, *args: str, **kw) -> subprocess.CompletedProcess[str]:
-        kw.setdefault("legacy_audit", self.legacy)
+        kw.setdefault("user_audit", self.user_log)
         return run_script(kw.pop("script", REPO / "install.sh"), *args, destdir=self.dest, **kw)
 
     def ok_install(self, *args: str, **kw) -> subprocess.CompletedProcess[str]:
@@ -69,7 +69,7 @@ class InstallCase(unittest.TestCase):
 class InstallLayout(InstallCase):
     def setUp(self) -> None:
         super().setUp()
-        self.legacy.write_text('{"event":"attempt"}\n{"event":"result"}\n', encoding="utf-8")
+        self.user_log.write_text('{"event":"attempt"}\n{"event":"result"}\n', encoding="utf-8")
         self.result = self.ok_install()
 
     def test_file_list_and_modes(self) -> None:
@@ -118,8 +118,8 @@ class InstallLayout(InstallCase):
         self.assertIn("none yet", self.result.stdout)
         self.assertEqual([p for p in (self.dest / "etc").rglob("*") if "CURRENT" in p.name or "EXPECTED" in p.name], [])
 
-    def test_audit_is_seeded_from_the_legacy_log_with_mode_0600(self) -> None:
-        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), self.legacy.read_bytes())
+    def test_audit_is_seeded_from_the_per_user_log_with_mode_0600(self) -> None:
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), self.user_log.read_bytes())
         self.assertEqual(self.mode("/var/lib/arltuner/audit.jsonl"), 0o600)
         self.assertIn("seeded from", self.result.stdout)
 
@@ -174,16 +174,16 @@ class Idempotence(InstallCase):
         self.assertIn("kept", second_run.stdout)
 
     def test_operator_owned_config_and_the_audit_log_survive_a_rerun(self) -> None:
-        self.legacy.write_text("legacy\n")
+        self.user_log.write_text("per-user log\n")
         self.ok_install()
         self.path("/etc/arltuner/policy.toml").write_text("# operator edit\n")
         self.path("/etc/arltuner/helper.toml").write_text("allow_taint_bits = [2, 5]\n")
-        self.path("/var/lib/arltuner/audit.jsonl").write_text("legacy\nroot-wrote-this\n")
-        self.legacy.write_text("a different legacy log\n")
+        self.path("/var/lib/arltuner/audit.jsonl").write_text("per-user log\nroot-wrote-this\n")
+        self.user_log.write_text("a different per-user log\n")
         r = self.ok_install()
         self.assertEqual(self.path("/etc/arltuner/policy.toml").read_text(), "# operator edit\n")
         self.assertEqual(self.path("/etc/arltuner/helper.toml").read_text(), "allow_taint_bits = [2, 5]\n")
-        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\nroot-wrote-this\n")
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "per-user log\nroot-wrote-this\n")
         self.assertIn("KEPT", r.stdout)
 
     def seed_accepted(self) -> dict[str, bytes]:
@@ -226,16 +226,16 @@ class Idempotence(InstallCase):
         self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / DEFAULT_POLICY).read_bytes())
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "keep me\n")
 
-    def test_no_legacy_log_gives_an_empty_0600_audit_log(self) -> None:
-        r = self.ok_install()  # self.legacy does not exist
+    def test_no_per_user_log_gives_an_empty_0600_audit_log(self) -> None:
+        r = self.ok_install()  # self.user_log does not exist
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), b"")
         self.assertEqual(self.mode("/var/lib/arltuner/audit.jsonl"), 0o600)
         self.assertIn("created empty", r.stdout)
 
-    def test_a_symlinked_legacy_log_is_not_followed(self) -> None:
+    def test_a_symlinked_per_user_log_is_not_followed(self) -> None:
         secret = self.tmp / "secret"
         secret.write_text("TOP SECRET\n")
-        self.legacy.symlink_to(secret)
+        self.user_log.symlink_to(secret)
         self.ok_install()
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), b"")
 
@@ -340,7 +340,7 @@ class SourceTreeAttacks(InstallCase):
                 (src / rel).symlink_to(elsewhere)
                 dest = self.tmp / ("root-" + rel.replace("/", "_"))
                 dest.mkdir()
-                r = run_script(src / "install.sh", destdir=dest, legacy_audit=self.legacy)
+                r = run_script(src / "install.sh", destdir=dest, user_audit=self.user_log)
                 self.assertNotEqual(r.returncode, 0, r.stdout)
                 self.assertIn("symlink", r.stderr)
                 self.assertEqual(list(dest.iterdir()), [], "refused before writing anything")
@@ -421,7 +421,7 @@ class ShellFunctions(InstallCase):
         self.assertFalse((self.tmp / "b.txt").is_symlink())
 
 
-class LegacySeed(InstallCase):
+class UserLogSeed(InstallCase):
     def me(self) -> tuple[str, str]:
         import pwd
 
@@ -429,7 +429,7 @@ class LegacySeed(InstallCase):
 
     def test_sudo_user_root_with_a_different_pkexec_uid_is_refused_before_anything_is_written(self) -> None:
         uid, _ = self.me()
-        self.legacy.write_text("x\n")
+        self.user_log.write_text("x\n")
         r = self.install(extra_env={"SUDO_USER": "root", "PKEXEC_UID": uid})
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("disagree", r.stderr)
@@ -443,9 +443,9 @@ class LegacySeed(InstallCase):
 
     def test_matching_users_are_accepted(self) -> None:
         uid, name = self.me()
-        self.legacy.write_text("legacy\n")
+        self.user_log.write_text("per-user log\n")
         self.ok_install(extra_env={"SUDO_USER": name, "PKEXEC_UID": uid})
-        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\n")
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "per-user log\n")
 
     def test_a_bad_or_unknown_pkexec_uid_is_refused(self) -> None:
         for bad in ("abc", "4294967290"):
@@ -454,13 +454,13 @@ class LegacySeed(InstallCase):
             self.assertEqual(list(self.dest.iterdir()), [], bad)
 
     def test_root_is_never_the_user_whose_log_is_seeded(self) -> None:
-        self.legacy.write_text("root's idea of a log\n")
-        r = self.ok_install(extra_env={"SUDO_USER": "root"}, legacy_audit=None)
+        self.user_log.write_text("root's idea of a log\n")
+        r = self.ok_install(extra_env={"SUDO_USER": "root"}, user_audit=None)
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), b"")
         self.assertIn("created empty", r.stdout)
 
-    def test_a_legacy_log_over_64_mib_is_refused_and_leaves_no_audit_log(self) -> None:
-        with open(self.legacy, "wb") as fh:
+    def test_a_per_user_log_over_64_mib_is_refused_and_leaves_no_audit_log(self) -> None:
+        with open(self.user_log, "wb") as fh:
             fh.truncate(67108864 + 1)
         r = self.install()
         self.assertNotEqual(r.returncode, 0)
@@ -468,8 +468,8 @@ class LegacySeed(InstallCase):
         self.assertFalse((self.dest / "var/lib/arltuner/audit.jsonl").exists())
         self.assertEqual(sorted(p.name for p in (self.dest / "var/lib/arltuner").iterdir()), ["curves", "profiles", "state", "stress"], "no staging file left behind (the store directories are made before the audit log)")
 
-    def test_a_legacy_log_of_exactly_64_mib_is_accepted(self) -> None:
-        with open(self.legacy, "wb") as fh:
+    def test_a_per_user_log_of_exactly_64_mib_is_accepted(self) -> None:
+        with open(self.user_log, "wb") as fh:
             fh.truncate(67108864)
         self.ok_install()
         self.assertEqual((self.dest / "var/lib/arltuner/audit.jsonl").stat().st_size, 67108864)
@@ -477,14 +477,14 @@ class LegacySeed(InstallCase):
     def test_the_size_cap_does_not_depend_on_a_stat_of_the_source(self) -> None:
         text = (REPO / "install.sh").read_text()
         self.assertIn("head -c 67108865", text)
-        self.assertNotIn("stat -c %s \"$LEGACY\"", text)
+        self.assertNotIn("stat -c %s \"$USER_LOG\"", text)
         self.assertIn("runuser -u", text)
 
 
 class Uninstall(InstallCase):
     def setUp(self) -> None:
         super().setUp()
-        self.legacy.write_text("legacy\n")
+        self.user_log.write_text("per-user log\n")
         self.ok_install()
         self.path("/run/arltuner").mkdir(parents=True)  # tmpfiles.d's job on a real system (a DESTDIR install never runs it)
         (self.path("/run/arltuner") / "mailbox.lock").write_text("")
@@ -504,7 +504,7 @@ class Uninstall(InstallCase):
         self.assertIn("kept " + str(self.path("/usr/lib/tmpfiles.d/arltuner.conf")), r.stdout)
         self.assertIn("kept " + str(self.path("/run/arltuner")), r.stdout)
         self.assertTrue(self.path("/var/lib/arltuner/audit.jsonl").is_file())
-        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\n")
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "per-user log\n")
         self.assertTrue(self.path("/etc/arltuner/policy.toml").is_file())
         self.assertIn("--purge", r.stdout)
 
@@ -551,9 +551,9 @@ class Uninstall(InstallCase):
 
     def test_reinstall_after_uninstall_keeps_the_old_audit_log(self) -> None:
         self.uninstall()
-        self.legacy.write_text("different\n")
+        self.user_log.write_text("different\n")
         self.ok_install()
-        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\n")
+        self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "per-user log\n")
 
     def test_unknown_argument_is_refused(self) -> None:
         r = run_script(REPO / "uninstall.sh", "--everything", destdir=self.dest)

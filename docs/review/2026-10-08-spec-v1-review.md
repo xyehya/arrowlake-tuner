@@ -1,6 +1,6 @@
 # Review of SPEC draft v1 (2026-10-08) — findings and disposition
 
-Reviewer: independent Sonnet agent, read-only (files + harmless local checks). Spec v1 = `linuxmon@b01f78a:docs/SPEC-gui.md`.
+Reviewer: independent Sonnet agent, read-only (files + harmless local checks). Spec v1 = the early draft `SPEC-gui.md` (superseded by `docs/SPEC.md`).
 Disposition: **A** = accepted into SPEC v2 · **P** = partly accepted (note) · **R** = rejected (reason) · **O** = open, operator decides.
 
 | # | Sev | Finding (short) | Disp. | Where in SPEC v2 / note |
@@ -21,7 +21,7 @@ Disposition: **A** = accepted into SPEC v2 · **P** = partly accepted (note) · 
 | 14 | major | telemetry MSR reads (0x198, 0xE7/0xE8, 0x19C, 0x1B1) need allowlist entries | A | §8 |
 | 15 | major | gates vs D-019: the app cannot run the acceptance gate; who attests | A | §5, §6.4 operator attestation record |
 | 16 | major | GUI rewriting `EXPECTED-words.txt` bypasses autostart compare and drifts from Windows `$Expected` | A | §6.4 propose-only; root-owned accepted copy |
-| 17 | major | one machine-wide lock shared with CLI; audit check not atomic | A | §4.6 (CLI already has `/run/lock/linuxmon-mailbox.lock`; helper uses the same) |
+| 17 | major | one machine-wide lock shared with CLI; audit check not atomic | A | §4.6 (the CLI already has a machine-wide lock under `/run/lock`; the helper uses the same) |
 | 18 | major | two tabs / reload: single operation state machine | A | §4.6 |
 | 19 | major | long applies: progress, abort between ops, browser disconnect | A | §4.6 |
 | 20 | major | op-budget exhaustion handling; which policy the helper loads | A | §4.6, §7 |

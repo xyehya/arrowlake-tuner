@@ -4,8 +4,8 @@
 ``diff`` into the ``health_gate(phase) -> (ok, detail)`` callable that :class:`arltuner.guard.WriteGuard` calls with
 ``"before"`` and ``"after"`` around every mailbox transaction (``docs/tasks/T-013-guard.md``).
 
-Rule (``docs/SAFETY.md`` "Mailbox-session discipline"; turbostat+ health bracket in
-``docs/research/lnx-turbostat-plus-facts.md``): acceptance is a CLEAN delta. Compare against the snapshot taken *before* this
+Rule (``docs/SAFETY.md`` "Mailbox-session discipline"; health bracket from earlier
+research on the reference machine): acceptance is a CLEAN delta. Compare against the snapshot taken *before* this
 transaction -- never against zero, because the boot's taint word may already carry bits from earlier tools (OCCT). Taint sticky
 bits are never cleared here, and taint letters are not decoded: bit indices only.
 
