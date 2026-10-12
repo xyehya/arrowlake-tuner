@@ -80,7 +80,7 @@ All from a Core Ultra 9 285K; the point is the behaviour, not the numbers.
 | E-cluster OC ratio 49x at 1.165 V, E table raised to 49x, `0x1D` = 49 | 49x = 1.1675 V, 48x = 1.1475 V, 47x = 1.130 V; `cpuinfo_max_freq` rose to 5.0 GHz; with `scaling_max_freq` lifted a stress run held 49x (4901 MHz), 0 errors, 43 C. Reverted afterwards [MEASURED lnx 2026-10-12] |
 | Same, kernel default after the raise | `scaling_max_freq` stayed 4.9 GHz, so an uncapped load ran 48x (intel_pstate maps N to N-1); fixed by G-126 [MEASURED lnx 2026-10-12] |
 | E 49x earlier (Windows XTU, then Linux) | all 16 E-cores reached about 4900 MHz, a 1-minute `stress-ng --verify` passed, overnight OCCT passed [MEASURED lnx 2026-10-01] |
-| P-core OC ratio 58x on P0 (V target 1.4297 V) | written once on Windows and read back; no stability result recorded; not part of any accepted state [MEASURED win 2026-10-06, platform-285k.md §10] |
+| P-core OC ratio 58x on P0 (V target 1.4297 V) | written once on Windows and read back; no stability result recorded; not part of any accepted state [MEASURED win 2026-10-06, platform-arl-s.md §10] |
 
 Nothing about a P-core OC ratio above the top fused point has been validated for stability on the reference chip. Whether a non-favored P-core accepts
 56x/57x as real ratios is open (favored-cores.md §5, [UNVERIFIED]).
@@ -107,7 +107,7 @@ follows. Observed side effect: the kernel rescaled the CPU capacity (`energy_mod
 
 ## 6. Limits you hit that are not the tool's
 - **Power and thermal.** All-core clocks on the reference chip were set by the BIOS power limits, not by the voltage: P-cores ran 51-54x under all-core
-  load, limited by power [MEASURED lnx 2026-10-02, platform-285k.md §3]. A higher ratio helps only where the load is not power-limited.
+  load, limited by power [MEASURED lnx 2026-10-02, platform-arl-s.md §3]. A higher ratio helps only where the load is not power-limited.
   A PL of 320 W on the same machine reached 102 C; 295 W peaked near 92 C [MEASURED lnx 2026-10-02]. The tool does not change power limits.
 - **Board.** Load-line calibration, the VccIA offset and cooling decide how much voltage droop you see; they are BIOS settings.
 - **Voltage ceiling.** E-core WHEA reports are reported above about 1.2 V [COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/];

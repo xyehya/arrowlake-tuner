@@ -2,7 +2,7 @@
 level-4 log. ``SimConfig.measured()`` (``sim.py``) turns these tables into a simulated machine. **Test/simulator fixture only (D-036):
 imported by ``msr/sim.py`` and the tests, never by a runtime path** (a test pins this).
 
-Every table here is ``[MEASURED win 2026-10-01]``: ``docs/knowledge/windows-path.md`` section "S-03d" (baseline words, BIOS 3.40,
+Every table here is ``[MEASURED win 2026-10-01]``: ``docs/knowledge/registers.md`` "Measured via XTU's level-4 log on Windows" (S-03d) and ``examples/reference-285k/notes/platform.md`` section 4 (baseline words, BIOS 3.40,
 OC lock off, UVP off, no XTU tuning applied) and ``docs/knowledge/registers.md`` "Measured via XTU's level-4 log on Windows".
 Nothing else belongs in this module: a value that was not measured must not be added here (``[UNVERIFIED]`` / ``[COMMUNITY]`` facts
 are leads, not constants).

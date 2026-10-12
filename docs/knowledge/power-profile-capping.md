@@ -1,8 +1,9 @@
 # Power profile vs. cpufreq capping for V/F measurement (R-001)
 
-Host: lnx (Fedora, kernel 7.2.9-200.fc44, intel_pstate active + HWP, tuned-ppd daemon). Date 2026-10-12. Operator exception D-037, tier T1
-(sysfs cpufreq + profile switch + MSR **reads**; no WRMSR, no mailbox). All findings `[MEASURED lnx 2026-10-12]`.
-Raw logs: `captures/r001/*.json` in the R-001 worktree (not committed).
+Host: lnx (Fedora, kernel 7.2.9-200.fc44, intel_pstate active + HWP, tuned-ppd daemon), reference 285K. Date 2026-10-12 (D-037: sysfs cpufreq,
+profile switch, MSR reads only). All findings `[MEASURED lnx 2026-10-12]`. The mechanisms (profiles, EPP, pinning, 100 MHz bins, perf-unit
+quantisation) are intel_pstate behaviour on hybrid parts; the exact VIDs, scale factors and unreachable-ratio sets are this chip and kernel's and must be
+re-derived elsewhere (the app finds them live: a ratio no cap reaches is reported `cap_granularity`).
 
 **Question:** must the V/F measurement (cap a unit with `scaling_max_freq`, load one pinned CPU, read requested VID from MSR 0x198) set or require a
 power profile / governor / EPP? **Answer:** no profile is required; the VID at a given ratio is the same under performance and balanced (and under
@@ -40,8 +41,8 @@ performance -> power-saver -> balanced -> performance). HWP_CAPABILITIES (0x771)
 | 1-thread load P0 (favored) | 57x 35/55, rest 55/54/51 | 57x 20/55 | **27x** |
 | 1-thread load EC0 | 48x | 48x | **19x** |
 | VID at that load, P1 / EC0 | 1.2712 V / 1.1226 V | 1.2712 / 1.1226 | 0.7786 / 0.775 |
-So the operator's guess is right about performance (E idles at 46-48x there, ~8x in balanced) and right that power-saver limits the maximum: it turns turbo
-off (ratio ceiling 37 P / 32 E) **and** its EPP `power` holds a loaded core at 27x (P) / 19x (E), below even that ceiling.
+E idles at 46-48x under performance (~8x in balanced). Power-saver turns turbo off (ratio ceiling = base, 37 P / 32 E here) **and** its EPP `power`
+holds a loaded core at 27x (P) / 19x (E), below even that ceiling.
 
 ## 3. Capped measurement (app method) per profile
 `kept/total` summed over 2 reps, window A (10 samples at 0.3 s) | window B (app, >= 2.5 s). VID = mean over kept samples in B; both reps identical unless two values shown.
@@ -103,8 +104,8 @@ ratios, and the achieved ratio is floor(perf / k):
 The ratio rule held on all 104 high-confidence loaded points (E p 20..68, P p 47..92). Examples (E): N 22 -> p 31 -> 22x, N 23 -> p 32 -> 22x,
 N 24 -> p 34 -> 24x (**p 33 = 23x is never produced**); N 15 -> 21 -> 15x; N 30 -> 42 -> 30x, N 31 -> 43 -> 30x; N 46 -> 64 -> 45x, N 47 -> 65 -> 46x; N 48 -> 67 -> 47x;
 N 49 -> 68 -> 48x (an E cap never reaches 49x here). Measured E sweep, cap 2200000..2400000 in 10 MHz steps: 22x up to 2390000, 24x at 2400000; 23x never.
-**Discrepancy to reconcile:** `vfdump.py` records `[MEASURED lnx 2026-10-02]` (T-027) that E 30/40/46x all needed the (ratio+1) cap; here (kernel 7.2.9) E 30x and 40x hit at
-ratio x 100 MHz in every profile and only 46x/48x needed +1. The earlier kernel/state is unknown; keep the retry logic regardless.
+Older note superseded: an earlier run (2026-10-02, T-027) found E 30/40/46x all needing the (ratio+1) cap; on kernel 7.2.9 E 30x and 40x hit at ratio x
+100 MHz in every profile and only 46x/48x needed +1. The newer measurement wins; the retry logic stays because the set is chip/kernel-dependent.
 Caps that give each ratio (smallest cap; the cap -> ratio map is a step function, any kHz inside the 100 MHz bin works):
 - **E, cpu 8-11:** 8..12 -> N = ratio; 14-17, 19, 20, 22, 24, 25, 27, 30, 32, 35, 40 -> N = ratio; 28 -> 2900000; 33 -> 3400000; 36 -> 3700000; 37 -> 3800000; 38 -> 3900000;
   41 -> 4200000; 42 -> 4300000; 43 -> 4400000; 44 -> 4500000; 45 -> 4600000; 46 -> 4700000; 47 -> 4800000; 48 -> 4900000. **Unreachable: 13, 18, 21, 23, 26, 29, 31, 34, 39.**
@@ -115,7 +116,7 @@ Caps that give each ratio (smallest cap; the cap -> ratio map is a step function
 - The only way to ask for a ratio no cap reaches would be a direct write of HWP_REQUEST (MSR 0x774, min = max = 33 for E 23x). Not tested, not allowed here; it is a
   WRMSR outside the OC mailbox and a policy question for the operator `[UNVERIFIED]`.
 
-## Recommendation for the app (measure op)
+## Recommendation for the app (measure op; implemented in G-132)
 1. Do **not** require or change the power profile, governor or EPP; the VID at a ratio does not depend on them. Never write EPP (EBUSY under `performance`, and not needed when pinned).
 2. Set `scaling_min_freq` = `scaling_max_freq` = cap on every CPU of the unit (raise: max then min; lower: min then max) and restore both exactly afterwards. This works in every profile and removes dips.
 3. Keep the ratio x 100 MHz then (ratio+1) x 100 MHz order: it covers every reachable ratio (E 28/33/36-38/41-48 need +1).
@@ -123,9 +124,3 @@ Caps that give each ratio (smallest cap; the cap -> ratio map is a step function
    measured; report "turbo is off (power-saver): switch to Balanced or Performance in GNOME Settings" and skip those points instead of reporting MISMATCH. Do not flip `no_turbo` yourself.
 5. Mark ratios that no cap can produce as "not reachable by cpufreq cap (hybrid perf step)" rather than MISMATCH: E 23x (neighbours 22x/24x), E 13/18/21/26/29/31/34/39, P cpu 1 42/47/52; their voltage cannot be measured this way, only interpolated or left unknown.
 6. Use the app's settle (2.5 s; with 0.3 s the first target sample arrives at 0.3-0.7 s depending on EPP, A-window hit rate 70-80 % at `balance_power`). Tell the user: the profile does not matter except power-saver; a profile switch resets EPP/no_turbo but not the caps; E cores idle at 46-48x only under Performance (cosmetic).
-
-## State restore
-Initial state (profile `performance` = tuned `throughput-performance`, governor `performance`, EPP `default`, EPB 0, min 800000, max 5700000 cpu0,3 / 5500000 cpu1,2,4-7 / 4900000 cpu8-23,
-no_turbo 0, min_perf_pct 100, per-CPU HWP_REQUEST) was saved before the first change, a restore trap ran after every experiment, and a last independent comparison of 9 fields x 24 CPUs plus the
-intel_pstate files and the profile showed no difference (HWP_CAPABILITIES "most-efficient" byte (23:16) differs on a few E cpus: hardware-reported, not a setting). Restore order that works: caps, EPP (while a
-powersave profile is active), profile, caps again.

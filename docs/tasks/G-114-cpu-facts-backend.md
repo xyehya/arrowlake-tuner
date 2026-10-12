@@ -7,7 +7,7 @@ Make the backend respect SPEC-v3 §9 F1–F9 and the contract 9 addendum (2026-1
 tables in `tune.read`, clamp/VccIA/turbo-order in `tune.plan`, max-turbo ratios + reachability reasons in `vf.measure`, and fix `mem.read`.
 
 ## Read first
-`docs/SPEC-v3.md` §3, §4, §9 · `docs/ARCHITECTURE.md` contract 9 + its 2026-10-11 addendum · `docs/knowledge/platform-285k.md` §2–5, §7 ·
+`docs/SPEC-v3.md` §3, §4, §9 · `docs/ARCHITECTURE.md` contract 9 + its 2026-10-11 addendum · `docs/knowledge/platform-arl-s.md` §2–5, §7 ·
 `docs/knowledge/tuning-results.md` (stock measured curve) · `docs/knowledge/memory-mchbar.md` (Frequency) · `src/arltuner/msr/` (simulator) ·
 `src/arltuner/helper/ops_tune.py`, `ops_measure.py` · `src/arltuner/telemetry/mem.py` · `src/arltuner/vfdump.py`.
 
@@ -19,7 +19,7 @@ tables in `tune.read`, clamp/VccIA/turbo-order in `tune.plan`, max-turbo ratios 
 
 ## Requirements
 - **Sim (F1/F2/F3):** P tables identical on all 8 cores (8,20,30,48,53,55,56,57), E 8,15,23,30,40,46; OC word P0 = `0x39`, others 0; 0x09 fused
-  words = the table in platform-285k §4; 0x1C favored 0x3939 (P0, P3) / 0x3737 / E 0x2E30; 0x1AD `0x3737373737373939`-style buckets as measured
+  words = the table in platform-arl-s §4 (values: examples/reference-285k/notes/platform.md §4); 0x1C favored 0x3939 (P0, P3) / 0x3737 / E 0x2E30; 0x1AD `0x3737373737373939`-style buckets as measured
   (P 57,57,55,…; E 48,48,47,46,…, see tune.read readings), 0x1AE/0x651 counts. Sim VIDs ≈ the measured stock curve (tuning-results.md) and obey
   F4 (clamp) and interpolation; non-favored cores cannot exceed 55×; E 23× and P 52× not pinnable (land on neighbours).
 - **tune.read:** add `fused` (12 guarded 0x09 reads) and `turbo` per the addendum; count them in the op estimate the page shows (124 → ~136).

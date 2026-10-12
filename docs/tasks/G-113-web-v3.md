@@ -14,7 +14,7 @@ Reset to stock; Restore accepted), **Profiles**, System, Audit. Use the `fronten
 
 ## Owns
 `web/index.html`, `web/app.js`, `web/style.css`, `tests/web/` (incl. `fake_helper.py`: implement every contract 9 op with realistic fixtures:
-the memory fixture in `docs/knowledge/memory-mchbar.md`, synthetic curves P ~0.70→1.40 V / E ~0.65→1.15 V, `vf.point` events while measuring).
+the memory fixture in `examples/reference-285k/notes/platform.md` §8, synthetic curves P ~0.70→1.40 V / E ~0.65→1.15 V, `vf.point` events while measuring).
 **Not:** `src/` (the `OPS` server allowlist is G-111/G-112's).
 
 ## Constraints (unchanged from G-110)

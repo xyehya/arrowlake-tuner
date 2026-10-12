@@ -67,7 +67,7 @@ the memory controller (frequency, gear, command rate, timings, DIMM temperatures
 re-reads them. A reading the tool cannot get is shown as unavailable with a reason, never as a number (SPEC-v3 §2).
 
 The **VID** shown per core is the voltage the core *requests* (MSR `0x198` bits 47:32 divided by 8192). It is not a measurement of the voltage
-delivered to the core; no such telemetry exists on this platform [MEASURED lnx 2026-10-01, platform-285k.md §5].
+delivered to the core; no such telemetry exists on this platform [MEASURED lnx 2026-10-01, platform-arl-s.md §5].
 
 ## 3. Preflight (System tab)
 **System → Preflight** lists one line per check, worst first. The header mode tag and a banner summarise it.

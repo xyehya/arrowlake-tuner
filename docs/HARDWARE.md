@@ -12,7 +12,7 @@
 | BIOS limits (user-reported) | a **per-core V/F offset** for P-cores (operator 2026-10-01: −50 mV at the 57× point, effective ≈ −40 mV vs fused: VID 1.3864 V vs fused 1.4258 V on P-Core 0); no E-core V/F; no absolute voltages shown (earlier note said one shared all-core offset — corrected) |
 
 ## CPU numbering [MEASURED lnx 2026-09-29 via a read-only monitoring capture; XTU mapping inferred]
-Linux CPUs **0–7 = P-cores, 8–23 = E-cores** (no SMT); E-clusters of 4 = **8–11, 12–15, 16–19, 20–23**; favored P-cores = **CPU 0 and 3**. XTU "P-Core N" = Linux CPU N; XTU "E-Core k" = Linux CPU 8+k. **Windows logical-processor numbers (mailbox masks, XTU logs "Core N") are NOT P-first** [MEASURED win 2026-10-01]: P = LP {0,1,10,11,12,13,22,23}, E = LP {2–5, 6–9, 14–17, 18–21}; Linux CPU ↔ LP map (order-preserving, consistent with favored P = Linux 0,3 = LP 0,11): `docs/knowledge/windows-path.md` S-03d.
+Linux CPUs **0–7 = P-cores, 8–23 = E-cores** (no SMT); E-clusters of 4 = **8–11, 12–15, 16–19, 20–23**; favored P-cores = **CPU 0 and 3**. XTU "P-Core N" = Linux CPU N; XTU "E-Core k" = Linux CPU 8+k. **Windows logical-processor numbers (mailbox masks, XTU logs "Core N") are NOT P-first** [MEASURED win 2026-10-01]: P = LP {0,1,10,11,12,13,22,23}, E = LP {2–5, 6–9, 14–17, 18–21}; Linux CPU ↔ LP map (order-preserving, consistent with favored P = Linux 0,3 = LP 0,11): `docs/knowledge/registers.md` "Measured via XTU's level-4 log on Windows".
 
 ## Host `win` — Windows 11 Pro build 26200 [MEASURED win 2026-09-30]
 - VBS/HVCI: off. Session was **not** elevated (Secure Boot query denied).

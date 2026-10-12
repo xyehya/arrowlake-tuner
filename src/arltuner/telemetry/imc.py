@@ -5,7 +5,7 @@ Command (root or perf_event_paranoid <= -1): ``perf stat -a -I <ms> -x , -e <rea
 
 Row format with ``-I`` and ``-x ,`` [DOC perf-stat(1) CSV output]: ``timestamp,count,unit,event,run-time,pct-running[,metric...]``
 where an unusable counter prints ``<not counted>`` / ``<not supported>`` in the count field. The free-running IMC events report
-MiB [MEASURED lnx 2026-10-03, linux-path.md s7: "units MiB; x1.0486 = MB"]. The event spelling ``uncore_imc_free_running/data_read/`` and
+MiB [MEASURED lnx 2026-10-03, telemetry-sources.md: "units are MiB (x 1.048576 = MB)"]. The event spelling ``uncore_imc_free_running/data_read/`` and
 ``/data_write/`` (perf merges the ``_0`` / ``_1`` instances) is [MEASURED lnx 2026-10-11] (root perf; sample CSV in docs/knowledge/telemetry-sources.md);
 it stays configurable. Nothing here runs perf at import or in tests.
 

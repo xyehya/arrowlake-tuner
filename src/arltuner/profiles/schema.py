@@ -38,7 +38,7 @@ Per-V/F-point offsets (T-025; optional, distinct from the whole-curve ``offset_m
 A profile may hold only ``[[point]]`` entries: it needs at least one ``[[core]]`` or ``[[point]]`` (``[turbo]`` alone is still empty).
 Monotonicity V(n) >= V(n-1) across points is enforced by the hardware, not by arltuner (the voltages of fused points are not readable).
 
-E-cluster rule: the hardware regulator is per cluster of four E-cores (docs/knowledge/platform-285k.md;
+E-cluster rule: the hardware regulator is per cluster of four E-cores (docs/knowledge/platform-arl-s.md section 2;
 whether a per-E-core write is cluster-wide is ``[UNVERIFIED]``), so two entries in the same cluster must carry
 identical ``ratio/oc_voltage_mv/offset_mv`` and ``Profile.expand`` reports every E entry as cluster-wide.
 """

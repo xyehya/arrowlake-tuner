@@ -50,7 +50,7 @@ Volatility is an assumption until measured: the first write of any kind is treat
 - Every MSR **write** taints the kernel (`TAINT_CPU_OUT_OF_SPEC`), even with `allow_writes=on`; reads never taint and unimplemented
   MSRs return EIO. Expected for our writes — record it in the session log. If a tool tainted the kernel, look for its writes in `dmesg`.
 - Still no blind sweeps (noise, MMIO/PCI side effects): only allowlisted reads.
-- Source: `docs/knowledge/linux-path.md` §5 (verify on the actual install before relying).
+- Source: `docs/knowledge/linux-path.md` §1 (verify on the actual install before relying).
 
 ## Mailbox-session discipline (lesson of the 2026-08-26 incident, from the operator's earlier monitoring tooling)
 _2026-10-11 (D-032): numeric limits (caps, dwell, steps, floor) are the operator's advanced-user policy; the one-at-a-time rule, health

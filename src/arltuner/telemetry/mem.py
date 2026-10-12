@@ -1,5 +1,5 @@
 """Live DDR5 frequency and timings from the memory controller's MCHBAR window (``mem.read``, contract 9). Read-only; facts in
-``docs/knowledge/memory-mchbar.md`` (Intel Core Ultra 200S/200HX Series 2, document 835538 [DOC]; the fixture values [MEASURED lnx 2026-10-11]).
+``docs/knowledge/memory-mchbar.md`` (Intel Core Ultra 200S/200HX Series 2, document 835538 [DOC]; the fixture values [MEASURED lnx 2026-10-11] in ``examples/reference-285k/notes/platform.md`` section 8).
 
 What this module may do: ``pread`` the host bridge's PCI config (MCHBAR register at ``0x48``), ``pread`` a **compiled whitelist** of exact (offset, width)
 MMIO registers through ``/dev/mem`` (``O_RDONLY | O_SYNC``), read SMBIOS type 17 structures from ``/sys/firmware/dmi/entries`` and the ``spd5118`` hwmon

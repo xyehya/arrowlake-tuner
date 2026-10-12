@@ -26,7 +26,7 @@ The CPU exposes a voltage/frequency control interface, the **OC mailbox**, throu
 ## 2. Tuning units and regulators
 Each **P-core** has its own on-die voltage regulator (DLVR) and therefore its own V/F curve. The **E-cores** are grouped in **clusters of four**
 that share one regulator and one curve. All DLVRs are fed from one external rail, VccIA, which boards label "Vcore"
-[MEASURED lnx 2026-10-01, USER analysis, platform-285k.md §5]. The cluster-of-four grouping is tagged [MEASURED] in the SPEC-v3 header and [USER][COMMUNITY] in registers.md "Voltage semantics".
+[MEASURED lnx 2026-10-01, USER analysis, platform-arl-s.md §5]. The cluster-of-four grouping is tagged [MEASURED] in the SPEC-v3 header and [USER][COMMUNITY] in registers.md "Voltage semantics".
 
 So a tuning unit is one P-core or one E-cluster. On the reference chip (8 P + 16 E, no SMT) that is 12 units: Linux CPUs 0-7 are P-cores, CPUs 8-23
 are E-cores in clusters 8-11, 12-15, 16-19, 20-23 [MEASURED lnx 2026-09-29]. The app derives the unit list from your CPU's sysfs
@@ -45,7 +45,7 @@ Example values from one chip (reference 285K; vf-dump of all cores [MEASURED lnx
 | E-cluster | 8, 15, 23, 30, 40, 46 (6 points) | `P2 = 7` answers `0x11` |
 
 The same point ratios appear in an independent community write-up for the 285K (P points 1-8 = 8/20/30/48/53/55/56/57, E points 1-6 =
-8/15/23/30/40/46, all factory-fused, offset only) [COMMUNITY SkatterBencher 285K guide, "Advanced Voltage Offset" slides 39/40, platform-285k.md §3].
+8/15/23/30/40/46, all factory-fused, offset only) [COMMUNITY SkatterBencher 285K guide, "Advanced Voltage Offset" slides 39/40, platform-arl-s.md §3].
 Whether other 200S parts use the same ratios is [UNVERIFIED]; the tool reads the table from each CPU.
 
 Facts about the points:
@@ -55,9 +55,9 @@ Facts about the points:
   ([05](05-measuring-curves.md); SPEC-v3 F7).
 - Example: top fused points on the reference chip, `0x09` words per P-core: P0 1.4258 V, P1 1.3047 V, P2 1.3633 V, P3 1.3945 V, P4 1.3164 V,
   P5 1.3555 V, P6 1.3438 V, P7 1.3750 V, all at 57x; E-cluster 0 1.1563 V and clusters 1-3 1.1367 V at 46x
-  [MEASURED win 2026-10-01 / lnx 2026-10-02, platform-285k.md §4]. They differ per core: that is the per-core silicon spread.
+  [MEASURED win 2026-10-01 / lnx 2026-10-02, platform-arl-s.md §4]. They differ per core: that is the per-core silicon spread.
 - Stock requested voltage is a *request* (VID, MSR `0x198` bits 47:32 divided by 8192 V; ratio in bits 15:8), not a measurement of delivered
-  voltage, and no delivered-voltage telemetry exists for the DLVRs [MEASURED lnx 2026-09-29 / 2026-10-01, registers.md, platform-285k.md §5].
+  voltage, and no delivered-voltage telemetry exists for the DLVRs [MEASURED lnx 2026-09-29 / 2026-10-01, registers.md, platform-arl-s.md §5].
 
 ## 4. The V/F word
 The word for core-scoped commands `0x10` (read) and `0x11` (write) has these fields [DECOMPILED registers.md "V/F data word"]:
@@ -78,7 +78,7 @@ The `P2` request field selects what the word belongs to:
 
 The decode of the offset field was confirmed against a known value: a graphics-slice word read `0xF8600000` = -59.6 mV, matching the -0.060 V that
 Intel XTU had applied [MEASURED win 2026-10-01]. Per-point offsets (`P2` = 1 ... n) are hidden in XTU on Arrow Lake-S but exist and were written on
-both operating systems [MEASURED lnx 2026-10-02, platform-285k.md §10].
+both operating systems [MEASURED lnx 2026-10-02, platform-arl-s.md §10].
 
 Example (reference chip): `0xF9A00035` = ratio `0x35` (53x), no target, offset -50 mV: a -50 mV offset at the 53x point of a P-core.
 
@@ -94,17 +94,17 @@ Because the fused points take offsets only, an "undervolt" in this tool is alway
 (the point above the top fused one) and is what you use to overclock. Static/override mode is out of scope (D-016).
 
 **Whole-curve offset.** The offset field of the `P2 = 0` word shifts every point of the unit by the same amount. Measured: P0 with a whole-curve
--10 mV moved every point by -10 mV (8x: 0.688 V to 0.678 V ... 57x: 1.429 V to 1.419 V) [MEASURED lnx 2026-10-11, tuning-results.md "First write
-sittings"]. It is additive to per-point offsets [MEASURED lnx 2026-10-12].
+-10 mV moved every point by -10 mV (8x: 0.688 V to 0.678 V ... 57x: 1.429 V to 1.419 V) [MEASURED lnx 2026-10-11, tuning-results.md §5; values:
+examples/reference-285k/notes/tuning-history.md §5]. It is additive to per-point offsets [MEASURED lnx 2026-10-12].
 **Without an OC point the hardware drops a written target voltage** (the word `0xFEC5B439` read back as `0xFEC00039`), so a whole-curve offset on
 a unit with no OC ratio is written with target 0 (D-035) [MEASURED lnx 2026-10-11]. A target kept in such a word is not reliable [MEASURED lnx 2026-10-12].
 
 ## 6. The OC point
 Setting an **OC ratio** above the top fused ratio of a unit adds one extra point: on the E-cluster the table gained `P2 = 7` (at the OC ratio),
 "OC point 7" [MEASURED lnx 2026-10-11]. For P-cores the community numbering is "P point 9"; on the reference chip a P OC point was not shown to appear as
-a readable point 9 [UNVERIFIED for P; the ring's ninth point is MEASURED, platform-285k.md §3].
+a readable point 9 [UNVERIFIED for P; the ring's ninth point is MEASURED, platform-arl-s.md §3].
 
-Measured behaviour of an E OC point (EC1, ratio 48 above the fused top 46; example values from one chip) [MEASURED lnx 2026-10-11, tuning-results.md]:
+Measured behaviour of an E OC point (EC1, ratio 48 above the fused top 46; example values from one chip) [MEASURED lnx 2026-10-11, examples/reference-285k/notes/tuning-history.md §5]:
 
 | Adaptive target written | Result at the OC ratio |
 |---|---|
@@ -113,14 +113,14 @@ Measured behaviour of an E OC point (EC1, ratio 48 above the fused top 46; examp
 | 1.117 V (below point 6) | 48x = 47x = 1.1375 V: clamped up to point 6 |
 
 A **P-core** OC ratio raise (58x on P0) had been written once on Windows without a recorded stability outcome [MEASURED win 2026-10-06, treated as
-"written once, ungated", platform-285k.md §10]. The ceiling the tool allows is a policy number you can edit, up to what the CPU's own limit (mailbox command `0x01`) reports ([02](02-install.md), [12 §4](12-safety-and-internals.md), D-038, D-039).
+"written once, ungated", platform-arl-s.md §10]. The ceiling the tool allows is a policy number you can edit, up to what the CPU's own limit (mailbox command `0x01`) reports ([02](02-install.md), [12 §4](12-safety-and-internals.md), D-038, D-039).
 
 An OC ratio cannot be cleared to 0 at runtime; a cold boot clears it [MEASURED lnx 2026-10-11, tuning-results.md].
 
 ## 7. How the CPU combines points: interpolation and the monotonic clamp
 - **Between two points the voltage interpolates linearly.** At 54x, a ratio without a point, the requested voltage is the midpoint of the 53x and 55x
   points to within about 1.5 mV on every P-core [MEASURED lnx 2026-10-03; dense curve MEASURED lnx 2026-10-11]. Between the OC ratio and the next
-  fused point the voltage also interpolates (E 45x: -7.4 mV of a -10 mV offset) [MEASURED lnx, platform-285k.md §3].
+  fused point the voltage also interpolates (E 45x: -7.4 mV of a -10 mV offset) [MEASURED lnx, platform-arl-s.md §3].
 - **Above the top point, ratios ride on it.** On E-clusters without an OC point, 47x and 48x request the same voltage as the 46x point; an offset on
   point 6 moves all three [MEASURED lnx 2026-10-11].
 - **Monotonic clamp.** The hardware enforces V(n) >= V(n-1). A deeper offset on a point is silently clamped up to the previous point's voltage. Example:
@@ -128,7 +128,7 @@ An OC ratio cannot be cleared to 0 at runtime; a cold boot clears it [MEASURED l
   above). The word you wrote may read back unchanged while the *voltage* is not what you asked for; that is why the app predicts the effective curve and
   why you should compare a re-measured curve ([05](05-measuring-curves.md)), not only the read-back word.
 - **Some points are inert on some cores.** On the reference chip's non-favored P-cores the 57x fused voltage is about equal to the core's
-  55x voltage (within 2 mV): they are flat placeholders, and those cores top out at 55x in practice [MEASURED lnx 2026-10-02, favored-cores.md §2].
+  55x voltage (within 2 mV): they are flat placeholders, and those cores top out at 55x in practice [MEASURED lnx 2026-10-02, favored-cores.md §3].
 
 ## 8. Favored cores
 Intel characterises each core at manufacture and fuses a ranking. Firmware publishes it as each core's `HWP_CAPABILITIES` Highest_Performance and
@@ -143,7 +143,7 @@ The criterion for the ranking is not published [UNVERIFIED]. We found no evidenc
 - Favored cores reach the top ratio only with few cores active (a 57x bucket for 1-2 active cores in the turbo table, section 10). Non-favored P-cores
   top out at 55x in practice even though they carry 56x and 57x points [MEASURED lnx 2026-10-02].
 - Favored does not simply mean the lowest voltage: CPU 1 and CPU 4 sat within 20 mV of CPU 0 at 53x/55x and are not favored
-  [MEASURED lnx 2026-10-02, favored-cores.md §2]. The fused voltage spread is mostly guard band, not true minimum voltage: in an all-core 60-minute test
+  [MEASURED lnx 2026-10-02, favored-cores.md §3]. The fused voltage spread is mostly guard band, not true minimum voltage: in an all-core 60-minute test
   the cores with the worst fused VID had the most undervolt room [MEASURED win 2026-10-04 / lnx 2026-10-08].
 
 ## 9. VccIA and what lowering a unit does
@@ -154,8 +154,8 @@ Working model on the reference chip: board Vcore is about the **highest voltage 
 - Points around 55x set VccIA for every multi-core load; the 57x points only for one or two active cores [MEASURED lnx 2026-10-03].
 - The ring (uncore) is a floor: at 40x its requested voltage kept board Vcore near 1.30 V below about 53x allowed [MEASURED lnx 2026-10-03].
 - **Lowering a unit that does not set the maximum does not lower Vcore.** Lowering the highest-voltage points lowers VccIA for the whole package
-  [tuning-results.md §5 lesson 4; SPEC-v3 F6]. Judge a change by Vcore, power and temperature at a fixed, capped load, not by all-core MHz (which the
-  BIOS power and thermal limits set) [tuning-results.md §2].
+  [tuning-results.md §3 lesson 2; SPEC-v3 F6]. Judge a change by Vcore, power and temperature at a fixed, capped load, not by all-core MHz (which the
+  BIOS power and thermal limits set) [tuning-results.md §3].
 - The BIOS VccIA offset and load-line calibration (LLC) also move it; they are BIOS settings the app does not change.
 - Voltage ceilings: the default top is the top fused VID plus about 200 mV (reference P about 1.581 V, E about 1.270 V) [COMMUNITY]; the hardware
   maximum comes from mailbox command `0x28` (about 1.625 V P, 1.355 V E on the reference chip) [MEASURED win 2026-10-01]. The policy's `"auto"`
@@ -189,7 +189,7 @@ Example values from one chip (reference 285K, stock) [MEASURED lnx 2026-09-29, =
   55x / 48x [MEASURED lnx 2026-10-12].
 
 ## 11. What survives a reboot
-Mailbox changes are volatile. Reference chip, per boot type [MEASURED lnx 2026-10-02, win 2026-10-02/10-03, platform-285k.md §7]:
+Mailbox changes are volatile. Reference chip, per boot type [MEASURED lnx 2026-10-02, win 2026-10-02/10-03, platform-arl-s.md §7]:
 
 | Event | Result |
 |---|---|
@@ -201,12 +201,12 @@ Re-apply (or "Restore accepted") after every boot. A cold boot is the guaranteed
 
 ## 12. Failure modes you have to design for
 - **Silent errors.** Unstable undervolts on the reference chip showed up as stress-test "CPU error detected" (wrong results) with **no** machine-check or
-  WHEA event and no system error [MEASURED win 2026-10-04, tuning-results.md §3]. A clean kernel log is therefore not evidence of stability. See
+  WHEA event and no system error [MEASURED win 2026-10-04, tuning-results.md §1]. A clean kernel log is therefore not evidence of stability. See
   [08](08-stability-testing.md).
 - **Weak tests passed what a strong test failed.** On the reference chip OCCT SSE for 10-15 minutes, a 20-minute CPU+RAM run, clock cycling and
   per-core `stress-ng --verify` sweeps all passed states that a 60-minute OCCT Linpack 2021 run failed [MEASURED win 2026-10-04].
 - **E-core low points.** Offsetting the E-cluster 40x point by -20 mV caused OCCT errors on the reference chip; bisecting ruled out the ring and VccIA
-  settings [MEASURED lnx 2026-10-02, tuning-results.md §4]. The app warns on that point (`E40_OFFSET`, labelled a community hint).
+  settings [MEASURED lnx 2026-10-02, platform-arl-s.md §3]. The app warns on that point (`E40_OFFSET`, labelled a community hint).
 - **E-core high voltage.** E-core WHEA reports are reported above about 1.2 V [COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/].
 - **A failing run does not name a core.** OCCT named "core 0" when core 0 was at stock and the offset on an E-cluster was the cause: bisect by reverting
   groups of offsets [MEASURED win 2026-10-04].
@@ -219,20 +219,20 @@ Re-apply (or "Restore accepted") after every boot. A cold boot is the guaranteed
 Not written by the tool: BIOS settings (VccIA offset, load-line calibration, ring/NGU/D2D ratios, VccSA, memory), static/override voltage, the GT
 (graphics) and system-agent domains, and persistent firmware variables. The GUI does not tune the ring or NGU (SPEC §2: ring/NGU writes are out of v1); the command line can write a ring V/F point offset
 (`point-offset --p1 2`, [10](10-cli-reference.md)). PL1/PL2 are not in the GUI either (SPEC §2); on the reference machine Linux powercap changed them at
-runtime because the lock bit was 0 [MEASURED lnx 2026-10-08, platform-285k.md].
+runtime because the lock bit was 0 [MEASURED lnx 2026-10-08, platform-arl-s.md §12].
 
 ## 14. Key facts at a glance
 | Fact | Tag and source |
 |---|---|
 | Every mailbox request, reads included, is a WRMSR to MSR `0x150` | [DECOMPILED registers.md] registers.md "OC mailbox" |
-| P-core and E-cluster have fixed fused V/F points that accept offsets only (reference: P 8, E 6) | [MEASURED lnx 2026-10-02] platform-285k.md §3 |
+| P-core and E-cluster have fixed fused V/F points that accept offsets only (reference: P 8, E 6) | [MEASURED lnx 2026-10-02] platform-arl-s.md §3 |
 | Adaptive target voltage is active on the OC point only; it needs an OC ratio above the top fused ratio | [MEASURED lnx 2026-10-11] tuning-results.md |
 | `P2 = 0` offset = whole-curve offset; without an OC point a written target is dropped | [MEASURED lnx 2026-10-11] tuning-results.md |
-| Hardware clamps V(n) >= V(n-1); deeper offsets are silently raised | [MEASURED lnx 2026-10-02] platform-285k.md §3 |
+| Hardware clamps V(n) >= V(n-1); deeper offsets are silently raised | [MEASURED lnx 2026-10-02] platform-arl-s.md §3 |
 | Between points voltage interpolates (54x = midpoint of 53x/55x) | [MEASURED lnx 2026-10-03 / 2026-10-11] |
 | Board Vcore tracks the highest allowed VID (+ about 0.1 V), not the active ones | [MEASURED lnx 2026-10-03], hypothesis on 3+ points |
-| Cold boot clears all runtime changes; warm reboot keeps part | [MEASURED lnx/win 2026-10-02] platform-285k.md §7 |
-| Unstable undervolts fail silently (no WHEA/MCE); only a long Linpack-class run caught them | [MEASURED win 2026-10-04] tuning-results.md §3 |
+| Cold boot clears all runtime changes; warm reboot keeps part | [MEASURED lnx/win 2026-10-02] platform-arl-s.md §7 |
+| Unstable undervolts fail silently (no WHEA/MCE); only a long Linpack-class run caught them | [MEASURED win 2026-10-04] tuning-results.md §1 |
 | UVP and OC Lock must be off or writes are refused | [DECOMPILED] registers.md return codes `0x13`, `0x01` |
 
 Next: [05 Measuring curves](05-measuring-curves.md) · Previous: [03 First run](03-first-run.md)

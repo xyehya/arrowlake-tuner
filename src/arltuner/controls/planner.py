@@ -1,7 +1,7 @@
 """Pure planner: profile + topology + words read from the core -> ordered, pre-checked mailbox request sequence. No I/O.
 
-XTU's per-core Apply, as **measured** on this system (``[MEASURED win 2026-10-01]``, ``docs/knowledge/windows-path.md`` S-03d,
-S-04...S-07; registers.md "Measured via XTU's level-4 log"), is reproduced here:
+XTU's per-core Apply, as **measured** on this system (``[MEASURED win 2026-10-01]``, S-03d,
+S-04...S-07; ``docs/knowledge/registers.md`` "Measured via XTU's level-4 log"), is reproduced here:
 
 1. read cmd ``0x14`` (P1=0, P2=0) once, on the first target CPU;
 2. if bit 3 (PerCore Voltage Enable) is clear, write cmd ``0x15`` with ``old | 0x8`` (XTU skips it when the bit is set; ``0x14`` is

@@ -1,6 +1,6 @@
 """T-025 controls tests: per-V/F-point offsets (``[[point]]``) through the planner, ``apply_profile``, the REAL guard and the simulator.
 
-Measured (``[MEASURED lnx 2026-10-02]``, docs/knowledge/platform-285k.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (46x, V target 0, offset 0), ``0x10
+Measured (``[MEASURED lnx 2026-10-02]``, examples/reference-285k/notes/platform.md section 3, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (46x, V target 0, offset 0), ``0x10
 P2=7`` -> rc ``0x11``. Whether the hardware accepts a point write on Linux is ``[UNVERIFIED]``: these tests prove what arltuner sends, in which order, and
 what it refuses -- against the simulator's own SIM-ONLY rule set.
 """

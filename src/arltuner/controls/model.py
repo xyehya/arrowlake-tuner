@@ -4,7 +4,7 @@ Pure data, no I/O. Facts: ``docs/knowledge/registers.md`` ("V/F data word", "XTU
 rules: ``docs/SAFETY.md`` ("Write-session protocol (T2)", "OC mailbox rule": every request, reads included, is a WRMSR); guard
 semantics: ``docs/tasks/T-013-guard.md`` (every executed request counts toward the session limit, read-backs do not).
 
-T-021: a per-core step list is XTU-shaped (``[MEASURED win 2026-10-01]``, ``docs/knowledge/windows-path.md`` S-04...S-07): reads
+T-021: a per-core step list is XTU-shaped (``[MEASURED win 2026-10-01]``, ``docs/knowledge/registers.md`` "Measured via XTU's level-4 log on Windows" (S-04...S-07)): reads
 ``0x10``, ``0x1C``, ``0x09 P1=0x11``, ``0x26`` of the core, then the writes ``0x11`` (full word), ``0x1D`` (= its ratio) and ``0x27``
 (= the ``0x26`` word).
 

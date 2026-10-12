@@ -1,7 +1,7 @@
 """T-021 tests for the measured baseline (``msr/measured_baseline.py``), ``SimConfig.measured()`` and the new simulator semantics
 (0x1C/0x1D favored word, 0x26/0x27 granular word, per-CPU 0x09 fused point and 0x28, ``reject_zero_fields``, ``fixed_reads``).
 
-The reference values are transcribed from docs/knowledge/windows-path.md S-03d (LP-indexed, Windows numbering) and S-04...S-07;
+The reference values are transcribed from docs/knowledge/registers.md level-4 log section, S-03d (LP-indexed, Windows numbering) and S-04...S-07;
 the module under test stores them in Linux CPU numbering, so the cross-check goes through the order-preserving LP map.
 Everything here is simulator-only; the simulator's rule behaviour (which rc for which violation) is SIM-ONLY, not a hardware fact.
 """

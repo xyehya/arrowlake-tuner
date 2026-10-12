@@ -8,7 +8,7 @@ For each tuning unit (a P-core, or an E-cluster) and each ratio, the tool caps t
 MSR `0x198` bits 47:32 divided by 8192 V, together with the running ratio in bits 15:8 [MEASURED lnx 2026-09-29, registers.md]. The result is the
 real volts-against-frequency curve *as currently tuned*, offsets included (SPEC-v3 §3).
 
-- It is a **request**, not the voltage the regulator delivers. No delivered-voltage telemetry exists [MEASURED lnx 2026-10-01, platform-285k.md §5].
+- It is a **request**, not the voltage the regulator delivers. No delivered-voltage telemetry exists [MEASURED lnx 2026-10-01, platform-arl-s.md §5].
 - Measuring sends **no mailbox traffic and writes no MSR.** The only writes are cpufreq sysfs limits, journaled first and restored when the run ends,
   is cancelled, fails, or at the next helper start if the helper died mid-run (`ops_measure.py`).
 - The measured curve is a tuning input: the Tune page predicts the effect of an offset on top of your **baseline** curve.
@@ -88,7 +88,7 @@ STATE.md].
 
 ## 5. Example: a stock curve from one chip
 Quick curve, cold boot, all offsets 0, requested VID (V) at ratio, single-unit load. **Example values from one chip** (reference 285K)
-[MEASURED lnx 2026-10-11 18:17 UTC, tuning-results.md]; `-` = the point is above what that core runs:
+[MEASURED lnx 2026-10-11 18:17 UTC, examples/reference-285k/notes/platform.md §6]; `-` = the point is above what that core runs:
 
 | Unit | 8x | 20x | 30x | 48x | 53x | 55x | 56x | 57x |
 |---|---|---|---|---|---|---|---|---|

@@ -17,7 +17,7 @@ Fix what the real Quick runs showed (`docs/knowledge/tuning-results.md`, 19:06 U
    point, `"oc"` for the OC ratio) so the UI can mark fused vs in-between ratios.
 
 ## Read first
-`docs/knowledge/tuning-results.md` (2026-10-11 sections) · `docs/knowledge/platform-285k.md` §3 · `docs/ARCHITECTURE.md` contract 9 + addenda ·
+`docs/knowledge/tuning-results.md` (2026-10-11 sections) · `docs/knowledge/platform-arl-s.md` §3 · `docs/ARCHITECTURE.md` contract 9 + addenda ·
 `src/arltuner/helper/ops_measure.py` · `src/arltuner/vfdump.py` (measure) · `src/arltuner/curves/` · `src/arltuner/telemetry/msrio.py`.
 
 ## Owns
