@@ -18,7 +18,8 @@ CSS = (WEB / "style.css").read_text(encoding="utf-8")
 
 # Ops the page may name at a call site: contract 8 reads, contract 9 (SPEC-v3) measure / curves / memory / tune / profiles, and cancel. Nothing else.
 ALLOWED_OPS = {"preflight", "audit.tail", "telemetry.start", "cancel", "mem.read", "vf.measure", "curves.list", "curves.get", "curves.update",
-               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save", "profiles.accept", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list"}
+               "curves.delete", "tune.read", "tune.plan", "tune.apply", "profiles.list", "profiles.save", "profiles.accept", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list",
+               "profiles.fingerprint"}  # G-141: a file beside the accepted state, never the hardware
 # Raw contract 8 write / frequency ops stay out of the page (it uses the tune.* ops instead). G-119: the stress ops (no mailbox, no MSR write) are the
 # Stress tab's.
 FORBIDDEN_OPS = ("apply", "restore", "plan", "vf.dump", "telemetry.stop", "freq.cap", "freq.restore")

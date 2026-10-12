@@ -5007,6 +5007,19 @@
     }
   }
 
+  // profiles.fingerprint (G-141): fingerprint.json beside the existing accepted state, from this boot's read; the accepted tuning stays as it is.
+  async function recordFingerprint() {
+    if (idleGate() !== "") return;
+    const { status, body } = await api("profiles.fingerprint", {});
+    if (status === 200 && body.ok && isObj(body.result)) {
+      const r = body.result;
+      setText("pr-status", "CPU fingerprint recorded (" + (r.fingerprint === "complete" ? "complete" : String(r.fingerprint)) + ", " + r.cpus + " CPUs) next to the accepted state (" +
+        (Array.isArray(r.accepted) ? r.accepted.join(" \u2192 ") : "") + "). Copy the accepted directory to Windows for the restore there.");
+    } else {
+      setText("pr-status", "Fingerprint not recorded: " + (isObj(body.error) && typeof body.error.message === "string" ? body.error.message : errText(body)));
+    }
+  }
+
   // The stored read's comparison with the accepted words, redone by the helper (tune.last) after the accepted state changed.
   async function refreshAcceptedCompare() {
     const { status, body } = await api("tune.last", {});
@@ -5020,6 +5033,7 @@
 
   function initProfiles() {
     $("btn-pr-accept-read").addEventListener("click", () => acceptState(null));
+    $("btn-pr-fingerprint").addEventListener("click", recordFingerprint);
     $("btn-pr-refresh").addEventListener("click", () => { PR.info = {}; loadProfiles(); });
     $("pr-name").addEventListener("input", () => { updateSaveState(); });
     $("btn-pr-save").addEventListener("click", saveProfile);

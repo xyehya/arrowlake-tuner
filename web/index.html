@@ -405,7 +405,8 @@
       <article class="card pr-chain-card" id="pr-chain-card" hidden>
         <div class="card-head"><h2>Accepted state</h2><span class="muted" id="pr-chain-note"></span></div>
         <ol class="pr-chain" id="pr-chain" aria-label="Accepted profiles in the order Restore accepted applies them"></ol>
-        <div class="row-tight"><button type="button" class="pr-act" id="btn-pr-accept-read" title="Records what the CPU holds now (the last read) as the accepted state. Nothing is written to the CPU.">Set the current state as accepted</button></div>
+        <div class="row-tight"><button type="button" class="pr-act" id="btn-pr-accept-read" title="Records what the CPU holds now (the last read) as the accepted state. Nothing is written to the CPU.">Set the current state as accepted</button>
+          <button type="button" class="pr-act" id="btn-pr-fingerprint" title="Records this CPU's identity and each core's fused top point (from the last read) next to the accepted state, for the Windows restore. The accepted tuning is not changed and nothing is written to the CPU.">Record CPU fingerprint for Windows</button></div>
       </article>
       <article class="card pr-list-card">
         <div class="card-head"><h2>Profiles</h2><button type="button" id="btn-pr-refresh">Refresh</button></div>
