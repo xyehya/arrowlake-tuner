@@ -65,6 +65,12 @@ Causality unproven; the mailbox burst was the only identified low-level mutation
 - The first mailbox transaction ever sent from arltuner is a single core-pinned `cmd 0x10` read on one CPU (spec: T-007, after T-003), followed by a dwell and a health delta — not a batch.
 - **Limits survive process boundaries (T-016):** the guard reads the audit log (`/var/lib/arltuner/audit.jsonl` when installed, else `$XDG_STATE_HOME/arltuner/audit.jsonl`, D-041) before every operation: a **cross-process dwell** (`min_dwell_s`, default 60 s since the last attempt by *any* process; a future-dated last attempt is refused) and a **per-boot cap** (`max_operations_per_boot`, default 12; reads count, read-backs don't). `apply` budgets the whole plan against the remaining per-boot operations **before sending anything**, so it cannot stop half-way on `BOOT_LIMIT`.
 - **`AUDIT_UNAVAILABLE` means the log cannot be evaluated, so nothing is sent.** Recovery is a human act: inspect the file, remove only a malformed line (a crash-truncated *last* line is tolerated; one that later gets a record appended becomes a malformed middle line); **never delete or truncate the log to get past a refusal** — that would erase the history the limits rely on. Reboot = new per-boot count, but the dwell still applies.
+- **Known limitation: the health gate sees only what happens inside its window (security review 2026-10-12, finding 14, D-042).** The gate compares kernel
+  taint / MCE / WHEA-class counters taken before and after one transaction, after the dwell. A fault that shows later (an instability that needs load, minutes
+  after the write) is not seen by it; it is caught by the stress screens (Stress tab, accept only after a clean run) and bounded by "revert = cold boot".
+  The gate fails closed on anything it cannot read, but a clean delta is evidence about that window, not proof that the setting is stable. The audit log has
+  no size cap and is never truncated by the tools (see above): it grows by roughly one short line per request, so size is a housekeeping matter for the
+  operator (inspect before ever editing it), not a reason for the tools to drop history.
 
 ## Windows-side rules (`win`)
 - Observing XTU is T0/T1. Pressing Apply in XTU while capturing is a human action (T2) — the orchestrator only
