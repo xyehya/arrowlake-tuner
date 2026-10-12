@@ -245,7 +245,7 @@ class TestBrowser(unittest.TestCase):
             for i, ratio in enumerate((56, 57)):
                 text = over.nth(i).inner_text()
                 self.assertIn(f"{ratio}×", text)
-                self.assertIn("fused · offset only · above this core’s 55× limit", text)
+                self.assertIn("above 55× limit", text)
                 self.assertNotIn("→", text)
                 self.assertFalse(over.nth(i).locator("select").is_disabled())   # still editable
             self.assertEqual(self.points(page, "P0").locator(".tn-pt.unreach").count(), 0)

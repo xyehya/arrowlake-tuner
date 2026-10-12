@@ -167,7 +167,7 @@ class TestBrowser(unittest.TestCase):
             pts = page.locator("#tn-pts-P0 .tn-pt.unreach")
             self.assertEqual(pts.count(), 2)
             for i in range(2):
-                self.assertIn("fused · offset only · above this core’s 55× limit", pts.nth(i).inner_text())
+                self.assertIn("above 55× limit", pts.nth(i).inner_text())
                 self.assertNotIn("→", pts.nth(i).inner_text())
                 self.assertNotIn("(fused)", pts.nth(i).inner_text())
 
@@ -212,7 +212,7 @@ class TestBrowser(unittest.TestCase):
             for i, ratio in enumerate((56, 57)):
                 t = pts.nth(i).inner_text()
                 self.assertIn(f"{ratio}×", t)
-                self.assertIn("fused · offset only · above this core’s 55× limit", t)
+                self.assertIn("above 55× limit", t)
                 self.assertNotIn("→", t)
                 self.assertNotIn("(fused)", t)
 

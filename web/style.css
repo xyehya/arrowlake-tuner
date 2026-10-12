@@ -719,6 +719,8 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 /* ---- CPU facts (G-115, SPEC-v3 section 9): point cells, clamp/reach marks, OC point, VccIA, turbo tables ---- */
 .tn-pt { min-width: 118px; }
 .tn-pt-tag { font-size: 11px; line-height: 1.2; }
+/* G-139: every V/F point cell of a unit has the same width, whatever its tag or predicted-voltage text says (the text wraps) */
+.tn-points > .tn-pt:not(.tn-oc) { flex: 0 0 142px; width: 142px; box-sizing: border-box; overflow-wrap: anywhere; }
 .tn-pt-eff { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--text); min-height: 1.2em; }
 .tn-pt.unreach { background: transparent; border-style: dashed; }
 .tn-pt.unreach > .tn-pt-ratio, .tn-pt.unreach > .tn-pt-eff, .tn-pt.unreach > .tn-pt-tag { opacity: 0.55; }

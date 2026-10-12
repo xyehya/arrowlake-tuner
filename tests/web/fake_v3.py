@@ -292,6 +292,7 @@ class V3Ops:
         self.last_read_at: float | None = None        # G-123: when the stored read (tune.last) was made, epoch seconds
         self.last_applied_at: float | None = None     # G-123: set when an apply changed the words after that read
         self.last_read_refused = False                # G-123: tune.last answers available:false although a read happened (another boot)
+        self.busy_first: dict[str, int] = {}          # G-139: op -> the first N calls of it are refused BUSY (the real helper runs at most 4 read-only ops at once; the page asks 6 on load)
         self.measure_delay = 0.0          # seconds between vf.point events
         self.measure_gate = threading.Event()
         self.measure_gate.set()
@@ -391,6 +392,9 @@ class V3Ops:
 
     # ---- dispatcher ----
     def handle_v3(self, rid: str, op: str, args: dict) -> None:
+        if self.busy_first.get(op, 0) > 0:
+            self.busy_first[op] -= 1
+            return self._err(rid, "BUSY", "4 read-only operations are already running; try again", state="idle")
         if op in self.replay:   # dev aid: answer with a result captured from the real simulator helper (shape checks without re-implementing it)
             return self._reply(rid, True, result=self.replay[op])
         try:

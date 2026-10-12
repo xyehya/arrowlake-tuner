@@ -22,6 +22,9 @@
     hbState: null, hbOpId: null, opsUsed: null, opsBudget: null, hbAt: 0,
     opsHist: [],           // [{t, v}]: mailbox operations used this boot, noted whenever the heartbeat's count changes (the session sparkline)
     lastTried: false,      // tune.last answered once (a reconnect must not wipe the editor)
+    lastBusy: false,       // a tune.last call is in flight
+    lastAt: 0,             // when tune.last was last asked (the Tune tab asks again no sooner than 2 s later)
+    lastNote: false,       // tn-status holds the page's own "fetching the kept read" note
     teleAt: 0,
     intervalS: 1,          // the sampler interval this page asked for
     opId: null,            // request id of the long op (tune.read, vf.measure, tune.apply) this page started, or adopted after a reload
@@ -112,7 +115,22 @@
   }
 
   // ---- network ---------------------------------------------------------------------------------------------------------------------
-  async function api(op, args) {
+  // G-139: the helper runs at most 4 read-only ops at once and answers the others BUSY ("try again"); the page asks six of them the moment the event stream opens. A BUSY answer to one of
+  // these READ-ONLY ops is therefore asked again, with a growing pause. Nothing else is ever repeated automatically: not tune.read / tune.plan / tune.apply, measure, stress.start,
+  // profiles.save / profiles.accept, or anything that writes or costs mailbox operations (a repeat there is the user's decision).
+  const RETRY_BUSY_OPS = new Set(["preflight", "audit.tail", "mem.read", "curves.list", "curves.get", "profiles.list", "profiles.get", "tune.last", "stress.list"]);
+  const BUSY_RETRY_MS = [300, 700, 1500, 3000, 5000, 8000];
+  // opts.onBusy(n, body) (optional) is called before each repeat, n = the repeat about to happen (1-based).
+  async function api(op, args, opts) {
+    for (let n = 0; ; n++) {
+      const r = await apiOnce(op, args);
+      const busy = r.status === 409 && isObj(r.body.error) && r.body.error.code === "BUSY";
+      if (!busy || !RETRY_BUSY_OPS.has(op) || n >= BUSY_RETRY_MS.length || S.sessionLost) return r;
+      if (opts && typeof opts.onBusy === "function") opts.onBusy(n + 1, r.body);
+      await new Promise((res) => setTimeout(res, BUSY_RETRY_MS[n]));
+    }
+  }
+  async function apiOnce(op, args) {
     let resp;
     try {
       resp = await fetch("/api/call", {
@@ -351,6 +369,7 @@
     renderCurves();
     renderStress();
     renderTunePreview();
+    renderReadCost();
     updateGate();
   }
 
@@ -1337,7 +1356,18 @@
     const n = UNIT_IDS.reduce((t, u) => t + (w.units[u] ? w.units[u].points.length + (w.units[u].oc ? 1 : 0) : 0), 0);
     return n > 0 ? n : null;
   }
-  function readCostText() { return readCost() === null ? "about one operation per V/F point of each unit" : "about " + readCost() + " operations (what the last read used)"; }
+  // G-139: before any read the text is worked out from the live unit list: one operation per V/F point of each unit (the point count is only known after a read), plus the extra reads
+  // per read (G-137): fused point 0x09 per P-core and per E-cluster, favored ratio 0x1C per P-core and per E-cluster, the OC limits 0x01 and 0x28 per kind, and the four turbo-table MSRs.
+  function readExtraOps() {
+    const nP = unitsOfKind("P").length, nE = unitsOfKind("E").length, kinds = (nP ? 1 : 0) + (nE ? 1 : 0);
+    return nP + nE + nP + nE + 2 * kinds + 4;
+  }
+  function readCostText() {
+    if (readCost() !== null) return "about " + readCost() + " operations (what the last read used)";
+    const nP = unitsOfKind("P").length, nE = unitsOfKind("E").length;
+    return "about one operation per V/F point of each of the " + UNIT_IDS.length + " units (" + nP + (nP === 1 ? " P-core, " : " P-cores, ") + nE + (nE === 1 ? " E-cluster)" : " E-clusters)") +
+      ", plus " + readExtraOps() + " for the fused points, favored ratios, limits and turbo tables";
+  }
   function renderReadCost() { setText("tn-cost-n", readCostText()); }
   // Mailbox reads (tune.read): preflight mode write, writes allowed, an idle helper with a fresh heartbeat, and the upper cost bound must fit.
   function gateReason() {
@@ -1555,12 +1585,28 @@
   }
 
   // On load: this boot's stored read (tune.last). No mailbox operation: the helper kept the last complete read in a root-owned file.
+  // G-139: the api helper asks again when the helper answers BUSY (see RETRY_BUSY_OPS); the status line says so meanwhile, and the Tune tab asks again when it opens with nothing shown.
   async function loadLastRead() {
-    if (T.words || S.lastTried) return;
-    const { status, body } = await api("tune.last", {});
-    if (status !== 200 || !body.ok || !isObj(body.result)) return;
+    if (T.words || S.lastTried || S.lastBusy) return;
+    S.lastBusy = true;
+    S.lastAt = Date.now();
+    let res;
+    try {
+      res = await api("tune.last", {}, { onBusy: (n, b) => {
+        if (T.words || ($("tn-status").textContent !== "" && !S.lastNote)) return;   // never over a message of an operation
+        setText("tn-status", "Fetching the read kept by the helper (it was busy: " + errText(b) + "). Trying again."); S.lastNote = true;
+      } });
+    } finally { S.lastBusy = false; }
+    const { status, body } = res;
+    if (T.words) return;   // a read finished meanwhile
+    if (status !== 200 || !body.ok || !isObj(body.result)) {
+      if (S.sessionLost || status === 401) return;
+      if ($("tn-status").textContent === "" || S.lastNote) { setText("tn-status", "The read kept by the helper could not be fetched (" + errText(body) + "). Open this tab again to retry, or press Read ratios & voltages."); S.lastNote = true; }
+      return;
+    }
     S.lastTried = true;
-    if (T.words || body.result.available !== true || !isObj(body.result.result)) return;   // a read finished meanwhile, or none exists for this boot
+    if (S.lastNote) { setText("tn-status", ""); S.lastNote = false; }
+    if (body.result.available !== true || !isObj(body.result.result)) return;   // none exists for this boot
     setWords(body.result.result, { at: body.result.at, applied_at: body.result.applied_at });
     setText("tn-status", "Showing the read kept by the helper (no mailbox operations used). " + (T.words && T.words.appliedSince ? "It was updated from the last apply's read-back. " : "") + "Press Re-read ratios & voltages for a fresh read.");
     renderReadCost();
@@ -3082,8 +3128,9 @@
     const over = def.units.filter((u) => unitKind(u) === "P" && isNum(stockMaxOf(u)) && ratio > stockMaxOf(u));
     const all = over.length === def.units.length && over.length > 0;
     const lims = Array.from(new Set(over.map(stockMaxOf))), limTxt = lims.length === 1 ? lims[0] + "\u00d7 " : "";
-    c.tag.textContent = FUSED_TAG + (all ? " \u00b7 above " + (def.units.length === 1 ? "this core\u2019s " : "these cores\u2019 ") + limTxt + "limit" : "");
-    c.tag.title = all ? "Fused into every P-core\u2019s table, but above this core\u2019s own 0x1C ratio" + (limTxt ? " (" + limTxt.trim() + ")" : "") + ". The offset can be set and is written like any other; no voltage is predicted, and nothing is claimed about whether the core can run this ratio." : "";
+    // G-139: a short tag ("above 55× limit") so the cell keeps the width of its neighbours; the whole sentence is the tooltip.
+    c.tag.textContent = all ? "above " + limTxt + "limit" : FUSED_TAG;
+    c.tag.title = all ? FUSED_TAG + ". Fused into every P-core\u2019s table, but above " + (def.units.length === 1 ? "this core\u2019s" : "these cores\u2019") + " own 0x1C ratio" + (limTxt ? " (" + limTxt.trim() + ")" : "") + ". The offset can be set and is written like any other; no voltage is predicted, and nothing is claimed about whether the core can run this ratio." : "";
     c.lab.classList.toggle("unreach", all);
     c.reach.hidden = over.length === 0 || all;
     if (over.length && !all) {
@@ -3233,7 +3280,13 @@
       r.rHint.textContent = info.text + inactiveNote(def.units);
       r.rNote.textContent = lim ? r.rWhy : (T.words.limitsNote || NO_LIMITS);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
-      setSel(r.vtSel, effVtv, V_TOL, (v) => v.toFixed(4) + " V");
+      // G-139: while the ratio is no OC ratio, a target kept in the word does nothing: the disabled control says "not set" (hex view: the kept value, marked "(inactive)"), never "· now"
+      const vtIdle = info.cls !== "oc" && effVtv !== MIXED && isNum(effVtv) && !def.units.some((u) => T.draft[u] && T.draft[u].vt !== undefined);
+      setSel(r.vtSel, vtIdle && !T.hex ? null : effVtv, V_TOL, (v) => v.toFixed(4) + " V");
+      for (const o of Array.from(r.vtSel.options)) {
+        if (o.dataset.base === undefined) o.dataset.base = o.textContent;
+        o.textContent = vtIdle && T.hex && o.selected ? o.dataset.base.replace(/\s+·\s*(now|edit)$/, "") + " (inactive)" : o.dataset.base;
+      }
       const vtCh = !(effVtv === curVtv || (isNum(effVtv) && isNum(curVtv) && same(effVtv, curVtv, V_TOL)));
       r.vtCell.classList.toggle("changed", vtCh);
       const vtNo = !lim ? NO_LIMITS : info.cls !== "oc" ? NEED_RATIO : !isNum(lim.vtMax) ? "your policy states no v_target_max_mv (/etc/arltuner/policy.toml)" : "";
@@ -4217,6 +4270,7 @@
     T.chart = makeVfChart($("tn-chart"), { label: "Measured curve with the predicted curve for the pending edit" });
     segmented($("tn-scope"), [{ value: "simple", label: "All-Core" }, { value: "unit", label: "Per-Core" }], T.scope, (m) => { T.scope = m; renderScopeNote(); buildRows(); });
     $("btn-tune-read").addEventListener("click", startRead);
+    renderReadCost();
     $("btn-tune-cancel").addEventListener("click", cancelOp);
     $("btn-tn-hex").addEventListener("click", () => {
       T.hex = !T.hex;
@@ -4929,7 +4983,11 @@
   // ---- tab entry hooks -----------------------------------------------------------------------------------------------------------------------------
   function onTabShown(name) {
     if (name === "curves") { if (!CV.loaded && S.sseUp) loadCurves(false); renderCurves(); }
-    else if (name === "tune") { if (!CV.loaded && S.sseUp) loadCurves(false); renderTunePreview(); updateTuneFoot(); }
+    else if (name === "tune") {
+      if (!CV.loaded && S.sseUp) loadCurves(false);
+      if (!T.words && S.sseUp && !S.lastBusy && Date.now() - S.lastAt > 2000) { S.lastTried = false; loadLastRead(); }   // G-139: nothing shown yet: ask for the kept read again (no mailbox operation)
+      renderTunePreview(); updateTuneFoot();
+    }
     else if (name === "stress") { if (S.sseUp && !ST.loaded) loadStressList(); renderStress(); }
     else if (name === "profiles") { if (S.sseUp) loadProfiles(); updateSaveState(); }
     else if (name === "audit") loadAudit();
