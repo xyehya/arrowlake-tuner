@@ -5,8 +5,6 @@
 // All data is written with textContent; no HTML strings are ever parsed and there is no inline style: geometry and colour go through SVG attributes
 // and classes only (CSP style-src 'self'). Contracts 8 and 9: docs/ARCHITECTURE.md.
 (function () {
-  const COST_LOW = 124;   // tune.read estimate, mailbox operations: 112 V/F reads + 12 fused-point reads (G-123; the favored-ratio reads come on top)
-  const COST_HIGH = 136;
   const HEARTBEAT_STALE_MS = 7000;  // the helper beats every 2 s
   const EVENTS_URL = "/api/events";
   const HISTORY_MS = 900000;        // client-side history window: 15 min (wall-clock time, not sample counts)
@@ -132,7 +130,7 @@
 
   // detail.check values of the measure / curves / profiles ops (G-111), in words
   const CHECK_TEXT = {
-    NO_CPUFREQ: "this machine exposes no cpufreq controls, so the cores cannot be capped",
+    NO_CPUFREQ: "the system exposes no cpufreq controls, so the cores cannot be capped",
     LOAD_GENERATOR: "the load generator could not be started (stress-ng missing or refused)",
     MEASURE_UNAVAILABLE: "measuring is not available right now (see Preflight in System)",
     JOURNAL_UNAVAILABLE: "the cpufreq restore journal cannot be written, so nothing was changed",
@@ -140,9 +138,9 @@
     EXISTS: "that name is already taken",
     NO_SUCH_CURVE: "there is no stored curve with that id",
     POLICY_RANGE: "a value is outside the policy range",
-    NO_READ: "this helper session has not read the tuning words yet: use Read tuning words first",
+    NO_READ: "this helper session has not read the ratios and voltages yet: use Read ratios & voltages first",
     NOTHING_TO_DO: "nothing would change",
-    NO_ACCEPTED_STATE: "no accepted state is installed on this machine",
+    NO_ACCEPTED_STATE: "no accepted state is installed",
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
     SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
     BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
@@ -330,6 +328,8 @@
   const CHECK_ORDER = { refuse: 0, "read-only": 1, unknown: 2, missing: 3, pass: 4 };
 
   function renderPreflight(r) {
+    FAV.pre = isObj(r) ? favFromTopology(r.topology) : null;   // absent topology: no favored cores from here (the read may still name some)
+    recomputeFav();
     if (!isObj(r) || typeof r.mode !== "string" || !Array.isArray(r.checks)) {
       S.mode = null; S.writesAllowed = null;
       setText("pf-summary", "The helper answered, but not with a full preflight report.");
@@ -362,9 +362,9 @@
       showBanner("b-readonly", "Read-only mode. Mailbox requests are disabled, so Tune cannot read or apply. Measuring and the dashboard still work. " + why.join(" | "));
     } else if (r.mode === "refuse") {
       const why = r.checks.filter((c) => c && c.status === "refuse").map((c) => c.name + ": " + c.reason);
-      showBanner("b-refuse", "Refused: the app cannot operate on this machine. " + why.join(" | "));
+      showBanner("b-refuse", "Refused: the app cannot operate on this system. " + why.join(" | "));
     } else if (S.writesAllowed === false) {
-      showBanner("b-readonly", "The helper does not permit mailbox requests (a preflight check is unknown), so reading and applying tuning words are disabled. Measuring still works. See System.");
+      showBanner("b-readonly", "The helper does not permit mailbox requests (a preflight check is unknown), so reading and applying ratios and voltages are disabled. Measuring still works. See System.");
     } else if (!S.sessionLost) {
       hideBanner();
     }
@@ -436,6 +436,7 @@
   }
 
   function renderHelper() {
+    if (T.words) renderProvenance();
     const used = S.opsUsed === null ? "n/a" : S.opsUsed;
     const cap = S.opsBudget === null ? "" : "Per-boot cap " + S.opsBudget + " (policy). The guard refuses past it; it is a limit, not a target.";
     setText("hb-state", S.hbState === null ? "n/a" : S.hbState);
@@ -473,6 +474,7 @@
     setTile("t-pkgw", pk.text, "W", pk.ok, pk.title);
     setTile("t-corew", cw.text, "W", cw.ok, cw.title);
     setTile("t-vcore", vc.text, "V", vc.ok, vc.title);
+    if (T.words) renderTuneVcore();
     const dr = reading(dram.read, 1), dw = reading(dram.write, 1);
     setTile("t-dram", dr.text + " / " + dw.text, "GB/s", dr.ok && dw.ok, dr.ok && dw.ok ? "" : (dr.ok ? dw.title : dr.title));
     const lim = reading(v.limit_reasons_raw);
@@ -602,7 +604,7 @@
 
   function probe(c) {
     const cpu = c.cpu;
-    setText("probe", c.name + ", cpu " + cpu + ": clock " + fmtReading(coreReading(cpu, "mhz"), 0, "MHz") + "; busy " +
+    setText("probe", c.name + coreMark(c) + ", cpu " + cpu + coreFavTitle(c) + ": clock " + fmtReading(coreReading(cpu, "mhz"), 0, "MHz") + "; busy " +
       fmtReading(coreReading(cpu, "busy"), 0, "%") + "; VID " + fmtReading(coreReading(cpu, "vid"), 3, "V") + "; temp " +
       fmtReading(coreReading(cpu, "temp"), 0, "°C") + ".");
   }
@@ -627,18 +629,19 @@
       const ref = tileRefs[c.cpu];
       if (!ref) continue;
       const x = reading(coreReading(c.cpu, V.metric), m.digits);
+      ref.name.textContent = c.short + coreMark(c);
       if (x.ok) {
         const col = rampAt(m.ramp, (x.value - rg.lo) / (rg.hi - rg.lo));
         ref.rect.setAttribute("fill", col.hex);
         ref.g.setAttribute("class", "tile tile-" + c.kind + (col.light ? " ink-dark" : ""));
         ref.val.textContent = c.kind === "P" ? x.text : (m.digits === 3 ? x.value.toFixed(2) : x.text);
-        ref.title.textContent = c.name + " (cpu " + c.cpu + "): " + x.text + " " + m.unit;
-        ref.g.setAttribute("aria-label", c.name + ", " + m.label + " " + x.text + " " + m.unit + ". Open in Cores.");
+        ref.title.textContent = c.name + coreMark(c) + " (cpu " + c.cpu + ")" + coreFavTitle(c) + ": " + x.text + " " + m.unit;
+        ref.g.setAttribute("aria-label", c.name + coreFavTitle(c) + ", " + m.label + " " + x.text + " " + m.unit + ". Open in Cores.");
       } else {
         ref.rect.setAttribute("fill", "url(#na-hatch)");
         ref.g.setAttribute("class", "tile tile-" + c.kind + " tile-na");
         ref.val.textContent = "n/a";
-        ref.title.textContent = c.name + " (cpu " + c.cpu + "): n/a, " + x.title;
+        ref.title.textContent = c.name + coreMark(c) + " (cpu " + c.cpu + ")" + coreFavTitle(c) + ": n/a, " + x.title;
         ref.g.setAttribute("aria-label", c.name + ", " + m.label + " not available: " + x.title + ". Open in Cores.");
       }
     }
@@ -898,7 +901,8 @@
       const tr = el("tr", "core-row k-" + c.kind);
       tr.tabIndex = 0;
       const nameCell = el("td", "core-name");
-      nameCell.append(el("span", "kind-dot k-" + c.kind), document.createTextNode(c.name));
+      const nameTxt = document.createTextNode(c.name);
+      nameCell.append(el("span", "kind-dot k-" + c.kind), nameTxt);
       const cpuCell = td(c.cpu, "n");
       const mhzCell = el("td", "bar-cell");
       const bar = sv("svg", { viewBox: "0 0 100 8", preserveAspectRatio: "none", "aria-hidden": "true", focusable: "false" }, "hbar");
@@ -915,7 +919,7 @@
       const pick = () => { V.selected = c.cpu; renderCoreSelection(); };
       tr.addEventListener("click", pick);
       tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
-      rowRefs[c.cpu] = { tr: tr, mhzNum: mhzNum, mhzCell: mhzCell, barFill: barFill, busy: busy, ratio: ratio, vid: vid, temp: temp, spark: spark,
+      rowRefs[c.cpu] = { tr: tr, nameCell: nameCell, nameTxt: nameTxt, mhzNum: mhzNum, mhzCell: mhzCell, barFill: barFill, busy: busy, ratio: ratio, vid: vid, temp: temp, spark: spark,
         cells: { busy: busy, ratio: ratio, vid: vid, temp: temp, spark: sparkCell } };
       return tr;
     }));
@@ -942,6 +946,8 @@
       const ref = rowRefs[c.cpu];
       if (!ref) continue;
       const x = reading(coreReading(c.cpu, "mhz"), 0);
+      ref.nameTxt.nodeValue = c.name + coreMark(c);
+      ref.nameCell.title = coreFavTitle(c).replace(/^, /, "");
       ref.mhzNum.textContent = x.text;
       ref.mhzNum.className = "bar-num" + (x.ok ? "" : " na");
       ref.mhzCell.title = x.title;
@@ -1084,7 +1090,49 @@
 
   // ---- tuning units (Contract 9: 12 curves = 8 P-cores + 4 E-clusters) and policy ranges (D-032) ---------------------------------------
   const UNIT_IDS = ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3"];
-  const FAVORED = ["P0", "P3"];
+  // Favored cores come from live data only (D-036): the preflight topology (CPPC performance or cpuinfo max frequency), else the 0x1C favored ratios of the
+  // last read (the P-cores whose ratio equals the highest, when they differ), else none. No core is favored by default.
+  const FAV_TEXT = { acpi_cppc: "favored core (highest CPPC performance)", cpuinfo_max_freq: "favored core (highest max frequency)", "0x1C": "favored core (0x1C favored ratio)" };
+  const FAV = { pre: null, read: null, ids: [], source: null, key: "|null" };   // pre: {ids, source} | null; read: [unit id] | null
+  function isFav(u) { return FAV.ids.indexOf(u) >= 0; }
+  function favMark(u) { return isFav(u) ? " \u2605" : ""; }
+  function favTitle(u) { return isFav(u) ? FAV_TEXT[FAV.source] || "favored core" : ""; }
+  function favFromTopology(topo) {
+    if (!isObj(topo) || !Array.isArray(topo.units)) return null;
+    const ids = topo.units.filter((x) => isObj(x) && x.favored === true && typeof x.id === "string" && x.id.charAt(0) === "P" && UNIT_IDS.indexOf(x.id) >= 0).map((x) => x.id);
+    // determined: the system had a source to judge by (an empty set then means every P-core is equal: none favored), so the read must not override it
+    return { ids: ids, source: topo.favored_source === "cpuinfo_max_freq" ? "cpuinfo_max_freq" : "acpi_cppc", determined: ids.length > 0 || typeof topo.favored_source === "string" };
+  }
+  function favFromRead(turbo) {   // {unit: ratio}: the P-cores at the highest favored ratio, only when the cores differ
+    if (!isObj(turbo) || !isObj(turbo.favored)) return null;
+    const ids = Object.keys(turbo.favored).filter((u) => isNum(turbo.favored[u]));
+    if (ids.length < 2) return [];
+    const hi = Math.max(...ids.map((u) => turbo.favored[u]));
+    return ids.every((u) => turbo.favored[u] === hi) ? [] : UNIT_IDS.filter((u) => ids.indexOf(u) >= 0 && turbo.favored[u] === hi);
+  }
+  function recomputeFav() {
+    let ids = [], source = null;
+    if (FAV.pre && FAV.pre.determined) { ids = FAV.pre.ids; source = ids.length ? FAV.pre.source : null; }
+    else if (FAV.read && FAV.read.length) { ids = FAV.read; source = "0x1C"; }
+    const key = ids.join(",") + "|" + source;
+    if (key === FAV.key) return;
+    FAV.key = key; FAV.ids = ids; FAV.source = source;
+    onFavoredChanged();
+  }
+  function onFavoredChanged() {   // the marks that were built once; paints that run on every tick or every render read FAV themselves
+    for (const b of document.querySelectorAll(".unit-chip[data-unit], .mm-tile[data-unit]")) {
+      const u = b.dataset.unit, n = b.querySelector(".uc-name, .mm-name");
+      if (n) n.textContent = u + favMark(u);
+      b.title = unitTileTitle(u);
+    }
+    if (CV.chart && V.tab === "curves") renderCurves(); else if (CV.chart) renderPresets();
+    if (T.words) buildRows();
+  }
+  function coreUnit(c) { return c.kind === "P" && /^\d+$/.test(String(c.cpu)) ? "P" + c.cpu : null; }   // a dashboard core -> its tuning unit (P-core n is unit Pn)
+  function coreMark(c) { const u = coreUnit(c); return u && isFav(u) ? " \u2605" : ""; }
+  function coreFavTitle(c) { const u = coreUnit(c); return u && isFav(u) ? ", " + favTitle(u) : ""; }
+  // The system's answer and the 0x1C favored ratios of the read disagree (an empty set counts: "none favored" against a core with a higher ratio).
+  function favMismatch() { return !!(FAV.pre && FAV.pre.determined && FAV.read && FAV.pre.ids.join() !== FAV.read.join()); }
   const POLICY = {
     offsetMin: -200, offsetMax: 200, offsetStep: 5,                 // mV
     vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005,     // V, adaptive target at the OC point
@@ -1096,6 +1144,7 @@
     const n = Number(id.slice(2));
     return [8 + 4 * n, 9 + 4 * n, 10 + 4 * n, 11 + 4 * n];
   }
+  function unitTileTitle(u) { return unitLabel(u) + " (cpu " + unitCpus(u).join(", ") + ")" + (isFav(u) ? ", " + favTitle(u) : ""); }
   function unitLabel(id) { return unitKind(id) === "P" ? "P-core " + id.slice(1) : "E-cluster " + id.slice(2); }
   const MINUS = "−";
   function fmtMv(x, digits) {
@@ -1197,11 +1246,21 @@
   function afterMissedResult(kind) {
     if (kind === "measure") { setText("cv-status", "The measurement ended while this page was away. Stored curves were reloaded."); loadCurves(true); }
     else if (kind === "stress") { ST.run = null; setText("st-status", "A stress screen ended while this page was away. It is in the list below."); renderStress(); loadStressList(); }
-    else if (kind === "commit") setText("tn-status", "An apply ended while this page was away. Read the tuning words to see where things stand.");
+    else if (kind === "commit") setText("tn-status", "An apply ended while this page was away. Read the ratios and voltages to see where things stand.");
     else { setText("tn-status", "A read ended while this page was away."); S.lastTried = false; loadLastRead(); }
   }
 
   // ---- gates ----------------------------------------------------------------------------------------------------------------------------
+  // What a read costs, from the last read: the helper's own count of the operations it used, else one per V/F point of the units read (+ the OC word of each unit); null before any read.
+  function readCost() {
+    const w = T.words;
+    if (!w) return null;
+    if (isObj(w.raw) && isNum(w.raw.ops_done) && w.raw.ops_done > 0) return w.raw.ops_done;
+    const n = UNIT_IDS.reduce((t, u) => t + (w.units[u] ? w.units[u].points.length + (w.units[u].oc ? 1 : 0) : 0), 0);
+    return n > 0 ? n : null;
+  }
+  function readCostText() { return readCost() === null ? "about one operation per V/F point of each unit" : "about " + readCost() + " operations (what the last read used)"; }
+  function renderReadCost() { setText("tn-cost-n", readCostText()); }
   // Mailbox reads (tune.read): preflight mode write, writes allowed, an idle helper with a fresh heartbeat, and the upper cost bound must fit.
   function gateReason() {
     if (S.sessionLost) return "Session ended.";
@@ -1212,7 +1271,8 @@
     if (!heartbeatFresh() || opsLeft() === null) return "Waiting for a helper heartbeat with the ops budget.";
     if (S.opId || S.submitting) return "A helper operation is running.";
     if (S.hbState !== "idle") return "The helper is " + S.hbState + ".";
-    if (opsLeft() < COST_HIGH) return "Does not fit: " + opsLeft() + " ops left, up to " + COST_HIGH + " needed.";
+    if (opsLeft() <= 0) return "No operations left in this boot's budget.";
+    if (readCost() !== null && opsLeft() < readCost()) return "Does not fit: " + opsLeft() + " ops left, about " + readCost() + " needed.";
     return "";
   }
 
@@ -1220,7 +1280,7 @@
   function idleGate() {
     if (S.sessionLost) return "Session ended.";
     if (!S.sseUp) return "Waiting for the event stream.";
-    if (S.mode === "refuse") return "Preflight refused this machine. See System.";
+    if (S.mode === "refuse") return "Preflight refused this system. See System.";
     if (!heartbeatFresh()) return "Waiting for a helper heartbeat.";
     if (S.opId || S.submitting) return "A helper operation is running.";
     if (S.hbState !== "idle") return "The helper is " + S.hbState + ".";
@@ -1387,7 +1447,7 @@
   function openDialog(d) { if (!d.open) d.showModal(); }
   function closeDialog(d) { if (d.open) d.close(); }
 
-  // ---- Tune: reading the tuning words (the old vf.dump) ---------------------------------------------------------------------------------
+  // ---- Tune: reading the ratios and voltages (the old vf.dump) ---------------------------------------------------------------------------------
   async function startRead() {
     if (gateReason() !== "") return;
     S.submitting = true;
@@ -1424,7 +1484,8 @@
     S.lastTried = true;
     if (T.words || body.result.available !== true || !isObj(body.result.result)) return;   // a read finished meanwhile, or none exists for this boot
     setWords(body.result.result, { at: body.result.at, applied_at: body.result.applied_at });
-    setText("tn-status", "Showing the read kept by the helper (no mailbox operations used). " + (T.words && T.words.appliedSince ? "It was updated from the last apply's read-back. " : "") + "Press Re-read tuning words for a fresh read.");
+    setText("tn-status", "Showing the read kept by the helper (no mailbox operations used). " + (T.words && T.words.appliedSince ? "It was updated from the last apply's read-back. " : "") + "Press Re-read ratios & voltages for a fresh read.");
+    renderReadCost();
   }
 
   function onReadResult(ev) {
@@ -1532,7 +1593,7 @@
       ch.lineEls = {};
       model.series.forEach((s) => {
         if (!s.pts.length) return;
-        const cls = "vc-line u-" + s.unit + (s.dash ? " dash" : "") + (FAVORED.indexOf(s.unit) >= 0 ? " fav" : "");
+        const cls = "vc-line u-" + s.unit + (s.dash ? " dash" : "") + (isFav(s.unit) ? " fav" : "");
         const p = sv("path", { d: s.pts.map((q, i) => (i ? "L" : "M") + ch.sx(q.mhz).toFixed(1) + " " + ch.sy(q.v).toFixed(1)).join("") }, cls);
         lines.append(p);
         ch.lineEls[s.key] = p;
@@ -1684,12 +1745,23 @@
     paintQueued: false,
   };
   V.cv = CV;
-  const PRESETS = [
-    { value: "all", label: "All", units: UNIT_IDS },
-    { value: "P", label: "P-cores", units: UNIT_IDS.slice(0, 8) },
-    { value: "E", label: "E-clusters", units: UNIT_IDS.slice(8) },
-    { value: "fav", label: "Favored", units: FAVORED, title: "The favored P-cores (P0 and P3)" },
-  ];
+  function presets() {   // the Favored preset exists only when favored cores were detected
+    const list = [
+      { value: "all", label: "All", units: UNIT_IDS },
+      { value: "P", label: "P-cores", units: UNIT_IDS.slice(0, 8) },
+      { value: "E", label: "E-clusters", units: UNIT_IDS.slice(8) },
+    ];
+    if (FAV.ids.length) list.push({ value: "fav", label: "Favored \u2605", units: FAV.ids.slice(), title: "The detected favored P-cores: " + FAV.ids.join(", ") + " (" + FAV_TEXT[FAV.source].replace(/^favored core /, "") + ")" });
+    return list;
+  }
+  function renderPresets() {
+    const ps = presets(), key = ps.map((x) => x.value + ":" + x.units.join(".")).join("|"), host = $("cv-presets");
+    if (host.dataset.key !== key) {
+      host.dataset.key = key;
+      segmented(host, ps.map((x) => ({ value: x.value, label: x.label, title: x.title })), presetOf(CV.drawn), (v) => { CV.drawn = new Set(presets().find((x) => x.value === v).units); renderCurves(); });
+    }
+    syncSegmented(host, presetOf(CV.drawn));
+  }
   const MEASURE_SECONDS = { quick: 120, dense: 600 };   // all 12 units (SPEC-v3 section 3)
 
   function tuningKind(c) {
@@ -1805,7 +1877,7 @@
     for (const u of UNIT_IDS) {
       if (!CV.drawn.has(u)) continue;
       const pa = recPoints(a, u);
-      const label = u + (FAVORED.indexOf(u) >= 0 ? " (favored)" : "");
+      const label = u + favMark(u);
       if (CV.delta) {
         const pb = recPoints(b, u);
         const pts = pa.map((p) => { const at = interpAt(pb, p.mhz); return at ? { mhz: p.mhz, v: (p.v - at.v) * 1000 } : null; }).filter(Boolean);
@@ -1862,7 +1934,7 @@
     if (isBase) {
       base = "Stock baseline: this curve is the fused V/F table as applied (offsets 0). " + (T.words && T.words.fused
         ? "Diamonds mark the top-point voltage read from the CPU (cmd 0x09); they should sit on the curve where it reaches that ratio."
-        : "Read tuning words (Tune) to draw the top-point voltage from the CPU (cmd 0x09) and cross-check it.");
+        : "Read ratios & voltages (Tune) to draw the top-point voltage from the CPU (cmd 0x09) and cross-check it.");
     } else if (baselineId() && a) base = "Stock baseline: " + (CV.list.find((c) => c.id === baselineId()) || {}).name + ". Predictions in Tune are made on it.";
     else base = "No curve is marked as the stock baseline yet. Tune predicts the effective voltage on it; set one in the Library.";
     setText("cv-base-note", base);
@@ -1888,7 +1960,7 @@
   function renderCurves() {
     renderCurveSelects();
     renderLegend($("cv-legend"), CV.drawn, (set) => { CV.drawn = set; renderCurves(); }, true);
-    syncSegmented($("cv-presets"), presetOf(CV.drawn));
+    renderPresets();
     syncSegmented($("cv-view"), CV.view);
     $("cv-chart-wrap").hidden = CV.view !== "chart";
     $("cv-table-wrap").hidden = CV.view !== "table";
@@ -1901,7 +1973,7 @@
   }
 
   function presetOf(set) {
-    for (const p of PRESETS) if (p.units.length === set.size && p.units.every((u) => set.has(u))) return p.value;
+    for (const p of presets()) if (p.units.length === set.size && p.units.every((u) => set.has(u))) return p.value;
     return "";
   }
 
@@ -1911,8 +1983,8 @@
       const b = el("button", "lg-chip u-" + u);
       b.type = "button";
       b.setAttribute("aria-pressed", set.has(u) ? "true" : "false");
-      b.title = unitLabel(u) + (FAVORED.indexOf(u) >= 0 ? ", favored core" : "") + ". Press to toggle; Shift+press shows only this one.";
-      b.append(el("span", "sw"), document.createTextNode(u));
+      b.title = unitLabel(u) + (isFav(u) ? ", " + favTitle(u) : "") + ". Press to toggle; Shift+press shows only this one.";
+      b.append(el("span", "sw"), document.createTextNode(u + favMark(u)));
       b.addEventListener("click", (e) => {
         const next = new Set(set);
         if (e.shiftKey && allowSolo) { next.clear(); next.add(u); } else if (next.has(u)) next.delete(u); else next.add(u);
@@ -2143,8 +2215,8 @@
       b.type = "button";
       b.dataset.unit = u;
       b.setAttribute("aria-pressed", "true");
-      b.title = unitLabel(u) + " (cpu " + unitCpus(u).join(", ") + ")" + (FAVORED.indexOf(u) >= 0 ? ", favored core" : "");
-      b.append(el("span", "uc-name", u), el("span", "uc-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]));
+      b.title = unitTileTitle(u);
+      b.append(el("span", "uc-name", u + favMark(u)), el("span", "uc-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]));
       b.addEventListener("click", () => { if (CV.sel.has(u)) CV.sel.delete(u); else CV.sel.add(u); syncUnitChips(); updateCurvesGate(); });
       return b;
     });
@@ -2257,14 +2329,14 @@
 
   // The tuning state recorded with a curve: "words" (read this boot) or "unknown" (no read this boot, so offsets are not known).
   function tuningWords(kind) {
-    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock = fused table as applied (every offset 0)" : "Tuning state unknown (no 'Read tuning words' this boot)";
+    return kind === "words" ? "Tuning at the time: read from the CPU" : kind === "stock" ? "Tuning at the time: stock = fused table as applied (every offset 0)" : "Tuning state unknown (no 'Read ratios & voltages' this boot)";
   }
 
   function initCurves() {
     CV.chart = makeVfChart($("cv-chart"), { label: "Measured V/F curves, volts against frequency" });
     buildMeasureControls();
     segmented($("cv-view"), [{ value: "chart", label: "Chart" }, { value: "table", label: "Table" }, { value: "library", label: "Library" }], CV.view, (v) => { CV.view = v; renderCurves(); });
-    segmented($("cv-presets"), PRESETS.map((p) => ({ value: p.value, label: p.label, title: p.title })), "all", (v) => { CV.drawn = new Set(PRESETS.find((p) => p.value === v).units); renderCurves(); });
+    renderPresets();
     segmented($("cv-table-mode"), [{ value: "v", label: "Volts" }, { value: "delta", label: "Δ vs baseline (mV)" }], "v", (v) => { CV.tableDelta = v === "delta"; renderCurves(); });
     const opts = $("cv-opts");
     const band = el("button", "seg-btn", "Spread band"), delta = el("button", "seg-btn", "Δ mV");
@@ -2287,7 +2359,7 @@
     $("btn-measure-cancel").addEventListener("click", cancelOp);
   }
 
-  // ---- Tune: read the tuning words, edit per unit, review a plan, apply it from the review dialog ----------------------------------------
+  // ---- Tune: read the ratios and voltages, edit per unit, review a plan, apply it from the review dialog ----------------------------------------
   const MIXED = { mixed: true };
   const T = {
     words: null,          // normalised tune.read: {units: {id: {id, cpu, oc, points}}, ...}
@@ -2344,7 +2416,6 @@
   function ocPointNo(units) { return Math.max(0, ...units.map((u) => curPts(u).length)) + 1; }
   function ocHeadText(units) { return "Point " + ocPointNo(units) + " \u00b7 OC"; }
   const OC_TIP = "ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)";
-  const PRED_NOTE_E = "47\u201348\u00d7 run on point 6 (turbo table); an E OC ratio adds an OC point";
 
   function fusedOf(u) { return T.words && T.words.fused ? T.words.fused[u] || null : null; }
   function baselineRec() {
@@ -2360,8 +2431,8 @@
     if (!rec) return null;
     const p = recAllPoints(rec, u).find((q) => q.ratio === ratio && q.status === "ok" && isNum(q.vid_v));
     if (p) return { v: p.vid_v, src: "baseline" };
-    const f = fusedOf(u);
-    return f && f.ratio === ratio ? { v: f.v, src: "fused" } : null;
+    const f = fusedOf(u), rc = reachOf(u);
+    return f && f.ratio === ratio && !(isNum(rc) && ratio > rc) ? { v: f.v, src: "fused" } : null;   // a top point above the unit's reach has no voltage to stand in for
   }
   // F4: effective V(n) = max(baseline VID(n) + offset(n), V(n-1)). byRatio[ratio] = {v, want, by, src} or null (no measured VID).
   function predictUnit(u) {
@@ -2519,7 +2590,7 @@
   function rowDefs() {
     if (T.scope === "simple") return [{ id: "P", label: "All P-cores", sub: "8 cores", units: UNIT_IDS.slice(0, 8), kind: "P" },
       { id: "E", label: "All E-clusters", sub: "4 clusters, 16 cores", units: UNIT_IDS.slice(8), kind: "E" }];
-    return UNIT_IDS.map((u) => ({ id: u, label: unitLabel(u), sub: unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] + (FAVORED.indexOf(u) >= 0 ? " · favored" : "") : "cpus " + unitCpus(u)[0] + "–" + unitCpus(u)[3], units: [u], kind: unitKind(u) }));
+    return UNIT_IDS.map((u) => ({ id: u, label: unitLabel(u), sub: unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpus " + unitCpus(u)[0] + "–" + unitCpus(u)[3], units: [u], kind: unitKind(u) }));
   }
 
   function buildRows() {
@@ -2537,7 +2608,10 @@
       const row = el("div", "tn-rowwrap");
       const line = el("div", "tn-row k-" + def.kind);
       const name = el("div", "tn-unit u-" + (def.units.length === 1 ? def.units[0] : def.kind === "P" ? "P0" : "EC0"));
-      name.append(el("span", "kind-dot k-" + def.kind), el("span", "tn-name", def.label), el("span", "tn-sub muted", def.sub));
+      const star = def.units.length === 1 ? favMark(def.units[0]) : "";
+      const nm = el("span", "tn-name", def.label + star);
+      if (star) nm.title = favTitle(def.units[0]);
+      name.append(el("span", "kind-dot k-" + def.kind), nm, el("span", "tn-sub muted", def.sub));
       const now = el("span", "tn-now muted", "");
       name.append(now);
       // offset
@@ -2645,7 +2719,8 @@
     box.append(head, tag, rText, vText, fText);
     r.oc = { box: box, ratio: rText, vt: vText, fused: fText };
     cells.push(box);
-    if (r.def.kind === "E") { const n = el("p", "tn-points-note muted", PRED_NOTE_E); cells.push(n); }
+    r.eNote = null;
+    if (r.def.kind === "E") { r.eNote = el("p", "tn-points-note muted", ""); cells.push(r.eNote); }
     fill(r.panel, cells);
   }
 
@@ -2655,14 +2730,18 @@
   }
 
   // Predicted effective voltage, clamp badge and reach caption under each point dropdown (F3 / F4).
+  // A prediction exists only for a unit that can reach the point, and only from the user's baseline curve (D-036); never from a CPU read, so it carries no "(fused)" claim for a point above reach.
   function refreshPointFacts(r, ratio) {
     const def = r.def, c = r.ptSels[ratio];
     const base = CV.cache[baselineId()] || null;
-    const infos = def.units.map((u) => ({ u: u, pr: predictUnit(u).byRatio[ratio] || null })).filter((x) => x.pr);
-    if (!baselineId()) { c.eff.textContent = "needs a baseline curve"; c.eff.title = "Mark a stock curve as the baseline in Curves; the effective voltage is predicted on it."; }
-    else if (!base) { c.eff.textContent = "loading the baseline"; c.eff.title = ""; }
+    const un = def.units.filter((u) => { const rc = reachOf(u); return isNum(rc) && ratio > rc; });
+    const ok = def.units.filter((u) => un.indexOf(u) < 0);
+    const infos = ok.map((u) => ({ u: u, pr: predictUnit(u).byRatio[ratio] || null })).filter((x) => x.pr);
+    c.eff.title = "";
+    if (!ok.length || !baselineId()) c.eff.textContent = "";   // above reach: only the caption below; no baseline: one hint in the card header
+    else if (!base) c.eff.textContent = "loading the baseline";
     else if (!infos.length) {
-      const bp = recAllPoints(base, def.units[0]).find((q) => q.ratio === ratio);
+      const bp = recAllPoints(base, ok[0]).find((q) => q.ratio === ratio);
       const why = bp && bp.status === "unreachable" ? bp.reason : null;
       c.eff.textContent = why === "cpufreq_granularity" ? "cannot be pinned" : why === "max_turbo" ? "not measured" : "no measured voltage";
       c.eff.title = "The baseline curve has no usable measurement at this ratio" + (why ? ": " + reasonText(why) : "") + ".";
@@ -2670,7 +2749,7 @@
     else {
       const src = infos.every((x) => x.pr.src === "fused") ? " (fused)" : "";
       c.eff.textContent = "\u2192 " + fmtVRange(infos.map((x) => x.pr.v), 3) + src;
-      c.eff.title = "Predicted effective voltage: baseline VID + offset" + (src ? "; the fused top point stands in for the baseline here" : "") + ".";
+      c.eff.title = "Predicted effective voltage on your baseline curve: baseline VID + offset" + (src ? "; the fused top point read from the CPU stands in for the baseline here" : "") + ". Not a CPU read.";
     }
     const cl = infos.filter((x) => x.pr.by !== null);
     c.badge.hidden = cl.length === 0;
@@ -2679,16 +2758,33 @@
       const x = cl[0];
       c.badge.title = x.u + " " + ratio + "\u00d7 would be " + fmtV(x.pr.want, 3) + ", below the " + x.pr.by + "\u00d7 point; the hardware holds every point at or above the one before it, so it lands on " + fmtV(x.pr.v, 3) + ".";
     }
-    const un = def.units.filter((u) => { const rc = reachOf(u); return isNum(rc) && ratio > rc; });
     c.lab.classList.toggle("unreach", un.length === def.units.length && un.length > 0);
     c.reach.hidden = un.length === 0;
     if (un.length) {
-      const rc = reachOf(un[0]);
-      c.reach.textContent = un.length === def.units.length ? (def.units.length === 1 ? "not reachable on this core" : "not reachable on these cores") : "not reachable on " + un.join(", ");
-      c.reach.title = "The point still shapes the table and can be edited, but " + (un.length === 1 ? un[0] : "these cores") + " top" + (un.length === 1 ? "s" : "") + " out at " + rc + "\u00d7.";
+      const tops = Array.from(new Set(un.map(reachOf))), topTxt = tops.length === 1 ? ", tops at " + tops[0] + "\u00d7" : "";
+      const noun = def.kind === "E" ? (un.length === 1 ? "this cluster" : "these clusters") : (un.length === 1 ? "this core" : "these cores");
+      c.reach.textContent = un.length === def.units.length ? "not reachable on " + noun + topTxt : "not reachable on " + un.join(", ") + topTxt;
+      c.reach.title = "The point still shapes the table and can be edited, but " + (un.length === 1 ? un[0] : "these units") + " top" + (un.length === 1 ? "s" : "") + " out at " + reachOf(un[0]) + "\u00d7 (read from the CPU).";
     }
-    const bad40 = def.kind === "E" && ratio === 40 && def.units.some((u) => curPts(u).some((p) => p.ratio === 40 && Math.abs(effPointMv(u, p)) > 0.049));
-    c.lab.classList.toggle("danger", bad40);
+  }
+
+  // The card-header note for every predicted voltage on the page: where it comes from, or how to get one.
+  function renderPredNote() {
+    const id = baselineId(), rec = id ? baselineRec() : null;
+    setText("tn-pred-note", !id ? "Measure a stock curve (Curves) to see predicted voltages."
+      : !rec ? "Loading the baseline curve."
+        : "Predicted voltages (\u2192 V) are computed on baseline \u2018" + (rec.name || rec.id) + "\u2019 measured " + String(rec.created || "").slice(0, 10) + ": baseline VID plus your offset. They are not read from the CPU.");
+  }
+
+  // The E turbo table decides which ratios above the top fused point exist; the note is derived from the table that was read, nothing fixed.
+  function eTurboNote(units) {
+    const t = turboCur("E");
+    if (!t) return "";
+    const u = units.find((x) => curPts(x).length), pts = u ? curPts(u) : [];
+    if (!pts.length) return "";
+    const top = pts.reduce((x, y) => (y.ratio > x.ratio ? y : x)), hi = Math.max(...t);
+    if (hi <= top.ratio) return "";
+    return "E turbo table: up to " + hi + "\u00d7 (" + t[t.length - 1] + "\u00d7 all-core); ratios above point " + top.point + " (" + top.ratio + "\u00d7) run on point " + top.point + "\u2019s voltage.";
   }
 
   function refreshOcCell(r) {
@@ -2696,8 +2792,8 @@
     const units = r.def.units;
     const rt = ratioOf(units, true), vt = vtOf(units, true), chR = !same(ratioOf(units, false), rt, 0.5) && isNum(rt), chV = isNum(vt) && !same(vtOf(units, false), vt, V_TOL);
     const fused = units.map(fusedOf);
-    const bios = isNum(rt) && !chR && fused.every((f) => f && f.ratio === rt);
-    r.oc.ratio.textContent = "ratio " + (isNum(rt) ? rt + "\u00d7" + (bios ? " (BIOS)" : "") : rt === MIXED ? "mixed" : "not set");
+    const atFused = isNum(rt) && !chR && fused.every((f) => f && f.ratio === rt);
+    r.oc.ratio.textContent = "ratio " + (isNum(rt) ? rt + "\u00d7" + (atFused ? " = fused top (no OC point)" : "") : rt === MIXED ? "mixed" : "not set");
     r.oc.vt.textContent = "target " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "mixed" : "not set");
     r.oc.box.classList.toggle("changed", chR || chV);
     r.oc.box.classList.toggle("unset", !isNum(rt) && !isNum(vt));
@@ -2709,10 +2805,6 @@
   function refreshRowWarn(r) {
     const def = r.def, msgs = [];
     const list = (us) => us.join(", ");
-    const at40 = def.units.filter((u) => unitKind(u) === "E" && curPts(u).some((p) => p.ratio === 40 && Math.abs(effPointMv(u, p)) > 0.049));
-    if (at40.length) msgs.push(["bad", list(at40) + ": the 40\u00d7 point carries an offset. A \u221220 mV offset there gave OCCT errors on this machine; keep point 5 at 0 mV."]);
-    const hot = def.units.filter((u) => unitKind(u) === "E" && isNum(effVt(u)) && effVt(u) > 1.2 + 1e-9);
-    if (hot.length) msgs.push(["warn", list(hot) + ": an E-core target above 1.2 V can trigger WHEA error reports."]);
     const pos = def.units.filter((u) => curPts(u).some((p) => effPointMv(u, p) > 0.049));
     if (pos.length) msgs.push(["warn", list(pos) + ": a positive offset raises the voltage above the fused curve."]);
     fill(r.warn, msgs.map((m) => el("li", m[0], m[1])));
@@ -2780,6 +2872,7 @@
       if (open) r.offCell.classList.toggle("changed", nPtChanged > 0);
       if (open) for (const ratio of Object.keys(r.ptSels)) refreshPointFacts(r, Number(ratio));
       if (open) refreshOcCell(r);
+      if (open && r.eNote) { const nt = eTurboNote(def.units); r.eNote.textContent = nt; r.eNote.hidden = !nt; }
       refreshRowWarn(r);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
       setSel(r.vtSel, effVtv, V_TOL, (v) => v.toFixed(4) + " V");
@@ -2793,6 +2886,7 @@
       r.rHint.textContent = rCh && isNum(effR) ? ratioHint(def.kind, effR) : (!rCh && curR === null ? "OC ratio reads 0 (not set)" : "");
     }
     updateTuneFoot();
+    renderPredNote();
     renderVccia();
     renderTurbo();
     renderTunePreview();
@@ -2818,10 +2912,9 @@
   }
 
   // ---- F6: predicted VccIA ---------------------------------------------------------------------------------------------------------------------
-  const VCCIA = { ring: 1.20, margin: 0.105 };   // ring ~1.20 V at 40x; VccIA ~ highest allowed VID + 100-110 mV [MEASURED lnx 2026-10-03, hypothesis on 3+ points]
-
   // The highest voltage the units may request when `which` buckets are the ones in force: "all" = every core loaded (last bucket), "few" = 1-2 cores (first bucket).
-  function vcciaFor(which) {
+  // VID only, on the user's baseline: the regulator headroom and the ring floor are not read from this system, so they are not added here (D-036).
+  function vidFor(which) {
     const tp = turboEff("P"), te = turboEff("E");
     if (!tp || !te) return null;
     const idx = which === "all" ? 7 : 0;
@@ -2832,42 +2925,36 @@
       const v = predAt(u, ratio);
       if (v !== null && (best[k] === null || v > best[k].v)) best[k] = { unit: u, ratio: ratio, v: v };
     }
-    const parts = [best.P, best.E, { unit: "ring", ratio: 40, v: VCCIA.ring }].filter(Boolean);
-    const top = parts.reduce((a, b) => (b.v > a.v ? b : a));
-    return { top: top, parts: best, total: top.v + VCCIA.margin };
+    const parts = [best.P, best.E].filter(Boolean);
+    if (!parts.length) return null;
+    return { top: parts.reduce((a, b) => (b.v > a.v ? b : a)), parts: best };
+  }
+
+  // The board Vcore sensor, live from telemetry (a per-board table decides whether the channel exists).
+  function renderTuneVcore() {
+    const x = isObj(V.last) ? reading(V.last.vcore, 3) : { ok: false };
+    setText("tn-vccia-live", x.ok ? "Board Vcore sensor now: " + x.text + " V (live telemetry)." : "");
   }
 
   function renderVccia() {
     const card = $("tn-vccia-card");
-    card.hidden = !T.words;
-    if (!T.words) return;
+    card.hidden = !T.words || !baselineId();   // without a baseline the one hint is in the Tune header (tn-pred-note)
+    if (card.hidden) return;
+    renderTuneVcore();
     const line = $("tn-vccia-line"), list = $("tn-vccia-list");
-    if (!baselineId()) {
-      line.textContent = "Needs a stock baseline curve.";
-      fill(list, []);
-      setText("tn-vccia-basis", "");
-      setText("tn-vccia-note", "Mark one stored curve as the stock baseline in Curves (Library, Set baseline). The prediction is made on it.");
-      return;
-    }
-    const all = vcciaFor("all"), few = vcciaFor("few");
-    if (!all) { line.textContent = "Turbo tables not read, so VccIA cannot be predicted."; fill(list, []); return; }
+    const all = vidFor("all"), few = vidFor("few");
+    if (!all) { line.textContent = "Turbo tables not read, so the highest VID cannot be predicted."; fill(list, []); return; }
     const rec = CV.cache[baselineId()];
-    setText("tn-vccia-basis", rec ? "estimate on " + (rec.name || rec.id) : "loading the baseline");
-    const lead = all.top.unit === "ring" ? "the ring at " + all.top.ratio + "\u00d7" : all.top.unit + " at " + all.top.ratio + "\u00d7";
-    fill(line, [document.createTextNode("Predicted VccIA \u2248 "), el("strong", "", all.total.toFixed(2) + " V"), document.createTextNode(", set by " + lead + " with every core loaded")]);
-    const rows = [];
+    setText("tn-vccia-basis", rec ? "predicted on baseline \u2018" + (rec.name || rec.id) + "\u2019 measured " + String(rec.created || "").slice(0, 10) : "loading the baseline");
+    fill(line, [document.createTextNode("Highest predicted VID \u2248 "), el("strong", "", all.top.v.toFixed(3) + " V"), document.createTextNode(", set by " + all.top.unit + " at " + all.top.ratio + "\u00d7 with every core loaded")]);
     const add = (label, part, top) => {
       const li = el("li", top ? "top" : "");
-      li.append(el("span", "vc-who", label), el("span", "vc-val mono", part ? fmtV(part.v, 3) : "n/a"), el("span", "vc-at muted", part ? (part.unit === "ring" ? "fixed floor at " : part.unit + " at ") + part.ratio + "\u00d7" : ""));
+      li.append(el("span", "vc-who", label), el("span", "vc-val mono", part ? fmtV(part.v, 3) : "n/a"), el("span", "vc-at muted", part ? part.unit + " at " + part.ratio + "\u00d7" : ""));
       return li;
     };
-    rows.push(add("P-cores, highest", all.parts.P, all.top === all.parts.P), add("E-clusters, highest", all.parts.E, all.top === all.parts.E), add("Ring", { unit: "ring", ratio: 40, v: VCCIA.ring }, all.top.unit === "ring"));
-    const margin = el("li", "plus");
-    margin.append(el("span", "vc-who", "Regulator headroom"), el("span", "vc-val mono", "+" + VCCIA.margin.toFixed(3) + " V"), el("span", "vc-at muted", "100\u2013110 mV above the highest allowed VID"));
-    rows.push(margin);
-    fill(list, rows);
-    const fewTxt = few && few.top.unit !== "ring" ? " With only 1\u20132 cores loaded " + few.top.unit + " may run " + few.top.ratio + "\u00d7 and VccIA would be \u2248 " + few.total.toFixed(2) + " V." : "";
-    setText("tn-vccia-note", "Lowering a unit that does not set the maximum does not lower Vcore: only the unit named above moves VccIA. Hypothesis from three measured points." + fewTxt);
+    fill(list, [add("P-cores, highest", all.parts.P, all.top === all.parts.P), add("E-clusters, highest", all.parts.E, all.top === all.parts.E)]);
+    const fewTxt = few ? " With only 1\u20132 cores loaded " + few.top.unit + " may run " + few.top.ratio + "\u00d7, highest VID \u2248 " + few.top.v.toFixed(3) + " V." : "";
+    setText("tn-vccia-note", "A prediction from your baseline, not a measurement. Lowering a unit that does not set the maximum does not lower the highest VID." + fewTxt);
   }
 
   // ---- F5: turbo ratio tables -------------------------------------------------------------------------------------------------------------------
@@ -2935,7 +3022,7 @@
       const favIds = Object.keys(fav).sort();
       r.note.textContent = k === "P"
         ? (favIds.length ? "Favored ratio per core (0x1C) sits on top of the table: " + favIds.map((u) => u + " " + fav[u] + "\u00d7").join(", ") + "." : "Favored ratios per core were not read.")
-        : "E-clusters have no favored core. 47\u201348\u00d7 come from this table, on point 6's voltage.";
+        : "E-clusters have no favored core." + (eTurboNote(UNIT_IDS.slice(8)) ? " " + eTurboNote(UNIT_IDS.slice(8)) : "");
     }
     setText("tn-turbo-note", "bucket = number of active cores, fewest first");
     setText("tn-turbo-help", "Ratios may only fall as more cores are active. A value higher than the bucket to its left is not offered, and lowering a bucket brings the ones on its right down with it. A plan that breaks the order is refused with TURBO_ORDER. Counts are read-only.");
@@ -3039,12 +3126,35 @@
     return { kind: "words", text: "tuned (P " + f(grp(UNIT_IDS.slice(0, 8))) + ", E " + f(grp(UNIT_IDS.slice(8))) + ")", title: "Offsets read from the CPU this boot." };
   }
 
+  function agoText(ms) {
+    const d = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    return d < 60 ? "just now" : d < 3600 ? Math.round(d / 60) + " min ago" : d < 86400 ? Math.round(d / 3600) + " h ago" : Math.round(d / 86400) + " d ago";
+  }
+  // Where the numbers on the page come from: a fresh read from the CPU, the helper's stored read of this boot, or that read updated by an apply's read-back.
+  function renderProvenance() {
+    const w = T.words;
+    if (!w) { setText("tn-prov", ""); return; }
+    const when = isNum(w.readAt) ? clockText(w.readAt) + " (" + agoText(w.readAt) + ")" : null;
+    let t;
+    if (w.prov === "applied") t = "Updated from the apply\u2019s read-back" + (when ? " at " + when : " (time unknown)") + ". Not a fresh read from the CPU: press Re-read ratios & voltages for one.";
+    else if (w.prov === "stored") t = "Showing the helper\u2019s earlier read" + (when ? " from " + when : " (time unknown)") + " (no mailbox operations used).";
+    else t = "Read from the CPU" + (when ? " at " + when : " (time unknown)") + ".";
+    setText("tn-prov", t + (favMismatch() ? " The favored cores named by the system differ from the 0x1C favored ratios of this read." : ""));
+  }
+  function readTime(r, meta) {   // epoch ms of the read: the helper's read_at (ISO UTC), else the stored read's epoch seconds, else unknown
+    const iso = isObj(meta) && typeof meta.read_at === "string" ? meta.read_at : isObj(r) && typeof r.read_at === "string" ? r.read_at : null;
+    const t = iso ? Date.parse(iso) : NaN;
+    if (isNum(t)) return t;
+    return isObj(meta) && isNum(meta.at) ? meta.at * 1000 : null;
+  }
   function clockText(ms) { return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); }
 
   // meta (tune.last): {at (epoch s), applied_at (epoch s | null)}: the words are the helper's stored read of this boot, not a fresh one.
   function setWords(r, meta) {
     const w = normWords(r);
     if (!Object.keys(w.units).length) { setText("tn-status", "The read returned no V/F units for the 12 tuning units. Nothing to edit."); return; }
+    FAV.read = favFromRead(w.turbo);
+    recomputeFav();
     T.words = w;
     T.draft = {};
     T.turbo = {};
@@ -3057,12 +3167,15 @@
     $("tn-console").hidden = false;
     $("tn-preview-card").hidden = false;
     $("tn-words-card").hidden = false;
-    if (isObj(meta) && isNum(meta.at)) w.at = meta.at * 1000;
+    w.readAt = readTime(r, meta);
     w.stored = isObj(meta);
     w.appliedSince = isObj(meta) && isNum(meta.applied_at);
-    setText("tn-sub", "Read at " + clockText(w.at) + " this boot" + (w.stored ? ", kept by the helper" : "") + (w.appliedSince ? "; the words follow the last apply" : "") +
-      ". Dropdowns show what the CPU holds now and only offer what the policy allows.");
-    setText("btn-tune-read", "Re-read tuning words");
+    w.prov = w.appliedSince ? "applied" : w.stored ? "stored" : "read";
+    if (w.appliedSince) w.readAt = meta.applied_at * 1000;
+    setText("tn-sub", "Dropdowns show what the CPU held at the read below and only offer what the policy allows.");
+    renderProvenance();
+    renderReadCost();
+    setText("btn-tune-read", "Re-read ratios & voltages");
     renderScopeNote();
     buildRows();
     renderWordsTable();
@@ -3115,7 +3228,7 @@
       body.append(tr);
     }
     t.append(head, body);
-    fill(host, [el("h3", "dlg-sub", "Turbo ratio tables"), t, el("p", "muted", "An OC ratio at or below bucket 0 raises no table, so asking 57× on a P-core whose table already reads 57× changes nothing there. Only a ratio above bucket 0 makes the plan write a table." + (w.tablesNote ? " " + w.tablesNote : ""))]);
+    fill(host, [el("h3", "dlg-sub", "Turbo ratio tables"), t, el("p", "muted", "An OC ratio at or below bucket 0 raises no table, so asking for a ratio the table already reads at bucket 0 changes nothing there. Only a ratio above bucket 0 makes the plan write a table." + (w.tablesNote ? " " + w.tablesNote : ""))]);
   }
 
   function renderAccepted(w) {
@@ -3158,7 +3271,7 @@
     } else {
       const chk = isObj(body.error) && isObj(body.error.detail) ? body.error.detail.check : null;
       if (chk === "NO_READ") {
-        onError("This helper session has not read the tuning words, and this plan needs them. Read tuning words first (about " + COST_LOW + " operations, each request is a WRMSR).");
+        onError("This helper session has not read the ratios and voltages, and this plan needs them. Read ratios & voltages first (" + readCostText() + ", each request is a WRMSR).");
         selectTab("tune", false);
         $("btn-tune-read").focus();
         return;
@@ -3267,7 +3380,7 @@
     if (isNum(res.reads)) facts.push(res.reads + " read-only requests");
     if (Array.isArray(res.steps)) facts.push("steps: " + stepKinds(res.steps));
     if (facts.length) nodes.push(el("p", "muted plan-facts", facts.join(" · ") + (res.steps_truncated === true ? " (the step list is shortened to fit one message)" : "")));
-    if (res.words_assumed === true) nodes.push(el("p", "plan-warn-line", "Some words were not read in this helper session, so the plan assumed their current values. Read the tuning words first for a plan based on what the CPU holds."));
+    if (res.words_assumed === true) nodes.push(el("p", "plan-warn-line", "Some words were not read in this helper session, so the plan assumed their current values. Read the ratios and voltages first for a plan based on what the CPU holds."));
     const gates = Array.isArray(res.gates) ? res.gates.filter(isObj) : [];
     if (gates.length) {
       const g = el("div", "plan-gates");
@@ -3334,8 +3447,8 @@
   // a badge, NOTE (and any code this page does not know) is plain text. A bare string (an older helper) is a NOTE.
   const WARN_CODES = {
     CLAMPED: { cls: "warn", label: "clamped" },
-    E40_OFFSET: { cls: "bad", label: "E 40\u00d7 offset" },
-    E_TARGET_WHEA: { cls: "warn", label: "WHEA risk" },
+    E40_OFFSET: { cls: "bad", label: "E 40\u00d7 offset \u00b7 community hint" },
+    E_TARGET_WHEA: { cls: "warn", label: "WHEA risk \u00b7 community hint" },
     POSITIVE_OFFSET: { cls: "warn", label: "positive offset" },
     NO_BASELINE: { cls: "warn", label: "no baseline" },
     TURBO_RAISE: { cls: "warn", label: "turbo raise" },
@@ -3580,8 +3693,8 @@
     const P = T.plan;
     if (!P) {  // the page was reloaded during the apply: no review dialog to show the read-back in
       const rb0 = ev.ok === true && isObj(ev.result) && Array.isArray(ev.result.readback) ? ev.result.readback : null;
-      setText("tn-status", rb0 ? "An apply finished while this page was away: " + rb0.filter((x) => isObj(x) && x.match !== true).length + " of " + rb0.length + " words differ on read-back. Read the tuning words to see the state."
-        : "An apply ended while this page was away (" + errText(ev) + "). Read the tuning words to see where things stand.");
+      setText("tn-status", rb0 ? "An apply finished while this page was away: " + rb0.filter((x) => isObj(x) && x.match !== true).length + " of " + rb0.length + " words differ on read-back. Read the ratios and voltages to see the state."
+        : "An apply ended while this page was away (" + errText(ev) + "). Read the ratios and voltages to see where things stand.");
       return;
     }
     if (ev.ok === true && isObj(ev.result)) {
@@ -3608,13 +3721,16 @@
           }
         }
         T.words.fromPlan = true;
+        T.words.prov = "applied";
+        T.words.readAt = isNum(Date.parse(ev.result.read_at)) ? Date.parse(ev.result.read_at) : Date.now();
+        renderProvenance();
         T.draft = {};
         const a = appliedFromWords(T.words);
         setAppliedChip(bad.size ? "unknown" : a.kind, P.partial ? "partial apply, read again" : bad.size ? "unverified" : a.text + ", written this session",
-          P.partial ? "The apply stopped part way: read the tuning words to see what the CPU holds." : bad.size ? "Some words did not read back as written." : "Written from the review dialog and read back. Read the tuning words again for a fresh check.");
+          P.partial ? "The apply stopped part way: read the ratios and voltages to see what the CPU holds." : bad.size ? "Some words did not read back as written." : "Written from the review dialog and read back. Read the ratios and voltages again for a fresh check.");
         buildRows();
       }
-      setText("tn-status", P.partial ? "Partial apply: it stopped after " + (isNum(P.writesSent) ? P.writesSent : "some") + " writes. Read the tuning words to see what the CPU holds."
+      setText("tn-status", P.partial ? "Partial apply: it stopped after " + (isNum(P.writesSent) ? P.writesSent : "some") + " writes. Read the ratios and voltages to see what the CPU holds."
         : "Applied from the review dialog. " + (rb.some((x) => x.match !== true) ? "Some words did not match; see the read-back." : "Every word read back as written."));
     } else {
       P.state = "error";
@@ -3776,8 +3892,8 @@
       b.type = "button";
       b.dataset.unit = u;
       b.setAttribute("aria-pressed", "true");
-      b.title = unitLabel(u) + " (cpu " + unitCpus(u).join(", ") + ")" + (FAVORED.indexOf(u) >= 0 ? ", favored core" : "");
-      b.append(el("span", "mm-name", u), el("span", "mm-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]), el("span", "mm-mhz", ""));
+      b.title = unitTileTitle(u);
+      b.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", unitKind(u) === "P" ? "cpu " + unitCpus(u)[0] : "cpu " + unitCpus(u)[0] + "–" + unitCpus(u)[3]), el("span", "mm-mhz", ""));
       b.addEventListener("click", () => { if (ST.sel.has(u)) ST.sel.delete(u); else ST.sel.add(u); renderStress(); });
       return b;
     });
@@ -3972,8 +4088,8 @@
     if (units.length) {   // the same mini map as the picker: the units that ran, each with the clock it held and its usual ratio
       const tile = (u) => {
         const a = ach[u], d = el("div", "mm-tile static u-" + u);
-        d.title = unitLabel(u) + ": mean clock and the ratio most often seen under load" + (FAVORED.indexOf(u) >= 0 ? " (favored core)" : "");
-        d.append(el("span", "mm-name", u), el("span", "mm-cpus", isNum(a.ratio_mode) ? a.ratio_mode + "× mostly" : "ratio n/a"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
+        d.title = unitLabel(u) + ": mean clock and the ratio most often seen under load" + (isFav(u) ? " (" + favTitle(u) + ")" : "");
+        d.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", isNum(a.ratio_mode) ? a.ratio_mode + "× mostly" : "ratio n/a"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
         return d;
       };
       const p = el("div", "mm-p"), e = el("div", "mm-e");
@@ -4018,7 +4134,7 @@
     $("st-hist").hidden = ST.list.length === 0;
     empty.hidden = ST.list.length > 0 && !problem;
     if (problem) empty.textContent = problem;
-    else if (!ST.list.length) empty.textContent = "No stress screens stored yet. Start one above; the result is kept on this machine.";
+    else if (!ST.list.length) empty.textContent = "No stress screens stored yet. Start one above; the result is kept on this computer.";
     fill($("st-hist-body"), ST.list.map((r) => {
       const tr = el("tr");
       const n = isNum(r.errors) ? r.errors : 0;
@@ -4292,7 +4408,7 @@
     const info = infoOf(name);
     const c = info ? (isObj(info.cumulative) ? info.cumulative : info.contents) : null;
     if (!c) return;
-    if (!T.words) { setText("pr-load-status", "Read the tuning words first (Tune): the editor shows each change against what the CPU holds now."); return; }
+    if (!T.words) { setText("pr-load-status", "Read the ratios and voltages first (Tune): the editor shows each change against what the CPU holds now."); return; }
     if (unitsChanged().length || turboKinds().length) {
       const ok = await confirmDialog("Replace the edits in Tune?", "Tune holds unapplied choices. Loading \"" + name + "\" replaces them. Nothing is written either way.", "Replace");
       if (!ok) return;

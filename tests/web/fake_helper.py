@@ -9,7 +9,7 @@ import threading
 import time
 
 from arltuner.web.helperlink import HelperLink
-from tests.web.fake_v3 import V3_OPS, V3Ops
+from tests.web.fake_v3 import V3_OPS, V3Ops, topology_view
 
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"  # [A-Z2-9] per Contract 8
 _UNSET = object()
@@ -150,7 +150,10 @@ class FakeHelper(V3Ops):
             self.requests.append(req)
             rid, op, args = req["id"], req["op"], req["args"]
             if op == "preflight":
-                self._reply(rid, True, result={"ok": True} if self.preflight_result is None else self.preflight_result)
+                res = {"ok": True} if self.preflight_result is None else self.preflight_result
+                if "checks" in res and "topology" not in res and self.topology_enabled:   # a full report gains the live G-128 topology (the favored set can change per test)
+                    res = {**res, "topology": topology_view()}
+                self._reply(rid, True, result=res)
             elif op == "plan":
                 steps = [{"step": 1, "what": "noop"}]
                 plan_id = hashlib.sha256(json.dumps(steps).encode()).hexdigest()

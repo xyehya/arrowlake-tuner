@@ -88,10 +88,9 @@ class TestHtml(unittest.TestCase):
         for ident in ("preflight", "banner", "helper", "core-table", "tiles", "audit", "mem-card", "refresh-range", "cv-chart", "cv-measure", "cv-lib",
                       "btn-measure", "btn-tune-read", "tn-rows", "btn-tn-plan", "btn-tn-reset", "btn-tn-restore", "tn-chart", "dlg-plan", "pr-list", "btn-pr-save"):
             self.assertIn(f'id="{ident}"', HTML)
-        self.assertIn("Read tuning words", HTML)
+        self.assertIn("Read ratios &amp; voltages", HTML)
         self.assertIn("each request is a WRMSR", HTML)  # stated next to the mailbox read button
-        self.assertIn("124&#8211;136", HTML)            # with the op estimate (112 V/F reads + 12 fused-point reads, G-123)
-        self.assertIn("112 V/F reads + 12 fused-point reads", HTML)
+        self.assertIn('id="tn-cost-n"', HTML)           # with the op count computed from the last read (D-036; no fixed estimate)
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tune-read"[^>]*\bdisabled\b')  # disabled until the page has proven it may run
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-measure"[^>]*\bdisabled\b')
         self.assertRegex(HTML, r'<button\b[^>]*\bid="btn-tn-plan"[^>]*\bdisabled\b')
@@ -205,10 +204,10 @@ class TestScript(unittest.TestCase):
         self.assertIn('$("btn-tune-read").addEventListener("click", startRead);', JS)
         # the gate: preflight write, writes allowed, a heartbeat with the budget, idle helper, and the upper cost bound must fit
         gate = func_body("gateReason")
-        for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < COST_HIGH"):
+        for needle in ('S.mode !== "write"', "S.writesAllowed !== true", "heartbeatFresh()", 'S.hbState !== "idle"', "opsLeft() < readCost()"):
             self.assertIn(needle, gate)
-        self.assertIn("const COST_LOW = 124;", JS)
-        self.assertIn("const COST_HIGH = 136;", JS)
+        self.assertNotIn("COST_LOW", JS)
+        self.assertNotIn("COST_HIGH", JS)
 
     def test_apply_is_only_sent_from_the_review_dialog_with_the_nonce(self):
         """Exactly one call site; it sits in the Apply handler; it sends the plan id and CONFIRM + the nonce of that plan itself (D-033 d: one click, no
@@ -247,7 +246,7 @@ class TestScript(unittest.TestCase):
         for check in ("NO_CPUFREQ", "LOAD_GENERATOR", "MEASURE_UNAVAILABLE", "JOURNAL_UNAVAILABLE", "CURVE_LIMIT", "EXISTS", "NO_SUCH_CURVE", "NO_READ",
                       "NOTHING_TO_DO", "NO_ACCEPTED_STATE", "STEP_LIMIT", "SESSION_LIMIT", "BOOT_LIMIT", "POLICY_RANGE", "TURBO_ORDER"):
             self.assertRegex(JS, rf"\b{check}: \"", check)             # every detail.check has a sentence
-        self.assertIn('chk === "NO_READ"', func_body("requestPlan"))     # NO_READ sends the operator to "Read tuning words"
+        self.assertIn('chk === "NO_READ"', func_body("requestPlan"))     # NO_READ sends the operator to "Read ratios & voltages"
         self.assertIn("omitted_units", JS)                               # records come in pieces; curves.get {id, units} merges them
         self.assertIn('api("curves.get", { id: rec.id, units: want })', JS)
         self.assertIn("P.partial", JS)                                   # complete:false + stop is shown as a partial apply

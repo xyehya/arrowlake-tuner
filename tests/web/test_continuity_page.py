@@ -27,8 +27,8 @@ class TestStatic(unittest.TestCase):
         self.assertIn("if (T.words ||", body)                # a read that finished meanwhile wins
         self.assertIn("available !== true", body)
         self.assertIn("loadLastRead();", func_body("onOpen"))
-        self.assertIn("Read at ", func_body("setWords"))     # "read at HH:MM this boot"
-        self.assertIn("Re-read tuning words", func_body("setWords"))
+        self.assertIn("renderProvenance();", func_body("setWords"))   # "Read from the CPU at HH:MM" / "Showing the helper's earlier read from HH:MM"
+        self.assertIn("Re-read ratios & voltages", func_body("setWords"))
 
     def test_loading_a_profile_into_tune_sends_nothing(self):
         body = func_body("loadIntoTune")
@@ -49,12 +49,17 @@ class TestStatic(unittest.TestCase):
         body = func_body("renderHelper")
         self.assertIn('setText("ov-used"', body)
         self.assertIn('setText("hb-cap"', body)              # the per-boot cap is a note
-        self.assertIn("opsLeft() < COST_HIGH", func_body("gateReason"))   # the guard's limit still gates a read that cannot fit
+        self.assertIn("opsLeft() < readCost()", func_body("gateReason"))   # the guard's limit still gates a read that cannot fit (the cost comes from the last read)
         self.assertIn(".ops-line", CSS)
 
-    def test_the_read_estimate_is_the_real_count(self):
-        self.assertIn("&#8776; 124&#8211;136", HTML)
-        self.assertIn("112 V/F reads + 12 fused-point reads", HTML)
+    def test_the_read_cost_is_computed_not_a_fixed_estimate(self):
+        """D-036: no fixed 124-136 operations; the count is the last read's own (ops_done), or one per V/F point, or 'about one per point' before any read."""
+        self.assertNotIn("124", HTML)
+        self.assertNotIn("COST_LOW", JS)
+        self.assertNotIn("COST_HIGH", JS)
+        self.assertIn('id="tn-cost-n"', HTML)
+        self.assertIn("ops_done", func_body("readCost"))
+        self.assertIn("about one operation per V/F point", HTML)
 
     def test_default_curve_is_the_newest_baseline_else_the_newest_complete_all_units_curve(self):
         body = func_body("defaultCurveId")
@@ -105,7 +110,8 @@ class TestBrowser(unittest.TestCase):
                 # the stored read pre-populates Tune without a mailbox read
                 page.click("#tab-tune")
                 page.wait_for_selector("#tn-console:not([hidden])", timeout=8000)
-                self.assertIn("Read at", page.inner_text("#tn-sub"))
+                self.assertIn("earlier read from", page.inner_text("#tn-prov"))   # the stored read is labelled as the helper's earlier read
+                self.assertIn("no mailbox operations used", page.inner_text("#tn-prov"))
                 self.assertIn("Re-read", page.inner_text("#btn-tune-read"))
                 self.assertNotIn("unknown", page.inner_text("#tn-state"))
                 self.assertEqual([r["op"] for r in fake.requests if r["op"] == "tune.read"], [])

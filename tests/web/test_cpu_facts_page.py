@@ -68,7 +68,8 @@ class TestStatic(unittest.TestCase):
         self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)                  # Point 9 . OC (P) / Point 7 . OC (E)
         self.assertIn("fused \\u00b7 offset only", JS)
         self.assertIn("ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)", JS)
-        self.assertIn("47\\u201348\\u00d7 run on point 6 (turbo table); an E OC ratio adds an OC point", JS)
+        self.assertIn("E turbo table: up to ", body_of("eTurboNote"))   # D-036: derived from the E turbo table that was read, not a fixed "47-48x"
+        self.assertNotIn("47\\u201348", JS)
 
     def test_a_read_oc_point_is_the_oc_point_never_an_extra_fused_column(self):
         """G-125: a read point flagged oc_point (EC1 P2 = 7 = 48x) stays out of the fused point set the grid and the predictions are built from."""
@@ -100,13 +101,18 @@ class TestStatic(unittest.TestCase):
         self.assertIn("Math.min(t[j], v)", body_of("setBucket"))
 
     def test_f8_warnings(self):
-        for text in ("OCCT errors", "WHEA", "a positive offset raises the voltage"):
-            self.assertIn(text, JS)
+        self.assertIn("a positive offset raises the voltage", JS)
+        self.assertIn("WHEA risk", JS)       # the label of the helper's E_TARGET_WHEA warning (shown as a community hint)
+        self.assertNotIn("OCCT", JS)         # D-036: no client-side E 40x lore; the warning shows only when the helper sends the code
         self.assertIn(".tn-warn li.bad", CSS)
 
-    def test_vccia_constants_cite_the_measured_model(self):
-        self.assertIn("ring: 1.20, margin: 0.105", JS)
-        self.assertIn("MEASURED lnx 2026-10-03", JS)
+    def test_no_fixed_ring_or_margin_on_the_tune_page(self):
+        """D-036: the Tune VccIA card is the highest predicted VID among the units; ring and headroom are not constants of the page."""
+        self.assertNotIn("ring: 1.20", JS)
+        self.assertNotIn("VCCIA", JS)
+        self.assertNotIn("ring: 1.20, margin: 0.105", JS)
+        self.assertIn("function vidFor", JS)
+        self.assertIn('id="tn-vccia-live"', HTML)
 
     def test_new_ids_exist_and_csp_rules_hold(self):
         for i in ("tn-vccia-card", "tn-vccia-line", "tn-vccia-list", "tn-turbo-card", "tn-turbo", "cv-base-note", "cv-unreach"):
@@ -181,14 +187,16 @@ class TestBrowser(unittest.TestCase):
                 self.assertIn("Point 1 · 8×", p0.nth(0).inner_text())
                 self.assertIn("fused · offset only", p0.nth(0).inner_text())
                 self.assertIn("Point 9 · OC", p0.nth(8).inner_text())
-                self.assertIn("57× (BIOS)", p0.nth(8).inner_text())   # P0 reads the BIOS 57x
+                self.assertIn("57× = fused top (no OC point)", p0.nth(8).inner_text())   # P0 reads 57x, the fused top
                 self.assertIn("not set", page.locator("#tn-pts-P1 .tn-oc").inner_text())
                 self.assertIn("Point 7 · OC", page.locator("#tn-pts-EC1 .tn-oc").inner_text())
-                self.assertIn("47–48× run on point 6", page.locator("#tn-pts-EC1").inner_text())
+                self.assertIn("E turbo table: up to 48× (46× all-core); ratios above point 6 (46×) run on point 6", page.locator("#tn-pts-EC1").inner_text())
                 # F3: 56x / 57x on P1 are dimmed; the same points on P0 (favored) are not
                 self.assertEqual(page.locator("#tn-pts-P1 .tn-pt.unreach").count(), 2)
                 self.assertEqual(page.locator("#tn-pts-P0 .tn-pt.unreach").count(), 0)
-                self.assertIn("not reachable on this core", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
+                self.assertIn("not reachable on this core, tops at 55×", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
+                for i in range(2):   # 56x and 57x alike: the reach caption only, never a predicted voltage
+                    self.assertNotIn("→", page.locator("#tn-pts-P1 .tn-pt.unreach").nth(i).inner_text())
                 # F4: a deep offset on 57x with a milder one on 56x is clamped; the badge shows
                 self.assertEqual(page.locator("#tn-pts-P0 .tn-badge:visible").count(), 0)
                 p0.nth(7).locator("select").select_option("-100")
@@ -198,12 +206,11 @@ class TestBrowser(unittest.TestCase):
                 v56 = re.search(r"→ ([\d.]+) V", p0.nth(6).inner_text()).group(1)
                 v57 = re.search(r"→ ([\d.]+) V", p0.nth(7).inner_text()).group(1)
                 self.assertEqual(v56, v57)
-                # F8: an E 40x offset is red
+                # F8: an E 40x offset is flagged by the helper's coded warning in the review, not by a client-side rule
                 page.locator("#tn-pts-EC1 .tn-pt").nth(4).locator("select").select_option("-20")
-                self.assertTrue(page.locator(".tn-warn li.bad").first.is_visible())
-                self.assertIn("OCCT", page.locator(".tn-warn li.bad").first.inner_text())
-                # F6 / F5: the VccIA panel names the unit that sets it; a turbo bucket cannot be raised above its left neighbour
-                self.assertIn("Predicted VccIA ≈", page.inner_text("#tn-vccia-line"))
+                self.assertEqual(page.locator(".tn-warn li.bad").count(), 0)
+                # F6 / F5: the card names the unit that sets the highest predicted VID; a turbo bucket cannot be raised above its left neighbour
+                self.assertIn("Highest predicted VID ≈", page.inner_text("#tn-vccia-line"))
                 sel = page.locator("#tn-turbo .turbo-kind").nth(0).locator("select")
                 values = [int(o) for o in sel.nth(3).locator("option").evaluate_all("els => els.map(e => e.value)")]
                 self.assertEqual(max(values), int(sel.nth(2).input_value()))
