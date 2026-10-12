@@ -217,8 +217,8 @@ Re-apply (or "Restore accepted") after every boot. A cold boot is the guaranteed
 
 ## 13. What the tool does not control
 Not written by the tool: BIOS settings (VccIA offset, load-line calibration, ring/NGU/D2D ratios, VccSA, memory), static/override voltage, the GT
-(graphics) and system-agent domains, and persistent firmware variables. The GUI does not tune the ring or NGU (SPEC §1: ring/NGU writes are out of v1); the command line can write a ring V/F point offset
-(`point-offset --p1 2`, [10](10-cli-reference.md)). PL1/PL2 are not in the GUI either (SPEC §1); on the reference machine Linux powercap changed them at
+(graphics) and system-agent domains, and persistent firmware variables. The GUI does not tune the ring or NGU (SPEC §2: ring/NGU writes are out of v1); the command line can write a ring V/F point offset
+(`point-offset --p1 2`, [10](10-cli-reference.md)). PL1/PL2 are not in the GUI either (SPEC §2); on the reference machine Linux powercap changed them at
 runtime because the lock bit was 0 [MEASURED lnx 2026-10-08, platform-285k.md].
 
 ## 14. Key facts at a glance
