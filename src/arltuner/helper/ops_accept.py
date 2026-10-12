@@ -116,7 +116,7 @@ def _profile_from_words(
         top = fused_top_ratio((fused or {}).get(cpu))
         oc = VfWord.from_u32(words[0])
         if oc.static:
-            raise _refused(f"{unit} is in static (override) voltage mode; only adaptive words are recorded (D-016).", "NOT_REPRESENTABLE")
+            raise _refused(f"{unit} is in static (override) voltage mode; only adaptive words are recorded.", "NOT_REPRESENTABLE")
         values: dict[str, int] = {}
         if oc.v_target_raw:
             if top is None:

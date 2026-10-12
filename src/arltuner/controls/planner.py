@@ -125,7 +125,7 @@ _CLUSTER_WARNING = (
 
 #: Warning on a plan that raises the ratio, the V target or the offset (D-016). ASCII only.
 RAISE_CAVEAT = (
-    "this plan RAISES a ratio, V target or offset: the numbers come from the reviewed policy (D-016), but that the hardware accepts a raise at "
+    "this plan RAISES a ratio, V target or offset: the numbers come from the reviewed policy, but that the hardware accepts a raise at "
     "all is UNVERIFIED; take a stability check between steps; a reboot restores the BIOS-programmed state"
 )
 
@@ -493,7 +493,7 @@ def plan_warnings(
         warnings.append(
             f"effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV; not readable through the "
             f"mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the "
-            f"effective offset at {policy.effective_offset_floor_mv} mV (D-015)"
+            f"effective offset at {policy.effective_offset_floor_mv} mV"
         )
     return tuple(warnings)
 
@@ -1008,8 +1008,8 @@ def _offset_problem(policy: Policy, cpu: int, offset_mv: int) -> str | None:
     if not floor <= raw <= ceiling:
         return (
             f"offset {offset_mv:+d} mV (raw {raw}) is outside the policy window {floor}..{ceiling} raw "
-            f"(effective floor {policy.effective_offset_floor_mv} mV minus the assumed BIOS offset, D-015; offset_ceiling_mv "
-            f"{policy.offset_ceiling_mv}, D-016)"
+            f"(effective floor {policy.effective_offset_floor_mv} mV minus the assumed BIOS offset; offset_ceiling_mv "
+            f"{policy.offset_ceiling_mv})"
         )
     return None
 

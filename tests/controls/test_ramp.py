@@ -315,7 +315,7 @@ class PreflightAgainstExplicitBounds(unittest.TestCase):
         self.refused(profile(e_core(0, oc_voltage_mv=1251)), "v_target_max_mv E = 1250")
         self.refused(profile(p4(oc_voltage_mv=1501)), "v_target_max_mv P = 1500")
         self.refused(profile(e_core(0, offset_mv=26)), "offset_ceiling_mv 25")  # +26 mV = raw 27 > the ceiling raw 26
-        self.refused(profile(p4(offset_mv=-51)), "D-015")
+        self.refused(profile(p4(offset_mv=-51)), "assumed BIOS offset")
 
     def test_values_on_the_bounds_pass(self) -> None:
         for prof in (profile(e_core(0, ratio=50)), profile(p4(ratio=58)), profile(e_core(0, oc_voltage_mv=1250)), profile(e_core(0, offset_mv=25)), profile(p4(offset_mv=-50))):

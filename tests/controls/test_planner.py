@@ -320,7 +320,7 @@ class MeasuredShapes(unittest.TestCase):
         self.assertIn("runtime offset -4.88 mV, effective -54.88 mV (assumed BIOS offset -50 mV)", text)  # P core
         self.assertIn("runtime offset -4.88 mV, effective -4.88 mV (assumed BIOS offset +0 mV)", text)  # E core
         self.assertIn("effective offset = assumed BIOS offset (P -50 mV, E +0 mV", text)
-        self.assertIn("-100 mV (D-015)", text)
+        self.assertIn("-100 mV", text)
 
 
 class Targets(unittest.TestCase):
@@ -490,7 +490,7 @@ class PredictedVerdicts(unittest.TestCase):
         self.assertTrue(plan_for(profile(p4(offset_mv=-50))).allowed)  # raw -51 == the P runtime floor (-100 effective - -50 BIOS)
         detail = self.refused(profile(p4(offset_mv=-51))).detail  # raw -52
         self.assertIn("-51", detail)
-        self.assertIn("D-015", detail)
+        self.assertIn("assumed BIOS offset", detail)
 
     def test_offset_boundary_on_an_e_core_is_minus_100_mv(self) -> None:
         base = {c: E_READINGS for c in (20, 21, 22, 23)}
@@ -581,7 +581,7 @@ class Warnings(unittest.TestCase):
         self.assertIn("UNVERIFIED", XTU_SHAPE_CAVEAT)
         self.assertIn("0x1D/0x27", XTU_SHAPE_CAVEAT)
         self.assertIn("A V target of 0 is sent only on a word with no OC point", XTU_SHAPE_CAVEAT)  # G-122: D-035, the zero target is sent there
-        self.assertIn("(D-035)", XTU_SHAPE_CAVEAT)
+        self.assertIn("no OC point", XTU_SHAPE_CAVEAT)
         self.assertIn("A zero ratio is never sent", XTU_SHAPE_CAVEAT)
         self.assertNotIn("this plan never does", XTU_SHAPE_CAVEAT)
         self.assertNotIn("[MEASURED", XTU_SHAPE_CAVEAT)  # D-036: no dated evidence tags in user-facing text
@@ -595,7 +595,7 @@ class Warnings(unittest.TestCase):
         self.assertFalse(any("cluster" in w for w in plan_for(profile(p4(offset_mv=-30))).warnings))
 
     def test_bios_offset_note_appears_with_an_offset_only(self) -> None:
-        self.assertTrue(any("assumed BIOS offset" in w and "D-015" in w for w in plan_for(profile(p4(offset_mv=-30))).warnings))
+        self.assertTrue(any("assumed BIOS offset" in w for w in plan_for(profile(p4(offset_mv=-30))).warnings))
         self.assertFalse(any("assumed BIOS offset" in w for w in plan_for(profile(p4(ratio=50))).warnings))
 
     def test_revert_note_text(self) -> None:

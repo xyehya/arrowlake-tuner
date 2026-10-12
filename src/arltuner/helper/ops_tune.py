@@ -1905,7 +1905,7 @@ def _check_turbo_order(profile: Profile) -> None:
 
 # G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
 _RAISE_NOTE = (
-    "this plan RAISES a ratio, V target or offset; the numbers come from the reviewed policy (D-016); take a stability check between steps"
+    "this plan RAISES a ratio, V target or offset; the numbers come from the reviewed policy; take a stability check between steps"
 )
 _POINT_NOTE = (
     "per-point offsets change one V/F point (0x11 with P2 = the point); the hardware keeps V(n) >= V(n-1): arltuner models it (CLAMPED warnings) but cannot read the "

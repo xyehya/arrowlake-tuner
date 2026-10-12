@@ -249,7 +249,7 @@ class RefusalsOnTheMeasuredMachine(MeasuredCase):
 
     def test_the_d015_floor_end_to_end(self) -> None:
         exc = self.refused(profile(p_core(1, -51)), reads=[])  # P: -50 mV is the runtime floor; refused before the first read (D-016)
-        self.assertIn("D-015", exc.refusals[0].detail)
+        self.assertIn("assumed BIOS offset", exc.refusals[0].detail)
         self.assertIsNone(exc.report)
         s = self.session()
         self.assertTrue(s.apply(profile(p_core(1, -50))).ok)

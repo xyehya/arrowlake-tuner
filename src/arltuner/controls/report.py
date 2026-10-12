@@ -264,7 +264,7 @@ def format_plan(plan: ApplyPlan) -> str:
         lines.append(f"Predicted verdict: NOT ALLOWED ({'; '.join(why)})")
     if plan.next_profile_text is not None:
         lines.append(
-            "NEXT ALLOWED STEP: the request is larger than one operation may change (per-operation step limits of the policy; D-016). "
+            "NEXT ALLOWED STEP: the request is larger than one operation may change (per-operation step limits of the policy). "
             "Save this as a profile and run it first; then read the result back, check stability and ask again:"
         )
         lines.extend("    " + line for line in plan.next_profile_text.rstrip("\n").split("\n"))
@@ -311,7 +311,7 @@ def format_preview(
     bios = policy.assumed_bios_offset_mv
     lines.append(
         f"  effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV) + runtime offset; "
-        f"floor {policy.effective_offset_floor_mv} mV (D-015); runtime offset ceiling {policy.offset_ceiling_mv:+d} mV (D-016)"
+        f"floor {policy.effective_offset_floor_mv} mV; runtime offset ceiling {policy.offset_ceiling_mv:+d} mV"
     )
     lines.append(
         f"Operations required: at most {worst} mailbox WRMSRs (every read, every write and the guard's read-back of each write); "

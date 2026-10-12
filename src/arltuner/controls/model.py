@@ -63,7 +63,7 @@ __all__ = [
 XTU_SHAPE_CAVEAT = (
     "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sent on Windows; OC words written this way have been read back as sent on Linux, "
     "but the semantics of 0x1D/0x27 stay UNVERIFIED. A V target of 0 is sent only on a word with no OC point "
-    "(ratio at or below the core's top fused ratio): the hardware keeps no target next to an offset there (D-035). "
+    "(ratio at or below the core's top fused ratio): the hardware keeps no target next to an offset there. "
     "A zero ratio is never sent (its acceptance is UNVERIFIED)"
 )
 

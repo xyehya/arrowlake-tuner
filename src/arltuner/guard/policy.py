@@ -570,7 +570,7 @@ def _check_vf_bounded(
     high = min(ctx.offset_ceiling_raw, params.get("offset_raw_max", 1023))
     if not low <= new.offset_raw <= high:
         return False, (
-            f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset, D-015; "
+            f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset; "
             f"runtime ceiling {ctx.offset_ceiling_raw}; both are policy values, {ctx.policy_where}, within the field encoding -1024..1023; entry params {dict(params)})"
         )
     if base.ratio == 0 and ctx.top_fused_ratio is not None and 0 < new.ratio <= ctx.top_fused_ratio:
@@ -645,7 +645,7 @@ def _check_vf_point_offset_bounded(
     high = min(ctx.offset_ceiling_raw, params.get("offset_raw_max", 1023))
     if not low <= new.offset_raw <= high:
         return False, (
-            f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset, D-015; "
+            f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset; "
             f"runtime ceiling {ctx.offset_ceiling_raw}; both are policy values, {ctx.policy_where}, within the field encoding -1024..1023; entry params {dict(params)})"
         )
     if abs(new.offset_raw - base.offset_raw) > ctx.max_offset_step_raw:

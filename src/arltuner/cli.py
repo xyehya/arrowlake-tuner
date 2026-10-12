@@ -145,7 +145,7 @@ def installed_state(lstat_fn: Callable[[str], object] = os.lstat) -> bool:
     except TrustError as exc:
         raise InstalledStateRefused(
             f"{INSTALLED_POLICY} is present but not trusted ({exc.path}: {exc.reason}); the CLI will not guess between the installed and the "
-            "per-user lock/audit paths (D-030). Repair the install (re-run install.sh as root) or pass explicit --audit and --lock. "
+            "per-user lock/audit paths. Repair the install (re-run install.sh as root) or pass explicit --audit and --lock. "
         ) from None
     return True
 
@@ -327,7 +327,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             "--policy",
             metavar="FILE",
             help="reviewed policy TOML (default: the built-in conservative M1 policy: no raise, step limits, D-015 offset floor); "
-            "ratio / voltage ceilings, the offset window and step limits are this file's numbers (D-016, D-039): editable up to the CPU's own limits "
+            "ratio / voltage ceilings, the offset window and step limits are this file's numbers: editable up to the CPU's own limits "
             "(cmd 0x01 ratio, cmd 0x28 voltage, read from the CPU) and the field encodings",
         )
         p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else $XDG_STATE_HOME/arltuner/audit.jsonl (default ~/.local/state/arltuner/), on Windows %%LOCALAPPDATA%%\\arltuner\\audit.jsonl)")
