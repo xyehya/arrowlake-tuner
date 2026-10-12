@@ -55,7 +55,7 @@ at a time, a review → apply step, read-back and an audit log. **A cold boot re
 | What | Needed | Check |
 |---|---|---|
 | CPU | Intel Core Ultra 200S desktop, Arrow Lake-S (CPU family 6, model 198) | `grep -m1 "model\s*:" /proc/cpuinfo` → 198 |
-| OS | Linux on bare metal (no VM), systemd + polkit + a desktop polkit agent (GNOME/KDE) | System tab → preflight |
+| OS | Linux on bare metal (no VM); systemd recommended (the root helper is a socket-activated service; any other init works if you start it by hand). No polkit, no password prompt | System tab → preflight |
 | Python | ≥ 3.12, standard library only (nothing to pip-install) | `python3 --version` |
 | Kernel | `msr` driver (`/dev/cpu/*/msr`); kernel lockdown `none`; `msr.allow_writes` not `off` | `cat /sys/kernel/security/lockdown` |
 | Browser | any current Chromium/Firefox (the GUI is a local web page on a random loopback address `127.x.y.z`, printed when it starts; not reachable from the network) | |
@@ -79,16 +79,18 @@ is refused with `OCLocked` or reads back unchanged, re-check UVP and OC Lock fir
 ```
 git clone https://github.com/xyehya/arrowlake-tuner && cd arrowlake-tuner
 python3 tools/run_tests.py          # optional: offline test suite (simulator, ~3 min)
-sudo bash install.sh                # code → /usr/lib/arltuner, GUI → /usr/share/arltuner/web, policy → /etc/arltuner, audit → /var/lib/arltuner
+sudo bash install.sh                # code → /usr/lib/arltuner, GUI → /usr/share/arltuner/web, helper units → systemd, policy + allowlist → /etc/arltuner, audit → /var/lib/arltuner
 ```
 The installer ends with a self-check ("all N checks passed"). It never applies any tuning and never touches an existing policy or accepted state.
 
 ## 4. Run
 ```
-python3 tools/arltuner-gui.py --open    # one polkit password prompt, then the browser opens the dashboard (a random http://127.x.y.z:PORT address)
+python3 tools/arltuner-gui.py --open    # no password: connects to the root helper service, then the browser opens the dashboard (a random http://127.x.y.z:PORT address)
 ```
 - Forgot the login link or closed the tab: run `python3 tools/arltuner-gui.py` again — it prints a fresh one-time link for the running GUI.
-- Stop the GUI: Ctrl+C in that terminal (the root helper exits with it).
+- Stop the GUI: Ctrl+C in that terminal (the root helper stops its work and exits by itself after about 10 idle minutes).
+- Who may use the helper: the users in `/etc/arltuner/helper.toml` `[access]` (the installer adds the user who ran `sudo bash install.sh`; add more with `sudo bash install.sh --add-user NAME`, no re-login). If the GUI says it
+  cannot connect or is not allowed, it prints the fix (`docs/guide/11-troubleshooting-faq.md`).
 
 **First session (in the app, in this order):**
 1. **Curves → Measure (Quick)** right after a cold boot, name it "stock", **mark as baseline** (predictions on the Tune page use it).
@@ -122,7 +124,7 @@ page and System → Tuning limits show each limit next to what your CPU allows. 
 ## 8. Troubleshooting
 | Symptom | Likely cause |
 |---|---|
-| Banner "read-only" / writes disabled | System → preflight: lockdown on (Secure Boot), `msr.allow_writes=off`, no polkit agent, or not an Arrow Lake-S CPU |
+| Banner "read-only" / writes disabled | System → preflight: lockdown on (Secure Boot), `msr.allow_writes=off`, helper service missing or nobody allowed (`helper_service`), or not an Arrow Lake-S CPU |
 | Apply refused `OCLocked` / nothing changes on read-back | BIOS OC Lock or Undervolt Protection still on |
 | Crash / reboot / errors under load | the tuning is unstable: cold boot (reverts all), then less negative offsets |
 | "No accepted state yet" | you have not used Profiles → Set as accepted yet |

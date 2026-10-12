@@ -1,6 +1,6 @@
 # 01 Requirements
 
-This page lists what the machine needs before you install: CPU, BIOS settings, Linux kernel, Python, polkit and optional tools. It is for anyone
+This page lists what the machine needs before you install: CPU, BIOS settings, Linux kernel, Python, the init system and optional tools. It is for anyone
 who has not run the tool yet. The app's own **System → Preflight** card checks most of this for you; this page explains each check.
 
 ## 1. CPU
@@ -26,7 +26,7 @@ The CPU's overclocking mailbox accepts runtime changes only if the firmware allo
 | Secure Boot | Disabled, or a kernel with lockdown `none` | Secure Boot normally turns on kernel lockdown, which blocks MSR writes (section 4) |
 | Per-core V/F offsets in BIOS | Leave at Auto / 0 | The app writes offsets itself at runtime. A BIOS offset stacks with what the app writes, so the values you read from the CPU would include it |
 
-On the reference machine (ASRock Z890 Steel Legend WiFi, BIOS 3.40) UVP was off, OC Lock off and Secure Boot off [USER 2026-09-30, HARDWARE.md]. These
+On the reference machine (ASRock Z890 Steel Legend WiFi, BIOS 3.40) UVP was off, OC Lock off and Secure Boot off [user-reported 2026-09-30, HARDWARE.md]; writes were then accepted [MEASURED win 2026-10-01, lnx 2026-10-01, platform-arl-s.md §1]. These
 two switches are the reason runtime writes work there. On other platforms a firmware may accept a write and silently ignore it
 [COMMUNITY github tarilka0gg/system-lab, linux-path.md §1], so the tool reads back every write and you should check the read-back, not only the
 absence of an error.
@@ -35,14 +35,14 @@ absence of an error.
 | Need | Detail | How the preflight sees it |
 |---|---|---|
 | Linux on bare metal | A virtual machine does not pass MSR writes to the hardware | `hypervisor`: read-only if the `hypervisor` cpuinfo flag is set |
-| systemd | `install.sh` creates `/run/arltuner` through `tmpfiles.d` (falls back to a plain directory without systemd-tmpfiles) | |
-| polkit | `pkexec` and `polkitd` installed, and a **polkit authentication agent** running in your desktop session (GNOME, KDE and similar have one). The root helper starts through `pkexec` and asks for your password | checks `pkexec`, `polkit`, `polkit_agent` |
-| A desktop session | The GUI is a local web page; a browser must open on the same machine | |
+| systemd (recommended) | `install.sh` installs and enables `arltuner-helper.socket` (socket activation: systemd starts the root helper on the first connection and it exits after about 10 idle minutes) and creates `/run/arltuner` through `tmpfiles.d`. **Any other init system works too**, but then the installer enables nothing: you start the helper yourself with `sudo /usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket` ([02](02-install.md)) | `helper_service`: the socket `/run/arltuner/helper.sock` exists, is a root-owned socket, and `/etc/arltuner/helper.toml` admits somebody |
+| No polkit, no password prompt | The project uses no polkit and no `pkexec`. The root helper is a service on a Unix socket; who may use it is an allowlist of user names in `/etc/arltuner/helper.toml` (the installer puts the user who ran `sudo bash install.sh` there). Trade-offs: [12 §7](12-safety-and-internals.md) | |
+| A desktop session | The GUI is a local web page; a browser must open on the same machine (a desktop polkit agent is **not** needed) | |
 | Python 3.12 or newer | Standard library only; nothing to `pip install`. `install.sh` uses `/usr/bin/python3` and refuses if it is older than 3.12 | `python` |
 | A current browser | Chromium or Firefox. The GUI is served on a random loopback address (`127.x.y.z`, see [03](03-first-run.md)); it is not reachable from the network | |
 | Root (sudo) | Only to run `install.sh` / `uninstall.sh` and the restore script | |
 
-Check: `python3 --version`, `command -v pkexec`.
+Check: `python3 --version`; `systemctl --version` if you want the systemd units.
 
 The reference machine runs Fedora 44 with kernel 7.2 [user-reported 2026-09-30, HARDWARE.md]. The code does not depend on the distribution
 (SPEC decision O-1: any Linux distro), but only Fedora is tested.
@@ -56,7 +56,7 @@ The tool reaches the CPU through `/dev/cpu/N/msr`. Every OC-mailbox request, **i
 | `/dev/cpu/N/msr` exists for every CPU | `ls /dev/cpu/*/msr \| wc -l` (24 on the reference chip) | Preflight `msr_device`. If the module exists but is not loaded: `sudo modprobe msr` (an explicit step; the tool never does it). Fedora builds the driver into the kernel (`CONFIG_X86_MSR=y`) [DOC src.fedoraproject.org f44 kernel config, linux-path.md §1] |
 | Kernel lockdown is `none` | `cat /sys/kernel/security/lockdown` shows `[none]` | With `[integrity]` or `[confidentiality]` MSR writes are blocked and the app is read-only (Secure Boot is the usual cause) [DOC include/linux/security.h, linux-path.md §1] |
 | `msr.allow_writes` is not `off` | `cat /sys/module/msr/parameters/allow_writes` as root (the file is root-only; an unprivileged preflight shows `unknown` and the root helper decides) | `on` or `default` are fine. To set it: boot parameter `msr.allow_writes=on`, or write `on` to that file as root [DOC kernel msr driver, linux-path.md §1] |
-| Root access to the msr nodes | The nodes are `root:msr 0660`, but **group membership is not enough**: opening as an ordinary user fails with EPERM | The root helper (polkit) does the access. You do not need to change permissions [MEASURED lnx 2026-10-08, linux-path.md §1] |
+| Root access to the msr nodes | The nodes are `root:msr 0660`, but **group membership is not enough**: opening as an ordinary user fails with EPERM | The root helper (a service, [12](12-safety-and-internals.md)) does the access. You do not need to change permissions [MEASURED lnx 2026-10-08, linux-path.md §1] |
 
 Effects you should expect: the first MSR write of a boot sets kernel taint bit 2 (`TAINT_CPU_OUT_OF_SPEC`), and the kernel logs
 `msr: Write to unrecognized MSR 0x150 ... tainting CPU_OUT_OF_SPEC`. Both are normal [MEASURED lnx 2026-10-01, linux-path.md §1]. The installer
@@ -96,7 +96,7 @@ Do not run another tool that talks to the same mailbox while you tune: HWiNFO, A
 ## 7. Check list
 - [ ] `grep` above shows family 6, model 198
 - [ ] UVP and OC Lock disabled in BIOS; Secure Boot off or lockdown `none`
-- [ ] bare metal, polkit agent running, Python 3.12 or newer
+- [ ] bare metal, Python 3.12 or newer, systemd (or you will start the helper by hand)
 - [ ] `/dev/cpu/*/msr` present; `allow_writes` not `off`
 - [ ] optional packages installed for the features you want
 - [ ] you know how to cold-boot (power off, wait, power on) and, ideally, how to clear CMOS on your board

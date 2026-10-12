@@ -26,7 +26,7 @@ The CPU exposes a voltage/frequency control interface, the **OC mailbox**, throu
 ## 2. Tuning units and regulators
 Each **P-core** has its own on-die voltage regulator (DLVR) and therefore its own V/F curve. The **E-cores** are grouped in **clusters of four**
 that share one regulator and one curve. All DLVRs are fed from one external rail, VccIA, which boards label "Vcore"
-[MEASURED lnx 2026-10-01, USER analysis, platform-arl-s.md §5]. The cluster-of-four grouping is tagged [MEASURED] in the SPEC-v3 header and [USER][COMMUNITY] in registers.md "Voltage semantics".
+[MEASURED lnx 2026-10-01, platform-arl-s.md §5]. The cluster-of-four grouping (one regulator per cluster) is tagged [COMMUNITY SkatterBencher] in platform-arl-s.md §2 and registers.md "Voltage semantics" (the SPEC-v3 header calls it [MEASURED]); the cluster membership itself (four E-cores per cluster) is [MEASURED lnx 2026-09-29].
 
 So a tuning unit is one P-core or one E-cluster. On the reference chip (8 P + 16 E, no SMT) that is 12 units: Linux CPUs 0-7 are P-cores, CPUs 8-23
 are E-cores in clusters 8-11, 12-15, 16-19, 20-23 [MEASURED lnx 2026-09-29]. The app derives the unit list from your CPU's sysfs

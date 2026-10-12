@@ -4,23 +4,24 @@
 | Page | Status | Last run |
 |---|---|---|
 | README.md (index) | complete; has the "Limits in one paragraph" box | 2026-10-12 (update) |
-| 01-requirements.md | complete | 2026-10-12 (update) |
-| 02-install.md | complete; limits table with hard ceilings | 2026-10-12 (update) |
-| 03-first-run.md | complete; random loopback URL | 2026-10-12 (update) |
+| 01-requirements.md | complete; no polkit, systemd recommended | 2026-10-12 (G-146) |
+| 02-install.md | complete; helper units, allowlist, `--add-user`, without systemd | 2026-10-12 (G-146) |
+| 03-first-run.md | complete; connects to the helper socket, no password | 2026-10-12 (G-146) |
 | 04-arrow-lake-vf-primer.md | complete | 2026-10-12 (update) |
 | 05-measuring-curves.md | complete | 2026-10-12 (update) |
 | 06-undervolting.md | complete; G-133 labels are now real | 2026-10-12 (update) |
 | 07-overclocking.md | complete; OC model matches the merged page | 2026-10-12 (update) |
 | 08-stability-testing.md | complete | 2026-10-12 (update) |
 | 09-profiles-and-restore.md | complete; Windows section rewritten (fingerprint, %ProgramData%), still "untested on Windows" | 2026-10-12 (update) |
-| 10-cli-reference.md | complete (flags from `--help` after G-138/G-141) | 2026-10-12 (update) |
-| 11-troubleshooting-faq.md | complete (first version) | 2026-10-12 (update) |
-| 12-safety-and-internals.md | complete; section 4 = limits (canonical), section 7 = D-042 hardening | 2026-10-12 (update) |
+| 10-cli-reference.md | complete (flags from `--help`); GUI/helper without pkexec | 2026-10-12 (G-146) |
+| 11-troubleshooting-faq.md | complete; GUI connect-error table | 2026-10-12 (G-146) |
+| 12-safety-and-internals.md | complete; §4 limits (canonical), §7 = D-043 access model (new), §8 = web hardening (was §7), sections 9-11 renumbered | 2026-10-12 (G-146) |
 Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 
 ## Style decisions
 - Evidence tags kept verbatim from the source; reference-machine numbers always "example values from one chip (Core Ultra 9 285K, ASRock Z890)".
 - Cite only files that exist in this repo (D-041). Vendor-decompile claims use `[DECOMPILED registers.md "section"]`. No names of private repos, personal paths or the earlier tool name.
+- No polkit anywhere (D-043): the helper is a socket-activated systemd service (`arltuner-helper.socket` -> `/run/arltuner/helper.sock`, 0666); the gate is the `[access]` allowlist (SO_PEERCRED) in `/etc/arltuner/helper.toml`; `sudo bash install.sh --add-user NAME`; without systemd run `sudo /usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket`. Say "sudo password" only for the restore script and installs.
 - Words: "you" for the user, not "operator"; `--operator` and the audit field `operator` keep the name.
 - **Limits wording (D-039), used on README, 02, 07, 10, 11, 12:** every limit is the user's policy in `/etc/arltuner/policy.toml`; defaults are conservative; the program hard-codes none;
   hard ceilings = the CPU's own limits read live (cmd `0x01` bits 7:0 ratio, cmd `0x28` minus one step voltage; unread = no raise) and the field encodings (offset -1000...+999 mV, V target 0.5...3.999 V,
@@ -41,6 +42,7 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 - Accepted layout now includes `fingerprint.json`; `profiles.accept` refuses `STALE_READ`; `profiles.fingerprint` -> `helper/ops_accept.py`, ARCHITECTURE G-141.
 - Limits: `policies/default.toml` header (D-039), ARCHITECTURE G-133/G-137/G-141 addenda, `registers.md` "Limits in the tool"; `System > Tuning limits` card `web/app.js renderSysLimits`.
 - tune.read cost about 140 on 8P+16E (112 V/F + 12 fused + 8 favored + 4 limits + 4 E 0x1C) -> ARCHITECTURE G-137 addendum; the page computes it from the unit list (G-139).
+- GUI connect errors (exit status 2) -> `src/arltuner/web/helperlink.py` `HelperConnectError` texts and `tools/arltuner-gui.py`; helper start/units -> `install.sh -h`, `uninstall.sh -h`, `packaging/arltuner-helper.{socket,service}`; allowlist file keys `allow_taint_bits`, `idle_exit_s`, `[access] users|group` -> `helper/settings.py`; preflight `helper_service` -> `platform/preflight.py`.
 - Everything from the first run (V/F word, points, clamp, interpolation, turbo tables, cold/warm boot, silent failures) still stands: `registers.md`, `platform-arl-s.md`, `tuning-results.md`.
 
 ## Open questions for the orchestrator
@@ -58,6 +60,12 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 9. ARCHITECTURE stress addendum (G-116: cap sets EPP `performance`) vs G-132 addendum (EPP write skipped under performance governor): guide does not mention EPP for Stress.
 10. The CLI's default policy (no `--policy`) is still the built-in conservative M1 policy with "no raise"; the restore scripts pass `/etc/arltuner/policy.toml`. Guide tells users to pass it.
 
+3a. (resolved by G-145/G-146) knowledge citations now point at `platform-arl-s.md`, `examples/reference-285k/notes/*`; `[USER]` tags removed from the sources and from guide 04/01.
+
+11. (G-146) Stale polkit wording in files I do not own: `docs/ARCHITECTURE.md:227` (G-116 addendum `PKEXEC_UID`; the G-144 addendum supersedes it), `docs/STATE.md:7`, `docs/ORCHESTRATION.md:38`, `docs/SPEC.md` §10 (D-021 draft).
+    `docs/SAFETY.md` has no paragraph on the D-043 access model (any process of an allowed user can drive the helper); guide 12 §7 carries it. Consider a short paragraph there.
+12. (G-146) "21 self-check checks" is from the coordinator; I did not run the installed self-check. Behaviour when the helper service is stopped while the GUI is open (page shows `helper: n/a`) is inferred from the code, not observed.
+
 ## Recheck after merges (all done 2026-10-12 against main c5eba92)
 - Tune labels All-Core/Per-Core, Whole Curve Offset/Per V/F point Offsets, OC box texts (with `·` and `×`), "No OC ratio" dropdown rules, "above 55× limit" tag, header "runs up to N×", live limits: verified in `web/app.js`.
 - D-038 +3: `policies/default.toml` header and ARCHITECTURE G-137; clamped by cmd `0x01`.
@@ -70,6 +78,8 @@ Next time: re-grep button names in `web/index.html`, `--help` of every CLI comma
 - After the first Windows run: correct 09 §4.
 
 ## Log (newest first)
+- 2026-10-12 (G-146 run, branch task/G-146-guide-no-polkit from main 27da86d): removed every polkit/pkexec/password description from guide 01, 02, 03, 09, 10, 11, 12, README (guide + root), `docs/SPEC.md` (O-3, preflight row, §4 diagram and 4.1, §10, §11);
+  added the D-043 access-model section (12 §7), the GUI connect-error table (11 §2), allowlist/`--add-user`/no-systemd text (02), License line in the guide index; verified G-145 citations (all section numbers resolve, `[USER]` gone). Commands verified with `--help`/`-h` only.
 - 2026-10-12 (update run, branch task/G-143-guide-update from main c5eba92): checked the recheck list against merged G-133..G-142 code; updated 01, 02, 03, 04, 05, 06, 07, 08, 09 (Windows fingerprint flow,
   %ProgramData%, new button, STALE_READ), 10 (--fingerprint, D-041 paths, Windows scripts table, screenshots tool), 11, 12 (limits section, D-042 hardening, socketpair, health-gate limitation), README
   limits paragraph; `docs/USER-GUIDE.md` is now a pointer; root `README.md` lines on setup/URL/limits/self-check refreshed (Screenshots section untouched). Scrubbed private-repo / predecessor / operator wording and

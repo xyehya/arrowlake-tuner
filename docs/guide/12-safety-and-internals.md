@@ -7,19 +7,23 @@ the policy. Sources: `docs/SAFETY.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.m
 ## 1. Architecture in one picture
 ```
 browser (127.x.y.z, random) --HTTP/SSE--> arltuner-gui.py (your user: web server)
-                                       |  JSON lines over a socketpair
+                                       |  JSON lines over a Unix socket (/run/arltuner/helper.sock)
                                        v
-                     root helper: pkexec /usr/lib/arltuner/arltuner-helper --device
+                     root helper: arltuner-helper.service (socket-activated; allowlist check per connection)
                                        |
                               plan -> guard -> mailbox transport -> /dev/cpu/N/msr
                                        |            |
                                   audit log     health gate (before/after)
 ```
 - The **web server** runs as you. It serves the page, checks the session, and forwards only an allowlisted set of operations with checked arguments
-  to the helper. It never touches hardware. It starts the helper over a `socketpair` (not pipes, so no other process of yours can reopen the channel through
-  `/proc/<pid>/fd`) and marks itself non-dumpable (`PR_SET_DUMPABLE 0`: other processes of your user cannot ptrace it or read its memory/environment) (G-142).
-- The **root helper** runs as root, started by `pkexec` through a polkit action that names exactly `/usr/lib/arltuner/arltuner-helper`. As root it accepts no
-  command-line arguments but `--device`; its paths are constants (`/etc/arltuner/policy.toml`, `/etc/arltuner/helper.toml`, `/var/lib/arltuner/audit.jsonl`,
+  to the helper. It never touches hardware. It connects to the helper's socket (after checking that the node is a socket owned by root and, with `SO_PEERCRED` on its own end, that the
+  listener really is root, so a look-alike gets no request). It marks itself non-dumpable (`PR_SET_DUMPABLE 0`: other processes of your user cannot ptrace it or read its memory/environment) (G-142). With the
+  development option `--helper CMD` the channel is a `socketpair` to a child process instead.
+- The **root helper** runs as root as a **systemd socket-activated service** (D-043): `arltuner-helper.socket` listens on `/run/arltuner/helper.sock` (mode 0666) and starts
+  `arltuner-helper.service` (`/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket`) on the first connection. Under another init system you run that command yourself. There is **no polkit and no
+  password**. At every connection the helper reads the connecting process's user id with `SO_PEERCRED` and admits it only if the name is in `[access] users` (or the user is in `[access] group`) of
+  `/etc/arltuner/helper.toml`; a missing, empty, unreadable or invalid list admits nobody; root only if listed by name. One client at a time (a second gets `CLIENT_BUSY`); when it leaves, telemetry stops and an operation in flight finishes
+  its read-back or restore; the service exits after `idle_exit_s` (default 600 s) with no client and no operation. As root it accepts no command-line arguments but `--device --socket`; its paths are constants (`/etc/arltuner/policy.toml`, `/etc/arltuner/helper.toml`, `/var/lib/arltuner/audit.jsonl`,
   `/etc/arltuner/accepted`); every file it opens is checked (regular, one link, owned by root, no group/other write, symlinks refused). It refuses to run from a
   checkout (SPEC §4.4, D-029).
 - The **guard** is the only code allowed to send a mailbox request.
@@ -30,7 +34,7 @@ Every mailbox request, a read included, passes these checks in order, and the fi
 | Check | Refusal | Meaning |
 |---|---|---|
 | guard tripped earlier | `TRIPPED` | after any transport error, read-back mismatch, failing health gate or unreleasable lock, everything is refused until a new session |
-| environment flag | `NO_ENV_FLAG` | `ARLTUNER_ALLOW_MAILBOX=1` must be set: exported by you on the CLI path; the helper supplies it itself after the polkit password (SPEC §4.1) |
+| environment flag | `NO_ENV_FLAG` | `ARLTUNER_ALLOW_MAILBOX=1` must be set: exported by you on the CLI path; the helper supplies it itself for an admitted connection (the allowlist replaced the old password, SPEC §4.1, D-043) |
 | confirmation | `BAD_CONFIRMATION` | the plan-bound token / typed confirmation did not match |
 | CPU allowed | `CPU_NOT_ALLOWED` | the CPU is not in the policy's P/E set |
 | allowlist | `NOT_ALLOWLISTED` | the command, `P1`, `P2` and kind (read/write) must be listed in the policy; default deny |
@@ -133,7 +137,32 @@ On Windows the equivalent check is new WHEA events.
 later, under load, is not seen by it. It is caught by stress tests and bounded by "revert = cold boot"; a clean health result is evidence about that window, not proof that a setting is
 stable (`docs/SAFETY.md`). The audit log has no size cap and is never truncated by the tools.
 
-## 7. Web server hardening (summary)
+## 7. Who can drive the helper: the access model (D-043)
+The project removed polkit on purpose (fewer dependencies, the same experience on every distribution, no password prompt on each start). That **changes the security model**, and you should
+know exactly how:
+
+| Before (D-029/D-042) | Now (D-043) |
+|---|---|
+| Starting the helper needed the administrator password once per GUI start (polkit). A process of yours without the password could not get root's MSR access | **Any process of an allowed user can connect to the helper and drive it without a prompt.** The socket is connectable by everyone (0666), but the helper refuses every user id that is not in the allowlist |
+
+What the allowlist means in practice: if you put a user in `/etc/arltuner/helper.toml`, anything running as that user (a browser exploit, a script, a malicious package you ran) can ask the helper
+to read or write the CPU, within the limits below, until the user is removed from the list. Do not allow accounts you do not control, and do not leave untrusted software running as an allowed user.
+To remove access, delete the name from `[access] users` (a root edit; effective at the next connection). Root cannot be added by the installer.
+
+**What still protects you** (none of it depends on a password):
+
+- **The allowlist itself**: a kernel-supplied user id (`SO_PEERCRED`, not forgeable by an unprivileged process), checked at every connection, fail closed; the file is root-owned and trust-checked.
+- **The guard and your policy limits** on every request: allowlist of commands, offset/ratio/voltage limits (hard ceilings: your CPU's own limits), one mailbox transaction at a time, read-back of every write, the
+  health check, and the audit log that records each request with the user (`gui:uid<N>`) ([§2](#2-the-write-guard), [§4](#4-limits-the-policy-file-is-yours)).
+- **One client at a time** and **idle exit**: a second client is refused; with no client the helper exits after about 10 minutes.
+- **Nothing is applied on its own**: the helper acts only on requests; no tuning is applied at boot (autostart is an unsigned proposal, D-021). Everything it writes is volatile: a cold boot reverts it.
+- **The GUI side**: the web server checks that the listener is root; its sessions have a fixed scope, and a **read** session can only read ([§8](#8-web-server-hardening-summary)). These web checks protect the browser path;
+  a process that speaks the helper protocol directly bypasses the web layer and is bounded by the helper's own checks above.
+- The helper's own hardening: root-owned code tree and trusted file opens, no argument but `--device --socket` as root, unit options `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`.
+
+The trade is deliberate: a prompt that appears on every start was judged more friction than protection on a single-user workstation. On a **multi-user machine**, allow only yourself, or do not install.
+
+## 8. Web server hardening (summary)
 - **Random loopback address (G-142, D-042).** The server binds `127.x.y.z` with a random port, a fresh address each run (it falls back to `127.0.0.1`, with a warning on the terminal, only
   if that bind fails). Browsers keep cookies per host name, not per port, so every run has its own cookie jar: another local service cannot receive your session cookie. This replaces
   the earlier accepted risk of D-028 #1, and it matters because the plan nonce is returned to the browser (D-033): whoever holds the cookie could otherwise fetch it.
@@ -146,22 +175,22 @@ stable (`docs/SAFETY.md`). The audit log has no size cap and is never truncated 
 - The page uses a strict content-security policy and no CDN; the GUI is plain HTML/CSS/JS shipped in the repository (D-012).
 
 Residual risks the project still accepts (D-028 minus the cookie item): a local process could hold all connection slots (a local denial of service only); rate limiting does not slow
-guessing, but the secrets are 256-bit. Do not run the GUI on a machine with untrusted local users. The restore scripts run Python under `-I` from the checkout; moving restore onto the installed,
+guessing, but the secrets are 256-bit. Do not run the tool on a machine with untrusted local users or allow accounts you do not control ([§7](#7-who-can-drive-the-helper-the-access-model-d-043)). The restore scripts run Python under `-I` from the checkout; moving restore onto the installed,
 root-owned tree is a planned follow-up (ROADMAP).
 
-## 8. Software and downloads
+## 9. Software and downloads
 The tool installs nothing by itself and downloads nothing. Its only third-party tools are the optional ones you install ([01 §5](01-requirements.md)).
 The Windows restore needs a driver carved from **your own** `ThrottleStop.exe`; it is never committed to the repository. It lives in the admin-only `%ProgramData%\arltuner`, each run loads a new
 hash-checked copy, and the service and the copy are deleted after the run ([09 §4](09-profiles-and-restore.md)).
 Third-party tuning programs (OCCT, XTU, ThrottleStop, HWiNFO) are never launched by the tool.
 
-## 9. What the tool will not do
+## 10. What the tool will not do
 - Write persistent settings: BIOS/NVRAM variables, firmware, anything that survives a cold boot. Everything it writes is volatile (T2 in `SAFETY.md`).
 - Use static/override voltage mode (D-016) or touch the ring/NGU/system-agent/graphics V/F from the GUI.
 - Apply anything at boot without you. Unattended autostart is an undecided, unsigned proposal (D-021) and is not implemented.
 - Raise a policy limit on its own, or retry a failing write.
 
-## 10. If something goes wrong
+## 11. If something goes wrong
 | Symptom | Do this |
 |---|---|
 | Freeze or reboot while tuning | cold boot (hold power until off, wait, start). The CPU is stock. Start from the last good state with a smaller change |

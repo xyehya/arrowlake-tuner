@@ -14,14 +14,14 @@ It has a local web GUI, a command line and restore scripts. It can:
 - run short **stress screens** (CPU or memory) and count errors;
 - keep a **profile** you trust as the *accepted state* and put it back after a reboot.
 
-Everything privileged runs in a small root helper started through polkit. Every write passes a guard, is sent one mailbox transaction at a time,
+Everything privileged runs in a small root helper, a systemd socket-activated service that only the users in its allowlist can use (no polkit, no password prompt). Every write passes a guard, is sent one mailbox transaction at a time,
 is read back and is written to an audit log. A **cold boot reverts every runtime change.** The tool applies nothing by itself at boot.
 
 ## Supported hardware
 | Item | Supported |
 |---|---|
 | CPU | Intel Core Ultra 200S, Arrow Lake-S desktop: CPU family 6, model 198 (0xC6), stepping 2 (`platforms/arl-s.toml`). An unlisted stepping gives a warning, not a refusal. Any other CPU is read-only or refused. |
-| OS | Linux on bare metal (not a VM), with systemd and polkit. Windows gets a PowerShell restore script only, driven by a fingerprint recorded on Linux (see [09 §4](09-profiles-and-restore.md); not yet run on real Windows in its current form). |
+| OS | Linux on bare metal (not a VM), with systemd (recommended; any init works with a manual command). Windows gets a PowerShell restore script only, driven by a fingerprint recorded on Linux (see [09 §4](09-profiles-and-restore.md); not yet run on real Windows in its current form). |
 | Board | Any board for the CPU whose BIOS lets you disable **Undervolt Protection** and **OC Lock**. The board-specific part is only the Vcore reading, which the app looks up by the board's DMI name. It is known for the reference board (ASRock Z890 Steel Legend WiFi); on an unknown board the dashboard shows no Vcore rather than a guess (`platforms/arl-s.toml`). |
 
 **Example values.** The project was developed and measured on one machine: a Core Ultra 9 285K on an ASRock Z890 Steel Legend WiFi. Where this
@@ -67,6 +67,9 @@ Details: [12 Safety and internals](12-safety-and-internals.md) and [`../SAFETY.m
 - **Button and tab names** are quoted from the web page (for example **Read ratios & voltages**, **All-Core** / **Per-Core**, **Whole Curve Offset** / **Per V/F point Offsets**, **Set as accepted**).
   Screenshots of the pages are in the repository [README](../../README.md#screenshots); they show one example machine.
 - Commands are for a normal user shell unless they start with `sudo`.
+
+## License
+MIT (see [`../../LICENSE`](../../LICENSE)).
 
 ## Other documents
 [`../../README.md`](../../README.md) (short project README), [`../SPEC-v3.md`](../SPEC-v3.md)

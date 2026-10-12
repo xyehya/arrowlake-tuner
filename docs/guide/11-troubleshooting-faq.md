@@ -6,7 +6,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 ## 1. Quick triage
 1. Open **System → Preflight**. Is the mode `write`? If not, fix the failing check first ([03 §3](03-first-run.md)).
 2. Open **Audit** and look at the newest lines: `refused`, `error`, `trip`, or a non-zero `rc`.
-3. If the machine crashed or behaves oddly: cold boot, then retry with a smaller change ([12 §10](12-safety-and-internals.md)).
+3. If the machine crashed or behaves oddly: cold boot, then retry with a smaller change ([12 §11](12-safety-and-internals.md)).
 
 ## 2. The tool does not start or is read-only
 | Symptom | Cause | Fix |
@@ -17,12 +17,30 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 | `msr_allow_writes`: `msr.allow_writes=off` | the kernel refuses MSR writes | boot with `msr.allow_writes=on` or write `on` to `/sys/module/msr/parameters/allow_writes` as root |
 | `hypervisor` | running in a virtual machine | run on bare metal |
 | `cpuid` / `topology` | not an Arrow Lake-S CPU or an unexpected core layout | not supported; nothing will be written |
-| `pkexec`, `polkit`, `polkit_agent` | polkit missing, or no authentication agent in the session | install polkit; use a normal desktop login |
+| `helper_service` | the helper socket is missing, not a root-owned socket, or `/etc/arltuner/helper.toml` admits nobody | `sudo bash install.sh`; `sudo bash install.sh --add-user NAME` (see the table below) |
 | `python` refuse | Python older than 3.12 | update Python |
-| no password prompt, "helper: n/a" | helper not installed or `--no-helper` | [02](02-install.md) |
+| "helper: n/a", calls answer 503 | no helper: `/run/arltuner/helper.sock` does not exist or `--no-helper` | [02](02-install.md) |
 | "Session ended. Open a fresh launcher link to continue." | the session cookie expired (30 min idle, 12 h total) or the GUI restarted | run `python3 tools/arltuner-gui.py --open` again |
-| Install refuses: "an arltuner-helper process is running" | the GUI is still running | Ctrl+C in its terminal, then re-run `install.sh` |
+| Install refuses: "an arltuner-helper process is running" | a helper the installer could not stop | `sudo systemctl stop arltuner-helper.socket arltuner-helper.service` (or SIGTERM a helper you started by hand), then re-run `install.sh` |
 | Self-check failed after install | the installed tree is not trusted | `sudo bash uninstall.sh`, check the checkout is not modified and has no symlinks, install again |
+
+### The GUI cannot connect to the helper
+`python3 tools/arltuner-gui.py` prints `arltuner-gui: <message>` and exits with status 2. There is no password and no polkit; the messages name the fix:
+
+| Message (shortened) | Cause | Fix |
+|---|---|---|
+| `warning: no helper: /run/arltuner/helper.sock does not exist (not installed? run: sudo bash install.sh). Starting without one` | nothing is installed (checkout run); the page loads but calls answer 503 | `sudo bash install.sh` |
+| `the helper is not installed or not started: ... does not exist. Run: sudo bash install.sh (it enables arltuner-helper.socket)` | the socket vanished between check and connect, or systemd is not running the socket unit | `sudo bash install.sh`, or `sudo systemctl enable --now arltuner-helper.socket` |
+| `nothing is listening on ...: start it with: sudo systemctl enable --now arltuner-helper.socket` | the socket node exists but no service owns it (for example after a manual helper stopped without systemd) | the command in the message; without systemd start the helper by hand ([02](02-install.md)) |
+| `the helper refused this user: not in the allowlist (/etc/arltuner/helper.toml). Run: sudo bash install.sh --add-user NAME` | your user is not in `[access] users` | run the command with your user name; no re-login needed, just start the GUI again |
+| `another client is connected to the helper (another arltuner GUI?). Close it, then start this one again.` | the helper serves one client at a time | Ctrl+C the other GUI (or wait for it to end), start again |
+| `permission denied on the helper socket ...: its file mode is wrong (it should be root-owned, mode 0666 ...)` | the socket node was changed | `sudo bash install.sh` repairs it |
+| `... is not a socket owned by root; not connecting to it` / `the process listening on ... is uid N, not root; not talking to it` | something other than the real helper owns the path; the GUI refuses to send it anything | find out what (`ls -l /run/arltuner`, `ss -xlp`), remove it, `sudo bash install.sh` |
+| `the helper closed the connection right away (it may have refused to start). See: journalctl -u arltuner-helper -n 30` | the helper started and exited, for example a failed trust check or a bad `helper.toml` | run the `journalctl` command; `sudo bash install.sh` re-runs the self-check |
+| `the helper did not answer within N s. See: journalctl -u arltuner-helper -n 30` | the helper hung | same |
+
+Other things to know: the helper exits by itself after about 10 idle minutes and systemd starts it at the next connection, so that is normal; if the GUI is running while you reinstall or stop the helper, the page shows
+"helper: n/a" and you start the GUI again; `helper.toml` with a syntax error admits **nobody** (fail closed), and the preflight check `helper_service` says why.
 
 ## 3. Refusals while planning or applying
 | Message / code | Meaning | Fix |
@@ -41,7 +59,7 @@ for anyone whose tool is read-only, refuses a plan, or whose tuning misbehaves.
 | `LOCKED` | another mailbox transaction holds the lock | wait for it; close other tuning tools |
 | `TRIPPED` | an earlier error, mismatch or health failure tripped the guard in this session | stop, check the audit log and `dmesg`, cold boot before more writes |
 | `HEALTH_GATE` | the before/after health check found a change | read the detail; unexpected kernel messages mean stop |
-| `NO_INVOKER` (Stress) | the helper does not know which user to run the load as | start the GUI from the launcher, not as root |
+| `NO_INVOKER` (Stress) | the connecting user is root (or unknown), and stress children are never run as root | run the GUI as your ordinary user (root can only connect if listed by name, and still cannot run stress) |
 | `TOOL_MISSING` | `stress-ng` or `stressapptest` not installed | install it ([01 §5](01-requirements.md)) |
 | `MEM_RANGE` | not enough free memory for the memory screen | pick a smaller size or Automatic |
 | `STALE_JOURNAL`, `RESTORE_FAILED` | cpufreq limits from an earlier run could not be put back | check `scaling_max_freq` / `scaling_min_freq` in System before anything else; restarting the helper applies a stale journal |
@@ -97,6 +115,10 @@ in this guide are labelled examples.
 
 **Does it work on laptop Arrow Lake parts or other vendors?** The platform check matches the desktop Arrow Lake-S CPUID (family 6, model 198); any other CPU makes the
 app read-only. Whether a laptop part exposes the same mailbox is not tested here. AMD and older Intel are out of scope.
+
+**Is there a password prompt?** No. The project uses no polkit. The GUI connects to a root helper service; the helper admits only the users listed in `/etc/arltuner/helper.toml`
+(the installer adds the user who ran `sudo bash install.sh`; `sudo bash install.sh --add-user NAME` adds more). The trade-off is explained in [12 §7](12-safety-and-internals.md). You only need `sudo` to install,
+to edit the policy and for the command-line restore script.
 
 **Do I need to disable Secure Boot?** Usually yes: it normally turns on kernel lockdown, which blocks MSR writes. Without writes the dashboard and the Curves
 measurement still work but Tune cannot read or apply.
