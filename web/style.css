@@ -167,6 +167,7 @@ main { max-width: 1680px; margin: 0 auto; padding: 20px clamp(16px, 3vw, 40px) 4
 .die { width: 100%; height: auto; max-height: 470px; }
 .hatch-bg { fill: #121a3a; }
 .hatch-line { stroke: #26305a; stroke-width: 3; }
+.cluster-label { fill: color-mix(in srgb, var(--e-core) 70%, var(--text)); font-size: 10px; font-weight: 600; letter-spacing: .04em; }
 .cluster { fill: none; stroke: color-mix(in srgb, var(--e-core) 35%, transparent); stroke-dasharray: 3 4; }
 .tile { cursor: pointer; }
 .tile-face { stroke: #2c3a70; stroke-width: 1; }
@@ -479,7 +480,7 @@ th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color:
 
 .cv-card .card-head { align-items: center; }
 .cv-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.cv-pick select { max-width: 46ch; }
+.cv-pick select { max-width: 72ch; text-overflow: ellipsis; }
 .cv-tools { margin-bottom: 8px; }
 .cv-tools select { max-width: 34ch; }
 .legend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }

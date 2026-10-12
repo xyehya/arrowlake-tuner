@@ -75,7 +75,8 @@ class TestStatic(unittest.TestCase):
         """G-125: a read point flagged oc_point (EC1 P2 = 7 = 48x) stays out of the fused point set the grid and the predictions are built from."""
         self.assertIn("p.oc_point !== true", body_of("curPts"))
         self.assertIn("oc_point: p.oc_point === true", JS)
-        self.assertIn("if (p.point > fusedN) p.oc_point = true", JS)   # an older read without the flag: judged by the point number (P 9, E 7)
+        self.assertIn("p.ratio > top) p.oc_point = true", JS)   # a raw read without the flag: a point above the unit's fused top (0x09), never a fixed count (D-036)
+        self.assertNotIn("fusedN", JS)
         self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)
 
     def test_the_before_after_table_names_the_unit_on_every_row(self):

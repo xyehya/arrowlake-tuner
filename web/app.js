@@ -585,7 +585,7 @@
 
   // ---- core map (Overview hero) ----------------------------------------------------------------------------------------------------
   // Schematic, not a die photo: P-cores in pairs and E-cores in clusters of four, interleaved over two rows.
-  const DIE = { P_W: 78, P_H: 128, E: 34, GAP: 10, GROUP_GAP: 18, PAD: 22, ROW_GAP: 22 };
+  const DIE = { P_W: 78, P_H: 128, E: 34, GAP: 10, GROUP_GAP: 18, PAD: 24, ROW_GAP: 30 };
   const tileRefs = {};  // cpu -> {g, rect, val, title}
 
   function buildDie() {
@@ -609,6 +609,9 @@
       for (const g of groups.slice(r * perRow, (r + 1) * perRow)) {
         if (g.kind === "E") {
           nodes.push(sv("rect", { x: x - 6, y: y0 - 6, width: width(g) + 12, height: DIE.P_H + 12, rx: 10 }, "cluster"));
+          // the tuning unit the four share (one regulator per cluster), named only when the live topology puts all of them in the same one
+          const us = Array.from(new Set(g.cores.map((c) => UNIT_BY_CPU[String(c.cpu)] || null)));
+          if (us.length === 1 && us[0]) { const t = sv("text", { x: x, y: y0 - 10 }, "cluster-label"); t.textContent = us[0]; nodes.push(t); }
         }
         g.cores.forEach((c, i) => {
           let tx, ty, tw, th;
@@ -1586,6 +1589,19 @@
 
   // On load: this boot's stored read (tune.last). No mailbox operation: the helper kept the last complete read in a root-owned file.
   // G-139: the api helper asks again when the helper answers BUSY (see RETRY_BUSY_OPS); the status line says so meanwhile, and the Tune tab asks again when it opens with nothing shown.
+  // After an apply: take the turbo tables (and their notes) from the helper's kept read, which folds the apply's read-backs, so an applied table is
+  // no longer shown as an edit against the old one. Read-only (tune.last); words of the units stay as folded from the review dialog.
+  async function refreshTablesAfterApply() {
+    const { status, body } = await api("tune.last", {});
+    if (!T.words || status !== 200 || !body.ok || !isObj(body.result) || body.result.available !== true || !isObj(body.result.result)) return;
+    const w = normWords(body.result.result);
+    T.words.tables = w.tables;
+    T.words.tablesNote = w.tablesNote;
+    T.words.turbo = w.turbo;
+    T.turbo = {};
+    refreshRows();
+  }
+
   async function loadLastRead() {
     if (T.words || S.lastTried || S.lastBusy) return;
     S.lastBusy = true;
@@ -3502,8 +3518,12 @@
           if (isObj(src) && typeof src.word === "string") p.word = src.word;
         }
       }
-      const fusedN = id.charAt(0) === "P" ? 8 : 6;   // F1: P points 1..8 are fused (OC = 9), E 1..6 (OC = 7); an older read without the flag is judged by the point number
-      for (const p of pts) if (p.point > fusedN) p.oc_point = true;
+      // The OC point is the helper's `oc_point` flag of the decoded read (D-036). Only a raw read without the decoded copy has no flag: there the point
+      // after the highest one the unit's fused top (0x09) names is taken as the OC point, never a fixed count.
+      if (!dec) {
+        const f = isObj(r.fused) ? r.fused[String(cpu)] : null, top = isObj(f) && isNum(f.ratio) ? f.ratio : null;
+        if (top !== null) for (const p of pts) if (p.point > 0 && isNum(p.ratio) && p.ratio > top) p.oc_point = true;
+      }
       units[id] = { id: id, cpu: cpu, oc: pts.find((p) => p.point === 0) || null, points: pts.filter((p) => p.point !== 0) };
     }
     const tables = isObj(r.tables) && Array.isArray(r.tables.p) && Array.isArray(r.tables.e) ? { p: r.tables.p.filter(isNum), e: r.tables.e.filter(isNum) } : null;
@@ -3590,9 +3610,15 @@
     const offs = UNIT_IDS.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)).filter(isNum);
     if (!offs.length) return { kind: "unknown", text: "unknown", title: "The read returned no offsets." };
     if (offs.every((x) => Math.abs(x) < MV_TOL)) return { kind: "stock", text: "stock", title: "Every offset read back as 0 mV." };
-    const grp = (ids) => agg(ids.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)), MV_TOL);
-    const f = (g) => (isNum(g) ? fmtMv(g) : g === MIXED ? "mixed" : "n/a");
-    return { kind: "words", text: "tuned (P " + f(grp(unitsOfKind("P"))) + ", E " + f(grp(unitsOfKind("E"))) + ")", title: "Offsets read from the CPU this boot." };
+    // per kind the range of offsets the read holds (point offsets plus the whole-curve offset of the OC word), e.g. "P −91…0 mV"
+    const rng = (k, ids) => {
+      const v = ids.filter((u) => w.units[u]).flatMap((u) => w.units[u].points.concat(w.units[u].oc ? [w.units[u].oc] : []).map((p) => p.offset_mv)).filter(isNum);
+      if (!v.length) return k + " n/a";
+      const lo = Math.min(...v), hi = Math.max(...v);
+      return k + " " + (hi - lo < MV_TOL ? fmtMv(lo, 0) : fmtMv(lo, 0).replace(" mV", "") + "\u2026" + fmtMv(hi, 0));
+    };
+    return { kind: "words", text: "tuned \u00b7 " + rng("P", unitsOfKind("P")) + ", " + rng("E", unitsOfKind("E")),
+      title: "Offsets read from the CPU this boot (lowest\u2026highest over every V/F point of each kind). See Tune for each unit." };
   }
 
   function agoText(ms) {
@@ -4205,7 +4231,9 @@
         const a = appliedFromWords(T.words);
         setAppliedChip(bad.size ? "unknown" : a.kind, P.partial ? "partial apply, read again" : bad.size ? "unverified" : a.text + ", written this session",
           P.partial ? "The apply stopped part way: read the ratios and voltages to see what the CPU holds." : bad.size ? "Some words did not read back as written." : "Written from the review dialog and read back. Read the ratios and voltages again for a fresh check.");
+        T.turbo = {};
         buildRows();
+        refreshTablesAfterApply();   // turbo tables as the helper now holds them (code review 2026-10-12 #5)
       }
       setText("tn-status", P.partial ? "Partial apply: it stopped after " + (isNum(P.writesSent) ? P.writesSent : "some") + " writes. Read the ratios and voltages to see what the CPU holds."
         : "Applied from the review dialog. " + (rb.some((x) => x.match !== true) ? "Some words did not match; see the read-back." : "Every word read back as written."));
