@@ -1,23 +1,23 @@
 # Memory: live DDR5 frequency and timings from MCHBAR (lnx, read-only)
 
-Host: lnx. Scope: P (Arrow Lake-S host bridge `8086:7d1a`). Source of the method: the operator's monitor repo (orchestrator-read 2026-10-11),
-which implements Intel's public register map **Core Ultra 200S/200HX Series 2, document 835538 rev 001** [DOC Intel 835538]. These are the
+Host: lnx. Scope: P (Arrow Lake-S; host bridge `8086:7d1a` on the reference 285K). The method follows Intel's public register map **Core Ultra 200S/200HX Series 2, document 835538 rev 001** [DOC Intel 835538]. These are the
 *trained, in-use* values (what the memory controller runs), not SPD/XMP values. Read-only: PCI config read + exact-width `/dev/mem` reads; **no
 PCI or MMIO write, ever; no MRC/PMA mailbox request**.
 
 ## Discovery
-1. Host bridge `/sys/bus/pci/devices/0000:00:00.0`: `vendor:device` must be `8086:7d1a`, else unavailable ("unknown host bridge").
+1. Host bridge `/sys/bus/pci/devices/0000:00:00.0`: `vendor:device` must be `8086:7d1a`, else unavailable ("unknown host bridge"). Whether other
+   ARL-S dies (e.g. 6P+8E parts) use the same device id is [UNVERIFIED]; add ids only from a measurement or Intel's datasheet.
 2. MCHBAR register = 8 bytes LE at PCI config offset **`0x48`** (`os.pread(config_fd, 8, 0x48)`, root). Bit 0 = enable (0 ⇒ unavailable
    "MCHBAR disabled"); base = `reg & ~0x7FFF`; base 0 ⇒ unavailable. Window size `0x20000`.
 3. Reads: `os.open("/dev/mem", O_RDONLY|O_SYNC)`, `os.pread(fd, width, base + offset)` for a **compiled whitelist** of (offset, width) only; a
-   short read ⇒ unavailable. Works on this kernel with `CONFIG_STRICT_DEVMEM=y` + `CONFIG_IO_STRICT_DEVMEM=y` (MCHBAR is MMIO, not claimed RAM)
+   short read ⇒ unavailable. Works on Fedora kernel 7.2 with `CONFIG_STRICT_DEVMEM=y` + `CONFIG_IO_STRICT_DEVMEM=y` (MCHBAR is MMIO, not claimed RAM)
    [MEASURED lnx 2026-10-11]. `/dev/mem` absent / EPERM ⇒ unavailable with the errno.
 
 ## Timing instances (MCHBAR-relative bases)
 `mc0_channel0 0x0E000`, `mc0_channel1 0x0E800`, `mc0_broadcast 0x0F000`, `mc1_channel0 0x1E000`, `mc1_channel1 0x1E800`, `mc1_broadcast 0x1F000`.
 Broadcast instances **read channel 0 of their controller** (835538 MC chapter) — aliases, not extra data. Per-instance whitelist (relative offset,
 width): `(0x000,8) (0x00C,4) (0x010,4) (0x014,4) (0x018,4) (0x070,4) (0x088,8) (0x138,8) (0x4A0,8)`. Use the first instance that passes the
-plausibility check; report how many instances agree (today: 6/6 identical).
+plausibility check; report how many instances agree (on the reference machine all 6 agree).
 
 ## Field layout (per instance; little-endian words)
 | Register (rel) | Name | Fields |
@@ -43,11 +43,8 @@ Plausibility (reject an instance otherwise): `4 ≤ tCL ≤ 72`, `8 ≤ tRCD ≤
 ## DIMMs (no MCHBAR)
 - SMBIOS type 17 (size, part number, manufacturer, configured speed/voltage, rank): `dmidecode -t 17` (root) or parse
   `/sys/firmware/dmi/entries/17-*/raw` (root, stdlib, preferred: no external binary).
-- DIMM temperatures: hwmon `spd5118` devices (`temp1_input`, m°C) — present on this machine (hwmon5, hwmon6) [MEASURED lnx 2026-10-11].
+- DIMM temperatures: hwmon `spd5118` devices (`temp1_input`, m°C) (present with DDR5 DIMMs on the reference machine) [MEASURED lnx 2026-10-11].
 
-## Fixture — live values on the reference machine [MEASURED lnx 2026-10-11, BIOS DDR5-7200]
-MCHBAR register base `0xFEDC0000`; 6/6 instances plausible and equal. QCLK ratio 108 → 3600.0 MHz, **DDR5-7200**, Gear 2, CMD 2N (2T);
-0x13D98 cross-check agrees (3600 MHz, ratio 36). Primary **36-44-44-96**, tRC 140, tRFC 574, tFAW 32, tCWL 34, tRTP 23, tWR 110 (tWRPRE 152),
-tRRD_L 12, tRRD_S 8, tREFI 32767, tRCDW 44, tRPab 44, tRFCpb 467. RDRD SG/DG/SD/DD 18/8/16/16 · WRWR 72/8/18/18 · RDWR 23/23/23/23 ·
-WRRD 68/48/13/13. BCLK CPU 100.000 / SoC 100.004 MHz. Max theoretical bandwidth 115200 MB/s. (Raw words: not captured; tests encode these field
-values into synthetic words with the layout above.)
+## Fixture
+The reference machine's live values (DDR5-7200, Gear 2, 36-44-44-96 ...), which the tests encode into synthetic words with the layout above:
+`examples/reference-285k/notes/platform.md` §8 [MEASURED lnx 2026-10-11].
