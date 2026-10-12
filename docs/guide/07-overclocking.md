@@ -64,7 +64,7 @@ favored-ratio word `0x1D`, the granular-ratio word `0x27`, and the E turbo table
 the kernel actually uses the new ratio (G-126). Review shows all of them.
 
 Cost (order of magnitude): the reference E-cluster raise was planned as 53 mailbox WRMSRs and one P-core as 13 [T-022, SAFETY.md]; restoring the whole
-accepted state on the reference machine took 172 write operations plus reads [MEASURED lnx 2026-10-11].
+accepted state on the reference machine took 172 operations and 57 read-back rows [MEASURED lnx 2026-10-11].
 
 ## 4. What was measured on the reference chip (example values from one chip)
 All from a Core Ultra 9 285K; the point is the behaviour, not the numbers.

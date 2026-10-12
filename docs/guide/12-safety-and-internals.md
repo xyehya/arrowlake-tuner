@@ -29,7 +29,7 @@ Every mailbox request, a read included, passes these checks in order, and the fi
 | Check | Refusal | Meaning |
 |---|---|---|
 | guard tripped earlier | `TRIPPED` | after any transport error, read-back mismatch, failing health gate or unreleasable lock, everything is refused until a new session |
-| environment flag | `NO_ENV_FLAG` | `ARLTUNER_ALLOW_MAILBOX=1` must be set by the human or the helper |
+| environment flag | `NO_ENV_FLAG` | `ARLTUNER_ALLOW_MAILBOX=1` must be set: exported by you on the CLI path; the helper supplies it itself after the polkit password (SPEC §4.1) |
 | confirmation | `BAD_CONFIRMATION` | the plan-bound token / typed confirmation did not match |
 | CPU allowed | `CPU_NOT_ALLOWED` | the CPU is not in the policy's P/E set |
 | allowlist | `NOT_ALLOWLISTED` | the command, `P1`, `P2` and kind (read/write) must be listed in the policy; default deny |

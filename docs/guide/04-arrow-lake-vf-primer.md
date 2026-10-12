@@ -74,7 +74,7 @@ The `P2` request field selects what the word belongs to:
 | `P2` | Meaning |
 |---|---|
 | 0 | the unit's **OC word**: ratio, adaptive target voltage and a *whole-curve* offset |
-| 1 ... n | the V/F point of that index; a point write carries `point_ratio | offset << 21` and a voltage target of 0 [MEASURED lnx 2026-10-02] |
+| 1 ... n | the V/F point of that index; a point write carries `point_ratio \| offset << 21` and a voltage target of 0 [MEASURED lnx 2026-10-02] |
 
 The decode of the offset field was confirmed against a known value: a graphics-slice word read `0xF8600000` = -59.6 mV, matching the -0.060 V that
 Intel XTU had applied [MEASURED win 2026-10-01]. Per-point offsets (`P2` = 1 ... n) are hidden in XTU on Arrow Lake-S but exist and were written on
@@ -194,7 +194,7 @@ Mailbox changes are volatile. Reference chip, per boot type [MEASURED lnx 2026-1
 | Event | Result |
 |---|---|
 | **Cold boot / power off** | everything returns to stock: point offsets, OC words and turbo tables |
-| **Warm reboot** | per-point offsets on most cores and E clusters are **kept**; the BIOS resets some state (on the reference chip: CPU 0's V/F word, the E-core favored word `0x1D` and the E turbo table `0x650`) |
+| **Warm reboot** | per-point offsets on most cores and E clusters are **kept**; the BIOS resets some state (on the reference chip: CPU 0 (OC word and point offsets), the E-core favored word `0x1D` and the E turbo table `0x650`) |
 
 So after a *warm* reboot the CPU may hold a mix of old and reset state. The tool never assumes a state: it reads the live words and plans from them.
 Re-apply (or "Restore accepted") after every boot. A cold boot is the guaranteed undo. Nothing is applied automatically at boot.
