@@ -581,10 +581,10 @@ class Warnings(unittest.TestCase):
         self.assertIn("UNVERIFIED", XTU_SHAPE_CAVEAT)
         self.assertIn("0x1D/0x27", XTU_SHAPE_CAVEAT)
         self.assertIn("A V target of 0 is sent only on a word with no OC point", XTU_SHAPE_CAVEAT)  # G-122: D-035, the zero target is sent there
-        self.assertIn("[MEASURED lnx 2026-10-11, D-035]", XTU_SHAPE_CAVEAT)
+        self.assertIn("(D-035)", XTU_SHAPE_CAVEAT)
         self.assertIn("A zero ratio is never sent", XTU_SHAPE_CAVEAT)
         self.assertNotIn("this plan never does", XTU_SHAPE_CAVEAT)
-        self.assertIn("[MEASURED win 2026-10-01]", XTU_SHAPE_CAVEAT)
+        self.assertNotIn("[MEASURED", XTU_SHAPE_CAVEAT)  # D-036: no dated evidence tags in user-facing text
         self.assertTrue(XTU_SHAPE_CAVEAT.isascii())
         self.assertNotIn("not modelled", XTU_SHAPE_CAVEAT)  # the T-014 ratio caveat is gone
 

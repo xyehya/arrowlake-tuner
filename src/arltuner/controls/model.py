@@ -61,10 +61,10 @@ __all__ = [
 #: Warning on every plan (docs/tasks/T-021; replaces the T-014 ratio caveat): the sequence reproduces XTU's Windows behaviour, but what
 #: it does on Linux is not known. ASCII only.
 XTU_SHAPE_CAVEAT = (
-    "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sends on Windows; OC words written this way have been read back as sent on Linux, "
-    "but the semantics of 0x1D/0x27 stay unverified. A V target of 0 is sent only on a word with no OC point "
+    "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sent on Windows; OC words written this way have been read back as sent on Linux, "
+    "but the semantics of 0x1D/0x27 stay UNVERIFIED. A V target of 0 is sent only on a word with no OC point "
     "(ratio at or below the core's top fused ratio): the hardware keeps no target next to an offset there (D-035). "
-    "A zero ratio is never sent (its acceptance is unverified)"
+    "A zero ratio is never sent (its acceptance is UNVERIFIED)"
 )
 
 #: Line of every revert plan (docs/tasks/T-021, T-022, G-125): a reboot restores whatever the BIOS programmed ([MEASURED win 2026-10-01]: XTU persisted

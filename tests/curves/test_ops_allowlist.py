@@ -10,7 +10,7 @@ from arltuner.web.server import OPS, public_response
 CID = "20261011T120000Z-ab12"
 CASES = [
     ("vf.measure", {}, True), ("vf.measure", {"mode": "quick"}, True), ("vf.measure", {"mode": "dense", "units": ["P0", "EC3"], "name": "x"}, True),
-    ("vf.measure", {"mode": "fast"}, False), ("vf.measure", {"units": []}, False), ("vf.measure", {"units": ["P0", "P0"]}, False), ("vf.measure", {"units": ["P8"]}, False),
+    ("vf.measure", {"mode": "fast"}, False), ("vf.measure", {"units": []}, False), ("vf.measure", {"units": ["P0", "P0"]}, False), ("vf.measure", {"units": ["Q8"]}, False), ("vf.measure", {"units": ["P8"]}, True),
     ("vf.measure", {"name": ""}, False), ("vf.measure", {"name": "x" * 65}, False), ("vf.measure", {"extra": 1}, False), ("vf.measure", {"units": "P0"}, False),
     ("curves.list", {}, True), ("curves.list", {"x": 1}, False),
     ("curves.get", {"id": CID}, True), ("curves.get", {"id": CID, "units": ["P1"]}, True), ("curves.get", {}, False), ("curves.get", {"id": "../x"}, False),

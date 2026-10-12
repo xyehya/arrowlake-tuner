@@ -268,5 +268,90 @@ class PerCoreEnableCheck(unittest.TestCase):
         self.assertFalse(self.check(req(0xFFFFFFFF), 0x0, {})[0])
 
 
+class AutoLimitsTests(unittest.TestCase):
+    """D-036 / G-128: ``"auto"`` ceilings and CPU sets are derived live; numeric values keep working."""
+
+    TOML = 'cpus = "auto"\ne_cpus = "auto"\n[ratio_max]\nP = "auto"\nE = "auto"\n[v_target_max_mv]\nP = "auto"\nE = "auto"\n'
+
+    def ctx(self, policy, cpu, vmax=None):
+        from arltuner.guard.policy import build_context
+
+        return build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None, max_voltage_word=vmax)
+
+    def test_auto_needs_the_live_topology_never_a_default(self) -> None:
+        for text in ('cpus = "auto"\n', 'cpus = [0]\ne_cpus = "auto"\n', 'cpus = [0]\n[ratio_max]\nP = "auto"\n'):
+            with self.subTest(text=text), self.assertRaisesRegex(PolicyError, "live topology"):
+                load_policy(text)
+
+    def test_cpus_and_ratio_ceilings_come_from_the_topology(self) -> None:
+        from arltuner.topology import arl_s_285k, synthetic
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertEqual((p.cpus, p.e_cpus), (frozenset(range(24)), frozenset(range(8, 24))))
+        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (57, 49))  # the highest cpuinfo_max_freq ratio of each kind
+        six = load_policy(self.TOML, synthetic(6, 8, favored_p=(0,), p_ratio=50, favored_ratio=52, e_ratio=40))
+        self.assertEqual((six.cpus, six.e_cpus), (frozenset(range(14)), frozenset(range(6, 14))))
+        self.assertEqual((six.ratio_max["P"], six.ratio_max["E"]), (52, 40))
+        self.assertEqual((six.core_kind(5), six.core_kind(6)), ("P", "E"))
+
+    def test_a_ratio_ceiling_with_no_sysfs_number_is_the_no_raise_value(self) -> None:
+        from arltuner.topology import Core, Topology
+
+        bare = Topology((Core("P", 0, 0, None, False), Core("E", 0, 1, 0, False)))
+        p = load_policy(self.TOML, bare)
+        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (None, None))
+
+    def test_a_live_ratio_above_the_sanity_bound_is_clamped(self) -> None:
+        from arltuner.guard.policy import SANITY_RATIO_MAX
+        from arltuner.topology import synthetic
+
+        p = load_policy(self.TOML, synthetic(2, 4, p_ratio=90, favored_ratio=90, e_ratio=90))
+        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (SANITY_RATIO_MAX["P"], SANITY_RATIO_MAX["E"]))
+
+    def test_numeric_values_keep_working_and_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
+        from arltuner.topology import synthetic
+
+        p = load_policy('cpus = ["0-13"]\n[ratio_max]\nP = 57\nE = 49\n[v_target_max_mv]\nP = 1625\nE = 1355\n', synthetic(6, 8))
+        self.assertEqual((p.ratio_max["P"], p.v_target_max_mv["E"], p.v_target_auto), (57, 1355, frozenset()))
+        self.assertEqual(p.e_cpus, frozenset(range(6, 14)))
+
+    def test_v_target_auto_is_the_0x28_maximum_minus_one_lsb(self) -> None:
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertEqual(p.v_target_auto, frozenset({"P", "E"}))
+        self.assertEqual(self.ctx(p, 0, 0x681).v_target_max_raw, 0x680)  # P: 1.625 V
+        self.assertAlmostEqual(0x680 / 1024, 1.625)
+        self.assertEqual(self.ctx(p, 8, 0x56D).v_target_max_raw, 0x56C)  # E: 1.3555 V
+
+    def test_v_target_auto_is_never_above_the_sanity_bound(self) -> None:
+        from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertEqual(self.ctx(p, 0, 0x7FF).v_target_max_raw, VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV["P"] / 1000))
+        self.assertEqual(self.ctx(p, 8, 0xFFF).v_target_max_raw, VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV["E"] / 1000))
+
+    def test_v_target_auto_with_a_zero_or_unread_0x28_allows_no_raise(self) -> None:
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertIsNone(self.ctx(p, 0, 0x0).v_target_max_raw)  # a field of 0 means 2.0 V to hw_v_max_raw: auto must not inherit that
+        self.assertIsNone(self.ctx(p, 0, 0x1000).v_target_max_raw)  # only [11:0] counts
+        self.assertIsNone(self.ctx(p, 0, None).v_target_max_raw)
+
+    def test_the_default_m1_policy_floor_is_not_widened(self) -> None:
+        p = default_m1_policy()
+        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -50, "E": 0})
+        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-51, -102))  # P runtime floor -50 mV, E -100 mV, as before G-128
+
+    def test_default_m1_policy_follows_a_given_topology(self) -> None:
+        from arltuner.topology import synthetic
+
+        p = default_m1_policy(synthetic(6, 8))
+        self.assertEqual((p.cpus, p.e_cpus), (frozenset(range(14)), frozenset(range(6, 14))))
+        self.assertEqual(p.with_topology(synthetic(8, 12)).cpus, frozenset(range(20)))
+
+
 if __name__ == "__main__":
     unittest.main()

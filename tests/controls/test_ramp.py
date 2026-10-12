@@ -140,7 +140,7 @@ class NextAllowedStep(unittest.TestCase):
         self.assertTrue(plan.needs_ramp)
         self.assertEqual(
             plan.next_profile_text,
-            '[meta]\nname = "t (next step)"\nplatform = "arl-s-285k"\n\n[[core]]\nkind = "E"\nindex = 0\nratio = 49\n',
+            '[meta]\nname = "t (next step)"\nplatform = "arl-s"\n\n[[core]]\nkind = "E"\nindex = 0\nratio = 49\n',
         )
         with self.assertRaises(NeedsRamp) as ctx:
             plan.require_allowed()

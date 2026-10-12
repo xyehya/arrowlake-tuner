@@ -118,13 +118,13 @@ _FUSED_P1 = 0x11  # cmd 0x09: P1 0x11 = domain floors / fused points, P2 = domai
 
 _CLUSTER_WARNING = (
     "E-core entries apply to all 4 CPUs of their cluster (XTU writes every E-core); whether one write is "
-    "cluster-wide is unverified"
+    "cluster-wide is UNVERIFIED"
 )
 
 #: Warning on a plan that raises the ratio, the V target or the offset (D-016). ASCII only.
 RAISE_CAVEAT = (
     "this plan RAISES a ratio, V target or offset: the numbers come from the reviewed policy (D-016), but that the hardware accepts a raise at "
-    "all is unverified; take a stability check between steps; a reboot restores the BIOS-programmed state"
+    "all is UNVERIFIED; take a stability check between steps; a reboot restores the BIOS-programmed state"
 )
 
 
@@ -437,7 +437,7 @@ def read_steps(
 POINT_CAVEAT = (
     "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across "
     "the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether "
-    "the hardware accepts a point write at all on Linux is unverified (OCCT is reported to write such words); a reboot restores the BIOS-programmed state"
+    "the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state"
 )
 
 
@@ -455,7 +455,7 @@ def plan_warnings(
     if policy is not None and (point_targets or any(t.offset_mv is not None for t in targets)):
         bios = policy.assumed_bios_offset_mv
         warnings.append(
-            f"effective offset = BIOS offset assumed by the policy (P {bios['P']:+d} mV, E {bios['E']:+d} mV; not readable through the "
+            f"effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV; not readable through the "
             f"mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the "
             f"effective offset at {policy.effective_offset_floor_mv} mV (D-015)"
         )

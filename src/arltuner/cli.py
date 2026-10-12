@@ -446,11 +446,12 @@ def _load_profile_or_exit(ctx: _Ctx, path: str) -> Profile:
         ctx.fail(EXIT_USAGE, f"profile error: {exc}")
 
 
-def _load_policy_or_exit(ctx: _Ctx, path: str | None) -> Policy:
+def _load_policy_or_exit(ctx: _Ctx, path: str | None, topology: Topology) -> Policy:
+    """The policy bound to the topology of this run (live on hardware; ``"auto"`` entries and the CPU sets are derived from it, D-036)."""
     if path is None:
-        return default_m1_policy()
+        return default_m1_policy(topology)
     try:
-        return load_policy(Path(path))
+        return load_policy(Path(path), topology)
     except PolicyError as exc:
         ctx.fail(EXIT_USAGE, f"policy error: {exc}")
 
@@ -750,8 +751,8 @@ def _cmd_plan(ctx: _Ctx, args: argparse.Namespace) -> int:
             "plan needs --sim: a dry run takes its baseline from the simulator; a real baseline needs guarded mailbox reads (use apply).",
         )
     profile = _load_profile_or_exit(ctx, args.profile)
-    policy = _load_policy_or_exit(ctx, args.policy)
     topology = arl_s_285k()
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
     try:
         plan = _sim_plan(ctx, ctx.sim_factory(), profile, topology, policy)
     except (ProfileError, PlanError) as exc:
@@ -764,8 +765,8 @@ def _cmd_plan(ctx: _Ctx, args: argparse.Namespace) -> int:
 def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
     device = bool(args.device)
     profile = _load_profile_or_exit(ctx, args.profile)
-    policy = _load_policy_or_exit(ctx, args.policy)
     topology = _topology_for(ctx, device)
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
     plan_policy = policy  # what the profile may spend: --device-win keeps IDENTITY_OPS of the session / boot budget for the identity check
     extra_ops = 0
     if ctx.win:
@@ -838,9 +839,9 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
 def _cmd_read_vf(ctx: _Ctx, args: argparse.Namespace) -> int:
     device = bool(args.device)
     cpu: int = args.cpu
-    policy = _load_policy_or_exit(ctx, args.policy)
-    policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
     topology = _topology_for(ctx, device)
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
+    policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
@@ -914,9 +915,9 @@ def _cmd_read(ctx: _Ctx, args: argparse.Namespace) -> int:
     cmd: int = args.cmd
     p1: int = args.p1
     p2: int = args.p2
-    policy = _load_policy_or_exit(ctx, args.policy)
-    policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
     topology = _topology_for(ctx, device)
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
+    policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
@@ -974,12 +975,12 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
     cpu: int = args.cpu
     p1: int = args.p1
     p2: int = args.p2
-    policy = _load_policy_or_exit(ctx, args.policy)
+    topology = _topology_for(ctx, device)
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
     if ctx.win:
         _identity_policy_check(ctx, policy)
     ops = 2 + (IDENTITY_OPS if ctx.win else 0)
     policy = dataclasses.replace(policy, max_operations_per_session=min(policy.max_operations_per_session, ops))  # [identity reads +] read + write; a policy can only lower it
-    topology = _topology_for(ctx, device)
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
@@ -1070,8 +1071,8 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     """T-026: one guarded session, one CONFIRM, every read budgeted before anything is sent. Never sends a write command."""
     device = bool(args.device)
     measure = bool(args.measure)
-    policy = _load_policy_or_exit(ctx, args.policy)
     topology = _topology_for(ctx, device)
+    policy = _load_policy_or_exit(ctx, args.policy, topology)
     try:
         cores = vfdump.select_cpus(topology, args.cpus, bool(args.all_e))
     except UnknownCore as exc:

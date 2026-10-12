@@ -115,11 +115,11 @@ __all__ = [
     "load_policy",
 ]
 
-#: D-015 (docs/DECISIONS.md): the runtime offset ADDS to the BIOS per-core V/F offset ``[MEASURED win 2026-10-01]``. The BIOS offset is not readable through
-#: the mailbox and D-036 forbids an assumed one, so the default is 0 for both kinds: the effective offset is what the CPU reports (the baseline word read in the
-#: session). A reviewed policy may still state one (``assumed_bios_offset_mv``); the runtime floor of a core kind is
-#: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``.
-DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": 0, "E": 0})
+#: D-015 (docs/DECISIONS.md): the runtime offset ADDS to the BIOS per-core V/F offset ``[MEASURED win 2026-10-01]``. The BIOS offset is not readable through the
+#: mailbox; a policy may state one per core kind (``assumed_bios_offset_mv``) and the runtime floor of a kind is
+#: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``. The default is unchanged by G-128 (P -50 mV, E 0 mV: the runtime floor of a policy that states nothing stays
+#: P -50 mV / E -100 mV, no widening); a policy that wants the CPU's own effective offset only (the shipped advanced policy) states 0 for both.
+DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": -50, "E": 0})
 DEFAULT_EFFECTIVE_OFFSET_FLOOR_MV = -100
 
 #: D-016 defaults of the per-operation step limits and the offset ceiling: the orchestrator's conservative choice (``[UNVERIFIED]`` as
@@ -263,8 +263,13 @@ def build_context(
     kind = policy.core_kind(cpu)
     v_max = policy.v_target_max_mv[kind]
     v_max_raw = None if v_max is None else VfWord.v_to_raw(v_max / 1000)
-    if kind in policy.v_target_auto and max_voltage_word is not None:
-        v_max_raw = hw_v_max_raw(max_voltage_word)  # "auto": the CPU's own 0x28 maximum minus one LSB (an unread 0x28 leaves the no-raise value)
+    if kind in policy.v_target_auto:
+        # "auto": the CPU's own 0x28 maximum minus one LSB, never above the sanity bound of the kind. An unread 0x28, or a field of 0 (hw_v_max_raw would call it
+        # 2.0 V), leaves the no-raise value (None).
+        if max_voltage_word is not None and (max_voltage_word & 0xFFF) != 0:
+            v_max_raw = min(hw_v_max_raw(max_voltage_word), VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV[kind] / 1000))
+        else:
+            v_max_raw = None
     return CheckContext(
         top_fused_ratio=fused_top_ratio(fused_word),
         offset_floor_raw=policy.offset_floor_raw(cpu),

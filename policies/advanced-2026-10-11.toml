@@ -1,19 +1,19 @@
-# policies/advanced-2026-10-11.toml -- ADVANCED-USER POLICY (D-032, operator yes 2026-10-11). Seeded to /etc/arltuner/policy.toml by install.sh
-# (--reseed-config replaces an existing one). Derived from policies/session-2026-10-02-points.toml; same allow entries, bounds opened to the numbers below.
-# Operator, verbatim: "remove the limitations on the mailbox writes and the amount of offsets or target voltages - this is for advanced users so they
-# know what they are doing. although in the drop down menus i dont think we can go above/below 200mv in offsets or the fused max of the p and e cores".
+# policies/advanced-2026-10-11.toml -- ADVANCED-USER POLICY (D-032, operator yes 2026-10-11; D-036: derived live). Seeded to /etc/arltuner/policy.toml by install.sh
+# (--reseed-config replaces an existing one). Derived from policies/session-2026-10-02-points.toml; same allow entries, bounds opened as below.
 #
-# What is OPEN (numbers, not mechanisms):
-#   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200; code sanity ceiling raised 100 -> 200)
-#   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV (the ramp profile is no longer required)
-#   V target     <= the hardware maximum of cmd 0x28 minus one: P 1625 mV, E 1355 mV [MEASURED win 2026-10-01]
-#   ratio        <= P 57 (fused max, 0x1C[15:8] on the favored cores [MEASURED]), E 49 (D-017, already run; 0x1C 46 is not an E cap [MEASURED])
+# What is OPEN (numbers, not mechanisms; the wording of the decision is D-032 in docs/DECISIONS.md):
+#   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200)
+#   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV
+#   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session (never above the code sanity bound of its kind)
+#   ratio        "auto": the highest cpuinfo_max_freq ratio of the P-cores / of the E-cores, read live from sysfs at helper start
+#   CPUs         "auto": the P and E CPUs of the live topology (P = devices/cpu_core, E = devices/cpu_atom)
 #   op caps      indicators only: 100000 per session and per boot; no dwell between operations
 # What is KEPT (safety mechanisms, not limits): one mailbox transaction at a time (2026-08-26 incident: sweeps, not budgets), the allowlist below
 # (default deny), the health gate, the audit log, the plan-bound nonce of tune.apply, the read-back of every write (a mismatch trips the guard).
 # Static/override voltage stays out (D-016: mode must be adaptive).
 
-cpus = ["0-23"]
+cpus = "auto"
+e_cpus = "auto"
 max_operations_per_session = 100000
 max_operations_per_boot = 100000
 min_dwell_s = 0.0
@@ -23,15 +23,15 @@ max_v_step_mv = 200
 max_offset_step_mv = 200
 offset_ceiling_mv = 200
 effective_offset_floor_mv = -200
-assumed_bios_offset_mv = { P = 0, E = 0 }  # BIOS P point offsets removed by the operator 2026-10-02 (measured: none left): runtime floor = -200 mV for both
+assumed_bios_offset_mv = { P = 0, E = 0 }  # no BIOS offset is assumed: the effective offset is what the CPU reports; runtime floor = -200 mV for both
 
 [ratio_max]
-P = 57
-E = 49
+P = "auto"
+E = "auto"
 
 [v_target_max_mv]
-P = 1625
-E = 1355
+P = "auto"
+E = "auto"
 
 # --- allowlist (a policy file replaces the whole policy, so it lists every request; the 2026-10-02 policy plus, G-114, plain reads of 0x1AE / 0x651) ---
 [[allow]]

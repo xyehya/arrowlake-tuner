@@ -710,7 +710,7 @@ class ReadVf(CliCase):
             with self.subTest(cpu=cpu):
                 code, out, err = self.run_cli("read-vf", "--sim", "--cpu", cpu, "--audit", self.audit, "--lock", self.lock, stdin=self.confirmed())
                 self.assertEqual(code, 2)
-                self.assertIn("not a CPU of this machine", err)
+                self.assertIn("not a CPU of this system", err)
                 self.assertNotIn("CONFIRM", out)
                 self.nothing_sent()
         self.assertEqual(self.run_cli("read-vf", "--sim", "--cpu", "x")[0], 1)
@@ -943,7 +943,7 @@ class DeviceRefusals(CliCase):
         for cpu in (24, -1):
             with self.subTest(cpu=cpu):
                 _, err = self.refused(*self.device_read(cpu), stdin=self.confirmed())
-                self.assertIn("not a CPU of this machine", err)
+                self.assertIn("not a CPU of this system", err)
 
     def test_read_vf_env_flag_absent(self) -> None:
         self.refused(*self.device_read(), stdin=self.confirmed(), env={})

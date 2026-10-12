@@ -65,7 +65,7 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.controls.planner import POINT_CAVEAT, kept_word
-from arltuner.guard.policy import fused_top_ratio, turbo_bytes
+from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV, fused_top_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
@@ -1019,7 +1019,9 @@ def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[st
     v = row["v_target_v"]
     if v is not None:
         mv = round(v * 1000)
-        cap = policy.v_target_max_mv[kind]  # "auto" has no number here: the guard judges it against the CPU's own 0x28 when the plan is applied
+        cap = policy.v_target_max_mv[kind]
+        if cap is None and kind in policy.v_target_auto:
+            cap = SANITY_V_TARGET_MAX_MV[kind]  # "auto": at plan time the code sanity bound; the guard judges the CPU's own 0x28 maximum when the plan is applied
         if cap is not None and VfWord.v_to_raw(mv / 1000) > VfWord.v_to_raw(cap / 1000):
             raise refuse(f"{unit}: OC-point voltage {mv} mV is above the policy v_target_max_mv[{kind}] = {cap} mV")
     ratio = row["ratio"]

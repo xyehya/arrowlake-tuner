@@ -445,10 +445,10 @@ class RevertPlanIsXtuShaped(MeasuredCase):
 class PolicyFields(unittest.TestCase):
     def test_defaults_are_the_d015_values(self) -> None:
         p = default_m1_policy()
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})  # D-036: no assumed BIOS offset
+        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -50, "E": 0})  # unchanged by G-128: the default runtime floor of the M1 policy is not widened
         self.assertEqual(p.effective_offset_floor_mv, -100)
         self.assertEqual(p.e_cpus, frozenset(range(8, 24)))  # the unbound default: the simulated reference CPU's E CPUs
-        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(7), p.offset_floor_raw(8), p.offset_floor_raw(23)), (-102, -102, -102, -102))
+        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(7), p.offset_floor_raw(8), p.offset_floor_raw(23)), (-51, -51, -102, -102))
         self.assertEqual(p.core_kind(7), "P")
         self.assertEqual(p.core_kind(8), "E")
 
@@ -486,7 +486,7 @@ class PolicyFields(unittest.TestCase):
         self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-20, -82))  # -20 mV / -80 mV
         q = load_policy('cpus = [0]\nassumed_bios_offset_mv = { P = 0, E = -10 }\n')
         self.assertEqual(dict(q.assumed_bios_offset_mv), {"P": 0, "E": -10})
-        self.assertEqual(load_policy("cpus = [0]\n").offset_floor_raw(0), -102)  # absent keys: the defaults
+        self.assertEqual(load_policy("cpus = [0]\n").offset_floor_raw(0), -51)  # absent keys: the defaults
 
     def test_bad_toml_values_are_load_errors(self) -> None:
         for text in (
