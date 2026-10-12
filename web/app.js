@@ -1607,15 +1607,20 @@
   }
 
   function makeVfChart(host, opts) {
-    const ch = { W: 960, H: 400, host: host, model: null, hoverMhz: null, hot: null, svg: null, tipLabel: opts.label || "V/F curves", xDom: [800, 5800], yDom: [0.6, 1.5], plot: null };
+    const ch = { W: 960, H: 400, B: VC.B, host: host, model: null, hoverMhz: null, hot: null, svg: null, tipLabel: opts.label || "V/F curves", xDom: [800, 5800], yDom: [0.6, 1.5], plot: null };
 
     ch.sx = (mhz) => VC.L + ((mhz - ch.xDom[0]) / (ch.xDom[1] - ch.xDom[0])) * (ch.W - VC.L - VC.R);
-    ch.sy = (v) => VC.T + ((ch.yDom[1] - v) / (ch.yDom[1] - ch.yDom[0])) * (ch.H - VC.T - VC.B);
+    ch.sy = (v) => VC.T + ((ch.yDom[1] - v) / (ch.yDom[1] - ch.yDom[0])) * (ch.H - VC.T - ch.B);
 
     ch.render = function (model) {
       ch.model = model;
       ch.W = clamp(Math.round(host.clientWidth || 960), 560, 1800);
-      ch.H = clamp(Math.round(ch.W * 0.38), 300, 520);
+      // the "not measured" row (G-131): tick marks under the x-axis, one lane per unit; the plot keeps its height, the chart grows by the row
+      const nm = Array.isArray(model.unmeasured) ? model.unmeasured : [];
+      const lanes = Array.from(new Set(nm.map((m) => m.unit)));
+      const nmH = nm.length ? 16 + lanes.length * 5 : 0;
+      ch.B = VC.B + nmH;
+      ch.H = clamp(Math.round(ch.W * 0.38), 300, 520) + nmH;
       const all = [];
       for (const s of model.series) for (const p of s.pts) all.push(p);
       for (const m of model.markers || []) all.push(m);
@@ -1632,7 +1637,8 @@
         return;
       }
       const ys = all.map((p) => p.v);
-      let xlo = Math.min(...all.map((p) => p.mhz)), xhi = Math.max(...all.map((p) => p.mhz));
+      const xs = all.concat(nm).map((p) => p.mhz);   // the not-measured ticks only widen the x-axis, never the voltage range
+      let xlo = Math.min(...xs), xhi = Math.max(...xs);
       xlo = Math.floor((xlo - 50) / 500) * 500; xhi = Math.ceil((xhi + 50) / 500) * 500;
       ch.xDom = [xlo, Math.max(xhi, xlo + 1000)];
       let ylo = Math.min(...ys), yhi = Math.max(...ys);
@@ -1653,18 +1659,32 @@
       }
       for (let m = ch.xDom[0]; m <= ch.xDom[1]; m += 500) {
         const x = ch.sx(m);
-        grid.append(sv("line", { x1: x, x2: x, y1: VC.T, y2: ch.H - VC.B, class: "vc-vgrid" }));
-        const a = sv("text", { x: x, y: ch.H - VC.B + 18, "text-anchor": "middle" }, "vc-tick");
+        grid.append(sv("line", { x1: x, x2: x, y1: VC.T, y2: ch.H - ch.B, class: "vc-vgrid" }));
+        const a = sv("text", { x: x, y: ch.H - ch.B + 18, "text-anchor": "middle" }, "vc-tick");
         a.textContent = String(m);
-        const b = sv("text", { x: x, y: ch.H - VC.B + 33, "text-anchor": "middle" }, "vc-tick vc-ratio");
+        const b = sv("text", { x: x, y: ch.H - ch.B + 33, "text-anchor": "middle" }, "vc-tick vc-ratio");
         b.textContent = m / 100 + "×";
         grid.append(a, b);
       }
       const xl = sv("text", { x: (VC.L + ch.W - VC.R) / 2, y: ch.H - 6, "text-anchor": "middle" }, "plot-axis");
       xl.textContent = "frequency (MHz) and ratio";
-      const yl = sv("text", { x: 14, y: (VC.T + ch.H - VC.B) / 2, "text-anchor": "middle", transform: "rotate(-90 14 " + (VC.T + ch.H - VC.B) / 2 + ")" }, "plot-axis");
+      const yl = sv("text", { x: 14, y: (VC.T + ch.H - ch.B) / 2, "text-anchor": "middle", transform: "rotate(-90 14 " + (VC.T + ch.H - ch.B) / 2 + ")" }, "plot-axis");
       yl.textContent = model.ymode === "mv" ? "difference (mV)" : "VID (V)";
       nodes.push(grid, xl, yl);
+      if (nm.length) {
+        const top = ch.H - ch.B + 40;
+        const lab = sv("text", { x: 6, y: top + 9, "text-anchor": "start" }, "vc-tick vc-nm-label");
+        lab.textContent = "not measured";
+        nodes.push(lab);
+        for (const m of nm) {
+          const g = sv("g", null, "vc-nm u-" + m.unit), x = ch.sx(m.mhz), y = top + lanes.indexOf(m.unit) * 5;
+          g.append(sv("line", { x1: x.toFixed(1), x2: x.toFixed(1), y1: y + 0.5, y2: y + 4.5 }), sv("rect", { x: (x - 5).toFixed(1), y: y - 0.5, width: 10, height: 6 }));
+          const t = sv("title");
+          t.textContent = m.title;
+          g.append(t);
+          nodes.push(g);
+        }
+      }
       if (model.band && model.band.length > 1) {
         const up = model.band.map((b, i) => (i ? "L" : "M") + ch.sx(b.mhz).toFixed(1) + " " + ch.sy(b.hi).toFixed(1)).join("");
         const dn = model.band.slice().reverse().map((b) => "L" + ch.sx(b.mhz).toFixed(1) + " " + ch.sy(b.lo).toFixed(1)).join("");
@@ -1703,12 +1723,12 @@
         }
         nodes.push(g);
       }
-      ch.cross = sv("line", { x1: -10, x2: -10, y1: VC.T, y2: ch.H - VC.B }, "vc-cross");
+      ch.cross = sv("line", { x1: -10, x2: -10, y1: VC.T, y2: ch.H - ch.B }, "vc-cross");
       ch.tip = sv("g", { transform: "translate(-999 -999)" }, "vc-tip");
-      const hit = sv("rect", { x: VC.L, y: VC.T, width: ch.W - VC.L - VC.R, height: ch.H - VC.T - VC.B }, "vc-hit");
+      const hit = sv("rect", { x: VC.L, y: VC.T, width: ch.W - VC.L - VC.R, height: ch.H - VC.T - ch.B }, "vc-hit");
       nodes.push(ch.cross, hit, ch.tip);
-      // pins sit above the hit area so the browser shows their <title> on hover: hollow ring = a point that exists but was not reached (F3/F9),
-      // diamond = the fused top-point value read from the CPU (F7)
+      // pins sit above the hit area so the browser shows their <title> on hover: diamond = the fused top-point value read from the CPU (F7), small ring = a clamped point;
+      // points that were not measured are not drawn here but as ticks in the "not measured" row under the axis (G-131)
       for (const m of model.pins || []) {
         const g = sv("g", null, "vc-pin u-" + m.unit + " " + m.kind);
         const cx = ch.sx(m.mhz), cy = ch.sy(m.v);
@@ -1983,26 +2003,100 @@
       model.band = band.length > 1 ? band : null;
     }
     if (!model.series.length) model.empty = CV.drawn.size ? "No measured points for the units drawn." : "No units drawn. Press a unit below, or pick a preset.";
-    else if (!CV.delta) model.pins = curvePins(a);
+    else if (!CV.delta) { model.pins = curvePins(a); model.unmeasured = unmeasuredOf(a); }
     return model;
   }
 
-  // Unreachable points as hollow rings (on the unit's last measured voltage: nothing was measured there), and on the baseline the fused top point (0x09).
+  // Not measured: points that exist but were not reached (unreachable) or did not settle at their ratio (mismatch). They are never drawn inside the plot (nothing was measured
+  // there): [{unit, ratio, mhz, kind, max, title}] for the "not measured" row under the x-axis, and groupedNotMeasured() for the caption. kind = the helper's reason, or "mismatch".
+  function unmeasuredOf(rec) {
+    const out = [];
+    if (!isObj(rec)) return out;
+    for (const u of UNIT_IDS) {
+      if (!CV.drawn.has(u)) continue;
+      const pts = recAllPoints(rec, u);
+      const okRatios = pts.filter((p) => p.status === "ok" && isNum(p.ratio)).map((p) => p.ratio);
+      for (const p of pts) {
+        if (!isNum(p.ratio) || (p.status !== "unreachable" && p.status !== "mismatch")) continue;
+        const below = okRatios.filter((r) => r < p.ratio);
+        const kind = p.status === "mismatch" ? "mismatch" : isStr(p.reason) ? p.reason : "other";
+        const max = below.length ? Math.max(...below) : null;
+        out.push({ unit: u, ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, kind: kind, max: max,
+          title: u + " " + p.ratio + "\u00d7: " + notMeasuredLong(kind, max) });
+      }
+    }
+    return out;
+  }
+  function notMeasuredLong(kind, max) {
+    if (kind === "max_turbo") return "above this core's max ratio" + (max === null ? "" : " " + max + "\u00d7");
+    if (kind === "mismatch") return "the core ran at another ratio than the target, so no voltage was kept";
+    return reasonText(kind);
+  }
+  function notMeasuredShort(kind, max) {
+    if (kind === "max_turbo") return "above core max" + (max === null ? "" : " " + max + "\u00d7");
+    if (kind === "cpufreq_granularity") return "cpufreq cannot pin this ratio";
+    if (kind === "active_cores") return "needs few active cores";
+    if (kind === "mismatch") return "did not settle at the target";
+    return "not reachable";
+  }
+  // "P1, P2, P4\u2013P7": consecutive units of one kind (three or more) collapse to a range.
+  function unitsText(units) {
+    const parts = [];
+    const num = (u) => parseInt(u.replace(/^[A-Z]+/, ""), 10), pre = (u) => u.replace(/[0-9]+$/, "");
+    for (let i = 0; i < units.length;) {
+      let j = i;
+      while (j + 1 < units.length && pre(units[j + 1]) === pre(units[i]) && num(units[j + 1]) === num(units[j]) + 1) j++;
+      if (j - i >= 2) parts.push(units[i] + "\u2013" + units[j]); else for (let k = i; k <= j; k++) parts.push(units[k]);
+      i = j + 1;
+    }
+    return parts.join(", ");
+  }
+  // "56\u201357\u00d7", "23, 29\u00d7"
+  function ratiosText(ratios) {
+    const rs = Array.from(new Set(ratios)).sort((a, b) => a - b), parts = [];
+    for (let i = 0; i < rs.length;) {
+      let j = i;
+      while (j + 1 < rs.length && rs[j + 1] === rs[j] + 1) j++;
+      parts.push(j > i ? rs[i] + "\u2013" + rs[j] : String(rs[i]));
+      i = j + 1;
+    }
+    return parts.join(", ") + "\u00d7";
+  }
+  // The caption line: the not-measured points grouped by reason, then by the units sharing the same ratios.
+  function notMeasuredCaption(list) {
+    const byWhy = new Map();
+    for (const m of list) {
+      const why = notMeasuredShort(m.kind, m.max);
+      if (!byWhy.has(why)) byWhy.set(why, new Map());
+      const units = byWhy.get(why);
+      if (!units.has(m.unit)) units.set(m.unit, []);
+      units.get(m.unit).push(m.ratio);
+    }
+    const groups = [];
+    for (const [why, units] of byWhy) {
+      const bySig = new Map();
+      for (const u of UNIT_IDS) {
+        if (!units.has(u)) continue;
+        const sig = ratiosText(units.get(u));
+        if (!bySig.has(sig)) bySig.set(sig, []);
+        bySig.get(sig).push(u);
+      }
+      for (const [sig, us] of bySig) groups.push({ first: UNIT_IDS.indexOf(us[0]), text: unitsText(us) + " at " + sig + " (" + why + ")" });
+    }
+    groups.sort((a, b) => a.first - b.first);
+    return groups.length ? "not measured: " + groups.map((g) => g.text).join(" \u00b7 ") : "";
+  }
+
+  // On the baseline, the fused top point (0x09) as a diamond at its voltage.
   function curvePins(rec) {
     const pins = [];
     for (const u of UNIT_IDS) {
       if (!CV.drawn.has(u)) continue;
       const meas = recPoints(rec, u);
-      for (const p of recAllPoints(rec, u)) {
-        if (p.status !== "unreachable" || !isNum(p.ratio)) continue;
-        const left = meas.filter((q) => q.ratio < p.ratio);
-        if (!left.length) continue;
-        pins.push({ unit: u, kind: "reach", mhz: p.ratio * 100, v: left[left.length - 1].v, title: u + " " + p.ratio + "×: " + reasonText(p.reason) + (isStr(p.reason) ? " (" + p.reason + ")" : "") + ". Drawn at the last measured voltage." });
-      }
       const f = fusedOf(u);
       if (f && rec.id === baselineId() && meas.length) {
         const top = meas.find((q) => q.ratio === f.ratio);
-        pins.push({ unit: u, kind: "fused", mhz: f.ratio * 100, v: f.v, title: u + " fused top point (cmd 0x09): " + f.v.toFixed(4) + " V at " + f.ratio + "×" +
+        pins.push({ unit: u, kind: "fused", mhz: f.ratio * 100, v: f.v, title: u + " fused top point (cmd 0x09): " + f.v.toFixed(4) + " V at " + f.ratio + "\u00d7" +
           (top ? "; measured " + top.v.toFixed(4) + " V (" + fmtMv((top.v - f.v) * 1000, 1) + ")." : "; not measured on this curve.") });
       }
     }
@@ -2024,13 +2118,7 @@
     const isStock = !!a && CV.live === null && tuningKind(a) === "stock";
     stockPill.hidden = !isStock;
     if (isStock) { stockPill.textContent = "stock = fused table as applied"; stockPill.title = "Measured with every offset at 0: the voltages are the CPU's fused V/F table as the CPU applies it."; }
-    const un = [];
-    if (a) for (const u of UNIT_IDS) {
-      if (!CV.drawn.has(u)) continue;
-      const bad = recAllPoints(a, u).filter((p) => p.status === "unreachable" && isNum(p.ratio));
-      if (bad.length) un.push(u + " " + bad.map((p) => p.ratio + "× (" + (isStr(p.reason) ? p.reason : "no reason given") + ")").join(", "));
-    }
-    setText("cv-unreach", un.length ? "Hollow rings are points that exist but were not reached: " + un.join("; ") + ". Hover a ring for the reason." : "");
+    setText("cv-unreach", a ? notMeasuredCaption(unmeasuredOf(a)) : "");
   }
 
   function paintCurves() {
@@ -2324,6 +2412,7 @@
     const nm = $("cv-name").value.trim();
     if (nm) args.name = nm;
     beginSubmit("measure");
+    showProblems([]);
     setText("cv-status", "Submitting...");
     updateGate();
     const { status, body } = await api("vf.measure", args);
@@ -2376,14 +2465,15 @@
 
   async function onMeasureResult(ev) {
     CV.live = null; CV.liveHead = null;
+    if (ev.ok !== true && isObj(ev.error) && isObj(ev.error.detail) && Array.isArray(ev.error.detail.problems)) showProblems(Array.from(new Set(ev.error.detail.problems.filter(isStr))));   // a failed or cancelled run: its notes too
     if (ev.ok === true && isObj(ev.result)) {
       const rec = isObj(ev.result.record) ? ev.result.record : null;
       const id = typeof ev.result.curve_id === "string" ? ev.result.curve_id : (rec && typeof rec.id === "string" ? rec.id : null);
       if (rec && id) { if (!rec.id) rec.id = id; CV.cache[id] = await mergeOmitted(rec); }
       CV.primary = id;
-      const problems = (Array.isArray(ev.result.problems) ? ev.result.problems : []).filter((x) => typeof x === "string");
+      const problems = Array.from(new Set((Array.isArray(ev.result.problems) ? ev.result.problems : []).filter((x) => typeof x === "string")));   // each note once
       setText("cv-status", "Measured " + (rec ? sumPoints(CV.cache[id] || rec) + " points" : "the curves") + ". Stored as \"" + (rec && rec.name ? rec.name : id) + "\". " +
-        (rec && isObj(rec.tuning_state) ? tuningWords(rec.tuning_state.kind) + ". " : "") + (problems.length ? "Problems: " + problems.join("; ") : ""));
+        (rec && isObj(rec.tuning_state) ? tuningWords(rec.tuning_state.kind) + ". " : "") + (problems.length ? problems.length + (problems.length === 1 ? " note" : " notes") + " \u2014 see below" : ""));
       showProblems(problems);
       await loadCurves(false);
     } else if (typeof ev.server_error === "string") {

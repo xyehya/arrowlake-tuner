@@ -87,6 +87,36 @@ class TestBrowser(unittest.TestCase):
         errors = [m for m in logs if m[0] in ("error", "pageerror", "warning") and "favicon" not in m[1] and "404" not in m[1]]
         self.assertEqual(errors, [])
 
+    def test_measure_notes_are_counted_in_the_status_and_listed_once_below(self):
+        """G-131: the status line carries the count only ("2 notes, see below"); the list shows each note once, none cut."""
+        from tests.web import v3_harness as h
+
+        srv, fake, stop = h.start(measure_delay=0.01, apply_delay=0.01, seed=False)
+        notes = ["governor performance: EPP already at performance", "energy_performance_preference not set on cpus 0–23 (Device or resource busy)"]
+        fake.measure_problems = notes + [notes[0]]   # a repeated line is shown once too
+        self.addCleanup(fake.close)
+        self.addCleanup(srv.close)
+        self.addCleanup(stop.set)
+        with sync_playwright() as p:
+            b = p.chromium.launch(executable_path=CHROME, headless=True, args=["--no-sandbox"])
+            try:
+                page = b.new_context(viewport={"width": 1400, "height": 900}).new_page()
+                h.login(page, srv)
+                page.goto(srv.origin + "/")
+                page.wait_for_selector("#conn-helper.s-ok", timeout=10000)
+                page.click("#tab-curves")
+                page.wait_for_selector("#btn-measure:not([disabled])", timeout=10000)
+                page.click("#btn-measure")
+                page.wait_for_selector("#cv-problems li", timeout=30000)
+                self.assertEqual(page.locator("#cv-problems li").all_text_contents(), notes)
+                status = page.inner_text("#cv-status")
+                self.assertIn("2 notes — see below", status)
+                self.assertNotIn("EPP", status)
+                self.assertNotIn("Problems:", status)
+                self.assertNotIn("Device or resource busy", status)
+            finally:
+                b.close()
+
     def test_apply_shows_the_os_frequency_cap_table(self):
         """G-126: an OC ratio change makes the helper report ``cpufreq``; the read-back dialog shows it (this builds ``cpufreqNode`` for real)."""
         from tests.web import v3_harness as h

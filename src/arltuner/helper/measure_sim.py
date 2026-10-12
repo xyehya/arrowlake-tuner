@@ -79,6 +79,12 @@ class SimModel:
     E_REACH = 48
     E_CPUINFO = 49
     E_QUIRK = range(16, 30)
+    #: G-131: the kernel converts an E-core cap to HWP perf units, ``perf = round(khz / scale)`` with ``scale = cpuinfo_max_freq / highest_perf`` (hybrid scaling factor), so a
+    #: cap lands on a perf step, not on the exact value written; ``scaling_max_freq`` reads back the step's frequency. ``highest_perf`` 69 = HWP highest of an E-core at 49x
+    #: ``[MEASURED lnx 2026-10-01]`` (docs/knowledge/tuning-results.md). Every perf step that a multiple of 100 MHz selects runs the ratio the table-driven rule below gives for
+    #: that multiple; a step that none selects (E 23x: step 33, between the caps 2300 and 2400 MHz) runs the ratio its own frequency truncates to. **A fixture of the cap
+    #: search, [UNVERIFIED] as a model of the silicon**: the hardware is the arbiter of which ratios the search can reach.
+    E_HIGHEST_PERF = 69
     QUIET_SHARE = 0.7  # share of samples a favored core spends above the all-core ratio when no other core is busy
 
     def __init__(self, seed: int = 285, background_busy: int = 0, topology: Topology | None = None) -> None:
@@ -136,11 +142,32 @@ class SimModel:
     def temp_c(self, unit: str, ratio: int) -> float:
         return round(34 + 30 * min(1.0, (ratio - 8) / 49) + self.spread[unit] * 60, 1)
 
+    @classmethod
+    def e_scale(cls) -> float:
+        """kHz per HWP perf unit of an E-core."""
+        return cls.E_CPUINFO * 100_000 / cls.E_HIGHEST_PERF
+
+    @classmethod
+    def e_cap_quantized(cls, cap_khz: int) -> int:
+        """What an E-core's ``scaling_max_freq`` reads back after ``cap_khz`` was written: the perf step's frequency (idempotent)."""
+        scale = cls.e_scale()
+        return round(round(cap_khz / scale) * scale)
+
+    @classmethod
+    def _e_landing(cls, cap_khz: int) -> int:
+        """The ratio an E cap lands on before the reach limit: the table-driven rule for the perf steps the 100 MHz multiples select, truncation for the others."""
+        scale = cls.e_scale()
+        perf = round(cap_khz / scale)
+        for k in range(8, 50):
+            if round(k * 100_000 / scale) == perf:
+                return k - 1 if k in cls.E_QUIRK and k != 24 else k  # 24 is not low: with 23 it makes 23x unpinnable by the 100 MHz caps
+        return int(perf * scale // 100_000)
+
     def settled(self, unit: str, cap_khz: int) -> int:
         """The ratio the unit settles at under load with ``scaling_max_freq = cap_khz`` (quiet system)."""
         cap_ratio = cap_khz // 100_000
-        if unit.startswith("E") and cap_ratio in self.E_QUIRK and cap_ratio != 24:  # 24 is not low: with 23 it makes 23x unpinnable
-            cap_ratio -= 1
+        if unit.startswith("E"):
+            cap_ratio = self._e_landing(cap_khz)
         if unit.startswith("P") and cap_ratio == 52:  # P 52x is not pinnable either: the cap lands on 51 (cap 53 gives 53)
             cap_ratio = 51
         return max(8, min(cap_ratio, self.reach(unit)))
@@ -189,6 +216,8 @@ class SimMeasureIO:
         return int(self.cpufreq.read(cpu, CAP_ATTR))
 
     def write_cap(self, cpu: int, khz: int) -> None:
+        if self.model.unit_of(cpu).startswith("E"):
+            khz = self.model.e_cap_quantized(int(khz))  # the kernel's perf rounding: the read-back is the step's frequency
         self.cpufreq.write(cpu, CAP_ATTR, str(int(khz)))
 
     def read_max_khz(self, cpu: int) -> int:

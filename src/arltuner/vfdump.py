@@ -52,12 +52,14 @@ __all__ = [
     "Stop",
     "SysfsMeasureIO",
     "Unit",
+    "CAP_SEARCH_OFFSETS_KHZ",
     "caps_to_try",
     "find_flags",
     "format_dump",
     "measure_group",
     "parse_cpu_list",
     "plan_requests",
+    "search_cap",
     "select_cpus",
     "to_json",
     "units_of",
@@ -520,6 +522,75 @@ def measure_group(
             except Exception as exc:
                 problems.append(f"could NOT restore scaling_max_freq of cpu {cpu} to {khz} kHz: {type(exc).__name__}: {exc} (restore it by hand)")
     return results
+
+
+#: G-131: cap offsets (kHz) around ``ratio x 100 MHz`` that :func:`search_cap` tries, nearest first, the higher side first (the kernel converts the cap to HWP perf units with the
+#: hybrid scaling factor, so a perf step that no multiple of 100 MHz selects can be the one that runs the target). The two neighbours (+-100 MHz) are the nominal attempts.
+CAP_SEARCH_OFFSETS_KHZ = (25_000, -25_000, 50_000, -50_000, 75_000, -75_000, 99_000, -99_000)
+
+
+def search_cap(
+    io: MeasureIO,
+    group: MeasureGroup,
+    ratio: int,
+    read_perf: Callable[[int], int],
+    sleep: Callable[[float], object],
+    problems: list[str],
+    *,
+    settle_s: float = SETTLE_S,
+    samples: int = SAMPLES,
+    interval_s: float = SAMPLE_INTERVAL_S,
+    min_valid: int = MIN_VALID,
+    offsets: Sequence[int] = CAP_SEARCH_OFFSETS_KHZ,
+) -> RatioMeasurement | None:
+    """G-131: one more try for a ``ratio`` that the nominal caps (``ratio`` / ``ratio + 1`` x 100 MHz) never ran: write each cap of ``offsets`` around ``ratio x 100 MHz`` to every
+    CPU of the group, read ``scaling_max_freq`` back, **skip a cap whose read-back equals one already tried** (the kernel's perf rounding makes neighbouring values the same cap),
+    sample, and stop at the first cap that gives ``min_valid`` samples at the target. Returns that :class:`RatioMeasurement` (``cap_khz`` = the read-back value in force) or ``None``.
+    Never above the CPUs' ``cpuinfo_max_freq`` or their current ``scaling_max_freq``; a cap the kernel refuses is skipped. The original caps are always restored (``finally``)."""
+    originals = {cpu: io.read_cap(cpu) for cpu in group.cpus}
+    limit = min(min(originals.values()), min(io.read_max_khz(cpu) for cpu in group.cpus))
+    nominal = ratio * 100_000
+    tried: set[int] = set()
+    found: RatioMeasurement | None = None
+
+    def put(cap: int) -> int | None:
+        """Write ``cap`` to the group and return what the rep CPU reads back (``None``: refused)."""
+        try:
+            for cpu in group.cpus:
+                io.write_cap(cpu, cap)
+            return io.read_cap(group.rep)
+        except (OSError, ValueError):
+            return None
+
+    try:
+        for cap in caps_to_try(ratio, limit):  # the nominal attempts were made by measure_group: only learn what they read back as
+            back = put(cap)
+            if back is not None:
+                tried.add(back)
+        for off in offsets:
+            cap = nominal + off
+            if cap > limit or cap < 100_000:
+                continue
+            back = put(cap)
+            if back is None or back in tried or back > limit:
+                continue
+            tried.add(back)
+            words, temps = _sample(io, group, back, read_perf, sleep, settle_s, samples, interval_s)
+            running = [(w >> 8) & 0xFF for w in words]
+            kept = [w for w, r in zip(words, running) if r == ratio]
+            if len(kept) >= min_valid:
+                vids = [((w >> 32) & 0xFFFF) / 8192 for w in kept]
+                t_lo, t_hi = (min(temps), max(temps)) if temps else (None, None)
+                found = RatioMeasurement(ratio, "ok", back, min(vids), max(vids), tuple(sorted(set(running))), f"cap {back // 1000} MHz (cap search)", t_lo, t_hi,
+                                         len(kept), len(words), "", sum(vids) / len(vids))
+                break
+    finally:
+        for cpu, khz in originals.items():
+            try:
+                io.write_cap(cpu, khz)
+            except Exception as exc:
+                problems.append(f"could NOT restore scaling_max_freq of cpu {cpu} to {khz} kHz: {type(exc).__name__}: {exc} (restore it by hand)")
+    return found
 
 
 class _Load:

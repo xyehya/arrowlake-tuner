@@ -768,7 +768,9 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .tb-dot.k-E { fill: var(--e-core); }
 .tb-dot.changed { stroke: var(--text); stroke-width: 2; }
 
-.vc-pin.reach circle { fill: transparent; stroke: var(--u); stroke-width: 2; stroke-dasharray: 3 2.5; cursor: help; }
+.vc-nm line { stroke: var(--u); stroke-width: 2; stroke-linecap: round; }
+.vc-nm rect { fill: transparent; cursor: help; }
+.vc-nm-label { font-size: 10.5px; }
 .vc-pin.fused path { fill: var(--u); fill-opacity: 0.25; stroke: var(--text); stroke-width: 1.5; cursor: help; }
 .vc-pin.clamp circle { fill: var(--surface); stroke: var(--u); stroke-width: 2.5; cursor: help; }
 .cv-note { max-width: 110ch; font-size: 13px; margin: 6px 0 0; }
