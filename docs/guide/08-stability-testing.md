@@ -8,11 +8,11 @@ code deliberately never prints "pass" or "stable" (D-019). It can only tell you 
 
 ## 1. Why a long test is needed
 On the reference chip, unstable undervolts produced **silent wrong results**: the stress tool reported "CPU error detected" while the kernel logged no
-WHEA event, no machine check and no system error [MEASURED win 2026-10-04, tuning-results.md §3]. Consequences:
+WHEA event, no machine check and no system error [MEASURED win 2026-10-04, tuning-results.md §1]. Consequences:
 
 - A clean kernel log does **not** prove stability.
 - Short and weak tests passed states that a long Linpack-class run failed: OCCT SSE for 10-15 minutes, a 20-minute CPU+RAM run, a clock cycler, a 1-thread
-  test and per-core `stress-ng --verify` sweeps all passed states that OCCT Linpack 2021 later failed [MEASURED win 2026-10-04, tuning-results.md §5].
+  test and per-core `stress-ng --verify` sweeps all passed states that OCCT Linpack 2021 later failed [MEASURED win 2026-10-04, tuning-results.md §2].
 - Time to failure is noisy: the same offsets failed after about 50 minutes in one run and about 2 minutes in another. Only a full pass counts, not how long a
   failure took.
 - The failing run does not tell you which core: OCCT reported "core 0" when core 0 was at stock and the cause was an offset on an E-cluster. Bisect by
@@ -68,7 +68,7 @@ The project's gate (D-019, 2026-10-04) for calling a state accepted [MEASURED wi
 
 Both passed on Windows (2026-10-04) and on Linux (2026-10-07/08) for the accepted state there. This gate is the project's choice, not a standard. OCCT
 and Linpack are not shipped or launched by this tool; install and run them yourself. Alternatives named in the repo: y-cruncher, Prime95 small-FFT, a
-a newer Linpack build (not evaluated here) [favored-cores.md §4, tuning-results.md §5]. Whatever you choose:
+a newer Linpack build (not evaluated here) [favored-cores.md §4, examples/reference-285k/notes/tuning-history.md §6]. Whatever you choose:
 
 - it must **self-check** its results (a test that only loads the CPU cannot catch silent corruption);
 - run it long, at the voltages and ratios you will really use, with the cooling you will really have;
@@ -98,7 +98,7 @@ sudo python3 tools/lnx/percore_stress.py --cpus 0-7 --from-ratio 51 --seconds 60
 Options: `--cpus`, `--from-ratio`, `--to-ratio`, `--no-uncapped`, `--seconds`, `--out`. Results go to `captures/lnx/percore-<timestamp>.txt` and `.json`.
 It exercises the lower points and the interpolated ratios between points, which OCCT core cycling mostly skips. It is a screen, not the gate.
 
-The favored-core notes (favored-cores.md §3-4) sketch a protocol for finding each core's minimum stable voltage: step one core's point offset down by
+The favored-core notes (favored-cores.md §4) sketch a protocol for finding each core's minimum stable voltage: step one core's point offset down by
 5 mV at a time, 10 minutes per step with a self-checking single-thread load, back off 10 mV at the first error and confirm with 60 minutes. That is a
 plan, not a measured result [UNVERIFIED as a procedure].
 

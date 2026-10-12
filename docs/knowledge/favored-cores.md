@@ -56,8 +56,8 @@ Protocol sketch (writes need the operator's go-ahead per `docs/SAFETY.md`):
    reachable by a cap, `power-profile-capping.md` §6). Each P-core has its own DLVR, so one core's offset does not move the others.
 3. Loads must self-check, because failures are silent (`tuning-results.md` §1): y-cruncher 1T, Prime95 small-FFT 1 worker, Linpack 1T residual check,
    `stress-ng --verify`; rotate them.
-4. M2 per core: lower that core's point offset in small steps within your policy, ~10 min per step; at the first error back off and confirm with a long
-   run; record Vmin, the failing load and the temperature.
+4. M2 per core: lower that core's point offset in small steps (e.g. 5 mV), ~10 min per step; at the first error back off (e.g. +10 mV) and confirm
+   with a 60-min run; record Vmin, the failing load and the temperature.
 5. M3 (raises V/ratio): OC ratio one bin above the core's top at a fixed target voltage no higher than the favored cores' fused top VID; pass/fail per core.
 6. M5: same cap and VID on each core, same fan curve and ambient; record steady-state temperature and power.
 7. Rank by M2 (primary), then M3, then M5; re-run M2 on the top cores after a cold boot.

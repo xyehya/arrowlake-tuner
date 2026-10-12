@@ -41,7 +41,7 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 - Accepted layout now includes `fingerprint.json`; `profiles.accept` refuses `STALE_READ`; `profiles.fingerprint` -> `helper/ops_accept.py`, ARCHITECTURE G-141.
 - Limits: `policies/default.toml` header (D-039), ARCHITECTURE G-133/G-137/G-141 addenda, `registers.md` "Limits in the tool"; `System > Tuning limits` card `web/app.js renderSysLimits`.
 - tune.read cost about 140 on 8P+16E (112 V/F + 12 fused + 8 favored + 4 limits + 4 E 0x1C) -> ARCHITECTURE G-137 addendum; the page computes it from the unit list (G-139).
-- Everything from the first run (V/F word, points, clamp, interpolation, turbo tables, cold/warm boot, silent failures) still stands: `registers.md`, `platform-285k.md`, `tuning-results.md`.
+- Everything from the first run (V/F word, points, clamp, interpolation, turbo tables, cold/warm boot, silent failures) still stands: `registers.md`, `platform-arl-s.md`, `tuning-results.md`.
 
 ## Open questions for the orchestrator
 1. **Windows is untested.** Guide 09 §4 describes the G-138/G-142 flow from the script headers and `docs/RUNBOOK-win.md`, labelled untested. After the first real run, correct anything that differs.

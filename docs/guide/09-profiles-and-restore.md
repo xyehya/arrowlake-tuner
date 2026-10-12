@@ -86,7 +86,7 @@ so it works from a cold boot (all stock) and from a warm reboot (a mix) alike. A
 accepted state tell you whether every word matches.
 
 On the reference machine restoring the whole accepted state took 172 operations and 57 read-back rows, all matching
-[MEASURED lnx 2026-10-11, 2026-10-12, tuning-results.md]. Example value from one chip.
+[MEASURED lnx 2026-10-11, 2026-10-12, examples/reference-285k/notes/tuning-history.md §5]. Example value from one chip.
 
 **From a terminal.** The restore script restores the accepted state and proves it word for word:
 ```

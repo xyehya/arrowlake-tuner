@@ -79,21 +79,21 @@ turbo tables alone. **Discard changes** drops unapplied choices. A **cold boot**
 All numbers here are **example values from one Core Ultra 9 285K**. They show how a tuning was built and what failed, not what your chip accepts.
 
 - **Passing state** (called p-step7, accepted 2026-10-04 on Windows and 2026-10-07/08 on Linux) [MEASURED win 2026-10-04, lnx 2026-10-07/08,
-  tuning-results.md §1-2]: 48x left at stock on all P-cores; 53x at -50 mV on all P-cores; 55x set by a *target voltage* per core (about 1.27-1.29 V; the
+  examples/reference-285k/notes/tuning-history.md §1-2]: 48x left at stock on all P-cores; 53x at -50 mV on all P-cores; 55x set by a *target voltage* per core (about 1.27-1.29 V; the
   offsets ranged from -28 to -91 mV, deepest on the cores with the highest stock voltage); the favored cores' 56x/57x set by target (P0 1.360/1.385 V,
   P3 1.330/1.365 V); E-clusters 46x point at -35 mV (cluster 0) and -25 mV (clusters 1-3), the 40x point left at stock. The gate was 60 minutes OCCT Linpack
   2021 plus 60 minutes OCCT SSE, no MCE/WHEA.
 - **What failed first.** An earlier accepted state (p-step4: 53x about -55 to -65 mV on some cores, other 53x/55x offsets) passed shorter tests (SSE 10-15
   minutes, CPU+RAM 20 minutes, clock cycling, per-core `stress-ng --verify`) but later failed OCCT Linpack with "CPU error detected" and no WHEA, no MCE.
-  Deeper variants (53x about -90 mV on four cores) failed within minutes [MEASURED win 2026-10-04, tuning-results.md §3]. Only the long gate separated
+  Deeper variants (53x about -90 mV on four cores) failed within minutes [MEASURED win 2026-10-04, examples/reference-285k/notes/tuning-history.md §3]. Only the long gate separated
   the states.
 - **Where margin returned.** Backing off the deepest offsets where all-core AVX loads run (P-cores at 51-52x = the blend between the 48x and 53x
   points) and capping 55x by voltage instead of offset fixed it [MEASURED win 2026-10-04].
 - **Why it works.** The factory voltage spread across cores is mostly guard band, so the cores with the worst stock VID had the most room
-  [MEASURED win 2026-10-04 / lnx 2026-10-08, favored-cores.md §2].
+  [MEASURED win 2026-10-04 / lnx 2026-10-08, favored-cores.md §3].
 - **E-cores.** Only the 46x point was offset on the reference chip; an offset on the 40x point produced errors [MEASURED lnx 2026-10-02].
 - **Heat and power.** Judge a change by Vcore, watts and temperature at a fixed capped load, not by all-core MHz, which the BIOS power and thermal limits
-  decide [tuning-results.md §2].
+  decide [tuning-results.md §3].
 
 ## 6. Common mistakes
 - Typing several changes at once: if the test fails you cannot tell which one caused it. One variable at a time.
