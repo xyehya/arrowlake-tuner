@@ -105,11 +105,11 @@ class ReadFactsTests(FactsCase):
         self.assertEqual(res["tune"]["EC0"]["cpus"][0]["points"][0]["point_label"], "OC (point 7)")
         self.assertEqual(res["tune"]["EC0"]["cpus"][0]["points"][6]["point_label"], "point 6")
 
-    def test_the_extra_reads_are_24_mailbox_reads_and_4_rdmsr_and_never_a_write(self) -> None:
+    def test_the_extra_reads_are_28_mailbox_reads_and_4_rdmsr_and_never_a_write(self) -> None:
         h = self.boot_with(baseline=False)
         self.read(h, cpus=[0])  # the dump of CPU 0 (10 reads: OC word, 8 points, the rc 0x11) plus the extras of the same call
         cmds = [r.cmd for r in self.sim.requests]
-        self.assertEqual((cmds.count(0x09), cmds.count(0x1C), cmds.count(0x10)), (12, 8, 10))
+        self.assertEqual((cmds.count(0x09), cmds.count(0x1C), cmds.count(0x10)), (12, 12, 10))  # 0x1C: 8 P-cores + 4 E clusters (G-137)
         self.assertEqual((cmds.count(0x01), cmds.count(0x28)), (2, 2))  # G-137 (D-039): the CPU's own limits, one P CPU and one E CPU each
         self.assertEqual([(r.cmd, r.cpu) for r in self.sim.requests if r.cmd in (0x01, 0x28)], [(0x01, 0), (0x28, 0), (0x01, 8), (0x28, 8)])
         self.assertEqual(len(self.sim.writes), len(self.sim.requests))  # every mailbox read is exactly one WRMSR 0x150, nothing else

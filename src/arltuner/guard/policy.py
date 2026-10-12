@@ -26,10 +26,10 @@ TOML schema (``load_policy``)::
     max_ratio_step = 1                    # |ratio - current| per 0x11 word
     max_v_step_mv = 20                    # |V target - current| per 0x11 word (mV)
     max_offset_step_mv = 25               # |offset - current| per 0x11 word (mV)
-    [ratio_max]                           # per core kind; absent kind = the current ratio (no raise)
-    E = 50
+    [ratio_max]                           # per core kind; absent kind = the current ratio (no raise); "auto" = fused 0x1C + 3
+    E = 50                                # effective ceiling = this, clamped by the CPU's own cmd 0x01 [7:0] (D-039); 0x01 unread = no raise
     [v_target_max_mv]                     # per core kind (mV); absent kind = the current/fused V target (no raise)
-    E = 1250
+    E = 1250                              # effective ceiling = this, clamped by the CPU's own cmd 0x28 maximum - 1 LSB (D-039)
 
     [[msr_allow]]                         # T-023: plain (non-mailbox) rdmsr/wrmsr; absent = every plain MSR access is denied
     name  = "turbo_e_write"               # unique

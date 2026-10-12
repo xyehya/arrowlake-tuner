@@ -323,7 +323,8 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             "--policy",
             metavar="FILE",
             help="reviewed policy TOML (default: the built-in conservative M1 policy: no raise, step limits, D-015 offset floor); "
-            "ratio / voltage ceilings, the offset ceiling and step limits can only be raised in this file (D-016)",
+            "ratio / voltage ceilings, the offset window and step limits are this file's numbers (D-016, D-039): editable up to the CPU's own limits "
+            "(cmd 0x01 ratio, cmd 0x28 voltage, read from the CPU) and the field encodings",
         )
         p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else ~/.local/state/linuxmon/audit.jsonl, on Windows %%LOCALAPPDATA%%\\linuxmon\\audit.jsonl)")
         p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/linuxmon-mailbox.lock, else the temp dir)")

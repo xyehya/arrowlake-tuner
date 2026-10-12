@@ -271,3 +271,11 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     Dashboard show "Mailbox ops this boot: N" with a session sparkline and the per-boot cap as a note (D-032); the read estimate is "≈ 124–136" (112 V/F reads + 12 fused-point
     reads; `_read_extras` also sends 8 favored-ratio mailbox reads, so a read costs about 132); the default curve is the newest baseline, else the newest complete all-units curve.
   - `install.sh` creates `/var/lib/arltuner/state` 0700.
+- **Addendum "G-137" (limits = policy up to the CPU's own maxima, D-039; `guard/policy.py`, `helper/ops_tune.py`):** `tune.read` reads, in the same session as the fused / favored words, cmd `0x01 P1=0` and `0x28 P1=0`
+  on the first P CPU and the first CPU of the first E cluster (4 more mailbox reads), and `0x1C` on the first CPU of every E cluster (the E `"auto"` ratio ceiling resolves from it). Result gains `hw_limits`
+  `{P|E: {ratio_max_oc: int|null, v_target_max_mv: int|null, offset_mv: [-1000, 999]}}` (`ratio_max_oc` = `0x01 [7:0]`, null when unread / 0 / bit 8 clear; `v_target_max_mv` = `0x28 [11:0] - 1 LSB` in whole mV; `offset_mv` = the field
+  encoding); kept with the stored read, so `tune.last` and a restarted helper have it. The helper binds the policy to them (`Policy.with_hw_limits`) in `_load_policy`: every ratio / V target ceiling (planner, plan-time `POLICY_RANGE`, guard, turbo-table
+  check) is the policy value clamped by them; unread = no raise (fail closed). `limits.v_target_max_v` reports the clamped live value (null while `0x28` is unread). Load-time bounds of a policy are field encodings only
+  (`ENCODING_*`: ratio 1..255, V target 500..3999 mV, offset ceiling <= 999 / floor >= -1000 mV, steps 1..255 / 2..1000 mV). Every refusal names its source: `policy ratio_max P = 60 (<policy file>; your CPU allows up to 120x per cmd 0x01)`,
+  `CPU limit 84x (cmd 0x01 ...)`, `field encoding`. **Gap:** the CLI `plan` / `apply` path (`controls/planner.py` read phase) has no `0x01` step yet, so a CLI ratio raise is "no raise" until it gets one.
+  A `tune.read` costs 4 (limits) + number of E clusters (0x1C) more mailbox reads. Tests: `tests/guard/test_hw_limits.py`, `tests/helper/test_hw_limits.py`.

@@ -144,3 +144,43 @@ class ApplyUsesTheLiveLimits(HwLimitsCase):
         self.assertIn("no-raise value: policy ratio_max P = 90", r["error"]["message"])
         self.assertIn("the CPU's own limit (cmd 0x01) was not read this session", r["error"]["message"])
         self.assertEqual([q for q in self.sim.requests if q.cmd == 0x11], [])
+
+
+class AutoCeilingsOfTheShippedPolicy(HwLimitsCase):
+    """The public default is ``"auto"`` for P and E (ratio and V target): each resolves from what ``tune.read`` read for that kind."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.policy.write_text(ADVANCED.read_text())  # the shipped file as it is: no hand-written number
+
+    def test_the_e_ratio_ceiling_is_resolved_from_the_0x1c_word_of_an_e_cluster_plus_3(self) -> None:
+        h = self.boot()
+        res = self.read(h)
+        e_reads = [(r.cpu, r.cmd) for r in self.sim.requests if r.cmd == 0x1C and r.cpu >= 8]
+        self.assertEqual(e_reads, [(8, 0x1C), (12, 0x1C), (16, 0x1C), (20, 0x1C)])  # one per E cluster, one transaction each
+        self.assertEqual(res["limits"]["ratio_max"], {"P": 60, "E": 51})  # P 0x3939 -> 57 + 3; E 0x2E30 -> max(48, 46) + 3 [MEASURED win 2026-10-01 / lnx 2026-10-11: 0x1C answers on E CPUs]
+        self.assertEqual(res["limits"]["source"]["ratio_max"], {"P": "auto", "E": "auto"})
+        self.assertNotIn("favored ratios", " ".join(res["extras_notes"].values()))
+        self.assertEqual(sorted(res["turbo"]["favored"]), [str(c) for c in range(8)])  # the E words are not favored ratios
+
+    def test_an_e_ratio_raise_is_planned_and_applied_under_auto(self) -> None:
+        h = self.boot()
+        self.read(h)
+        self.apply_ok(h, self.plan(h, rows(row("EC0", ratio=50))))
+
+    def test_the_v_target_ceiling_is_the_live_0x28_value_not_a_constant(self) -> None:
+        h = self.boot(SimConfig.measured(max_voltage_cpu={0: 0x700, **{c: 0x560 for c in range(8, 24)}}, per_point=True, reject_zero_fields=True, point_offsets={}))
+        res = self.read(h)
+        self.assertEqual(res["hw_limits"]["P"]["v_target_max_mv"], 1749)  # (0x700 - 1) / 1024 V in whole mV
+        self.assertEqual(res["hw_limits"]["E"]["v_target_max_mv"], 1342)  # (0x560 - 1) / 1024 V
+        self.assertEqual(res["limits"]["v_target_max_v"], {"P": 1.749, "E": 1.342})
+
+    def test_the_v_target_ceiling_is_none_while_0x28_is_unread(self) -> None:
+        h = self.boot()
+        self.read(h)
+        h.helper._tune_state.hw_limits = None
+        from arltuner.helper import ops_tune
+
+        lim = ops_tune._limits(ops_tune._load_policy(h.helper), ops_tune._topology(h.helper), h.helper._tune_state.favored_words)
+        self.assertEqual(lim["v_target_max_v"], {"P": None, "E": None})
+        self.assertEqual(lim["ratio_max"], {"P": None, "E": None})  # the ratio needs the CPU limit too
