@@ -154,3 +154,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   toggle the performance". Scope of the exception (T-research R-001 only): power profile switch, cpufreq `scaling_max_freq`/`scaling_min_freq`/
   EPP writes, pinned `stress-ng` load, MSR **reads** (0x198, 0x774, 0x771, 0xE7/0xE8). Still forbidden to the worker: any WRMSR, any OC-mailbox
   request, the arltuner helper's write ops, BIOS. Initial state recorded and restored, verified at the end. Other workers keep the AGENTS.md rule.
+- **D-038 · 2026-10-12 · OC ratio headroom (operator yes, widens D-032's ratio cap).** Asked "highest OC ratio the dropdown can offer" (P was
+  capped at 57 = fused top ⇒ no P OC ratio possible), operator chose "Modest fixed cap": reference machine `/etc/arltuner/policy.toml`
+  `ratio_max` P 60 / E 50 (backup `policy.toml.bak-2026-10-12`); public default `"auto"` = the 0x1C fused max of the kind **+ 3**, clamped to
+  the sanity bound (P 62 / E 60). Rejected: cmd 0x01 fused max OC ratio (reads 120× on P: no cap in practice). Unchanged: ≤ 8× per write,
+  one transaction at a time, read-back, health gate. The page reads the limits live (G-133), never a literal.
