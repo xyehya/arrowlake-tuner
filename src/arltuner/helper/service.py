@@ -42,7 +42,7 @@ from .protocol import REFUSED, encode, error_response
 from .settings import DEFAULT_IDLE_EXIT_S, HelperToml
 from .trust import TrustError, check_trusted_path
 
-__all__ = ["CLIENT_BUSY", "ACCESS_DENIED", "Peer", "SOCKET_MODE", "SOCKET_PATH", "Service", "ServiceError", "adopt_socket", "create_socket", "listen_fds", "peer_credentials"]
+__all__ = ["CLIENT_BUSY", "ACCESS_DENIED", "CachedSettings", "Peer", "SOCKET_MODE", "SOCKET_PATH", "Service", "ServiceError", "adopt_socket", "create_socket", "listen_fds", "peer_credentials"]
 
 SOCKET_PATH = Path("/run/arltuner/helper.sock")
 SOCKET_MODE = 0o666  # connectable by everyone; SO_PEERCRED + [access] decide (D-043 amendment)
@@ -55,7 +55,9 @@ _PEERCRED = "3i"  # struct ucred: pid, uid, gid
 _BACKLOG = 4
 _POLL_S = 0.2
 _REFUSAL_SEND_S = 1.0  # a refused peer that does not read must not hold the accept loop
-_SESSION_JOIN_S = 600.0
+SEND_TIMEOUT_S = 8.0  # a client that does not read for this long is a dead client (SO_SNDTIMEO on its connection): the connection ends like a disconnect
+_SESSION_JOIN_S = 300.0  # how long a stopping service waits for a session's operation to finish its read-back / restore; the unit's TimeoutStopSec is >= this
+_LOG_EVERY_S = 10.0  # refusal log lines: at most one per kind and uid in this window, with the count of the suppressed ones
 
 
 class ServiceError(Exception):
@@ -79,6 +81,21 @@ def peer_credentials(conn: socket.socket) -> Peer:
 # =============================================================================================================================================
 # the listening socket
 # =============================================================================================================================================
+def _something_listens(path: str) -> bool:
+    """True when a connect to the node succeeds (a live listener, e.g. systemd's socket unit). ``ECONNREFUSED`` / ``ENOENT`` = stale. Any other error cannot
+    prove the node stale, so it counts as in use (nothing is removed on a guess)."""
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(2.0)
+        probe.connect(path)
+        return True
+    except (ConnectionRefusedError, FileNotFoundError):
+        return False
+    except OSError:
+        return True
+    finally:
+        probe.close()
+
 def listen_fds(environ: Mapping[str, str], pid: int) -> int | None:
     """``sd_listen_fds`` without libsystemd: the fd number (3) when systemd handed exactly one socket to *this* process, ``None`` when nothing was handed over
     (no variables, or ``LISTEN_PID`` names another process - an inherited environment). ``ServiceError`` for a half-set or malformed handover."""
@@ -126,6 +143,7 @@ def create_socket(
     path: Path | str, *, group: str | None, euid: int = 0, lstat_fn: Callable[[str], Any] = os.lstat, umask_fn: Callable[[int], int] = os.umask,
     chown_fn: Callable[..., object] = os.chown, chmod_fn: Callable[[str, int], object] = os.chmod, unlink_fn: Callable[[str], object] = os.unlink,
     mkdir_fn: Callable[[str, int], object] = os.mkdir, getgrnam: Callable[[str], Any] | None = None, trust_parents: bool = True,
+    probe_fn: Callable[[str], bool] | None = None,
 ) -> socket.socket:
     """Make the listening socket safely (module docstring). ``ServiceError`` for anything that is not as it should be; a socket is never left wider than
     0600 until it is complete (then 0666: the peer check is the gate) and never bound at all if its directory or an existing node is suspect. ``group`` is
@@ -170,8 +188,11 @@ def create_socket(
     if st is not None:
         if not stat.S_ISSOCK(st.st_mode) or st.st_uid != euid:
             raise ServiceError(f"{path} exists and is not a socket owned by uid {euid}; not removed")
+        if (probe_fn or _something_listens)(str(path)):  # the instance lock proves no other helper process, but systemd's socket unit may hold the node
+            raise ServiceError(f"{path} is in use: something is listening on it (the systemd socket unit arltuner-helper.socket?); not removed. "
+                               "Use the socket unit (sudo systemctl start arltuner-helper.socket) or stop it first")
         try:
-            unlink_fn(str(path))  # stale: the caller holds the instance lock, so no other helper is serving it
+            unlink_fn(str(path))  # stale: nobody listens
         except OSError as exc:
             raise ServiceError(f"cannot remove the stale socket {path}: {exc.strerror or exc}") from None
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -203,6 +224,62 @@ def create_socket(
 # =============================================================================================================================================
 # the service
 # =============================================================================================================================================
+class CachedSettings:
+    """``helper.toml`` through the trust check, re-read only when the file changes (device, inode, size, mtime, ctime): a flood of connects does not make the
+    root helper re-parse and re-check it every time. A failure is cached under the same key (it is still a refusal). A change of an *ancestor directory's*
+    permissions without any change to the file is not noticed until the file changes or the helper restarts (idle exit)."""
+
+    def __init__(self, loader: Callable[[], HelperToml], path: Path | str, lstat_fn: Callable[[str], Any] = os.lstat) -> None:
+        self._loader, self._path, self._lstat = loader, str(path), lstat_fn
+        self._key: tuple[int, ...] | None = None
+        self._value: HelperToml | None = None
+        self._error: Exception | None = None
+
+    def __call__(self) -> HelperToml:
+        try:
+            st = self._lstat(self._path)
+            key: tuple[int, ...] | None = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        except (OSError, AttributeError):
+            key = None  # absent / unstatable: the loader decides, nothing is cached
+        if key is not None and key == self._key:
+            if self._error is not None:
+                raise self._error
+            assert self._value is not None
+            return self._value
+        try:
+            value, error = self._loader(), None
+        except Exception as exc:
+            value, error = None, exc
+        self._key, self._value, self._error = key, value, error
+        if error is not None:
+            raise error
+        assert value is not None
+        return value
+
+
+class _LogLimiter:
+    """At most one log line per key in ``every_s``; the next one that gets through says how many were left out."""
+
+    def __init__(self, every_s: float, monotonic: Callable[[], float]) -> None:
+        self._every, self._mono = every_s, monotonic
+        self._last: dict[Any, float] = {}
+        self._skipped: dict[Any, int] = {}
+
+    def __call__(self, key: Any, text: str) -> str | None:
+        now = self._mono()
+        last = self._last.get(key)
+        if last is not None and now - last < self._every:
+            self._skipped[key] = self._skipped.get(key, 0) + 1
+            return None
+        self._last[key] = now
+        if len(self._last) > 256:  # bounded: forget the oldest keys
+            for old in sorted(self._last, key=self._last.get)[:128]:  # type: ignore[arg-type]
+                self._last.pop(old, None)
+                self._skipped.pop(old, None)
+        n = self._skipped.pop(key, 0)
+        return f"{text} (+{n} similar refusals in the last {self._every:.0f} s not logged)" if n else text
+
+
 class _ConnWriter:
     """Write side of a connection for the protocol ``Writer``: whole-buffer writes (``sendall``)."""
 
@@ -223,7 +300,7 @@ class Service:
     def __init__(
         self, helper: Helper, sock_factory: Callable[[], socket.socket], *, path: Path | str = SOCKET_PATH, settings_loader: Callable[[], HelperToml], activated: bool,
         peercred: Callable[[socket.socket], Peer] = peer_credentials, lookups: Mapping[str, Any] | None = None, log: Callable[[str], None] | None = None,
-        monotonic: Callable[[], float] = time.monotonic, poll_s: float = _POLL_S,
+        monotonic: Callable[[], float] = time.monotonic, poll_s: float = _POLL_S, send_timeout_s: float = SEND_TIMEOUT_S, sndbuf: int | None = None,
     ) -> None:
         self.helper = helper
         self.sock_factory = sock_factory  # called after the instance lock is held: a socket node found then is stale by construction
@@ -236,6 +313,9 @@ class Service:
         self.log = log or helper.cfg.log
         self.monotonic = monotonic
         self.poll_s = poll_s
+        self.send_timeout_s = send_timeout_s
+        self.sndbuf = sndbuf  # tests: a small send buffer makes a stalled reader show up quickly
+        self._limited = _LogLimiter(_LOG_EVERY_S, monotonic)
         self.idle_exit_s = DEFAULT_IDLE_EXIT_S
         self.session: threading.Thread | None = None
         self._conn: socket.socket | None = None
@@ -253,6 +333,14 @@ class Service:
             self._close(conn)
 
     @staticmethod
+    def _shutdown_conn(conn: socket.socket) -> None:
+        """Both directions: the client sees the end, the blocked reader returns, a blocked send fails."""
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    @staticmethod
     def _close(conn: socket.socket) -> None:
         try:
             conn.shutdown(socket.SHUT_RDWR)
@@ -263,47 +351,64 @@ class Service:
         except OSError:
             pass
 
+    def _log_limited(self, key: Any, text: str) -> None:
+        line = self._limited(key, text)
+        if line is not None:
+            self.log(line)
+
     def _admitted(self, peer: Peer) -> bool:
         try:
             settings = self.settings_loader()
         except Exception as exc:  # unreadable / untrusted / invalid helper.toml: nobody
-            self.log(f"access: helper.toml refused ({type(exc).__name__}: {exc}); no client is admitted")
+            self._log_limited(("toml",), f"access: helper.toml refused ({type(exc).__name__}: {exc}); no client is admitted")
             return False
         self.idle_exit_s = settings.idle_exit_s
         if settings.access.empty:
-            self.log("access: [access] in helper.toml is missing or empty; no client is admitted")
+            self._log_limited(("empty",), "access: [access] in helper.toml is missing or empty; no client is admitted")
             return False
         try:
             return bool(settings.access.allows(peer.uid, **self.lookups))
         except Exception as exc:
-            self.log(f"access: check failed ({type(exc).__name__}: {exc}); refused")
+            self._log_limited(("check",), f"access: check failed ({type(exc).__name__}: {exc}); refused")
             return False
 
-    def _accept_one(self, conn: socket.socket) -> None:
+    def _accept_one(self, conn: socket.socket) -> bool:
+        """Admit (start the session) or refuse the connection. True only for an admitted client: refused connects do not count as activity (idle exit)."""
         try:
             peer = self.peercred(conn)
         except (OSError, struct.error) as exc:
-            self.log(f"refused a connection: cannot read the peer credentials ({exc})")
+            self._log_limited(("cred",), f"refused a connection: cannot read the peer credentials ({exc})")
             self._refuse(conn, ACCESS_DENIED, "the peer's credentials could not be read; refused")
-            return
+            return False
         if not self._admitted(peer):
-            self.log(f"refused uid {peer.uid} (pid {peer.pid}): not allowed by helper.toml [access]")
+            self._log_limited(("denied", peer.uid), f"refused uid {peer.uid} (pid {peer.pid}): not allowed by helper.toml [access]")
             self._refuse(conn, ACCESS_DENIED, f"uid {peer.uid} is not allowed to use the helper (not in [access] of /etc/arltuner/helper.toml)")
-            return
+            return False
         if self.session is not None and self.session.is_alive():
-            self.log(f"refused uid {peer.uid} (pid {peer.pid}): another client is connected")
+            self._log_limited(("busy", peer.uid), f"refused uid {peer.uid} (pid {peer.pid}): another client is connected")
             self._refuse(conn, CLIENT_BUSY, "another client is connected")
-            return
+            return False
         conn.settimeout(None)
+        try:
+            # a client that stops reading must not freeze the helper (a send blocks under the writer lock): after this long without room the connection is dead
+            whole, frac = divmod(self.send_timeout_s, 1.0)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, struct.pack("@ll", int(whole), int(frac * 1_000_000)))
+            if self.sndbuf is not None:
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.sndbuf)
+        except OSError as exc:
+            self.log(f"cannot set the send timeout on the client socket ({exc}); refused")
+            self._refuse(conn, ACCESS_DENIED, "the connection could not be set up; refused")
+            return False
         self._conn = conn
         self.session = threading.Thread(target=self._session, args=(conn, peer), name="helper-client", daemon=True)
         self.session.start()
+        return True
 
     def _session(self, conn: socket.socket, peer: Peer) -> None:
         self.log(f"client connected: uid {peer.uid} (pid {peer.pid})")
         rfile = conn.makefile("rb")
         try:
-            self.helper.serve(rfile, _ConnWriter(conn), peer_uid=peer.uid)  # type: ignore[arg-type]
+            self.helper.serve(rfile, _ConnWriter(conn), peer_uid=peer.uid, abort=lambda: self._shutdown_conn(conn))  # type: ignore[arg-type]
         except Exception:
             self.log("client session failed:\n" + traceback.format_exc())
         finally:
@@ -353,8 +458,8 @@ class Service:
                 except OSError as exc:
                     self.log(f"accept failed: {exc}")
                     return 1
-                last_active = self.monotonic()
-                self._accept_one(conn)
+                if self._accept_one(conn):  # only an admitted client counts as activity: a stream of refused connects must not keep an idle helper alive
+                    last_active = self.monotonic()
             return 0
         finally:
             self._shutdown_session()

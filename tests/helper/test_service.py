@@ -17,7 +17,7 @@ from typing import Any
 
 from arltuner.helper import Helper, OpSpec
 from arltuner.helper.service import (
-    ACCESS_DENIED, CLIENT_BUSY, Peer, Service, ServiceError, adopt_socket, create_socket, listen_fds, peer_credentials,
+    ACCESS_DENIED, CLIENT_BUSY, CachedSettings, Peer, Service, ServiceError, adopt_socket, create_socket, listen_fds, peer_credentials,
 )
 from arltuner.helper.settings import Access, HelperToml, load_helper_toml, parse_helper_toml
 
@@ -103,7 +103,7 @@ class ServiceCase(HelperCase):
         return HelperToml(access=kw.pop("access", Access((my_name(),))), **kw)
 
     def serve(self, settings=None, *, activated: bool = False, group: str | None = "mine", cfg=None, peercred=None, lookups=None, poll_s: float = 0.02,
-              extra_ops=None) -> Service:
+              extra_ops=None, **service_kw: Any) -> Service:
         if extra_ops:
             cfg = cfg or self.config(extra_ops=extra_ops)
         helper = Helper(cfg or self.config())
@@ -112,7 +112,7 @@ class ServiceCase(HelperCase):
         kw: dict[str, Any] = {} if peercred is None else {"peercred": peercred}
         svc = Service(
             helper, lambda: create_socket(self.path, group=grp_name, euid=euid, trust_parents=False), path=self.path, settings_loader=loader, activated=activated,
-            lookups=lookups, log=self.logs.append, poll_s=poll_s, **kw,
+            lookups=lookups, log=self.logs.append, poll_s=poll_s, **kw, **service_kw,
         )
         codes: list[int] = []
         thread = threading.Thread(target=lambda: codes.append(svc.run()), daemon=True)
@@ -607,6 +607,242 @@ class SocketActivationTests(unittest.TestCase):
         s.listen(1)
         with self.assertRaises(ServiceError):
             adopt_socket(os.dup(s.fileno()))
+
+
+# =============================================================================================================================================
+# security review of G-144 (Opus): stalls, cross-connection leaks, idle, log floods, stale-socket removal
+# =============================================================================================================================================
+@unittest.skipUnless(POSIX, "Unix sockets")
+class StalledClientTests(ServiceCase):
+    """MED 1: a client that stops reading must not freeze the helper (the send happens under the writer lock)."""
+
+    def flood(self, c: Client, n: int = 600) -> threading.Thread:
+        def go() -> None:
+            c.sock.settimeout(1.0)
+            try:
+                for i in range(n):
+                    c.sock.sendall(json.dumps({"id": f"p{i}", "op": "preflight"}).encode() + b"\n")
+            except OSError:
+                pass  # the helper closed the connection: expected
+
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        return t
+
+    def test_a_stalled_reader_is_dropped_after_the_send_timeout_and_the_next_client_is_served(self) -> None:
+        svc = self.serve(send_timeout_s=0.5, sndbuf=4096)
+        a = self.connect()
+        t0 = time.monotonic()
+        self.wait(lambda: any("client connected" in line for line in self.logs), "the session to start")
+        self.flood(a)  # requests in, answers never read
+        self.wait(lambda: svc.session is None or not svc.session.is_alive(), "the stalled session to be dropped", timeout=15)
+        self.assertLess(time.monotonic() - t0, 12)
+        self.assertTrue(any("stalled" in line for line in self.logs), self.logs)
+        b = self.connect()
+        self.assertTrue(b.call("1", "preflight")["ok"])  # the service never froze
+
+    def test_an_operation_in_flight_when_the_client_stalls_completes_and_no_new_one_starts(self) -> None:
+        self.sim = sim = BlockingSim(self.sim.config)
+        sim.park_at = 2
+        svc = self.serve(send_timeout_s=0.5, sndbuf=4096)
+        a = self.connect()
+        a.send({"id": "d", "op": "vf.dump", "args": {"cpus": "0"}})
+        self.assertTrue(sim.parked.wait(T))  # a mailbox transaction is in flight
+        self.flood(a)
+        self.wait(lambda: any("stalled" in line for line in self.logs), "the stall to be noticed", timeout=15)
+        self.assertIsNotNone(svc.helper.machine.running)  # still finishing: the session is not over, the op was not abandoned
+        self.assertTrue(svc.session.is_alive())
+        sim.release.set()
+        self.wait(lambda: svc.session is None or not svc.session.is_alive(), "the session to end after the op", timeout=15)
+        self.assertIsNone(svc.helper.machine.running)
+        self.assertFalse(svc.helper.busy())
+        b = self.connect()
+        self.assertTrue(b.call("1", "preflight")["ok"])
+
+
+@unittest.skipUnless(POSIX, "Unix sockets")
+class CrossConnectionTests(ServiceCase):
+    """MED 2: nothing of one connection (a late answer, its peer uid, its threads) may reach or influence the next."""
+
+    PEERS = {"a": 1111, "b": 2222}
+
+    def two_users(self):
+        pw = {"a": types.SimpleNamespace(pw_uid=1111), "b": types.SimpleNamespace(pw_uid=2222)}
+        uids = iter([1111, 2222, 2222, 2222, 2222, 2222])
+        return dict(settings=HelperToml(access=Access(("a", "b"))), peercred=lambda conn: Peer(1, next(uids), 1), lookups=dict(getpwnam=lambda n: pw[n]))
+
+    def test_a_late_read_only_answer_never_reaches_the_next_client_and_the_next_client_waits(self) -> None:
+        seen: list[Any] = []
+
+        def slow(h, ctx, a):
+            time.sleep(1.5)
+            seen.append(("peer_at_end", h.peer_uid, h.cfg.operator))
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": 1, "of": 1, "ops_used": 0, "ops_budget": 1})  # a late event as well
+            return {"secret_of": "client A"}
+
+        spec = OpSpec("stub.slow", slow, lambda a: a, slow=True)
+        before = set(threading.enumerate())
+        svc = self.serve(extra_ops={"stub.slow": spec}, **self.two_users())
+        a = self.connect()
+        a.send({"id": "A-req", "op": "stub.slow"})
+        time.sleep(0.3)
+        a.close()  # A is gone while its read-only op is still running
+        b = self.connect()
+        err = self.refusal(b)  # B is not served while any thread of A's connection lives
+        self.assertEqual(err["detail"], {"check": CLIENT_BUSY})
+        self.wait(lambda: svc.session is None or not svc.session.is_alive(), "A's connection to end")
+        self.assertEqual(seen, [("peer_at_end", 1111, "gui:uid1111")])  # the op saw A's peer, never B's
+        leftovers = [t for t in set(threading.enumerate()) - before if t.name.startswith(("helper-stdin", "helper-heartbeat", "helper-op", "helper-telemetry"))]
+        self.assertEqual(leftovers, [])  # every thread of the connection ended before the service took the next client
+        b = self.connect()
+        mine = []
+        deadline = time.monotonic() + 3
+        b.send({"id": "B-req", "op": "audit.tail"})
+        while time.monotonic() < deadline:
+            m = b.read()
+            mine.append(m)
+            if m and m.get("id") == "B-req":
+                break
+        self.assertFalse([m for m in mine if m and (m.get("id") == "A-req" or "secret_of" in json.dumps(m))], mine)
+        self.assertEqual(svc.helper.peer_uid, 2222)
+        self.assertEqual(svc.helper.cfg.operator, "gui:uid2222")
+
+    def test_a_dead_connection_drops_its_emits(self) -> None:
+        from arltuner.helper.core import Connection
+        from arltuner.helper.protocol import Writer
+        import io
+
+        out = io.BytesIO()
+        conn = Connection(Writer(out), 5, "gui:uid5")
+        self.assertTrue(conn.emit({"event": "heartbeat"}))
+        conn.dead = True
+        self.assertFalse(conn.emit({"event": "heartbeat"}))
+        self.assertEqual(out.getvalue().count(b"\n"), 1)
+        self.assertNotEqual(conn.generation, Connection(Writer(out), 5, "x").generation)
+
+    def test_the_old_reader_cannot_cancel_the_next_connections_operation(self) -> None:
+        self.sim = sim = BlockingSim(self.sim.config)
+        sim.park_at = 2
+        svc = self.serve()
+        a = self.connect()
+        a.close()  # A: EOF at once
+        self.wait(lambda: any("client disconnected: uid" in line for line in self.logs), "A's connection to end")
+        self.wait(lambda: svc.session is None or not svc.session.is_alive(), "A's session thread to end")
+        b = self.connect()
+        b.send({"id": "d", "op": "vf.dump", "args": {"cpus": "0"}})
+        self.assertTrue(sim.parked.wait(T))
+        time.sleep(0.3)
+        cancel = svc.helper._cancel
+        self.assertIsNotNone(cancel)
+        self.assertFalse(cancel.is_set())  # nothing from A's connection touched B's op
+        sim.release.set()
+        self.assertTrue(b.read_until(lambda m: m.get("id") == "d")["ok"])
+
+
+@unittest.skipUnless(POSIX, "Unix sockets")
+class IdleAndFloodTests(ServiceCase):
+    def test_refused_connects_do_not_keep_an_idle_helper_alive(self) -> None:
+        svc = self.serve(self.toml(access=Access(("a-user-that-is-not-us",)), idle_exit_s=1), activated=True)
+        end = time.monotonic() + 3.5
+        while svc.thread.is_alive() and time.monotonic() < end:  # type: ignore[attr-defined]
+            try:
+                c = self.connect()
+                c.read()
+                c.close()
+            except OSError:
+                break
+            time.sleep(0.1)
+        self.assertFalse(svc.thread.is_alive())  # type: ignore[attr-defined]
+        self.assertEqual(svc.codes, [0])  # type: ignore[attr-defined]
+
+    def test_refusal_log_lines_are_rate_limited(self) -> None:
+        self.serve(self.toml(access=Access(("a-user-that-is-not-us",))))
+        for _ in range(40):
+            c = self.connect()
+            c.read()
+            c.close()
+        lines = [line for line in self.logs if line.startswith("refused uid")]
+        self.assertEqual(len(lines), 1, lines)
+
+    def test_the_limiter_reports_what_it_left_out(self) -> None:
+        from arltuner.helper.service import _LogLimiter
+
+        now = [0.0]
+        lim = _LogLimiter(10.0, lambda: now[0])
+        self.assertEqual(lim("k", "x"), "x")
+        self.assertIsNone(lim("k", "x"))
+        self.assertIsNone(lim("k", "x"))
+        self.assertEqual(lim("other", "y"), "y")
+        now[0] = 11.0
+        self.assertIn("+2 similar", lim("k", "x"))
+        now[0] = 30.0
+        self.assertEqual(lim("k", "x"), "x")
+
+    def test_helper_toml_is_re_read_only_when_it_changes(self) -> None:
+        calls = []
+        d = self.tmp / "t"
+        d.mkdir()
+        f = d / "helper.toml"
+        f.write_text('[access]\nusers = ["a"]\n')
+        cached = CachedSettings(lambda: calls.append(1) or load_helper_toml(f, root_uid=os.geteuid(), check_parents=False), f)
+        for _ in range(20):
+            self.assertEqual(cached().access.users, ("a",))
+        self.assertEqual(len(calls), 1)
+        f.write_text('[access]\nusers = ["a", "b"]\n')
+        self.assertEqual(cached().access.users, ("a", "b"))
+        self.assertEqual(len(calls), 2)
+        os.chmod(f, 0o666)  # a mode change (ctime) is a change: the trust check runs again and now refuses
+        with self.assertRaises(Exception):
+            cached()
+        self.assertEqual(len(calls), 3)
+        for _ in range(5):
+            with self.assertRaises(Exception):
+                cached()
+        self.assertEqual(len(calls), 3)  # the refusal is cached under the same key
+        f.unlink()
+        cached()  # absent: defaults, not cached
+        cached()
+        self.assertEqual(len(calls), 5)
+
+
+@unittest.skipUnless(POSIX, "Unix sockets")
+class LiveSocketIsNeverRemovedTests(unittest.TestCase):
+    def test_a_manual_start_refuses_when_something_listens_on_the_node(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir(mode=0o755)
+            node = run / "helper.sock"
+            live = socket.socket(socket.AF_UNIX)
+            live.bind(str(node))
+            live.listen(1)  # e.g. systemd's arltuner-helper.socket
+            try:
+                with self.assertRaises(ServiceError) as ctx:
+                    create_socket(node, group=None, euid=os.geteuid(), trust_parents=False)
+                self.assertIn("in use", str(ctx.exception))
+                self.assertIn("arltuner-helper.socket", str(ctx.exception))
+                self.assertTrue(stat.S_ISSOCK(os.lstat(node).st_mode))  # not removed
+                probe = socket.socket(socket.AF_UNIX)
+                probe.connect(str(node))  # and still the same live listener
+                probe.close()
+            finally:
+                live.close()
+            create_socket(node, group=None, euid=os.geteuid(), trust_parents=False).close()  # now stale: replaced
+
+    def test_an_error_other_than_refused_counts_as_in_use(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir(mode=0o755)
+            node = run / "helper.sock"
+            stale = socket.socket(socket.AF_UNIX)
+            stale.bind(str(node))
+            stale.close()
+            with self.assertRaises(ServiceError):
+                create_socket(node, group=None, euid=os.geteuid(), trust_parents=False, probe_fn=lambda p: True)
+            self.assertTrue(os.path.lexists(node))
 
 
 if __name__ == "__main__":

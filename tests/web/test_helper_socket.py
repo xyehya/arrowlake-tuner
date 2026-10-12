@@ -107,6 +107,24 @@ class ConnectErrors(unittest.TestCase):
             connect_helper(str(self.path), owner_uid=os.geteuid() + 1)  # "owned by somebody else"
         self.assertEqual(ctx.exception.kind, "untrusted")
 
+    @unittest.skipIf(os.geteuid() == 0, "needs a listener that is not root")
+    def test_a_listener_that_is_not_root_is_refused_after_connect(self) -> None:
+        """Client-side check: even if the node looks root-owned, the process listening on it must be (SO_PEERCRED on our end)."""
+        import types
+
+        served: list[socket.socket] = []
+        self.listener(served.append)
+        looks_root = lambda p: types.SimpleNamespace(st_mode=stat.S_IFSOCK | 0o666, st_uid=0)  # noqa: E731
+        with self.assertRaises(HelperConnectError) as ctx:
+            connect_helper(str(self.path), owner_uid=0, lstat_fn=looks_root)
+        self.assertEqual(ctx.exception.kind, "untrusted")
+        self.assertIn("not root", str(ctx.exception))
+        time.sleep(0.2)
+        for c in served:  # nothing was sent to it: no request line reached the impostor
+            c.settimeout(0.5)
+            self.assertEqual(c.recv(100), b"")  # we closed without sending a byte
+            c.close()
+
     @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
     def test_permission_denied_means_the_socket_is_broken_not_that_the_user_is_unlisted(self) -> None:
         s = socket.socket(socket.AF_UNIX)

@@ -16,8 +16,9 @@ After=arltuner-helper.socket
 Type=simple
 ExecStart=/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket
 KillSignal=SIGTERM
-# A measurement or stress run in flight restores cpufreq before the helper exits; give it time before systemd kills it.
-TimeoutStopSec=120
+# A measurement or stress run in flight restores cpufreq before the helper exits; give it time before systemd kills it (the helper waits at most 300 s for a
+# session, arltuner.helper.service._SESSION_JOIN_S; keep this value >= that one).
+TimeoutStopSec=300
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes

@@ -60,7 +60,7 @@ class Good(unittest.TestCase):
     def test_a_correct_install_passes_every_check(self) -> None:
         results = run(GOOD)
         self.assertEqual({k: v for k, v in results.items() if v}, {})
-        self.assertEqual(len(results), 20)
+        self.assertEqual(len(results), 21)
         self.assertFalse([k for k in results if "polkit" in k and "old" not in k])  # no polkit action/rules checks any more, only "no old polkit action file"
 
     def test_the_audit_log_may_be_absent(self) -> None:
@@ -163,6 +163,20 @@ class Damage(unittest.TestCase):
             self.assertEqual(list(bad), ["systemd service unit arltuner-helper.service"])
             self.assertNotIn("systemd service unit arltuner-helper.service: content", run(tree))
 
+    def test_socket_mode_0660_is_accepted_like_preflight_does(self) -> None:
+        selfcheck.check_socket_unit_text(SOCKET_UNIT.replace(b"SocketMode=0666", b"SocketMode=0660"))
+
+    def test_systemd_drop_ins_are_refused_unless_empty_or_absent(self) -> None:
+        for base in ("/etc/systemd/system", "/run/systemd/system", "/usr/lib/systemd/system", "/etc/systemd/system.control"):
+            for unit in ("arltuner-helper.service", "arltuner-helper.socket"):
+                d = f"{base}/{unit}.d"
+                tree = GOOD | {d: (0, DIR), f"{d}/override.conf": (0, FILE), base: (0, DIR)}
+                label, why = self.only(tree)
+                self.assertEqual(label, "no systemd drop-ins for the helper units", d)
+                self.assertIn("override.conf", why)
+                empty = GOOD | {d: (0, DIR), base: (0, DIR)}
+                self.assertEqual(failures(empty), {}, d)  # an empty drop-in directory overrides nothing
+
     def test_no_group_is_required_any_more(self) -> None:
         self.assertFalse([k for k in run(GOOD) if "group" in k])
 
@@ -247,7 +261,7 @@ class UnitContent(unittest.TestCase):
         self.assertNotIn("Install", selfcheck.unit_sections(SERVICE_UNIT))  # started by the socket, never enabled by itself
 
     def test_socket_mode_owner_group_and_path_are_pinned(self) -> None:
-        for old, new in ((b"SocketMode=0666", b"SocketMode=0660"), (b"SocketMode=0666", b"SocketMode=0664"), (b"SocketMode=0666", b"SocketMode=0777"),
+        for old, new in ((b"SocketMode=0666", b"SocketMode=0664"), (b"SocketMode=0666", b"SocketMode=0777"), (b"SocketMode=0666", b"SocketMode=0600"),
                          (b"SocketUser=root", b"SocketUser=yk"), (b"ListenStream=/run/arltuner/helper.sock", b"ListenStream=/run/user/1000/helper.sock"),
                          (b"Accept=no", b"Accept=yes")):
             with self.subTest(new=new):

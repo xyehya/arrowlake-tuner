@@ -16,6 +16,7 @@ import os
 import queue
 import socket
 import stat
+import struct
 import subprocess
 import threading
 from typing import Any, BinaryIO, Callable
@@ -304,7 +305,8 @@ def _whoami() -> str:
 def connect_helper(
     path: str = HELPER_SOCKET, *, timeout: float = HANDSHAKE_S, lstat_fn: Callable[[str], Any] = os.lstat, owner_uid: int = 0, user: str | None = None,
 ) -> HelperLink:
-    """Connect to the root helper service (D-043) and prove the link works. The node must be a socket owned by ``owner_uid`` (root); then the first request
+    """Connect to the root helper service (D-043) and prove the link works. The node must be a socket owned by ``owner_uid`` (root) and, once connected, the
+    peer's credentials (``SO_PEERCRED`` on our end) must say the listener is ``owner_uid`` too; then the first request
     (``preflight``, read-only) is the handshake: either it is answered (the helper admitted this user) or the helper's framed refusal / EOF explains why not.
     Raises :class:`HelperConnectError` with a message that names the fix."""
     who = user or _whoami()
@@ -330,6 +332,14 @@ def connect_helper(
     except OSError as exc:
         sock.close()
         raise HelperConnectError("unavailable", f"cannot connect to {path}: {exc.strerror or exc}") from None
+    try:  # the other end must be root (the credentials of the process that listens on the node): never hand requests to a look-alike
+        pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+        if uid != owner_uid:
+            sock.close()
+            raise HelperConnectError("untrusted", f"the process listening on {path} is uid {uid}, not root; not talking to it")
+    except OSError as exc:
+        sock.close()
+        raise HelperConnectError("untrusted", f"cannot verify who listens on {path} ({exc.strerror or exc}); not talking to it") from None
     link = HelperLink(sock.makefile("rb"), SocketWriter(sock)).start()
     try:
         link.call("preflight", {}, timeout=timeout)

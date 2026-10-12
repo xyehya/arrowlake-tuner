@@ -3,8 +3,8 @@
 
 It asks the question the root helper will ask at start-up (SPEC 4.4): is everything it will load or open root-owned, not group/world-writable,
 free of symlinks, with root-owned parents? It reuses ``arltuner.helper.trust`` (the helper's own checks) and adds what only the install can know:
-the launcher is executable, the systemd socket + service units are present and pin the launcher and the socket's owner / mode (0666: the peer check is the
-gate), no polkit action file is left over from the old install, ``helper.toml`` has an ``[access]`` that admits somebody, the audit log is 0600.
+the launcher is executable, the systemd socket + service units are present and pin the launcher and the socket's owner / mode (0666, or 0660; the peer check is the
+gate), no drop-in overrides them, no polkit action file is left over from the old install, ``helper.toml`` has an ``[access]`` that admits somebody, the audit log is 0600.
 Pure over injectable ``lstat_fn`` / ``listdir_fn`` / ``read_fn`` / ``root_uid``: tests feed fake stat results. Exit 0: all checks passed;
 1: at least one failed (each is named); the install is then NOT usable and ``uninstall.sh`` removes it.
 """
@@ -25,6 +25,8 @@ SELFCHECK = CODE_DIR / "arltuner-selfcheck"
 OLD_POLKIT_FILE = Path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")  # the G-106 install's action: must be gone (D-043)
 UNIT_DIRS = (Path("/etc/systemd/system"), Path("/usr/lib/systemd/system"))  # install.sh uses the first; a distribution package may use the second
 SOCKET_UNIT, SERVICE_UNIT = "arltuner-helper.socket", "arltuner-helper.service"
+# Where systemd looks for overrides of a unit: <dir>/<unit>.d/*.conf. Any file there could change ExecStart or the socket's mode, so none is accepted.
+DROPIN_BASES = tuple(Path(p) for p in ("/etc/systemd/system", "/etc/systemd/system.control", "/run/systemd/system", "/run/systemd/system.control", "/usr/lib/systemd/system"))
 SOCKET_PATH = Path("/run/arltuner/helper.sock")
 EXEC_START = f"/usr/bin/python3 -I {HELPER} --device --socket"
 TMPFILES_FILE = Path("/usr/lib/tmpfiles.d/arltuner.conf")
@@ -75,14 +77,16 @@ def unit_sections(data: bytes) -> dict[str, dict[str, list[str]]]:
 
 
 def check_socket_unit_text(data: bytes) -> None:
-    """``ValueError`` unless the socket unit listens on exactly ``/run/arltuner/helper.sock``, owned by root, mode 0666 (D-043 amendment: the helper's peer check
-    is the gate, so the group is irrelevant), and does not hand each connection to its own service instance (``Accept=no``)."""
+    """``ValueError`` unless the socket unit listens on exactly ``/run/arltuner/helper.sock``, owned by root, mode 0666 or 0660 (D-043 amendment: the helper's
+    peer check is the gate; the same two modes preflight accepts), and does not hand each connection to its own service instance (``Accept=no``)."""
     sock = unit_sections(data).get("Socket")
     if sock is None:
         raise ValueError("no [Socket] section")
-    for key, want in (("ListenStream", [str(SOCKET_PATH)]), ("SocketUser", ["root"]), ("SocketMode", ["0666"])):
+    for key, want in (("ListenStream", [str(SOCKET_PATH)]), ("SocketUser", ["root"])):
         if sock.get(key) != want:
             raise ValueError(f"{key} is {sock.get(key)}, must be exactly {want}")
+    if sock.get("SocketMode") not in (["0666"], ["0660"]):
+        raise ValueError(f"SocketMode is {sock.get('SocketMode')}, must be exactly ['0666'] (or ['0660'])")
     if sock.get("Accept", ["no"]) != ["no"]:
         raise ValueError(f"Accept is {sock.get('Accept')}, must be no (the helper serves its one client itself)")
     extra = sorted(set(sock) - SOCKET_KEYS_ALLOWED)
@@ -103,6 +107,28 @@ def check_service_unit_text(data: bytes) -> None:
     present = [k for k in FORBIDDEN_SERVICE_KEYS if k in svc]
     if present:
         raise ValueError(f"{present} must not be set in [Service]: the helper runs exactly the pinned command, as root, with access to MSRs / sysfs / its state")
+
+
+def check_no_dropins(listdir_fn: Callable[[str], list[str]]) -> None:
+    """``ValueError`` if a drop-in directory of either helper unit exists and is not empty (an empty or absent one overrides nothing)."""
+    found = []
+    for base in DROPIN_BASES:
+        for unit in (SOCKET_UNIT, SERVICE_UNIT):
+            directory = base / f"{unit}.d"
+            try:
+                names = listdir_fn(str(directory))
+            except FileNotFoundError:
+                continue
+            except NotADirectoryError:
+                found.append(f"{directory} (not a directory)")
+                continue
+            except OSError as exc:
+                found.append(f"{directory} (unreadable: {exc.strerror or exc})")
+                continue
+            if names:
+                found.append(f"{directory}: {sorted(names)}")
+    if found:
+        raise ValueError(f"systemd drop-ins override the helper units (they could change ExecStart or the socket's mode): {found}")
 
 
 def check_old_polkit_gone(lstat_fn: Callable[[str], Any]) -> None:
@@ -194,6 +220,7 @@ def selfcheck(
     unit("systemd socket unit arltuner-helper.socket", SOCKET_UNIT, check_socket_unit_text)
     unit("systemd service unit arltuner-helper.service", SERVICE_UNIT, check_service_unit_text)
 
+    run("no systemd drop-ins for the helper units", lambda: check_no_dropins(listdir_fn))
     run("no old polkit action file", lambda: check_old_polkit_gone(lstat_fn))
     path("tmpfiles.d file", TMPFILES_FILE)
     path("policy /etc/arltuner/policy.toml", ETC_DIR / "policy.toml")

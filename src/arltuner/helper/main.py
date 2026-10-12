@@ -331,7 +331,7 @@ def run_socket(
 ) -> int:
     """``--socket``: the helper as a service (D-043). Root: the installed socket path and ``/etc/arltuner/helper.toml``, nothing from argv. Non-root (tests,
     ``--sim``): ``--socket-path`` / ``--helper-toml``, whose files must belong to the invoking user the way root's belong to root."""
-    from .service import SOCKET_PATH, Service, ServiceError, adopt_socket, create_socket, listen_fds
+    from .service import SOCKET_PATH, CachedSettings, Service, ServiceError, adopt_socket, create_socket, listen_fds
 
     env = os.environ if environ is None else environ
     if euid == 0:
@@ -347,8 +347,10 @@ def run_socket(
     for name in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):  # nothing we start may think it was handed a socket
         env.pop(name, None)
 
-    def settings():  # type: ignore[no-untyped-def]
+    def load_settings():  # type: ignore[no-untyped-def]
         return load_helper_toml(toml_path, lstat_fn=lstat_fn, root_uid=euid, check_parents=euid == 0)
+
+    settings = CachedSettings(load_settings, toml_path, lstat_fn)  # re-read through the trust check only when the file changes
 
     def make_socket():  # type: ignore[no-untyped-def]
         if fd is not None:

@@ -361,6 +361,129 @@ def run_bash(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", "-c", prelude + script], capture_output=True, text=True, cwd=cwd, env={"PATH": os.environ["PATH"]}, timeout=60)
 
 
+class AccessTool(InstallCase):
+    """packaging/arltuner-access, called directly: it refuses uid 0 whatever the account is called."""
+
+    def load(self):
+        from importlib.machinery import SourceFileLoader
+        from importlib.util import module_from_spec, spec_from_loader
+
+        sys.path.insert(0, str(REPO / "src"))
+        self.addCleanup(sys.path.remove, str(REPO / "src"))
+        loader = SourceFileLoader("arltuner_access_tool", str(REPO / "packaging" / "arltuner-access"))
+        mod = module_from_spec(spec_from_loader("arltuner_access_tool", loader))
+        loader.exec_module(mod)
+        return mod
+
+    def test_an_alias_of_root_is_refused_by_uid_not_by_name(self) -> None:
+        import contextlib
+        import io
+        import types
+        from unittest import mock
+
+        mod = self.load()
+        target = self.tmp / "helper.toml"
+        with mock.patch.object(mod.pwd, "getpwnam", lambda n: types.SimpleNamespace(pw_uid=0 if n == "toor" else 1000)):
+            for flag in ("--add-user", "--seed-user"):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(mod.main([str(target), flag, "toor"]), 1)
+                self.assertIn("uid 0", err.getvalue())
+                self.assertFalse(target.exists())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mod.main([str(target), "--add-user", "alice"]), 0)
+        self.assertIn('"alice"', target.read_text())
+
+    def test_capitalised_names_are_fine_and_junk_is_not(self) -> None:
+        import contextlib
+        import io
+
+        mod = self.load()
+        target = self.tmp / "helper.toml"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mod.main([str(target), "--add-user", "Alice.B"]), 0)
+        for junk in ("a b", 'a"b', "-x", "a\nb", "1a"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(mod.main([str(target), "--add-user", junk]), 1, junk)
+
+
+class StrictHelperPids(InstallCase):
+    """Only the REAL helper is ever signalled by the installer: uid 0, exe = the system python3, argv exactly the unit's / the old launcher's."""
+
+    def procs(self, **cmdlines: list[str]) -> Path:
+        proc = self.tmp / "proc"
+        py = self.tmp / "python3-real"
+        py.write_text("")
+        for pid, argv in cmdlines.items():
+            d = proc / pid.lstrip("p")
+            d.mkdir(parents=True)
+            (d / "cmdline").write_bytes(b"".join(a.encode() + b"\0" for a in argv))
+            (d / "exe").symlink_to(py)
+        (proc / "99").mkdir()
+        (proc / "99" / "cmdline").write_bytes(b"/usr/bin/python3\0-I\0/usr/lib/arltuner/arltuner-helper\0--device\0")  # no exe link: unverifiable
+        return proc
+
+    def pids(self, proc: Path, *, uid: int | None = None, exe_ok: bool = True) -> list[str]:
+        py = str(self.tmp / "python3-real") if exe_ok else "/nonexistent/python"
+        script = (
+            f'PROC_ROOT={proc}\nHELPER_PY={py}\nHELPER_UID={os.getuid() if uid is None else uid}\n'
+            + bash_function("strict_helper_pids") + "\nstrict_helper_pids"
+        )
+        r = run_bash(script, self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return sorted(r.stdout.split())
+
+    PY = "/usr/bin/python3"
+    LAUNCHER = "/usr/lib/arltuner/arltuner-helper"
+
+    def test_the_real_helper_forms_are_found(self) -> None:
+        proc = self.procs(p10=[self.PY, "-I", self.LAUNCHER, "--device"], p11=[self.PY, "-I", self.LAUNCHER, "--device", "--socket"])
+        self.assertEqual(self.pids(proc), ["10", "11"])
+
+    def test_everything_else_is_not_the_helper(self) -> None:
+        proc = self.procs(
+            p20=["pkexec", self.LAUNCHER, "--device"], p21=[self.PY, "-I", self.LAUNCHER, "--device", "--sim"], p22=["python3", "-I", self.LAUNCHER, "--device"],
+            p23=[self.PY, self.LAUNCHER, "--device"], p24=[self.PY, "-I", self.LAUNCHER, "--socket", "--device"], p25=[self.PY, "-I", "/home/u/x/arltuner-helper", "--device"],
+            p26=["vim", self.LAUNCHER], p27=[self.PY, "-I", self.LAUNCHER, "--device", "--socket", "x"], p28=["sudo", self.PY, "-I", self.LAUNCHER, "--device"],
+            p29=[self.PY, "-I", self.LAUNCHER, "--device", "--socket-path=/tmp/s"], p30=["/home/u/arltuner-helper.py", "--sim"],
+        )
+        self.assertEqual(self.pids(proc), [])
+
+    def test_a_process_of_another_user_or_another_exe_is_never_signalled(self) -> None:
+        proc = self.procs(p10=[self.PY, "-I", self.LAUNCHER, "--device"])
+        self.assertEqual(self.pids(proc, uid=os.getuid() + 1), [])  # the proc entry belongs to somebody who is not the expected root
+        self.assertEqual(self.pids(proc, exe_ok=False), [])  # argv is just text: the binary must be the system python
+
+    def test_the_stop_comes_late_and_a_failed_install_restores_the_socket(self) -> None:
+        text = (REPO / "install.sh").read_text()
+        stop, swap = text.index('systemctl stop arltuner-helper.socket arltuner-helper.service'), text.index('swap_dir "$NEW" "$LIB"\n\n# --- 2.')
+        compile_, sanity = text.index('-m compileall'), text.index("# --- sanity: sources")
+        self.assertTrue(sanity < compile_ < stop < swap, "stop the helper after the checks and the compile, right before the code swap")
+        self.assertIn("trap cleanup EXIT", text)
+        self.assertEqual(text.count("systemctl stop arltuner-helper.socket"), 1)
+
+    def stub_systemctl(self) -> tuple[Path, Path]:
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        log = self.tmp / "systemctl.log"
+        log.unlink(missing_ok=True)
+        stub = bin_dir / "systemctl"
+        stub.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+        stub.chmod(0o755)
+        return bin_dir, log
+
+    def run_cleanup(self, *, stopped: int, rc: int) -> list[str]:
+        bin_dir, log = self.stub_systemctl()
+        script = f'NEW=$PWD/n WEB=$PWD/w ETC=$PWD/e STATE=$PWD/s\nSTOPPED_SOCKET={stopped}\n' + bash_function("cleanup") + f'\nPATH={bin_dir}:$PATH\nset +e\n(exit {rc})\ncleanup'
+        r = run_bash(script.replace("set -e", ""), self.tmp)
+        return log.read_text().split("\n")[:-1] if log.exists() else []
+
+    def test_cleanup_restarts_the_previous_socket_only_after_a_failure_and_only_if_it_was_stopped(self) -> None:
+        self.assertEqual(self.run_cleanup(stopped=1, rc=1), ["start arltuner-helper.socket"])
+        self.assertEqual(self.run_cleanup(stopped=0, rc=1), [])
+        self.assertEqual(self.run_cleanup(stopped=1, rc=0), [])
+
+
 class SourceTreeAttacks(InstallCase):
     def test_a_symlinked_source_directory_is_refused_and_nothing_is_installed(self) -> None:
         for rel in ("src", "src/arltuner", "platforms", "web", "packaging", "policies"):
@@ -508,7 +631,7 @@ class AccessAllowlist(InstallCase):
         self.assertEqual(self.path("/etc/arltuner/helper.toml").read_text(), "not [ toml\n")
 
     def test_bad_user_names_are_refused_before_anything_is_written(self) -> None:
-        for bad in ("root", "Bob", "a b", "-x", "", 'x"y', "a;b", "../etc"):
+        for bad in ("root", "a b", "-x", "", 'x"y', "a;b", "../etc", "1abc", "a" * 40):
             with self.subTest(bad=bad):
                 r = self.install("--add-user", bad)
                 self.assertNotEqual(r.returncode, 0)
@@ -516,6 +639,16 @@ class AccessAllowlist(InstallCase):
         r = self.install("--add-user")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("needs a user name", r.stderr)
+
+    def test_a_bad_sudo_user_is_refused_before_anything_is_written_and_a_capitalised_one_is_fine(self) -> None:
+        for bad in ("a b", 'x"y', "a;b", "../etc", "$(id)", "-rf", "a\nb"):
+            with self.subTest(bad=bad):
+                r = self.install(extra_env={"SUDO_USER": bad})
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("not a plain user name", r.stderr)
+                self.assertEqual(list(self.dest.iterdir()), [])
+        self.ok_install(extra_env={"SUDO_USER": "John.Smith"})
+        self.assertEqual(self.toml()["access"]["users"], ["John.Smith"])
 
     def test_the_installed_helper_toml_passes_the_helpers_own_parser(self) -> None:
         from arltuner.helper.settings import parse_helper_toml
@@ -714,7 +847,7 @@ class SelfcheckOnTheRealInstallTree(InstallCase):
         self.assertEqual((self.dest / "usr/lib/arltuner/arltuner-helper").read_bytes(), (REPO / "packaging/arltuner-helper").read_bytes())
         results = mod.selfcheck(lstat_fn=lstat, listdir_fn=listdir, read_fn=read, root_uid=os.geteuid())
         self.assertEqual([r for r in results if r[1] is not None], [])
-        self.assertEqual(len(results), 20)
+        self.assertEqual(len(results), 21)
 
 
 if __name__ == "__main__":

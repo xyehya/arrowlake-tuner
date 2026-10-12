@@ -36,7 +36,7 @@ die() { echo "install.sh: $*" >&2; exit 1; }
 
 RESEED=0
 ADD_USERS=()
-NAME_RE='^[a-z_][a-z0-9_.-]{0,31}\$?$'
+NAME_RE='^[A-Za-z_][A-Za-z0-9_.-]{0,31}\$?$'
 while [ $# -gt 0 ]; do
     case $1 in
         --reseed-config) RESEED=1 ;;
@@ -117,6 +117,26 @@ helper_pids() {  # PIDs running the helper: argv[0] is the helper itself, or a w
     done
 }
 
+HELPER_PY=$(readlink -f /usr/bin/python3 2>/dev/null || true)  # what /proc/<pid>/exe of the real helper resolves to
+HELPER_UID=0
+strict_helper_pids() {  # PIDs of the REAL helper only: uid 0, exe = the system python3, argv exactly  /usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device [--socket]
+    local c pid a
+    local -a argv
+    for c in "$PROC_ROOT"/[0-9]*/cmdline; do
+        [ -r "$c" ] || continue
+        pid=${c%/cmdline}; pid=${pid##*/}
+        [ "$pid" != "$$" ] || continue
+        argv=()
+        while IFS= read -r -d '' a || [ -n "$a" ]; do argv+=("$a"); done < "$c" 2>/dev/null || true
+        case ${#argv[@]} in 4|5) ;; *) continue ;; esac
+        [ "${argv[0]}" = /usr/bin/python3 ] && [ "${argv[1]}" = -I ] && [ "${argv[2]}" = /usr/lib/arltuner/arltuner-helper ] && [ "${argv[3]}" = --device ] || continue
+        [ "${#argv[@]}" -eq 4 ] || [ "${argv[4]}" = --socket ] || continue
+        [ -n "$HELPER_PY" ] && [ "$(readlink -f "$PROC_ROOT/$pid/exe" 2>/dev/null || true)" = "$HELPER_PY" ] || continue
+        [ "$(stat -c %u "$PROC_ROOT/$pid" 2>/dev/null || true)" = "$HELPER_UID" ] || continue
+        echo "$pid"
+    done
+}
+
 # --- sanity: sources and interpreter -------------------------------------------------------------------------------------------------
 # Every directory we copy from, and every file we need, must be a real entry of THIS checkout: no symlink, and its realpath stays under $SRC.
 for f in src platforms web packaging policies; do
@@ -147,22 +167,24 @@ if [ -n "${SUDO_USER:-}" ]; then
 fi
 [ "$INVOKER" != root ] || INVOKER=""  # never root
 
-# --- stop a running helper (after every check that can refuse: a refused install leaves a running helper alone) ----------------------------------------
-if [ "$SYSTEMD" -eq 1 ]; then  # the socket first (no new activation), then the service (an operation in flight completes; TimeoutStopSec)
-    systemctl stop arltuner-helper.socket arltuner-helper.service 2>/dev/null || true
+uid_of() {  # uid_of NAME: the uid of an existing user, or nothing (the name was validated against NAME_RE first, so it is never an option)
+    getent passwd "$1" 2>/dev/null | cut -d: -f3 || true
+}
+if [ -n "$INVOKER" ]; then  # the name ends up in a TOML file, a runuser call and the allowlist: a plain name, an existing user in a real install, never uid 0
+    [[ $INVOKER =~ $NAME_RE ]] || die "the invoking user name '$INVOKER' is not a plain user name; refusing"
+    INVOKER_UID=$(uid_of "$INVOKER")
+    if [ -z "$INVOKER_UID" ] && [ -z "$DESTDIR" ]; then die "the invoking user '$INVOKER' is not known to the system (getent passwd)"; fi
+    [ "$INVOKER_UID" != 0 ] || die "the invoking user '$INVOKER' has uid 0: root is never put in the allowlist"
 fi
+for u in ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do
+    [ "$(uid_of "$u")" != 0 ] || die "--add-user: '$u' has uid 0: root is never put in the allowlist"
+done
+
+# --- a running helper: a DESTDIR install just refuses; a real one stops it later (right before the code is replaced), after every step that can still refuse ---
 RUNNING=$(helper_pids | tr '\n' ' ')
-if [ -n "$RUNNING" ] && [ -z "$DESTDIR" ]; then  # an old pkexec-started helper (G-106) or a manual one: SIGTERM is its orderly stop
-    echo "stopping the running helper (pid ${RUNNING% }) ..."
-    # shellcheck disable=SC2086
-    kill -TERM $RUNNING 2>/dev/null || true
-    for _ in $(seq 1 120); do
-        sleep 0.5
-        RUNNING=$(helper_pids | tr '\n' ' ')
-        [ -n "$RUNNING" ] || break
-    done
+if [ -n "$DESTDIR" ]; then
+    [ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 fi
-[ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 
 copy_one() {  # copy_one SRC DST MODE: copy WITHOUT dereferencing, then insist the result is a regular file (a source swapped for a link is not followed)
     local from=$1 to=$2 mode=$3
@@ -207,7 +229,16 @@ normalize() {  # normalize DIR: dirs 0755, files 0644, root-owned when we can be
 # --- 1. code: copy, precompile in place, then swap in -----------------------------------------------------------------------------------
 mkdir -p "$DESTDIR/usr/lib/tmpfiles.d"  # system directory: created if missing, never re-moded
 NEW=$DESTDIR/usr/lib/.arltuner.new.$$
-trap 'rm -rf "$NEW" "${WEB}.new.$$" "$ETC/.tmp.$$" "$STATE/.audit.new.$$"' EXIT
+STOPPED_SOCKET=0
+cleanup() {
+    local rc=$?
+    rm -rf "$NEW" "${WEB}.new.$$" "$ETC/.tmp.$$" "$STATE/.audit.new.$$"
+    if [ "$rc" -ne 0 ] && [ "$STOPPED_SOCKET" -eq 1 ]; then  # a failed install does not leave the machine without the helper it had
+        echo "install.sh: the install failed; starting the previous arltuner-helper.socket again" >&2
+        systemctl start arltuner-helper.socket 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
 rm -rf "$NEW"
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$NEW" "$NEW/arltuner" "$NEW/platforms"
 copy_files "$SRC/src/arltuner" "$NEW/arltuner" -name '*.py'
@@ -219,6 +250,26 @@ copy_one "$SRC/packaging/arltuner-access" "$NEW/arltuner-access" 0755
 (cd / && "$PYTHON" -I -m compileall -q -f -d "$FINAL_PKG" "$NEW/arltuner") || die "compileall failed"
 normalize "$NEW"
 chmod 0755 "$NEW/arltuner-helper" "$NEW/arltuner-selfcheck" "$NEW/arltuner-access"
+
+# --- stop the running helper: as late as possible (everything that can refuse has run; the code tree is replaced next) -----------------------------
+if [ "$SYSTEMD" -eq 1 ]; then  # the socket first (no new activation), then the service (an operation in flight completes; TimeoutStopSec)
+    if systemctl is-active --quiet arltuner-helper.socket 2>/dev/null; then STOPPED_SOCKET=1; fi
+    systemctl stop arltuner-helper.socket arltuner-helper.service 2>/dev/null || true
+fi
+if [ -z "$DESTDIR" ]; then
+    STRICT=$(strict_helper_pids | tr '\n' ' ')
+    if [ -n "$STRICT" ]; then  # an old pkexec-started helper (G-106) or a manual one: SIGTERM is its orderly stop. Only the real helper is signalled.
+        echo "stopping the running helper (pid ${STRICT% }) ..."
+        # shellcheck disable=SC2086
+        kill -TERM $STRICT 2>/dev/null || true
+        for _ in $(seq 1 120); do
+            sleep 0.5
+            [ -n "$(strict_helper_pids)" ] || break
+        done
+    fi
+    RUNNING=$(helper_pids | tr '\n' ' ')
+    [ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
+fi
 swap_dir "$NEW" "$LIB"
 
 # --- 2. static web files ------------------------------------------------------------------------------------------------------------

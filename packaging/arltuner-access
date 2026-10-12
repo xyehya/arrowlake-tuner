@@ -15,6 +15,7 @@ Exit 0: done / unchanged; 1: refused (named on stderr).
 """
 import json
 import os
+import pwd
 import re
 import sys
 from pathlib import Path
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(os.path.abspath(__file__)).parent))  # -I removes th
 
 from arltuner.helper.settings import Access, HelperToml, parse_helper_toml  # noqa: E402
 
-NAME = re.compile(r"[a-z_][a-z0-9_.-]{0,31}\$?")
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,31}\$?")
 HEADER = (
     "# arltuner root helper settings (read as root; trust-checked at every use). Keys: allow_taint_bits, idle_exit_s, [access].\n"
     "# The first MSR write of a boot sets kernel taint bit 2 (CPU_OUT_OF_SPEC): expected [MEASURED lnx 2026-10-07, docs/knowledge/linux-path.md].\n"
@@ -32,6 +33,14 @@ HEADER = (
     "# Add a user with:  sudo bash install.sh --add-user NAME   (takes effect at the next connection, no restart needed)\n"
     "# idle_exit_s: the socket-activated helper exits after this many idle seconds (0 = never; default 600).\n"
 )
+
+
+def is_uid0(name: str) -> bool:
+    """True if the name is an account with uid 0 (``root`` or an alias): never added to the allowlist by this tool. An unknown name is not (it may be created later)."""
+    try:
+        return pwd.getpwnam(name).pw_uid == 0
+    except (KeyError, OSError):
+        return False
 
 
 def render(t: HelperToml, *, idle_set: bool) -> str:
@@ -63,8 +72,8 @@ def main(argv: list[str]) -> int:
                 print(f"arltuner-access: {value!r} is not a valid user/group name", file=sys.stderr)
                 return 1
             if a in ("--add-user", "--seed-user"):
-                if value == "root":
-                    print("arltuner-access: root is not added to the allowlist by this tool (edit helper.toml by hand if you really want that)", file=sys.stderr)
+                if value == "root" or is_uid0(value):
+                    print(f"arltuner-access: {value!r} is uid 0: root is not added to the allowlist by this tool (edit helper.toml by hand if you really want that)", file=sys.stderr)
                     return 1
             if a == "--add-user":
                 add.append(value)
