@@ -433,10 +433,13 @@ class TestCpuFacts(V3Base):
         p1 = {p["ratio"]: p for p in rec["units"]["P1"]["points"]}
         p0 = {p["ratio"]: p for p in rec["units"]["P0"]["points"]}
         self.assertEqual((p1[57]["status"], p1[57]["reason"]), ("unreachable", "max_turbo"))
-        self.assertEqual(p1[52]["reason"], "cpufreq_granularity")
+        self.assertEqual(p1[52]["reason"], "cap_granularity")
         self.assertEqual((p0[57]["status"], p0[52]["status"]), ("ok", "unreachable"))   # the favored cores reach 57x; 52x cannot be pinned anywhere
         e = {p["ratio"]: p for p in rec["units"]["EC0"]["points"]}
-        self.assertEqual((e[23]["status"], e[23]["reason"]), ("unreachable", "cpufreq_granularity"))
+        # G-132 item 8: E 23x is a V/F point between two measured ones: interpolated (never "ok"), with the neighbours it came from
+        self.assertEqual((e[23]["status"], e[23]["reason"], e[23]["from"], e[23]["neighbours"]), ("interpolated", "cap_granularity", [15, 30], [22, 24]))
+        self.assertTrue(e[15]["vid_v"] <= e[23]["vid_v"] <= e[30]["vid_v"])
+        self.assertEqual(p0[52]["status"], "unreachable")   # not a V/F point: never interpolated
         self.assertEqual((e[47]["status"], e[48]["status"], max(e)), ("ok", "ok", 48))   # F9: E max turbo is measured; never above it
 
     def test_read_has_fused_and_turbo(self):

@@ -1,9 +1,9 @@
 """G-111 ops (contract 9): ``vf.measure`` (long, state ``measuring``), ``curves.list/get/update/delete``, ``mem.read``. **No mailbox, no MSR write.**
 
 ``vf.measure`` runs the T-026/T-027 engine (:func:`arltuner.vfdump.measure_group`: cap search, at-target filter, ``MISMATCH``) for the selected tuning units:
-cap the unit's CPUs through cpufreq ``scaling_max_freq``, load **all CPUs of the unit** with pinned busy loops, settle, sample MSR ``0x198`` (requested VID =
+pin the unit's CPUs through cpufreq ``scaling_min_freq`` = ``scaling_max_freq`` (G-132, R-001: profile-proof; governor and EPP are not touched), load **all CPUs of the unit** with pinned busy loops, settle, sample MSR ``0x198`` (requested VID =
 ``[47:32]/8192``, running ratio ``[15:8]``) through a **read-only** MSR port, keep the samples at the target ratio. The only things written are cpufreq sysfs
-values, and every one of them is **journaled before the first change** (``/run/arltuner/measure-journal.json``, root 0600) and restored on success, cancel,
+values (min and max), and every one of them is **journaled before the first change** (``/run/arltuner/measure-journal.json``, root 0600) and restored on success, cancel,
 error and at the next helper start if the journal is stale (the helper died mid-run). The load generators carry their own deadline, so a dead helper cannot
 leave them spinning.
 
@@ -17,7 +17,6 @@ import os
 import re
 import secrets
 import subprocess
-import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -52,21 +51,26 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ---- measurement constants (SPEC-v3 section 3; the T-027 defaults are 2.5 s settle / 30 samples, the helper's run is shorter on purpose) -------------------------
+#: G-132: the cap search of one point that no cap reaches takes about this long at most (it samples a few caps, each ``settle + samples x interval``).
+SEARCH_BUDGET_S = 10.0
 SETTLE_S = 0.3
 SAMPLES = 10
 SAMPLE_INTERVAL_S = 0.1
 MIN_VALID = 5  # of SAMPLES: half must run at the target ratio (the CLI needs 5 of 30; a knob to tune on the machine, T-027 saw the ratio waver under load)
 POINT_OVERHEAD_S = 0.1  # per attempt: cap writes + process start (only for the first ETA, before any point has been timed)
-EPP_VALUE = "balance_performance"
 EPP_ATTR = "energy_performance_preference"
 CAP_ATTR = "scaling_max_freq"
 MAX_ATTR = "cpuinfo_max_freq"
 MIN_ATTR = "scaling_min_freq"
 GOV_ATTR = "scaling_governor"
-#: What the run changes (journaled, restored); min freq and governor are only recorded as context, never touched, never restored.
-TOUCHED = (CAP_ATTR, EPP_ATTR)
-CONTEXT = (MIN_ATTR, GOV_ATTR)
-_ATTR_ORDER = {a: i for i, a in enumerate((CAP_ATTR, MIN_ATTR, GOV_ATTR, EPP_ATTR))}  # restore: max first (a min above a still-lowered max would be EINVAL)
+#: What the measure run changes (journaled, restored): G-132 (R-001) pins ``scaling_min_freq`` = ``scaling_max_freq``; profile, governor and EPP are never written. The stress run
+#: (``ops_stress``) journals ``(CAP_ATTR, EPP_ATTR)``. A journal written by an older helper (cap + EPP) is still restored, so all three are accepted from a journal file.
+TOUCHED = (CAP_ATTR, MIN_ATTR)
+JOURNAL_ATTRS = (CAP_ATTR, MIN_ATTR, EPP_ATTR)
+CONTEXT = (MIN_ATTR, GOV_ATTR)  # recorded as context when the run does not touch it
+NO_TURBO_PATH = "intel_pstate/no_turbo"
+BASE_ATTR = "base_frequency"
+TURBO_OFF_NOTE = "Turbo is off (power-saver profile?): ratios above base cannot be reached \u2014 switch to Balanced or Performance"
 SPINNER = (
     "import os,time\n"
     "os.sched_setaffinity(0,{{{cpu}}})\n"
@@ -100,6 +104,13 @@ class CpufreqFiles:
 
     def write(self, cpu: int, attr: str, value: str) -> None:
         self.path(cpu, attr).write_text(str(value), encoding="ascii")
+
+    def read_no_turbo(self) -> bool | None:
+        """``intel_pstate/no_turbo`` (G-132): ``True`` when turbo is off (power-saver profile), ``None`` when the file is not there or unreadable."""
+        try:
+            return (self.root / NO_TURBO_PATH).read_text(encoding="ascii").strip() == "1"
+        except OSError:
+            return None
 
 
 # =============================================================================================================================================
@@ -289,13 +300,15 @@ def epp_pinned_cpus(w: MeasureWiring, cpus: Sequence[int]) -> list[int]:
     return [cpu for cpu in cpus if w.cpufreq.read(cpu, GOV_ATTR) == "performance"]
 
 
-def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None, skip_epp: Sequence[int] = ()) -> list[dict[str, Any]]:
-    """Read every value the run will touch and write the journal (temp + fsync + rename) **before** the first change. Returns the entries. ``skip_epp``: CPUs whose EPP is not
-    touched by the run (:func:`epp_pinned_cpus`) and so is not journaled."""
+def _write_journal(
+    w: MeasureWiring, cpus: Sequence[int], boot_id: str | None, skip_epp: Sequence[int] = (), touched: Sequence[str] = (CAP_ATTR, EPP_ATTR),
+) -> list[dict[str, Any]]:
+    """Read every value the run will touch (``touched``: the measure run passes ``TOUCHED``, the stress run its default cap + EPP) and write the journal (temp + fsync + rename)
+    **before** the first change. Returns the entries. ``skip_epp``: CPUs whose EPP is not touched by the run (:func:`epp_pinned_cpus`) and so is not journaled."""
     entries: list[dict[str, Any]] = []
     context: dict[str, dict[str, str]] = {}
     for cpu in cpus:
-        for attr in TOUCHED:
+        for attr in touched:
             if attr == EPP_ATTR and cpu in skip_epp:
                 continue
             value = w.cpufreq.read(cpu, attr)
@@ -304,7 +317,7 @@ def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None, s
                 if attr == CAP_ATTR and value == w.cpufreq.read(cpu, MAX_ATTR):
                     entry["at_max"] = True  # G-126: the user had no own cap; restore to the *current* cpuinfo max (an OC ratio apply may have raised it)
                 entries.append(entry)
-        context[str(cpu)] = {a: v for a in CONTEXT if (v := w.cpufreq.read(cpu, a)) is not None}
+        context[str(cpu)] = {a: v for a in CONTEXT if a not in touched and (v := w.cpufreq.read(cpu, a)) is not None}
     if not any(e["attr"] == CAP_ATTR for e in entries):
         raise OpError(REFUSED, "cpufreq scaling_max_freq is not available for the selected CPUs (is a cpufreq driver loaded?)", {"check": "NO_CPUFREQ"})
     doc = {"version": 1, "pid": os.getpid(), "boot_id": boot_id, "created": w.wall_clock(), "entries": entries, "context": context}
@@ -333,22 +346,43 @@ def _write_journal(w: MeasureWiring, cpus: Sequence[int], boot_id: str | None, s
 
 
 def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
-    """Write every journaled value back (max before min before governor before EPP; only where the current value differs). Returns the failures, never raises. A failure
-    that hits several CPUs the same way is **one** line (G-131: never a flood of identical errors); a single failure keeps the per-CPU wording."""
+    """Write every journaled value back (only where the current value differs). A CPU's max and min go back as a **pair in the order the kernel accepts** (G-132: it refuses
+    ``min > max``: the new max at or above the current min -> max first, else min first), then EPP. Returns the failures, never raises. A failure that hits several CPUs the
+    same way is **one** line (G-131: never a flood of identical errors); a single failure keeps the per-CPU wording."""
     failed: dict[tuple[str, str], list[tuple[int, str]]] = {}
-    for e in sorted(entries, key=lambda e: (e["cpu"], _ATTR_ORDER.get(e["attr"], 9))):
-        cpu, attr, value = e["cpu"], e["attr"], e["value"]
-        try:
-            if attr == CAP_ATTR and e.get("at_max") is True:  # G-126: the journaled cap was the cpuinfo max: follow it if it moved meanwhile
-                now_max = w.cpufreq.read(cpu, MAX_ATTR)
-                if now_max is not None and re.fullmatch(r"[0-9]{1,10}", now_max):
-                    value = now_max
-            if w.cpufreq.read(cpu, attr) == value:
+    by_cpu: dict[int, dict[str, dict[str, Any]]] = {}
+    for e in entries:
+        by_cpu.setdefault(e["cpu"], {})[e["attr"]] = e
+
+    def number(text: str | None) -> int | None:
+        return int(text) if text is not None and re.fullmatch(r"[0-9]{1,10}", text) else None
+
+    for cpu in sorted(by_cpu):
+        items = by_cpu[cpu]
+        order = [CAP_ATTR, MIN_ATTR, GOV_ATTR, EPP_ATTR]
+        if CAP_ATTR in items and MIN_ATTR in items:
+            new_max = number(items[CAP_ATTR]["value"])
+            if items[CAP_ATTR].get("at_max") is True and number(w.cpufreq.read(cpu, MAX_ATTR)) is not None:
+                new_max = number(w.cpufreq.read(cpu, MAX_ATTR))
+            cur_min = number(w.cpufreq.read(cpu, MIN_ATTR))
+            if new_max is not None and cur_min is not None and new_max < cur_min:
+                order = [MIN_ATTR, CAP_ATTR, GOV_ATTR, EPP_ATTR]
+        for attr in order:
+            e = items.get(attr)
+            if e is None:
                 continue
-            w.cpufreq.write(cpu, attr, value)
-        except Exception as exc:
-            reason = (exc.strerror if isinstance(exc, OSError) and exc.strerror else None) or str(exc)
-            failed.setdefault((attr, f"{type(exc).__name__}: {reason}"), []).append((cpu, value))
+            value = e["value"]
+            try:
+                if attr == CAP_ATTR and e.get("at_max") is True:  # G-126: the journaled cap was the cpuinfo max: follow it if it moved meanwhile
+                    now_max = w.cpufreq.read(cpu, MAX_ATTR)
+                    if now_max is not None and re.fullmatch(r"[0-9]{1,10}", now_max):
+                        value = now_max
+                if w.cpufreq.read(cpu, attr) == value:
+                    continue
+                w.cpufreq.write(cpu, attr, value)
+            except Exception as exc:
+                reason = (exc.strerror if isinstance(exc, OSError) and exc.strerror else None) or str(exc)
+                failed.setdefault((attr, f"{type(exc).__name__}: {reason}"), []).append((cpu, value))
     problems: list[str] = []
     for (attr, why), items in failed.items():
         if len(items) == 1:
@@ -371,7 +405,7 @@ def _valid_entries(doc: Any) -> list[dict[str, Any]]:
         raise ValueError("not a measurement journal")
     out = []
     for e in doc["entries"]:
-        if (not isinstance(e, dict) or not _is_int(e.get("cpu")) or not 0 <= e["cpu"] < 1024 or e.get("attr") not in TOUCHED
+        if (not isinstance(e, dict) or not _is_int(e.get("cpu")) or not 0 <= e["cpu"] < 1024 or e.get("attr") not in JOURNAL_ATTRS
                 or not isinstance(e.get("value"), str) or len(e["value"]) > 64 or not re.fullmatch(r"[A-Za-z0-9_ .-]*", e["value"])):
             raise ValueError(f"bad journal entry {e!r}")
         item: dict[str, Any] = {"cpu": e["cpu"], "attr": e["attr"], "value": e["value"]}
@@ -384,7 +418,7 @@ def _valid_entries(doc: Any) -> list[dict[str, Any]]:
 def recover_journal(w: MeasureWiring, log: Callable[[str], None]) -> bool:
     """At helper start: a journal on disk is a measurement that never finished. Restore it, then remove it (only when everything was restored). Returns True if
     a journal was found. The journal is root's own file under the root-owned run directory; it is opened ``O_NOFOLLOW`` and ``fstat``-checked, and only the
-    two attributes the run ever touches are accepted from it."""
+    attributes a run ever touches are accepted from it."""
     try:
         fd = open_checked(w.journal_path, write=False, create=False, euid=w.euid, what="measure journal")
     except FileNotFoundError:
@@ -526,18 +560,28 @@ def _plan_ratios(top: int, points: Sequence[int], mode: str) -> tuple[tuple[int,
 
 
 def _classify(m: vfdump.RatioMeasurement, max_ratio: int, intermittent: Sequence[int]) -> tuple[str, str | None]:
-    """``(status, reason)`` of a measured point (F3/F9). ``unreachable`` + ``max_turbo`` (the ratio is above ``cpuinfo_max_freq``), ``active_cores`` (a favored core's
-    56/57x never got ``min_valid`` samples even with the longer sampling), ``cpufreq_granularity`` (only stray samples at the target: the caps land on its neighbours,
-    E 23x / P 52x). A target that was hit now and then but too rarely stays ``mismatch``."""
+    """``(status, reason)`` of a measured point (F3/F9). ``unreachable`` + ``max_turbo`` (the ratio is above ``cpuinfo_max_freq``), ``user_cap`` (G-132: the user's own
+    ``scaling_max_freq`` is below it), ``active_cores`` (a favored core's 56/57x never got ``min_valid`` samples even with the longer sampling), ``cap_granularity`` (G-132, was
+    ``cpufreq_granularity``: only stray samples at the target, the caps land on its neighbours, E 23x / P 52x). A target that was hit now and then but too rarely stays
+    ``mismatch``."""
     if m.status == "ok":
         return "ok", None
     if m.status == "skipped":
-        return "unreachable", "max_turbo"
+        return "unreachable", "user_cap" if m.why == "user_cap" else "max_turbo"
     if m.ratio in intermittent and not (m.seen_ratios and m.seen_ratios[-1] > m.ratio):  # still below min_valid after the long sampling (never ran above)
         return "unreachable", "active_cores"
     if m.samples_kept <= max(1, m.samples_total // 5):  # a stray sample or two (the ratio wavers by a bin) is not hitting the target
-        return "unreachable", "max_turbo" if m.ratio > max_ratio else "cpufreq_granularity"
+        return "unreachable", "max_turbo" if m.ratio > max_ratio else "cap_granularity"
     return "mismatch", None
+
+
+def _neighbours(ratio: int, seen: Sequence[int]) -> list[int | None] | None:
+    """``[A, B]``: the nearest ratios below / above ``ratio`` that the caps tried did run (``None`` for a missing side); ``None`` when neither side was seen."""
+    below = [r for r in seen if r < ratio]
+    above = [r for r in seen if r > ratio]
+    if not below and not above:
+        return None
+    return [max(below) if below else None, min(above) if above else None]
 
 
 def _fused_point(points: Sequence[int], ratio: int, oc_ratio: int | None) -> int | str | None:
@@ -575,6 +619,8 @@ def _point(m: vfdump.RatioMeasurement, max_ratio: int = 1000, intermittent: Sequ
     }
     if reason is not None:
         point["reason"] = reason  # contract 9 addendum: only on unreachable
+        if reason == "cap_granularity" and (near := _neighbours(m.ratio, m.seen_ratios)) is not None:
+            point["neighbours"] = near
     return point
 
 
@@ -662,6 +708,38 @@ def _tuning_state(helper: Any, topo: Topology) -> dict[str, Any]:
     return state
 
 
+def _khz(text: str | None) -> int | None:
+    return int(text) if text is not None and re.fullmatch(r"[0-9]{1,10}", text) else None
+
+
+#: Reasons of an unmeasured V/F point that may be estimated from its neighbours (a point above the unit's reach -- ``max_turbo``, ``turbo_off``, ``user_cap`` -- never is).
+INTERPOLABLE = ("cap_granularity", "cpufreq_granularity", "active_cores")
+
+
+def interpolate_points(points: list[dict[str, Any]]) -> None:
+    """G-132 item 8 (operator: V/F frequencies between points are interpolated by the CPU -- 54x measured exactly at the midpoint of 53x and 55x): a **V/F point** (``fused_point``
+    set) that is ``unreachable`` for an :data:`INTERPOLABLE` reason and has a measured (``ok``) V/F point on **both** sides gets ``vid_v`` = the straight line between the
+    nearest measured V/F points A and B, ``status "interpolated"``, ``from [A, B]`` (``exact: true`` when both neighbours have the same voltage: monotonicity makes it exact).
+    The value is clamped into ``[V(A), V(B)]`` (the monotonic rule). No neighbour on one side => the point stays unreachable. Never ``ok``."""
+    anchors = [p for p in points if p.get("fused_point") is not None and p["status"] == "ok" and p.get("vid_v") is not None]
+    for p in points:
+        if p.get("fused_point") is None or p["status"] != "unreachable" or p.get("reason") not in INTERPOLABLE:
+            continue
+        below = [a for a in anchors if a["ratio"] < p["ratio"]]
+        above = [a for a in anchors if a["ratio"] > p["ratio"]]
+        if not below or not above:
+            continue
+        lo, hi = max(below, key=lambda a: a["ratio"]), min(above, key=lambda a: a["ratio"])
+        v_lo, v_hi = lo["vid_v"], hi["vid_v"]
+        v = v_lo + (v_hi - v_lo) * (p["ratio"] - lo["ratio"]) / (hi["ratio"] - lo["ratio"])
+        v = min(max(v, min(v_lo, v_hi)), max(v_lo, v_hi))
+        p["status"] = "interpolated"
+        p["vid_v"] = round(v, 4)
+        p["from"] = [lo["ratio"], hi["ratio"]]
+        if v_lo == v_hi:
+            p["exact"] = True
+
+
 def _retryable(point: dict[str, Any]) -> bool:
     return point["status"] == "mismatch" or (point["status"] == "unreachable" and point.get("reason") == "active_cores")
 
@@ -689,6 +767,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
     except Exception as exc:
         raise OpError(REFUSED, f"the measurement cannot start: {type(exc).__name__}: {exc}", {"check": "MEASURE_UNAVAILABLE"}) from None
     problems: list[str] = []
+    cap_notes: list[str] = []  # the engine's own restore failures: dropped, the journal restore at the end retries them and reports each failure once (aggregated)
     record: dict[str, Any] | None = None
     error: BaseException | None = None
     entries: list[dict[str, Any]] = []
@@ -716,6 +795,25 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         favored_units = {u for u in units if topo.by_cpu(topo.unit_cpus(u)[0]).favored}
         intermittent = {u: intermittent_ratios(plan[u], u in favored_units, all_core) for u in units}
         total = sum(len(r) for r in plan.values())
+        # G-132 (R-001): turbo off (the power-saver profile) => nothing above the base ratio can run; those points are not attempted, they are ``unreachable`` / ``turbo_off``.
+        no_turbo = False
+        reader = getattr(w.cpufreq, "read_no_turbo", None)
+        if reader is not None:
+            try:
+                no_turbo = reader() is True
+            except Exception:
+                no_turbo = False
+        base_of: dict[str, int] = {}
+        if no_turbo:
+            problems.insert(0, TURBO_OFF_NOTE)
+            for u in units:
+                cpu0 = topo.unit_cpus(u)[0]
+                khz = _khz(w.cpufreq.read(cpu0, BASE_ATTR))
+                if khz is None:  # with turbo off cpuinfo_max_freq is the base (R-001 section 1)
+                    khz = _khz(w.cpufreq.read(cpu0, MAX_ATTR))
+                if khz is None:
+                    khz = run.io.read_max_khz(cpu0)
+                base_of[u] = khz // 100_000
         try:
             boot = helper.cfg.boot_id_fn()
         except Exception:
@@ -727,20 +825,8 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "plan": plan_source, "complete": False, "kernel": w.kernel_fn(),
             "tuning_state": _tuning_state(helper, topo), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
         }
-        pinned = epp_pinned_cpus(w, cpus)  # G-131: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
-        entries = _write_journal(w, cpus, record["boot_id"], pinned)  # before the first change
+        entries = _write_journal(w, cpus, record["boot_id"], touched=TOUCHED)  # before the first change
         journaled = True
-        if pinned:
-            problems.append("governor performance: EPP already at performance")
-        epp_failed: dict[str, list[int]] = {}
-        for cpu in cpus:  # EPP for the run (governor unchanged); restored from the journal
-            if any(e["cpu"] == cpu and e["attr"] == EPP_ATTR for e in entries):
-                try:
-                    w.cpufreq.write(cpu, EPP_ATTR, EPP_VALUE)
-                except OSError as exc:
-                    epp_failed.setdefault(str(exc.strerror or exc), []).append(cpu)
-        for why, bad in epp_failed.items():  # one note per distinct error, the CPUs as ranges
-            problems.append(f"{EPP_ATTR} not set on {_cpus_text(bad)} ({why})")
 
         def sleep(seconds: float) -> None:
             if cancel.is_set():
@@ -764,28 +850,40 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             return round((w.monotonic() - started) / done * (total - done))
 
         ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": 0, "of": total, "unit": None, "ratio": None, "eta_s": eta()})
+        first_seen: dict[tuple[str, int], tuple[int, ...]] = {}
+
+        def add_point(unit: str, entry: dict[str, Any], point: dict[str, Any], ratio: int) -> None:
+            nonlocal done
+            label = _fused_point(kept[unit], ratio, oc_of[unit])
+            if label is not None:  # omitted when null: a dense run of 12 units must still fit one response line
+                point["fused_point"] = label
+            entry["points"].append(point)
+            done += 1
+            ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": point["mhz"], "vid_v": point["vid_v"], "status": point["status"], **({"reason": point["reason"]} if "reason" in point else {})})
+            ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
+
         for unit in units:
             cpus_u = topo.unit_cpus(unit)
             entry = record["units"].setdefault(unit, {"cpus": list(cpus_u), "points": []})
+            above = [r for r in plan[unit] if no_turbo and r > base_of[unit]]
+            to_measure = tuple(r for r in plan[unit] if r not in above)
 
             def on_result(m: vfdump.RatioMeasurement, unit: str = unit, entry: dict[str, Any] = entry) -> None:
-                nonlocal done
                 point = _point(m, top_of[unit], intermittent[unit])
-                label = _fused_point(kept[unit], m.ratio, oc_of[unit])
-                if label is not None:  # omitted when null: a dense run of 12 units must still fit one response line
-                    point["fused_point"] = label
-                entry["points"].append(point)
-                done += 1
+                first_seen[(unit, m.ratio)] = m.seen_ratios
                 seen = [t for t in (m.temp_min_c, m.temp_max_c, record["temps"]["min_c"], record["temps"]["max_c"]) if t is not None]
                 if seen:
                     record["temps"] = {"min_c": round(min(seen), 1), "max_c": round(max(seen), 1)}
-                ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": m.ratio, "mhz": point["mhz"], "vid_v": point["vid_v"], "status": point["status"], **({"reason": point["reason"]} if "reason" in point else {})})
-                ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": m.ratio, "eta_s": eta()})
+                add_point(unit, entry, point, m.ratio)
 
-            group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], tuple(plan[unit]), intermittent[unit])
-            vfdump.measure_group(
-                run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=on_result,
-            )
+            if to_measure:
+                group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], to_measure, tuple(r for r in intermittent[unit] if r in to_measure))
+                vfdump.measure_group(
+                    run.io, group, read_perf, sleep, cap_notes, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=on_result,
+                )
+            for ratio in above:  # not attempted
+                add_point(unit, entry, {"ratio": ratio, "mhz": ratio * 100, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 0,
+                                        "status": "unreachable", "reason": "turbo_off"}, ratio)
         # Retry pass (G-118): a point that ended mismatch / unreachable (active_cores) gets one more attempt with the long sampling window, one unit at a time,
         # every other unit idle; the better result is the one reported (its kept / total).
         retry = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if _retryable(p)]
@@ -795,7 +893,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
             second: list[vfdump.RatioMeasurement] = []
             group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], (ratio,), (ratio,))  # intermittent: the long window (40 x 50 ms, early stop)
-            vfdump.measure_group(run.io, group, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=second.append)
+            vfdump.measure_group(run.io, group, read_perf, sleep, cap_notes, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID, on_result=second.append)
             done += 1
             pts = record["units"][unit]["points"]
             at = next(i for i, p in enumerate(pts) if p["ratio"] == ratio)
@@ -812,15 +910,18 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
                     ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": new["mhz"], "vid_v": new["vid_v"], "status": new["status"], "retry": True,
                               **({"reason": new["reason"]} if "reason" in new else {})})
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
-        # Cap search (G-131): a point that ended unreachable / cpufreq_granularity (the caps land on its neighbours: the kernel converts them to HWP perf units) gets one more
-        # attempt with caps between the neighbours; the cap that ran the target is recorded as ``cap_khz``. Still not hit: it stays unreachable.
-        search = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if p["status"] == "unreachable" and p.get("reason") == "cpufreq_granularity"]
+        # Cap search (G-131): a point that ended unreachable / cap_granularity (the caps land on its neighbours: the kernel converts them to HWP perf units) gets one more
+        # attempt with caps between the neighbours; the cap that ran the target is recorded as ``cap_khz``. Still not hit: it stays unreachable, with the nearest ratios the caps
+        # did run (``neighbours``, G-132). The search is bounded (``SEARCH_BUDGET_S``) so a point no cap reaches costs about ten seconds.
+        search = [(u, p["ratio"]) for u in units for p in record["units"][u]["points"] if p["status"] == "unreachable" and p.get("reason") == "cap_granularity"]
         total += len(search)
         for unit, ratio in search:
             cpus_u = topo.unit_cpus(unit)
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
             group = vfdump.MeasureGroup(unit, unit_kind(unit), tuple(cpus_u), cpus_u[0], (ratio,), ())
-            found = vfdump.search_cap(run.io, group, ratio, read_perf, sleep, problems, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID)
+            seen_search: set[int] = set()
+            found = vfdump.search_cap(run.io, group, ratio, read_perf, sleep, cap_notes, settle_s=w.settle_s, samples=w.samples, interval_s=w.interval_s, min_valid=MIN_VALID,
+                                      seen_out=seen_search, budget_s=SEARCH_BUDGET_S, clock=w.monotonic)
             done += 1
             pts = record["units"][unit]["points"]
             at = next(i for i, p in enumerate(pts) if p["ratio"] == ratio)
@@ -836,7 +937,11 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
                 pts[at] = new
                 ctx.emit({"event": "vf.point", "op_id": ctx.req_id, "unit": unit, "ratio": ratio, "mhz": new["mhz"], "vid_v": new["vid_v"], "status": new["status"], "retry": True,
                           **({"reason": new["reason"]} if "reason" in new else {})})
+            elif (near := _neighbours(ratio, sorted(set(first_seen.get((unit, ratio), ())) | seen_search))) is not None:
+                pts[at]["neighbours"] = near
             ctx.emit({"event": "progress", "op_id": ctx.req_id, "step": done, "of": total, "unit": unit, "ratio": ratio, "eta_s": eta()})
+        for unit in units:  # G-132 item 8: a V/F point no cap could run, between measured V/F points, gets the straight line between them
+            interpolate_points(record["units"][unit]["points"])
         record["complete"] = True
         record["baseline"] = want_baseline  # only a complete record becomes the baseline (store.save unsets the old one)
     except _Cancelled:
@@ -947,7 +1052,12 @@ def op_curves_list(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[st
         raise _store_error(exc) from None
     for problem in store.problems:
         helper.cfg.log(f"curves.list skipped {problem}")
-    return {"curves": rows}
+    reader = getattr(_wiring(helper).cpufreq, "read_no_turbo", None)
+    try:
+        no_turbo = reader() if reader is not None else None  # G-132: the Curves page warns before a run when turbo is off (power-saver profile)
+    except Exception:
+        no_turbo = None
+    return {"curves": rows, "no_turbo": no_turbo if isinstance(no_turbo, bool) else None}
 
 
 def op_curves_get(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:

@@ -1,18 +1,14 @@
 """``vf.measure`` / ``curves.*`` / ``mem.read`` through a real helper on pipes, over a fake cpufreq sysfs and the SimModel (no hardware, no process, no sleeping)."""
 from __future__ import annotations
 
-import errno
-import json
-import os
 import threading
 import unittest
-from collections.abc import Callable
 
 from arltuner import vfdump
-from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, SimModel, _capped, cpu_ranges
+from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR, MIN_ATTR, TURBO_OFF_NOTE, SimModel, _capped, cpu_ranges, interpolate_points
 from arltuner.helper.protocol import MAX_LINE, encode
 
-from ._measure_support import ORIGINAL_EPP, MeasureCase, reference_read
+from ._measure_support import MeasureCase, reference_read
 from ._support import error_code
 
 
@@ -96,19 +92,21 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(self.io.read_max_khz(8), 4_900_000)  # cpuinfo_max_freq of an E-core says 49x ...
         self.assertEqual(max(points(rec, "EC0")), 48)  # ... G-118: the 0x650 table says 48, so 49x is never offered
         self.assertEqual(max(points(rec, "P1")), 55)  # dense stops at the unit maximum (cpuinfo_max_freq 5.5 GHz): nothing above is tried
-        self.assertEqual(points(rec, "P1")[52]["reason"], "cpufreq_granularity")  # F9: P 52x is not pinnable
+        self.assertEqual(points(rec, "P1")[52]["reason"], "cap_granularity")  # F9: P 52x is not pinnable
 
     def test_unpinnable_ratios_are_unreachable_with_a_granularity_reason(self) -> None:
         """F9 / G-131: E 29x and P 52x never land on the target with any cap (the cap search tries and finds nothing): unreachable, not an error and not a mismatch. E 23x is
         only missed by the two 100 MHz caps; the cap search finds it (next test)."""
         rec = self.start_measure().call("m", "vf.measure", {"mode": "dense", "units": ["EC0", "P4"]}, timeout=60)["result"]["record"]
         e = points(rec, "EC0")[29]
-        self.assertEqual((e["status"], e["reason"], e["vid_v"], e.get("retried")), ("unreachable", "cpufreq_granularity", None, True))
+        self.assertEqual((e["status"], e["reason"], e["vid_v"], e.get("retried")), ("unreachable", "cap_granularity", None, True))
         self.assertLessEqual(e["kept"], 2)
+        self.assertTrue(e["neighbours"][0] < 29 < e["neighbours"][1], e)  # G-132: the ratios the caps did run, for "the nearest are A and B"
         self.assertNotIn("cap_khz", e)
         self.assertEqual(points(rec, "EC0")[24]["status"], "ok")
         self.assertEqual(points(rec, "EC0")[22]["status"], "ok")
-        self.assertEqual((points(rec, "P4")[52]["status"], points(rec, "P4")[52]["reason"]), ("unreachable", "cpufreq_granularity"))
+        self.assertEqual((points(rec, "P4")[52]["status"], points(rec, "P4")[52]["reason"]), ("unreachable", "cap_granularity"))
+        self.assertEqual(points(rec, "P4")[52]["neighbours"], [51, 53])
         self.assertEqual(points(rec, "P4")[53]["status"], "ok")
         self.assert_cpufreq_pristine()
 
@@ -156,8 +154,9 @@ class QuickRunTests(MeasureCase):
         hover = vfdump.RatioMeasurement(30, "MISMATCH", 3_000_000, seen_ratios=(29, 30), samples_kept=4, samples_total=10, why="above")
         self.assertEqual(_classify(hover, 46, ()), ("mismatch", None))
         never = vfdump.RatioMeasurement(30, "MISMATCH", 3_000_000, seen_ratios=(29, 31), samples_kept=0, samples_total=10, why="above")
-        self.assertEqual(_classify(never, 46, ()), ("unreachable", "cpufreq_granularity"))
+        self.assertEqual(_classify(never, 46, ()), ("unreachable", "cap_granularity"))
         self.assertEqual(_classify(vfdump.RatioMeasurement(57, "skipped", why="below"), 55, ()), ("unreachable", "max_turbo"))
+        self.assertEqual(_classify(vfdump.RatioMeasurement(48, "skipped", why="user_cap"), 55, ()), ("unreachable", "user_cap"))
 
     def test_favored_57x_needs_few_active_cores_and_is_sampled_longer(self) -> None:
         """F3 [MEASURED lnx 2026-10-11]: quiet system => P0/P3 reach 56/57x on ~70 % of the samples (ok, early stop at min_valid, kept < total); with 2+ other busy
@@ -316,14 +315,12 @@ class QuickRunTests(MeasureCase):
         self.assertAlmostEqual(m.vid("P0", 57), 1.386, places=4)  # 1.4288 - 0.0498 = 1.379 < V(56x): clamped
         self.assertAlmostEqual(m.vid("P0", 56), 1.386, places=4)
 
-    def test_the_run_writes_only_cap_and_epp_and_journals_first(self) -> None:
+    def test_the_run_writes_only_the_pinned_min_and_max_and_journals_first(self) -> None:
+        """G-132 (R-001): profile, governor and EPP are never written (EPP is EBUSY under performance and not needed when pinned)."""
         self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P5", "EC1"]}, timeout=60)
         self.assertTrue(self.cpufreq.journal_existed_at_first_write)
-        self.assertEqual({attr for _, attr, _ in self.cpufreq.writes}, {CAP_ATTR, EPP_ATTR})
+        self.assertEqual({attr for _, attr, _ in self.cpufreq.writes}, {CAP_ATTR, MIN_ATTR})
         self.assertEqual({cpu for cpu, _, _ in self.cpufreq.writes}, {5, 12, 13, 14, 15})  # only the selected units' CPUs
-        epp = [(cpu, v) for cpu, a, v in self.cpufreq.writes if a == EPP_ATTR]
-        self.assertEqual(sorted(epp), sorted([(5, "balance_performance"), *((c, "balance_performance") for c in (12, 13, 14, 15)),
-                                              (5, ORIGINAL_EPP), *((c, ORIGINAL_EPP) for c in (12, 13, 14, 15))]))
         self.assert_cpufreq_pristine()
 
     def test_tuning_state_comes_from_the_words_read_this_session(self) -> None:
@@ -352,7 +349,7 @@ class QuickRunTests(MeasureCase):
         self.assertTrue(entered.wait(10))
         self.assertEqual(error_code(h.call("d", "vf.dump", {"cpus": "0"})), "BUSY")
         self.assertEqual(error_code(h.call("m2", "vf.measure", {})), "BUSY")
-        self.assertEqual(h.call("l", "curves.list")["result"], {"curves": []})  # read-only ops stay available
+        self.assertEqual(h.call("l", "curves.list")["result"], {"curves": [], "no_turbo": False})  # read-only ops stay available
         self.assertTrue(h.call("p", "preflight")["ok"])
         self.assertEqual(h.helper.machine.state.value, "measuring")
         gate.set()
@@ -474,60 +471,74 @@ class PathsOutTests(MeasureCase):
         self.assertEqual(self.cpufreq.writes, [])
 
 
-class EppTests(MeasureCase):
-    """G-131: under the ``performance`` governor intel_pstate holds EPP and refuses a write with EBUSY; that is the state the run wants, so it is neither written nor journaled.
-    Any other EPP failure is ONE note with the CPUs as ranges, on the way in and on the way back."""
+class PinningTests(MeasureCase):
+    """G-132 (R-001 section 5): the measure op sets ``scaling_min_freq`` = ``scaling_max_freq`` = cap on the unit's CPUs, max first when raising and min first when lowering (the kernel
+    refuses ``min > max``), and puts both back. Restore failures are ONE line per attribute, with the CPUs as ranges."""
 
     UNITS = ["P5", "EC1"]  # cpus 5, 12-15
 
-    def ebusy(self, when: Callable[[str, str], bool]) -> None:
-        real = self.cpufreq.write
+    def replay(self) -> None:
+        """Replay every cpufreq write against a kernel that answers EINVAL to min > max: no write of this run may be one."""
+        state = {cpu: [800_000, self.model.max_khz(cpu)] for cpu in range(24)}
+        for cpu, attr, value in self.cpufreq.writes:
+            mn, mx = state[cpu]
+            if attr == MIN_ATTR:
+                self.assertLessEqual(int(value), mx, f"cpu {cpu}: min {value} above max {mx}")
+                state[cpu][0] = int(value)
+            elif attr == CAP_ATTR:
+                self.assertGreaterEqual(int(value), mn, f"cpu {cpu}: max {value} below min {mn}")
+                state[cpu][1] = int(value)
+        self.assertEqual({cpu: tuple(v) for cpu, v in state.items()}, {cpu: (800_000, self.model.max_khz(cpu)) for cpu in range(24)})
 
-        def write(cpu: int, attr: str, value: str) -> None:
-            if attr == EPP_ATTR and when(attr, str(value)):
-                raise OSError(errno.EBUSY, os.strerror(errno.EBUSY))
-            real(cpu, attr, value)
-
-        self.cpufreq.write = write  # type: ignore[method-assign]
-
-    def set_governor(self, gov: str) -> None:
-        for cpu in range(24):
-            self.cpufreq.write(cpu, "scaling_governor", gov)
-        self.cpufreq.writes.clear()
-
-    def test_the_performance_governor_leaves_epp_alone_and_says_so_once(self) -> None:
-        self.set_governor("performance")
-        self.ebusy(lambda a, v: True)  # any EPP write would fail
-        journaled: list[list[str]] = []
-        self.perf_hook = lambda cpu: journaled.append([e["attr"] for e in json.loads(self.journal.read_text())["entries"]])
+    def test_min_equals_max_while_a_point_is_measured_and_the_order_is_always_valid(self) -> None:
+        seen: list[tuple[str, str]] = []
+        self.perf_hook = lambda cpu: seen.append((self.read(cpu, MIN_ATTR), self.read(cpu, CAP_ATTR)))
         reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
         self.assertTrue(reply["ok"], reply)
-        self.assertEqual(reply["result"]["problems"], ["governor performance: EPP already at performance"])
-        self.assertEqual({attr for _, attr, _ in self.cpufreq.writes}, {CAP_ATTR})  # no EPP write, neither for the run nor for the restore
-        self.assertTrue(journaled and all(EPP_ATTR not in attrs for attrs in journaled), journaled)  # nothing to restore, so nothing journaled
-        self.assertEqual(self.read(5, EPP_ATTR), ORIGINAL_EPP)
-        self.assertEqual(self.read(5, "scaling_governor"), "performance")
-        self.assertFalse(self.journal.exists())
-
-    def test_any_other_epp_failure_is_one_aggregated_note(self) -> None:
-        self.ebusy(lambda a, v: v == "balance_performance")  # the run's write fails, the restore has nothing to do
-        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
-        self.assertTrue(reply["ok"], reply)
-        self.assertEqual(reply["result"]["problems"], ["energy_performance_preference not set on cpus 5, 12–15 (Device or resource busy)"])
+        self.assertTrue(seen and all(mn == mx for mn, mx in seen), [x for x in seen if x[0] != x[1]][:3])
+        self.assertGreater(len({mx for _, mx in seen}), 5)  # a different pin for each point
+        self.replay()
         self.assert_cpufreq_pristine()
 
-    def test_all_cpus_are_one_range(self) -> None:
-        self.ebusy(lambda a, v: v == "balance_performance")
-        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3"]}, timeout=120)
-        self.assertEqual(reply["result"]["problems"], ["energy_performance_preference not set on cpus 0–23 (Device or resource busy)"])
+    def test_raising_writes_max_first_and_lowering_writes_min_first(self) -> None:
+        self.start_measure().call("m", "vf.measure", {"mode": "dense", "units": ["P5"]}, timeout=60)
+        w = [(a, int(v)) for c, a, v in self.cpufreq.writes if c == 5]
+        # the first pin is 8x (800 MHz) = the idle minimum: max written lower first? no: 800000 >= min 800000 -> max, then min
+        self.assertEqual(w[:2], [(CAP_ATTR, 800_000), (MIN_ATTR, 800_000)])
+        self.assertEqual(w[2:4], [(CAP_ATTR, 900_000), (MIN_ATTR, 900_000)])  # raising
+        self.assertEqual(w[-2:], [(CAP_ATTR, self.model.max_khz(5)), (MIN_ATTR, 800_000)])  # the restore raises the max first, then lowers the min
+
+    def test_a_user_min_above_the_first_pin_is_lowered_first_and_restored(self) -> None:
+        self.cpufreq.write(5, MIN_ATTR, "3000000")
+        self.cpufreq.writes.clear()
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P5"]}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        first = [(a, int(v)) for c, a, v in self.cpufreq.writes if c == 5][:2]
+        self.assertEqual(first, [(MIN_ATTR, 800_000), (CAP_ATTR, 800_000)])  # 800 MHz is below the user's minimum: min first
+        self.assertEqual(self.read(5, MIN_ATTR), "3000000")  # the user's own minimum is back
+        self.assertEqual(self.read(5, CAP_ATTR), str(self.model.max_khz(5)))
+
+    def test_epp_and_governor_are_never_written_whatever_they_are(self) -> None:
+        for cpu in range(24):
+            self.cpufreq.write(cpu, "scaling_governor", "performance")
+            self.cpufreq.write(cpu, EPP_ATTR, "performance")
+        self.cpufreq.writes.clear()
+        reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual({attr for _, attr, _ in self.cpufreq.writes}, {CAP_ATTR, MIN_ATTR})
+        self.assertNotIn("problems", reply["result"])  # no EPP note any more
+        self.assertEqual((self.read(5, EPP_ATTR), self.read(5, "scaling_governor")), ("performance", "performance"))
 
     def test_a_restore_that_fails_the_same_way_everywhere_is_one_line(self) -> None:
-        self.ebusy(lambda a, v: v == ORIGINAL_EPP)  # the run's write works, writing the original back does not
+        for cpu in (5, 12, 13, 14, 15):
+            self.cpufreq.write(cpu, MIN_ATTR, "1200000")  # the user's own minimum
+        self.cpufreq.fail = lambda cpu, attr, value: attr == MIN_ATTR and value == "1200000"  # writing it back fails
         reply = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": self.UNITS}, timeout=60)
         self.assertEqual(error_code(reply), "INTERNAL")
         lines = reply["error"]["detail"]["problems"]
-        self.assertEqual(len(lines), 1, lines)
-        self.assertEqual(lines[0], "could NOT restore energy_performance_preference of cpus 5, 12–15 to the journaled values: OSError: Device or resource busy (restore it by hand)")
+        restore = [x for x in lines if "could NOT restore" in x]
+        self.assertEqual(len(restore), 1, lines)
+        self.assertEqual(restore[0], "could NOT restore scaling_min_freq of cpus 5, 12\u201315 to the journaled values: OSError: injected write failure (restore it by hand)")
         self.assertTrue(self.journal.exists(), "an unrestored run keeps its journal")
 
     def test_cpu_ranges(self) -> None:
@@ -540,6 +551,108 @@ class EppTests(MeasureCase):
         self.assertEqual(_capped(["a"] * 10), ["a"] * 10)
         out = _capped([str(i) for i in range(14)])
         self.assertEqual((len(out), out[:9], out[9]), (10, [str(i) for i in range(9)], "... and 5 more notes not shown"))
+
+
+class TurboOffTests(MeasureCase):
+    """G-132 (R-001): the power-saver profile sets ``intel_pstate/no_turbo`` = 1; nothing above the base ratio can run, so those points are not attempted."""
+
+    def test_points_above_base_are_turbo_off_not_attempted_and_the_note_comes_first(self) -> None:
+        self.set_no_turbo(True)
+        caps: list[int] = []
+        self.perf_hook = lambda cpu: caps.append(int(self.read(cpu, CAP_ATTR)))
+        rec_reply = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["P5", "EC1"]}, timeout=60)
+        self.assertTrue(rec_reply["ok"], rec_reply)
+        self.assertEqual(rec_reply["result"]["problems"][0], TURBO_OFF_NOTE)
+        rec = rec_reply["result"]["record"]
+        self.assertEqual([r for r, p in points(rec, "P5").items() if p.get("reason") == "turbo_off"], [48, 53, 55, 56, 57])  # P base 37x
+        self.assertEqual([r for r, p in points(rec, "EC1").items() if p.get("reason") == "turbo_off"], [40, 46, 47, 48])  # E base 32x
+        for unit, ratio in (("P5", 53), ("EC1", 46)):
+            p = points(rec, unit)[ratio]
+            self.assertEqual((p["status"], p["vid_v"], p["kept"], p["total"]), ("unreachable", None, 0, 0))
+        self.assertEqual({r: points(rec, "P5")[r]["status"] for r in (8, 20, 30)}, {8: "ok", 20: "ok", 30: "ok"})
+        self.assertLessEqual(max(caps), 3_700_000 + 100_000)  # nothing above base was ever asked for (a +1 bin attempt at most)
+        self.assertEqual(self.cpufreq.read(5, CAP_ATTR), str(self.model.max_khz(5)))
+        self.assertFalse(self.journal.exists())
+
+    def test_the_note_is_one_line_and_absent_when_turbo_is_on(self) -> None:
+        h = self.start_measure()
+        reply = h.call("m", "vf.measure", {"mode": "quick", "units": ["P5"]}, timeout=60)
+        self.assertNotIn("problems", reply["result"])
+        self.set_no_turbo(True)
+        again = h.call("m2", "vf.measure", {"mode": "quick", "units": ["P5"]}, timeout=60)
+        self.assertEqual(again["result"]["problems"].count(TURBO_OFF_NOTE), 1)
+
+    def test_the_base_falls_back_to_cpuinfo_max_when_there_is_no_base_frequency_file(self) -> None:
+        self.set_no_turbo(True)
+        for cpu in range(24):
+            (self.sysfs / f"cpu{cpu}" / "cpufreq" / "base_frequency").unlink()
+            (self.sysfs / f"cpu{cpu}" / "cpufreq" / "cpuinfo_max_freq").write_text("3700000\n" if cpu < 8 else "3200000\n")  # R-001: cpuinfo max = base with turbo off
+        rec = self.start_measure().call("m", "vf.measure", {"mode": "quick", "units": ["P5"]}, timeout=60)["result"]["record"]
+        self.assertTrue(all(p["status"] == "ok" for p in rec["units"]["P5"]["points"] if p["ratio"] <= 37))
+        self.assertTrue(all(p["reason"] in ("turbo_off", "max_turbo") for p in rec["units"]["P5"]["points"] if p["ratio"] > 37))
+
+    def test_curves_list_tells_the_page_before_a_run(self) -> None:
+        h = self.start_measure()
+        self.assertIs(h.call("l", "curves.list")["result"]["no_turbo"], False)
+        self.set_no_turbo(True)
+        self.assertIs(h.call("l2", "curves.list")["result"]["no_turbo"], True)
+
+
+class UserCapTests(MeasureCase):
+    def test_a_point_above_the_users_own_cap_is_user_cap_not_max_turbo(self) -> None:
+        self.cpufreq.write(2, CAP_ATTR, "4000000")
+        self.cpufreq.writes.clear()
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["P2"]}, timeout=60)["result"]["record"]
+        p2 = points(rec, "P2")
+        self.assertEqual({r: (p2[r]["status"], p2[r].get("reason")) for r in (30, 48, 53, 55)}, {30: ("ok", None), 48: ("unreachable", "user_cap"), 53: ("unreachable", "user_cap"),
+                                                                                                  55: ("unreachable", "user_cap")})
+        self.assertEqual((self.read(2, CAP_ATTR), self.read(2, MIN_ATTR)), ("4000000", "800000"))  # the user's cap is back
+
+    def test_above_the_core_limit_stays_max_turbo(self) -> None:
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["P2"]}, timeout=60)["result"]["record"]
+        self.assertEqual({points(rec, "P2")[r]["reason"] for r in (56, 57)}, {"max_turbo"})
+
+
+class InterpolationTests(MeasureCase):
+    """G-132 item 8: a V/F point no cap can run, between measured V/F points, gets the straight line between them (status ``interpolated``, never ``ok``)."""
+
+    def test_e_23x_is_interpolated_between_15x_and_30x_when_no_cap_runs_it(self) -> None:
+        self.model.hwp_bins = True  # the R-001 cap resolution: E 23x is reachable by no cap
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)["result"]["record"]
+        e = points(rec, "EC0")
+        p = e[23]
+        self.assertEqual((p["status"], p["reason"], p["fused_point"], p["from"]), ("interpolated", "cap_granularity", 3, [15, 30]))
+        self.assertEqual(p["neighbours"], [22, 24])
+        self.assertAlmostEqual(p["vid_v"], 0.775, delta=0.003)  # both neighbours sit at the E VID floor
+        self.assertTrue(min(e[15]["vid_v"], e[30]["vid_v"]) <= p["vid_v"] <= max(e[15]["vid_v"], e[30]["vid_v"]))
+        self.assertTrue(all(e[r]["status"] == "ok" for r in (8, 15, 30, 40, 46)))
+        self.assert_cpufreq_pristine()
+
+    def test_a_dense_run_interpolates_only_v_f_points(self) -> None:
+        self.model.hwp_bins = True
+        rec = self.start_measure(kept_read=True).call("m", "vf.measure", {"mode": "dense", "units": ["EC0", "P4"]}, timeout=120)["result"]["record"]
+        self.assertEqual(points(rec, "EC0")[23]["status"], "interpolated")
+        self.assertEqual(points(rec, "EC0")[29]["status"], "unreachable")  # not a V/F point: left alone (the Table view shows "unreachable")
+        self.assertEqual(points(rec, "P4")[52]["status"], "unreachable")
+
+    def test_points_above_the_reach_or_without_a_neighbour_are_not_interpolated(self) -> None:
+        pts = [
+            {"ratio": 30, "status": "ok", "vid_v": 0.80, "fused_point": 3}, {"ratio": 48, "status": "unreachable", "reason": "cap_granularity", "vid_v": None, "fused_point": 4},
+            {"ratio": 53, "status": "ok", "vid_v": 1.20, "fused_point": 5}, {"ratio": 55, "status": "ok", "vid_v": 1.30, "fused_point": 6},
+            {"ratio": 56, "status": "unreachable", "reason": "max_turbo", "vid_v": None, "fused_point": 7}, {"ratio": 57, "status": "unreachable", "reason": "max_turbo", "vid_v": None, "fused_point": 8},
+            {"ratio": 8, "status": "unreachable", "reason": "cap_granularity", "vid_v": None, "fused_point": 1},   # nothing below it
+            {"ratio": 54, "status": "unreachable", "reason": "cap_granularity", "vid_v": None},                   # not a V/F point
+        ]
+        interpolate_points(pts)
+        by = {p["ratio"]: p for p in pts}
+        self.assertEqual((by[48]["status"], by[48]["from"], by[48]["vid_v"], by[48].get("exact")), ("interpolated", [30, 53], 1.113, None))  # 0.80 + 0.40 x 18/23
+        self.assertEqual([by[r]["status"] for r in (8, 54, 56, 57)], ["unreachable"] * 4)
+
+    def test_equal_neighbours_are_exact_and_the_value_stays_inside_them(self) -> None:
+        pts = [{"ratio": 15, "status": "ok", "vid_v": 0.775, "fused_point": 2}, {"ratio": 23, "status": "unreachable", "reason": "cap_granularity", "vid_v": None, "fused_point": 3},
+               {"ratio": 30, "status": "ok", "vid_v": 0.775, "fused_point": 4}]
+        interpolate_points(pts)
+        self.assertEqual((pts[1]["status"], pts[1]["vid_v"], pts[1]["exact"]), ("interpolated", 0.775, True))
 
 
 class CurvesOpsTests(MeasureCase):

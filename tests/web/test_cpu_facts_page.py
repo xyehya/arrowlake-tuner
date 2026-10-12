@@ -38,7 +38,7 @@ class TestStatic(unittest.TestCase):
     def test_addendum_fields_are_bound(self):
         for name in ("effective_v", "clamped_by", "vccia", "predicted_v", "set_by", "fused", "turbo", "favored", "counts", "reason"):
             self.assertIn(name, JS, name)
-        for reason in ("max_turbo", "cpufreq_granularity", "active_cores"):
+        for reason in ("max_turbo", "cap_granularity", "cpufreq_granularity", "active_cores", "turbo_off", "user_cap"):
             self.assertIn(reason, JS, reason)
         self.assertIn('chk === "TURBO_ORDER"', JS)
 
@@ -260,12 +260,11 @@ class TestBrowser(unittest.TestCase):
                 titles = page.locator("#cv-chart .vc-nm title").all_text_contents()
                 self.assertIn("P1 56\u00d7: above this core's max ratio 55\u00d7", titles)
                 self.assertIn("P1 57\u00d7: above this core's max ratio 55\u00d7", titles)
-                self.assertTrue(any(t.startswith("EC0 23\u00d7: cpufreq caps cannot pin this ratio") for t in titles), titles)
+                self.assertFalse(any(t.startswith("EC0 23\u00d7") for t in titles), titles)   # G-132: E 23x is interpolated, so it has a value and is no longer "not measured"
                 self.assertEqual(page.locator("#cv-chart .vc-nm-label").text_content(), "not measured")
                 caption = page.inner_text("#cv-unreach")
                 self.assertTrue(caption.startswith("not measured: "), caption)
                 self.assertIn("at 56\u201357\u00d7 (above core max 55\u00d7)", caption)
-                self.assertIn("cpufreq cannot pin this ratio", caption)
                 self.assertNotIn("Hollow rings", caption)
                 self.assertNotIn("cpufreq_granularity", caption)   # the caption speaks plainly, the codes stay in the table view
                 self.assertIn("fused V/F table as applied", page.inner_text("#cv-base-note"))

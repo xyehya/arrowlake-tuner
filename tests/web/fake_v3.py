@@ -33,6 +33,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+from arltuner.helper.ops_measure import interpolate_points
+
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
 UNITS = [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]
 UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)}}
@@ -102,7 +104,7 @@ def unreachable_reason(unit: str, ratio: int) -> str | None:
     if ratio > reach_ratio(unit):
         return "max_turbo"
     if ratio in CPUFREQ_UNPINNABLE[kind_of(unit)]:
-        return "cpufreq_granularity"
+        return "cap_granularity"
     return None
 
 
@@ -283,6 +285,8 @@ class V3Ops:
         self.measure_gate.set()
         self.record_budget_units: int | None = None   # G-111: max units per curve response (None = whole records)
         self.measure_problems: list[str] = []
+        self.no_turbo = False          # G-132: the power-saver profile (curves.list no_turbo; points above base are turbo_off)
+        self.interpolate = True        # G-132 item 8: unmeasurable V/F points between measured ones are interpolated
         self.measure_refusal: dict | None = None      # {"code", "message", "check"}: refuse vf.measure up front
         self.apply_delay = 0.0
         self.apply_mismatch: set[tuple[str, int]] = set()
@@ -319,6 +323,8 @@ class V3Ops:
         for u in rec["units"]:
             for r in measure_ratios(u, mode):
                 rec["units"][u]["points"].append(self._point(u, r, offset_mv))
+            if self.interpolate:
+                interpolate_points(rec["units"][u]["points"])
         rec["baseline"] = baseline
         if created:
             rec["created"] = created
@@ -345,14 +351,22 @@ class V3Ops:
                 "units": {u: {"cpus": UNIT_CPUS[u], "points": []} for u in units}, "baseline": False}
 
     def _point(self, unit: str, ratio: int, offset_override: float | None = None) -> dict:
+        fused = (P_POINTS if kind_of(unit) == "P" else E_POINTS)
         why = unreachable_reason(unit, ratio)
+        if self.no_turbo and ratio > (37 if kind_of(unit) == "P" else 32):   # G-132: turbo off (power-saver profile): not attempted
+            return {"ratio": ratio, "mhz": ratio * 100.0, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 0, "status": "unreachable", "reason": "turbo_off",
+                    **({"fused_point": fused.index(ratio) + 1} if ratio in fused else {})}
         if why:
-            return {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable", "reason": why}
+            pt = {"ratio": ratio, "mhz": None, "vid_v": None, "vid_min": None, "vid_max": None, "kept": 0, "total": 30, "status": "unreachable", "reason": why}
+            if why == "cap_granularity":
+                pt["neighbours"] = [ratio - 1, ratio + 1]
+            if ratio in fused:   # the real helper labels the unreachable V/F points too
+                pt["fused_point"] = fused.index(ratio) + 1
+            return pt
         off = offset_override if offset_override is not None else interp_offset(self.tuning[unit]["points"], ratio)
         v = stock_vid(unit, ratio) + off / 1000.0
         pt = {"ratio": ratio, "mhz": ratio * 100.0 + 2.0, "vid_v": round(v, 4), "vid_min": round(v - 0.004, 4), "vid_max": round(v + 0.005, 4),
               "kept": 28, "total": 30, "status": "ok"}
-        fused = (P_POINTS if kind_of(unit) == "P" else E_POINTS)
         if ratio in fused:   # G-118: the key is absent for the ratios in between
             pt["fused_point"] = fused.index(ratio) + 1
         return pt
@@ -378,7 +392,7 @@ class V3Ops:
     # ---- curves ----
     def _op_curves_list(self, rid, args):
         rows = sorted(self.curves.values(), key=lambda r: r["created"], reverse=True)
-        self._reply(rid, True, result={"curves": [self._summary(r) for r in rows]})
+        self._reply(rid, True, result={"curves": [self._summary(r) for r in rows], "no_turbo": self.no_turbo})
 
     def _budgeted(self, rec: dict, only: list[str] | None = None) -> dict:
         """The record as one 64 KiB line would carry it: at most ``record_budget_units`` units, the rest named in ``omitted_units``."""
@@ -503,10 +517,14 @@ class V3Ops:
                 eta = (time.monotonic() - t0) / (i + 1) * (len(plan) - i - 1) if self.measure_delay else (len(plan) - i - 1) * 0.5
                 self.emit({"event": "progress", "op_id": rid, "step": i + 1, "of": len(plan), "unit": u, "ratio": r, "eta_s": round(eta, 1)})
                 self.emit({"event": "vf.point", "op_id": rid, "unit": u, "ratio": r, "mhz": pt["mhz"], "vid_v": pt["vid_v"], "status": pt["status"]})
+            if self.interpolate:   # G-132 item 8
+                for u in units:
+                    interpolate_points(rec["units"][u]["points"])
             self.curves[rec["id"]] = rec
             result = {"curve_id": rec["id"], "record": self._budgeted(rec)}
-            if self.measure_problems:
-                result["problems"] = list(self.measure_problems)
+            notes = (["Turbo is off (power-saver profile?): ratios above base cannot be reached \u2014 switch to Balanced or Performance"] if self.no_turbo else []) + list(self.measure_problems or [])
+            if notes:
+                result["problems"] = notes
             self._reply(rid, True, result=result)
         finally:
             self._measuring.discard(rid)

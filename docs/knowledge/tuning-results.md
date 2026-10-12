@@ -96,7 +96,7 @@ mismatch 0.775 0.963 1.137 (0.775 V = E-cluster VID floor up to 30×). Open: 57�
 ### Dense stock curve [MEASURED lnx 2026-10-11 19:08 UTC, curve `20261011T190830Z-rj7b`, ~12 min, temps 34–80 °C]
 - 44–47 ratios per P-core (8…55/56/57×), 32 per E-cluster (8…48×). **No unit is non-monotonic** (no ratio's VID below the previous by > 3 mV) — F4 holds.
 - **54× = midpoint of 53×/55× within ±1.5 mV on every P-core** (e.g. P2 1.3187 vs 1.31875) — confirms interpolation between fused points.
-- cpufreq caps cannot pin P 42/47/52× nor E 13/18/21/23/26/29× (land on neighbours) → `cpufreq_granularity`. P3 57× missed (active cores),
+- cpufreq caps cannot pin P 42/47/52× nor E 13/18/21/23/26/29× (land on neighbours) → `cpufreq_granularity` (since G-132 `cap_granularity`; R-001 lists the full set: E also 31/34/39, `power-profile-capping.md` section 6). P3 57× missed (active cores),
   P7 55× mismatch: background noise, retry pass (G-118) addresses it.
 - 64 KiB line budget: the result omitted EC3 with `record.omitted_units = ["EC3"]`; `curves.get {units}` returned it.
 

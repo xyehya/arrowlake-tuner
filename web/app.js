@@ -1702,8 +1702,10 @@
         if ((marked || s.pts.length <= 24) && !s.dash) {
           for (const q of s.pts) {
             const fused = isFusedPoint(q.fused);
-            const dot = sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: !marked ? 3 : fused ? 4.5 : 2 }, "vc-dot u-" + s.unit + (marked ? (fused ? " fused" : " between") : ""));
-            if (marked && fused) { const t = sv("title"); t.textContent = s.unit + " " + q.mhz / 100 + "x: " + fusedLabel(q.fused); dot.append(t); }
+            const interp = isObj(q.interp);
+            const dot = sv("circle", { cx: ch.sx(q.mhz).toFixed(1), cy: ch.sy(q.v).toFixed(1), r: !marked ? 3 : fused ? 4.5 : 2 }, "vc-dot u-" + s.unit + (marked ? (fused ? " fused" : " between") : "") + (interp ? " interp" : ""));
+            if (interp) { const t = sv("title"); t.textContent = s.unit + " " + q.mhz / 100 + "x: " + (fused ? fusedLabel(q.fused) + ", " : "") + q.v.toFixed(3) + " V, " + interpText(q.interp); dot.append(t); }
+            else if (marked && fused) { const t = sv("title"); t.textContent = s.unit + " " + q.mhz / 100 + "x: " + fusedLabel(q.fused); dot.append(t); }
             lines.append(dot);
           }
         }
@@ -1819,16 +1821,32 @@
     return ch;
   }
 
-  // Why a V/F point could not be measured (contract 9 addendum: reason = max_turbo | cpufreq_granularity | active_cores; F3/F9).
-  function reasonText(reason) {
+  // Why a V/F point could not be measured (contract 9 addendum: reason = max_turbo | cap_granularity | cpufreq_granularity (older records) | active_cores | turbo_off | user_cap;
+  // F3/F9, G-132). `p` (optional) is the point record: cap_granularity names the ratios the caps did run (`neighbours: [A, B]`).
+  function reasonText(reason, p) {
     if (reason === "max_turbo") return "the point exists but this core's max turbo ratio is lower, so it never runs here";
-    if (reason === "cpufreq_granularity") return "cpufreq caps cannot pin this ratio (the cap lands on a neighbour)";
+    if (reason === "cap_granularity" || reason === "cpufreq_granularity") {
+      const n = isObj(p) && Array.isArray(p.neighbours) ? p.neighbours.filter(isNum) : [];
+      const at = isObj(p) && isNum(p.ratio) ? p.ratio + "\u00d7" : "this ratio";
+      return reason === "cpufreq_granularity" ? "cpufreq caps cannot pin this ratio (the cap lands on a neighbour)"
+        : "Linux cannot cap this core to exactly " + at + " (frequency rounding)" + (n.length === 2 ? "; the nearest are " + n[0] + "\u00d7 and " + n[1] + "\u00d7" : n.length === 1 ? "; the nearest is " + n[0] + "\u00d7" : "");
+    }
     if (reason === "active_cores") return "reachable only with few active cores, and the measurement loads the whole unit";
+    if (reason === "turbo_off") return "turbo is off (power-saver profile?): ratios above base cannot be reached; switch to Balanced or Performance";
+    if (reason === "user_cap") return "your own scaling_max_freq cap is below this ratio, so it was not attempted";
     return "not reachable on this core";
+  }
+  // A point whose voltage is estimated (G-132): the straight line between the measured V/F points `from`.
+  function interpText(p) {
+    const f = isObj(p) && Array.isArray(p.from) ? p.from.filter(isNum) : [];
+    if (isObj(p) && p.exact === true) return "exact: both neighbours equal" + (f.length === 2 ? " (" + f[0] + "\u00d7 and " + f[1] + "\u00d7)" : "");
+    return "interpolated" + (f.length === 2 ? " between " + f[0] + "\u00d7 and " + f[1] + "\u00d7" : "");
   }
 
   // ---- Curves: measure, keep and compare V/F curves ----------------------------------------------------------------------------------
+  const TURBO_OFF_NOTE = "Turbo is off (power-saver profile?): ratios above base cannot be reached \u2014 switch to Balanced or Performance";
   const CV = {
+    noTurbo: false,      // curves.list no_turbo (G-132)
     list: [],            // curves.list rows, newest first
     cache: {},           // id -> full record (curves.get)
     loaded: false,
@@ -1894,9 +1912,15 @@
     const u = isObj(rec) && isObj(rec.units) ? rec.units[unit] : null;
     const pts = isObj(u) && Array.isArray(u.points) ? u.points : [];
     return pts.filter((p) => isObj(p) && p.status !== "mismatch" && p.status !== "unreachable" && isNum(p.vid_v) && isNum(p.ratio))
-      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status,
+      .map((p) => ({ ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, v: p.vid_v, vmin: p.vid_min, vmax: p.vid_max, kept: p.kept, total: p.total, status: p.status, from: p.from, exact: p.exact,
         fused: isFusedPoint(p.fused_point) ? p.fused_point : null }))
       .sort((a, b) => a.mhz - b.mhz);
+  }
+  // G-132 item 8: the chart plots the unit's V/F points only (the fused points and the OC point; the line between them is the interpolation rule). A record that carries no
+  // fused_point at all (an older curve) draws every measured ratio, as before. The in-between ratios of a dense run stay in the Table view.
+  function recChartPoints(rec, unit) {
+    const all = recPoints(rec, unit);
+    return all.some((q) => isFusedPoint(q.fused)) ? all.filter((q) => isFusedPoint(q.fused)) : all;
   }
   function recAllPoints(rec, unit) {
     const u = isObj(rec) && isObj(rec.units) ? rec.units[unit] : null;
@@ -1914,6 +1938,9 @@
     }
     CV.list = body.result.curves.filter(isObj);
     CV.loaded = true;
+    CV.noTurbo = body.result.no_turbo === true;   // G-132: the power-saver profile turns turbo off; a run cannot reach ratios above base
+    setText("cv-turbo-note", CV.noTurbo ? TURBO_OFF_NOTE : "");
+    $("cv-turbo-note").hidden = !CV.noTurbo;
     const ids = new Set(CV.list.map((c) => c.id));
     for (const k of Object.keys(CV.cache)) if (!ids.has(k)) delete CV.cache[k];
     if (CV.compare && !ids.has(CV.compare)) CV.compare = null;
@@ -1978,16 +2005,16 @@
     if (CV.delta && !b) { model.empty = "Choose a second curve under Compare with to see the difference."; return model; }
     for (const u of UNIT_IDS) {
       if (!CV.drawn.has(u)) continue;
-      const pa = recPoints(a, u);
+      const pa = recChartPoints(a, u);
       const label = u + favMark(u);
       if (CV.delta) {
-        const pb = recPoints(b, u);
+        const pb = recChartPoints(b, u);
         const pts = pa.map((p) => { const at = interpAt(pb, p.mhz); return at ? { mhz: p.mhz, v: (p.v - at.v) * 1000 } : null; }).filter(Boolean);
         if (pts.length) model.series.push({ key: u, unit: u, label: label, pts: pts });
       } else {
-        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v, fused: p.fused })), live: CV.live !== null && CV.liveHead === u });
+        if (pa.length) model.series.push({ key: u, unit: u, label: label, pts: pa.map((p) => ({ mhz: p.mhz, v: p.v, fused: p.fused, interp: p.status === "interpolated" ? p : null })), live: CV.live !== null && CV.liveHead === u });
         if (b) {
-          const pb = recPoints(b, u);
+          const pb = recChartPoints(b, u);
           if (pb.length) model.series.push({ key: u + ":cmp", unit: u, label: u + " (compare)", pts: pb.map((p) => ({ mhz: p.mhz, v: p.v })), dash: true });
         }
       }
@@ -2016,25 +2043,29 @@
       if (!CV.drawn.has(u)) continue;
       const pts = recAllPoints(rec, u);
       const okRatios = pts.filter((p) => p.status === "ok" && isNum(p.ratio)).map((p) => p.ratio);
+      const vfOnly = pts.some((p) => isFusedPoint(p.fused_point));   // G-132: only V/F points that have no value at all; in-between ratios live in the Table view
       for (const p of pts) {
         if (!isNum(p.ratio) || (p.status !== "unreachable" && p.status !== "mismatch")) continue;
+        if (vfOnly && !isFusedPoint(p.fused_point)) continue;
         const below = okRatios.filter((r) => r < p.ratio);
         const kind = p.status === "mismatch" ? "mismatch" : isStr(p.reason) ? p.reason : "other";
         const max = below.length ? Math.max(...below) : null;
         out.push({ unit: u, ratio: p.ratio, mhz: isNum(p.mhz) ? p.mhz : p.ratio * 100, kind: kind, max: max,
-          title: u + " " + p.ratio + "\u00d7: " + notMeasuredLong(kind, max) });
+          title: u + " " + p.ratio + "\u00d7: " + notMeasuredLong(kind, max, p) });
       }
     }
     return out;
   }
-  function notMeasuredLong(kind, max) {
+  function notMeasuredLong(kind, max, p) {
     if (kind === "max_turbo") return "above this core's max ratio" + (max === null ? "" : " " + max + "\u00d7");
     if (kind === "mismatch") return "the core ran at another ratio than the target, so no voltage was kept";
-    return reasonText(kind);
+    return reasonText(kind, p);
   }
   function notMeasuredShort(kind, max) {
     if (kind === "max_turbo") return "above core max" + (max === null ? "" : " " + max + "\u00d7");
-    if (kind === "cpufreq_granularity") return "cpufreq cannot pin this ratio";
+    if (kind === "cpufreq_granularity" || kind === "cap_granularity") return "cpufreq cannot pin this ratio";
+    if (kind === "turbo_off") return "turbo is off";
+    if (kind === "user_cap") return "above your cpufreq cap";
     if (kind === "active_cores") return "needs few active cores";
     if (kind === "mismatch") return "did not settle at the target";
     return "not reachable";
@@ -2118,7 +2149,20 @@
     const isStock = !!a && CV.live === null && tuningKind(a) === "stock";
     stockPill.hidden = !isStock;
     if (isStock) { stockPill.textContent = "stock = fused table as applied"; stockPill.title = "Measured with every offset at 0: the voltages are the CPU's fused V/F table as the CPU applies it."; }
-    setText("cv-unreach", a ? notMeasuredCaption(unmeasuredOf(a)) : "");
+    setText("cv-unreach", a ? [notMeasuredCaption(unmeasuredOf(a)), interpolatedCaption(a)].filter(Boolean).join(" \u00b7 ") : "");
+  }
+  // G-132: the V/F points drawn as hollow markers because no cap could run them: their voltage is the straight line between the measured V/F points beside them.
+  function interpolatedCaption(rec) {
+    const bySig = new Map();
+    for (const u of UNIT_IDS) {
+      if (!CV.drawn.has(u)) continue;
+      const rs = recAllPoints(rec, u).filter((p) => p.status === "interpolated" && isNum(p.ratio)).map((p) => p.ratio);
+      if (!rs.length) continue;
+      const sig = ratiosText(rs);
+      if (!bySig.has(sig)) bySig.set(sig, []);
+      bySig.get(sig).push(u);
+    }
+    return bySig.size ? "interpolated (hollow markers): " + Array.from(bySig, ([sig, us]) => unitsText(us) + " at " + sig).join(" \u00b7 ") : "";
   }
 
   function paintCurves() {
@@ -2215,10 +2259,11 @@
     const cells = [];
     let lo = Infinity, hi = -Infinity, big = 0;
     const val = (u, p) => {
-      if (p.status !== "ok" || !isNum(p.vid_v)) return null;
-      if (!CV.tableDelta) return { v: p.vid_v };
+      if ((p.status !== "ok" && p.status !== "interpolated") || !isNum(p.vid_v)) return null;
+      const guess = p.status === "interpolated" && p.exact !== true;   // an estimated point is marked "~" like any other estimate (an exact one is not)
+      if (!CV.tableDelta) return { v: p.vid_v, est: guess };
       const at = interpAt(recPoints(base, u), isNum(p.mhz) ? p.mhz : p.ratio * 100);
-      return at ? { v: (p.vid_v - at.v) * 1000, est: !at.exact } : null;
+      return at ? { v: (p.vid_v - at.v) * 1000, est: !at.exact || guess } : null;
     };
     for (const u of UNIT_IDS) for (const p of recAllPoints(a, u)) { const x = val(u, p); if (x) { lo = Math.min(lo, x.v); hi = Math.max(hi, x.v); big = Math.max(big, Math.abs(x.v)); } }
     const rows = UNIT_IDS.filter((u) => isObj(a.units) && isObj(a.units[u])).map((u) => {
@@ -2234,7 +2279,7 @@
         const x = val(u, p);
         if (!x) {
           const why = p.status === "unreachable" ? "unreachable" : p.status === "mismatch" ? "mismatch" : CV.tableDelta ? "no baseline value" : "n/a";
-          tr.append(td(p.status === "ok" ? "n/a" : "—", "n vt-na", u + " at " + r + "×: " + why + (p.status === "unreachable" ? ": " + reasonText(p.reason) + (isStr(p.reason) ? " (" + p.reason + ")" : "") : "")));
+          tr.append(td(p.status === "ok" ? "n/a" : "—", "n vt-na", u + " at " + r + "×: " + why + (p.status === "unreachable" ? ": " + reasonText(p.reason, p) + (isStr(p.reason) ? " (" + p.reason + ")" : "") : "")));
           continue;
         }
         let cls, text;
@@ -2248,7 +2293,8 @@
         }
         const kept = isNum(p.kept) && isNum(p.total) ? ", " + p.kept + " of " + p.total + " samples at target" : "";
         const range = isNum(p.vid_min) && isNum(p.vid_max) ? ", range " + p.vid_min.toFixed(3) + " to " + p.vid_max.toFixed(3) + " V" : "";
-        tr.append(td(text + (x.est ? "~" : ""), "n " + cls, u + " at " + r + "× (" + (isNum(p.mhz) ? p.mhz.toFixed(0) : r * 100) + " MHz): " + p.vid_v.toFixed(3) + " V" + range + kept));
+        const interp = p.status === "interpolated" ? ", " + interpText(p) : "";
+        tr.append(td(text + (x.est ? "~" : ""), "n " + cls, u + " at " + r + "× (" + (isNum(p.mhz) ? p.mhz.toFixed(0) : r * 100) + " MHz): " + p.vid_v.toFixed(3) + " V" + range + kept + interp));
       }
       return tr;
     });
@@ -2601,8 +2647,8 @@
   function baseVid(u, ratio) {
     const rec = baselineRec();
     if (!rec) return null;
-    const p = recAllPoints(rec, u).find((q) => q.ratio === ratio && q.status === "ok" && isNum(q.vid_v));
-    if (p) return { v: p.vid_v, src: "baseline" };
+    const p = recAllPoints(rec, u).find((q) => q.ratio === ratio && (q.status === "ok" || q.status === "interpolated") && isNum(q.vid_v));
+    if (p) return { v: p.vid_v, src: p.status === "interpolated" ? "interpolated" : "baseline", exact: p.status === "interpolated" && p.exact === true };   // G-132: a point nobody could measure uses its interpolated value
     const f = fusedOf(u), rc = reachOf(u);
     return f && f.ratio === ratio && !(isNum(rc) && ratio > rc) ? { v: f.v, src: "fused" } : null;   // a top point above the unit's reach has no voltage to stand in for
   }
@@ -2915,13 +2961,13 @@
     else if (!infos.length) {
       const bp = recAllPoints(base, ok[0]).find((q) => q.ratio === ratio);
       const why = bp && bp.status === "unreachable" ? bp.reason : null;
-      c.eff.textContent = why === "cpufreq_granularity" ? "cannot be pinned" : why === "max_turbo" ? "not measured" : "no measured voltage";
+      c.eff.textContent = why === "cpufreq_granularity" || why === "cap_granularity" ? "cannot be pinned" : why === "max_turbo" || why === "turbo_off" || why === "user_cap" ? "not measured" : "no measured voltage";
       c.eff.title = "The baseline curve has no usable measurement at this ratio" + (why ? ": " + reasonText(why) : "") + ".";
     }
     else {
-      const src = infos.every((x) => x.pr.src === "fused") ? " (fused)" : "";
+      const src = infos.every((x) => x.pr.src === "fused") ? " (fused)" : infos.some((x) => x.pr.src === "interpolated") ? " (interpolated)" : "";
       c.eff.textContent = "\u2192 " + fmtVRange(infos.map((x) => x.pr.v), 3) + src;
-      c.eff.title = "Predicted effective voltage on your baseline curve: baseline VID + offset" + (src ? "; the fused top point read from the CPU stands in for the baseline here" : "") + ". Not a CPU read.";
+      c.eff.title = "Predicted effective voltage on your baseline curve: baseline VID + offset" + (src === " (fused)" ? "; the fused top point read from the CPU stands in for the baseline here" : src ? "; the baseline has no measurement at this point, so its value is interpolated between the neighbouring measured points" : "") + ". Not a CPU read.";
     }
     const cl = infos.filter((x) => x.pr.by !== null);
     c.badge.hidden = cl.length === 0;

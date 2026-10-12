@@ -6,6 +6,7 @@ the topology it simulates (the reference CPU, or a ``synthetic`` 6P+8E ...), so 
 """
 from __future__ import annotations
 
+import math
 import random
 import threading
 from collections.abc import Sequence
@@ -48,17 +49,22 @@ class SimCpufreq:
         self.model = model or SimModel()
         self.values: dict[tuple[int, str], str] = {}
         self.lock = threading.Lock()
+        self.no_turbo = False  # intel_pstate/no_turbo (the power-saver profile sets it); a test or the sim flips it
         for core in self.model.topology.cores:
             cpu = core.cpu
             self.values[(cpu, CAP_ATTR)] = str(self.model.max_khz(cpu))
             self.values[(cpu, "cpuinfo_max_freq")] = str(self.model.max_khz(cpu))
             self.values[(cpu, MIN_ATTR)] = "800000"
+            self.values[(cpu, "base_frequency")] = str((32 if core.kind == "E" else 37) * 100_000)  # R-001: the power-saver ceiling = base (P 37x / E 32x)
             self.values[(cpu, GOV_ATTR)] = "powersave"
             self.values[(cpu, EPP_ATTR)] = "balance_power"
 
     def read(self, cpu: int, attr: str) -> str | None:
         with self.lock:
             return self.values.get((cpu, attr))
+
+    def read_no_turbo(self) -> bool | None:
+        return self.no_turbo
 
     def write(self, cpu: int, attr: str, value: str) -> None:
         with self.lock:
@@ -87,8 +93,11 @@ class SimModel:
     E_HIGHEST_PERF = 69
     QUIET_SHARE = 0.7  # share of samples a favored core spends above the all-core ratio when no other core is busy
 
-    def __init__(self, seed: int = 285, background_busy: int = 0, topology: Topology | None = None) -> None:
+    def __init__(self, seed: int = 285, background_busy: int = 0, topology: Topology | None = None, hwp_bins: bool = False) -> None:
         self.seed = seed
+        #: G-132: model the R-001 cap resolution instead of the G-131 fixture: a cap is quantised to its 100 MHz bin N (the read-back is N x 100 MHz), the E-core's HWP perf is
+        #: ``ceil(1.377 N)`` and the ratio it runs ``floor(perf / 1.4)`` -- so E 23x (perf 33 is never produced) is reachable by no cap ``[MEASURED lnx 2026-10-12]``.
+        self.hwp_bins = hwp_bins
         self.topology = topology if topology is not None else arl_s_285k()
         self.background_busy = background_busy  # busy CPUs outside the run (a desktop session, the helper): >= 2 takes the favored top ratio away
         units = self.topology.unit_ids()
@@ -147,15 +156,20 @@ class SimModel:
         """kHz per HWP perf unit of an E-core."""
         return cls.E_CPUINFO * 100_000 / cls.E_HIGHEST_PERF
 
-    @classmethod
-    def e_cap_quantized(cls, cap_khz: int) -> int:
-        """What an E-core's ``scaling_max_freq`` reads back after ``cap_khz`` was written: the perf step's frequency (idempotent)."""
-        scale = cls.e_scale()
+    def e_cap_quantized(self, cap_khz: int) -> int:
+        """What an E-core's ``scaling_max_freq`` reads back after ``cap_khz`` was written: the perf step's frequency (idempotent); with ``hwp_bins`` its 100 MHz bin."""
+        if cap_khz <= 800_000:  # the idle floor (8x) is a whole step in the model, so a pin at 8x and the restore of the minimum agree
+            return cap_khz
+        if self.hwp_bins:
+            return cap_khz // 100_000 * 100_000
+        scale = self.e_scale()
         return round(round(cap_khz / scale) * scale)
 
-    @classmethod
-    def _e_landing(cls, cap_khz: int) -> int:
+    def _e_landing(self, cap_khz: int) -> int:
         """The ratio an E cap lands on before the reach limit: the table-driven rule for the perf steps the 100 MHz multiples select, truncation for the others."""
+        cls = type(self)
+        if self.hwp_bins:
+            return int(math.ceil(1.377 * (cap_khz // 100_000)) // 1.4)  # floor(ceil(1.377 N) / 1.4)
         scale = cls.e_scale()
         perf = round(cap_khz / scale)
         for k in range(8, 50):
@@ -219,6 +233,16 @@ class SimMeasureIO:
         if self.model.unit_of(cpu).startswith("E"):
             khz = self.model.e_cap_quantized(int(khz))  # the kernel's perf rounding: the read-back is the step's frequency
         self.cpufreq.write(cpu, CAP_ATTR, str(int(khz)))
+
+    def read_min(self, cpu: int) -> int | None:
+        """G-132: ``scaling_min_freq`` (a cap is pinned, min = max). An E-core's value is rounded like its maximum (a pin reads back min = max)."""
+        value = self.cpufreq.read(cpu, MIN_ATTR)
+        return None if value is None else int(value)
+
+    def write_min(self, cpu: int, khz: int) -> None:
+        if self.model.unit_of(cpu).startswith("E"):
+            khz = self.model.e_cap_quantized(int(khz))  # a pin is min = max: both read back the same perf step
+        self.cpufreq.write(cpu, MIN_ATTR, str(int(khz)))
 
     def read_max_khz(self, cpu: int) -> int:
         return self.model.max_khz(cpu)

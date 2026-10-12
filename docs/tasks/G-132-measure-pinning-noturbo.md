@@ -24,6 +24,10 @@ min=max pinning is at least as reliable everywhere and fixes the EPP problem; so
 6. Contract: document the new reasons and point fields (`cap_khz`, `retried`, reasons `turbo_off`, `cap_granularity`, `user_cap`) in
    `docs/ARCHITECTURE.md` contract 9 addendum; update the web reason texts.
 7. Correct `docs/knowledge/` where R-001 contradicts older notes (T-027 "+1 cap" note) — one line each, citing R-001.
+8. **Interpolation (operator, 2026-10-12):** V/F frequencies between points are interpolated by the CPU (54x measured at the midpoint of 53x/55x). (a) A fused V/F point that could not be
+   measured (e.g. E 23x `cap_granularity`) with measured V/F points on both sides gets `status: "interpolated"`, `vid_v` = linear between them (clamped to the monotonic rule), `from: [A, B]`,
+   `exact` when equal; never `ok`; not above reach / without a neighbour. (b) The chart plots V/F points only (fused + OC), straight lines between them, interpolated points as hollow markers,
+   the "not measured" row only for V/F points with no value; in-between ratios stay in the Table. (c) Tune predictions use the interpolated value and label it "(interpolated)".
 
 ## Owns
 `src/arltuner/helper/ops_measure.py`, `src/arltuner/helper/ops_stress.py`, `src/arltuner/helper/measure_sim.py`, `src/arltuner/vfdump.py`,
