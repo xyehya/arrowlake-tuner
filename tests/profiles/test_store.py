@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arltuner.profiles.store import MAX_PROFILE_BYTES, ProfileStore, ProfileStoreError
+from arltuner.profiles.store import MAX_PROFILE_BYTES, MAX_PROFILES, ProfileStore, ProfileStoreError
 
 INTENT = {"scope": "unit", "rows": [{"target": "P0", "offset": {"kind": "curve", "mv": -10}, "v_target_v": None, "ratio": None}]}
 
@@ -70,6 +70,19 @@ class Save(StoreCase):
         big = {"scope": "unit", "rows": [{"pad": "x" * MAX_PROFILE_BYTES}]}
         self.assertEqual(self.code(self.store.save, "big", big), "TOO_BIG")
         self.assertFalse((self.dir / "big.json").exists())
+
+    def test_the_profile_count_is_capped_with_a_clear_error(self) -> None:  # G-142
+        self.store.save("seed", INTENT)
+        for i in range(MAX_PROFILES - 1):
+            (self.dir / f"p{i}.json").write_text("{}")
+        self.store.list()  # a full directory still lists (bounded) and loads
+        with self.assertRaises(ProfileStoreError) as cm:
+            self.store.save("one-too-many", INTENT)
+        self.assertEqual(cm.exception.code, "TOO_BIG")  # the helper maps TOO_BIG to BAD_REQUEST (ops_tune)
+        self.assertIn(str(MAX_PROFILES), cm.exception.message)
+        self.assertFalse((self.dir / "one-too-many.json").exists())
+        (self.dir / "p0.json").unlink()
+        self.assertEqual(self.store.save("fits-now", INTENT)["name"], "fits-now")
 
     def test_a_group_writable_directory_is_refused(self) -> None:
         self.store.save("seed", INTENT)

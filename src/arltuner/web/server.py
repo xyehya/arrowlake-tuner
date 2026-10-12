@@ -174,6 +174,9 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
 READ_OPS = frozenset({"preflight", "audit.tail", "telemetry.start", "profiles.list", "profiles.get", "tune.last", "curves.list", "curves.get",
                       "mem.read", "stress.list"})
 SCOPES = ("full", "read")
+# Events a ``read`` session's stream may carry (the dashboard's feeds). An explicit allowlist: any other event name (progress / point events of a
+# measurement the operator started, anything added later) is not delivered to it. Result events are additionally per-session in HelperLink.
+READ_EVENTS = frozenset({"heartbeat", "state", "telemetry"})
 
 # HTTP status for a helper error code (Contract 8 codes; unknown codes -> 422)
 _STATUS_FOR_CODE = {"BAD_REQUEST": 400, "UNKNOWN_OP": 400, "BUSY": 409, "PLAN_STALE": 409, "CONFIRM_MISMATCH": 409, "CANCELLED": 409,
@@ -339,7 +342,10 @@ class WebServer:
     # ---- auth state -----------------------------------------------------------------------------------------------------------
     def swap_token(self, presented: str, scope: str = "full") -> str | None:
         """Single-use, constant-time. Returns a new session id, or None. The token is burned on the first correct presentation.
-        ``scope`` is ``full`` or ``read`` (``READ_OPS`` only); it is fixed for the life of the session."""
+        ``scope`` is ``full`` or ``read`` (``READ_OPS`` only); it is fixed for the life of the session. Any other value is refused
+        (None) and does not burn the token."""
+        if scope not in SCOPES:
+            return None
         with self._lock:
             now = self.cfg.clock()
             ok = hmac.compare_digest(presented.encode("utf-8", "replace"), self._token.encode("utf-8"))
@@ -376,6 +382,17 @@ class WebServer:
         with self._lock:
             rec = self._sessions.get(sid)
             return rec[2] if rec else None
+
+    def may_call(self, sid: str, op: str) -> bool:
+        """Authorization, fail closed: only a session whose recorded scope is exactly ``full`` may call any allowlisted op, exactly ``read`` only
+        ``READ_OPS``; an unknown / missing / garbled scope, an unknown session, or any error in this check refuses."""
+        try:
+            scope = self.session_scope(sid)
+            if scope == "full":
+                return True
+            return scope == "read" and op in READ_OPS
+        except Exception:
+            return False
 
     def new_bootstrap(self) -> str:
         """Mint a fresh single-use bootstrap token (the previous one stops working). Existing sessions are untouched."""
@@ -714,7 +731,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if spec is None:
             return self._err(400, "unknown_op")
         validate, is_long = spec
-        if self.srv.session_scope(sid) == "read" and req["op"] not in READ_OPS:
+        if not self.srv.may_call(sid, req["op"]):
             return self._err(403, "read_only_session")
         try:
             valid = isinstance(args, dict) and validate(args)
@@ -776,6 +793,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if full:
             return self._err(503, "too_many_streams")
         sub = helper.subscribe(sid)
+        full_stream = srv.session_scope(sid) == "full"
         last_write = time.monotonic()
         try:
             self.connection.settimeout(srv.cfg.sse_write_timeout_s)  # a client that stops reading is dropped
@@ -798,6 +816,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     name = ev.get("event")
                     if not isinstance(name, str) or not _EVENT_RE.match(name):
+                        continue
+                    if not full_stream and name not in READ_EVENTS:  # fail closed: a non-full session sees the dashboard feeds only
                         continue
                     data = json.dumps(ev, separators=(",", ":"))
                     self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))

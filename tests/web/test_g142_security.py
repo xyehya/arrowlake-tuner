@@ -77,13 +77,15 @@ class TestRandomLoopbackBind(Base):
         self.assertEqual(srv.host_header, f"127.0.0.1:{srv.port}")
 
 
-class TestReadScope(Base):
+class ReadLogin(Base):
     def login_read(self) -> str:
         body = f"token={self.srv.token}&scope=read".encode()
         st, r, _ = self.req("POST", "/bootstrap", {"Content-Type": "application/x-www-form-urlencoded"}, body, origin="null")
         self.assertEqual(st, 200)
         return r.getheader("Set-Cookie").split(";")[0].split("=", 1)[1]
 
+
+class TestReadScope(ReadLogin):
     def test_read_ops_are_the_screenshot_tools_allowlist_and_all_short_reads(self):
         self.assertEqual(READ_OPS, tool.READ_OPS)
         self.assertTrue(READ_OPS <= set(OPS))
@@ -160,6 +162,94 @@ class TestReadScope(Base):
                 os.close(fd)
                 with self.assertRaises(tool.ToolError, msg=origin):
                     tool.read_launcher(p)
+
+
+class TestScopeFailsClosed(ReadLogin):
+    """Orchestrator note: every authorization decision fails closed (unknown / garbled scope, later-added ops, a scope the client picks, SSE, errors)."""
+
+    def test_unknown_or_garbled_scopes_may_call_nothing(self):
+        ck = self.login()
+        sid = self.srv.valid_session(ck, touch=False)
+        for garbled in (None, "", "FULL", "Full", "admin", "read ", "full\n", 5, True, ["full"], {"full": 1}):
+            with self.srv._lock:
+                self.srv._sessions[sid][2] = garbled
+            for op in ("preflight", "tune.apply", "vf.measure"):
+                self.assertFalse(self.srv.may_call(sid, op), (garbled, op))
+                st, _, body = self.call(op, {}, cookie=ck)
+                self.assertEqual((st, json.loads(body)["server_error"]), (403, "read_only_session"), (garbled, op))
+        with self.srv._lock:
+            self.srv._sessions[sid][2] = "full"
+        self.assertTrue(self.srv.may_call(sid, "vf.measure"))
+
+    def test_a_session_record_without_a_scope_and_an_unknown_session_are_refused(self):
+        ck = self.login()
+        sid = self.srv.valid_session(ck, touch=False)
+        with self.srv._lock:
+            del self.srv._sessions[sid][2:]
+        self.assertFalse(self.srv.may_call(sid, "preflight"))
+        self.assertEqual(self.call("preflight", cookie=ck)[0], 403)
+        self.assertFalse(self.srv.may_call("no-such-session", "preflight"))
+
+    def test_an_error_in_the_scope_check_refuses(self):
+        ck = self.login()
+        with mock.patch.object(WebServer, "session_scope", side_effect=RuntimeError("boom")):
+            self.assertFalse(self.srv.may_call("x", "preflight"))
+            self.assertEqual(self.call("preflight", cookie=ck)[0], 403)
+        self.assertEqual(self.fake.requests, [])
+
+    def test_swap_token_refuses_an_unknown_scope_without_burning_the_token(self):
+        for bad in ("", "FULL", "admin", None, 0):
+            self.assertIsNone(self.srv.swap_token(self.srv.token, bad), bad)
+        self.assertIsNotNone(self.srv.swap_token(self.srv.token, "read"))
+
+    def test_the_client_cannot_pick_or_raise_its_scope_after_bootstrap(self):
+        ck = self.login_read()
+        name = server_mod.COOKIE_NAME
+        body = json.dumps({"op": "vf.measure", "args": {}}).encode()
+        for extra in ({"X-Scope": "full"}, {"X-Arltuner-Scope": "full"}, {"Cookie": f"{name}={ck}; scope=full"}, {"Authorization": "full"}):
+            h = {"Content-Type": JSON_CT, **extra}
+            st, _, _ = self.req("POST", "/api/call", h, body, cookie=None if "Cookie" in extra else ck, origin=self.srv.origin)
+            self.assertEqual(st, 403, extra)
+        st, _, _ = self.req("POST", "/api/call", {"Content-Type": JSON_CT}, json.dumps({"op": "vf.measure", "args": {"scope": "full"}}).encode(),
+                            cookie=ck, origin=self.srv.origin)
+        self.assertEqual(st, 403)
+        # the token is burned: a second bootstrap cannot mint a full session
+        st, _, _ = self.req("POST", "/bootstrap", {"Content-Type": "application/x-www-form-urlencoded"}, f"token={self.srv.token}&scope=full".encode(),
+                            origin="null")
+        self.assertEqual(st, 403)
+        self.assertEqual(self.srv.session_scope(self.srv.valid_session(ck, touch=False)), "read")
+
+    def test_read_ops_is_an_explicit_frozen_allowlist_and_a_later_added_op_is_refused(self):
+        self.assertIsInstance(READ_OPS, frozenset)
+        ck = self.login_read()
+        sid = self.srv.valid_session(ck, touch=False)
+        with mock.patch.dict(OPS, {"future.op": (lambda a: a == {}, False)}):
+            self.assertFalse(self.srv.may_call(sid, "future.op"))
+            self.assertEqual(self.call("future.op", cookie=ck)[0], 403)
+        self.assertEqual(self.fake.requests, [])
+
+    def test_a_read_stream_carries_only_the_dashboard_feeds_and_none_of_the_results(self):
+        read_ck = self.login_read()
+        self.srv.new_bootstrap()   # a fresh launcher token for the full session (existing sessions are untouched)
+        full_ck = self.login()
+        rs, fs = open_sse(self, read_ck), open_sse(self, full_ck)
+        read_until(rs, b"retry: 3000")
+        read_until(fs, b"retry: 3000")
+        st, _, _ = self.call("vf.dump", {}, cookie=full_ck)   # a long op of the full session: its result belongs to that session only
+        self.assertEqual(st, 202)
+        got_full = read_until(fs, b"event: result")
+        self.fake.progress("w99", 1, 2, 5)
+        self.fake.emit({"event": "vf.point", "op_id": "w99", "cpu": 0})
+        self.fake.emit({"event": "future.event", "x": 1})
+        self.fake.heartbeat("idle")
+        self.fake.telemetry()
+        got_full += read_until(fs, b"event: telemetry")
+        got_read = read_until(rs, b"event: telemetry")
+        for banned in (b"event: progress", b"event: vf.point", b"event: result", b"event: future.event"):
+            self.assertNotIn(banned, got_read, banned)
+        self.assertIn(b"event: heartbeat", got_read)
+        self.assertIn(b"event: progress", got_full)   # the full session still sees everything
+        self.assertIn(b"event: result", got_full)
 
 
 class TestStrictJsonAndOps(Base):

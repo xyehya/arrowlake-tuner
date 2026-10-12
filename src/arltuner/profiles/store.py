@@ -18,10 +18,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-__all__ = ["MAX_PROFILE_BYTES", "NAME_RE", "ProfileStore", "ProfileStoreError"]
+__all__ = ["MAX_PROFILES", "MAX_PROFILE_BYTES", "NAME_RE", "ProfileStore", "ProfileStoreError"]
 
 NAME_RE = re.compile(r"[a-z0-9._-]{1,64}\Z")
 MAX_PROFILE_BYTES = 32 * 1024
+MAX_PROFILES = 500  # saved profiles; ``save`` refuses (TOO_BIG) past this, so the root-owned directory cannot be filled through the GUI (G-142)
 _MAX_LISTED = 500  # profiles.list never returns more than this many (a runaway directory must not blow the 64 KiB response line)
 _SUFFIX = ".json"
 
@@ -82,6 +83,12 @@ class ProfileStore:
         if len(data) > MAX_PROFILE_BYTES:
             raise ProfileStoreError("TOO_BIG", f"the profile is {len(data)} bytes (limit {MAX_PROFILE_BYTES})")
         self._check_directory(create=True)
+        try:
+            have = sum(1 for n in os.listdir(self.directory) if n.endswith(_SUFFIX))
+        except OSError as exc:
+            raise ProfileStoreError("IO", f"cannot list {self.directory}: {exc.strerror or exc}") from None
+        if have >= MAX_PROFILES:
+            raise ProfileStoreError("TOO_BIG", f"there are already {have} saved profiles (limit {MAX_PROFILES}); delete some files in {self.directory} first")
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
             fd = os.open(path, flags, 0o600)
