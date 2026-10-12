@@ -65,7 +65,7 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.controls.planner import POINT_CAVEAT, kept_word
-from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV, fused_top_ratio, turbo_bytes
+from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV, fused_ratio_cap, fused_top_ratio, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
@@ -211,6 +211,7 @@ class TuneState:
     plans: PlanStore
     tables: dict[str, tuple[int, ...]] | None = None  # {"e": 8 buckets, "p": 8 buckets} from the last tune.read (plain rdmsr), or None
     tables_note: str | None = None
+    favored_words: dict[int, int] | None = None  # cpu -> the whole 0x1C word of the last tune.read (P-cores): the data an "auto" ratio ceiling is derived from
     fused: dict[int, dict[str, Any]] | None = None  # G-114 F7: cpu -> {word, ratio, v} of the last tune.read (cmd 0x09 P1=0x11 P2=0)
     turbo: dict[str, Any] | None = None  # G-114 F5: {"P": {ratios, counts}, "E": {...}, "favored": {cpu: ratio}} of the last tune.read
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -427,6 +428,7 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
             wall_clock=wall,
             boot_id_fn=cfg.boot_id_fn,
             msr_port=port,
+            session_favored_words=_state(helper).favored_words,
         )
         yield _Session(guard, Confirmation(token, cfg.operator), policy, clock, sleep, used)
     finally:
@@ -491,10 +493,12 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 out["fused"] = {cpu: _fused_entry(mailbox(cpu, _FUSED_CMD, _FUSED_P1, "read the fused V/F point (0x09)")) for cpu in p_cpus + e_cpus}
 
             favored: dict[int, int] = {}
+            favored_full: dict[int, int] = {}
 
             def do_favored() -> None:
                 for cpu in p_cpus:
-                    favored[cpu] = mailbox(cpu, int(Cmd.FAVORED_CORE_READ), 0, "read the favored ratio (0x1C)") & 0xFF
+                    word = mailbox(cpu, int(Cmd.FAVORED_CORE_READ), 0, "read the favored ratio (0x1C)")
+                    favored[cpu], favored_full[cpu] = word & 0xFF, word
 
             def do_turbo() -> None:
                 ratios = {msr: plain(msr) for msr in (0x1AD, 0x650)}
@@ -529,6 +533,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 out["turbo"]["favored"] = {cpu: r for cpu, r in favored.items()}
             elif favored:
                 out["turbo"] = {"P": None, "E": None, "favored": dict(favored)}
+            out["favored_words"] = favored_full
     except OpError as exc:
         if exc.code == CANCELLED:
             raise
@@ -602,6 +607,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     with st.lock:
         st.tables, st.tables_note = tables, note
         st.fused, st.turbo = extras["fused"], extras["turbo"]
+        st.favored_words = extras.get("favored_words") or None
     fused_words = _fused_map(topology, extras["fused"])
     if fused_words:
         helper.fused_words = fused_words
@@ -997,7 +1003,18 @@ def _no_read(unit: str, why: str) -> OpError:
     return OpError(REFUSED, f"{unit}: {why}; run 'Read tuning words' (tune.read) first. Nothing was sent.", {"check": "NO_READ"})
 
 
-def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any]) -> None:
+def _ratio_cap(helper: Helper, policy: Policy, kind: str) -> int | None:
+    """The ratio ceiling of a kind at plan time: the policy's number; for ``"auto"`` the fused ``0x1C`` values of that kind read by this boot's ``tune.read`` (None = not
+    read: the guard judges it when the plan is applied, from the session's own reads)."""
+    if kind in policy.ratio_auto:
+        st = _state(helper)
+        with st.lock:
+            words = dict(st.favored_words or {})
+        return fused_ratio_cap(kind, [w for cpu, w in words.items() if policy.core_kind(cpu) == kind])
+    return policy.ratio_max[kind]
+
+
+def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any], ratio_cap: int | None = None) -> None:
     """``REFUSED POLICY_RANGE`` naming the field and the limit, before anything else is computed."""
     kind = _kind_of(unit)
 
@@ -1026,7 +1043,7 @@ def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[st
             raise refuse(f"{unit}: OC-point voltage {mv} mV is above the policy v_target_max_mv[{kind}] = {cap} mV")
     ratio = row["ratio"]
     if ratio is not None:
-        cap = policy.ratio_max[kind]
+        cap = ratio_cap if kind in policy.ratio_auto else policy.ratio_max[kind]
         if cap is not None and ratio > cap:
             raise refuse(f"{unit}: ratio {ratio} is above the policy ratio_max[{kind}] = {cap}")
 
@@ -1047,7 +1064,7 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
                 cpus = unit_cpus(topology, unit)
             except UnknownCore:
                 raise OpError(BAD_REQUEST, f"{unit} is not a unit of this system (units: {', '.join(topology.unit_ids())})") from None
-            _check_range(policy, unit, cpus, row)
+            _check_range(policy, unit, cpus, row, _ratio_cap(helper, policy, _kind_of(unit)))
             core = topology.by_cpu(cpus[0])
             known = {c: last[c] for c in cpus if last and c in last and last[c]}
             vals: dict[str, int | None] = {"ratio": row["ratio"], "oc_voltage_mv": None if row["v_target_v"] is None else round(row["v_target_v"] * 1000), "offset_mv": None}
@@ -1129,7 +1146,7 @@ def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], derived:
         tables = st.tables
     out = {"e": None if derived is None else derived.e, "p": None if derived is None else derived.p}
     for kind, ratios in asked.items():
-        cap = policy.ratio_max[kind]
+        cap = _ratio_cap(helper, policy, kind)
         if cap is not None and max(ratios) > cap:
             raise OpError(REFUSED, f"turbo.{kind}: ratio {max(ratios)} is above the policy ratio_max[{kind}] = {cap}. Nothing was sent.", {"check": "POLICY_RANGE"})
         msr = "0x650" if kind == "E" else "0x1AD"

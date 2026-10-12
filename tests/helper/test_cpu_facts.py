@@ -289,8 +289,15 @@ class TurboOrderTests(FactsCase):
 
     def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
         h = self.boot_with(baseline=False)
+        self.read(h)  # "auto": the cap is the fused 0x1C value the read reported
         r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
+
+    def test_an_intent_turbo_table_before_any_read_is_left_to_the_guard(self) -> None:
+        """Unread 0x1C = no raise: the plan-time range check has no number, the apply refuses (fail closed) -- nothing is sent above an unread cap."""
+        h = self.boot_with(baseline=False)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
+        self.assertTrue(r["ok"], r)
 
     def test_a_turbo_only_p_plan_applies_and_reads_back_without_any_mailbox_word(self) -> None:
         """G-117: ``{turbo: {P}}`` alone is a real plan: plain-MSR writes of 0x1AD, counts (0x1AE) untouched, no 0x14 / 0x15, no mailbox request."""
@@ -310,6 +317,14 @@ class TurboOrderTests(FactsCase):
         self.assertEqual(self.table(8, 0x650), [48] * 8)
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
         self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)  # no per-core word was written
+
+    def test_a_turbo_raise_without_any_read_0x1c_is_refused_by_the_guard(self) -> None:
+        """Fail closed: no 0x1C read in the session (tune.read never ran) = no raise above the table's current bytes."""
+        h = self.boot_with(baseline=False)
+        p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
+        r = self.apply(h, p)
+        self.assertEqual(error_code(r), "REFUSED", r)
+        self.assertEqual(self.table(), [57, 57, 55, 55, 55, 55, 55, 55])
 
     def test_a_turbo_only_plan_still_predicts_vccia_from_the_new_table(self) -> None:
         h = self.boot_with()

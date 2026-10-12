@@ -22,7 +22,7 @@ class AdvancedPolicy(unittest.TestCase):
         self.assertEqual((p.offset_ceiling_mv, p.effective_offset_floor_mv), (200, -200))
         self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})
         self.assertEqual((p.max_ratio_step, p.max_v_step_mv, p.max_offset_step_mv), (8, 200, 200))
-        self.assertEqual(dict(p.ratio_max), {"P": 57, "E": 49})  # "auto": the live cpuinfo_max_freq ratios (the D-032 numbers on the reference CPU)
+        self.assertEqual((dict(p.ratio_max), p.ratio_auto), ({"P": None, "E": 49}, frozenset({"P"})))  # P "auto": the fused 0x1C values read in the session; E 49 (D-032/D-017: 0x1C gives 48 on E)
         self.assertEqual(p.v_target_auto, frozenset({"P", "E"}))  # "auto": the CPU's own 0x28 maximum minus one LSB, judged by the guard
         self.assertEqual((p.max_operations_per_session, p.max_operations_per_boot, p.min_dwell_s), (100000, 100000, 0.0))
 
@@ -45,7 +45,6 @@ class AdvancedPolicy(unittest.TestCase):
         small = load_policy(POLICY, synthetic(6, 8, favored_p=(0,), favored_ratio=55, p_ratio=53, e_ratio=44))
         self.assertEqual(small.cpus, frozenset(range(14)))
         self.assertEqual(small.e_cpus, frozenset(range(6, 14)))
-        self.assertEqual(dict(small.ratio_max), {"P": 55, "E": 44})
         with self.assertRaises(PolicyError):
             load_policy(POLICY)  # "auto" never falls back to a default topology
 

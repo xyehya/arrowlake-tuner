@@ -287,6 +287,7 @@ def apply_profile(
         misc_word=misc_word,
         msr_words=msr_words,
         point_words=point_words,
+        favored_words=getattr(guard, "favored_words", lambda: None)(),
     )
     try:
         plan.require_allowed()

@@ -356,6 +356,7 @@ class WriteGuard:
         wall_clock: Callable[[], float] | None = None,
         boot_id_fn: Callable[[], str | None] = read_boot_id,
         msr_port: MsrPortLike | None = None,
+        session_favored_words: Mapping[int, int] | None = None,
     ) -> None:
         if not callable(getattr(transport, "transact", None)):
             raise TypeError("transport must have a transact(cpu, cmd, p1, p2, data) method")
@@ -395,6 +396,8 @@ class WriteGuard:
         self._journal: list[_Executed] = []
         self._msr_baselines: dict[tuple[int, int], int] = {}  # (cpu, msr) -> value of a successful plain rdmsr (T-023)
         self._msr_journal: list[_MsrExecuted] = []
+        # 0x1C words (cpu -> word) the helper read from the CPU earlier in this boot's session (tune.read): the data of an "auto" ratio ceiling for a plan that reads none itself
+        self._seed_favored = {int(c): int(w) for c, w in (session_favored_words or {}).items() if w}
 
     # ---------------------------------------------------------------- public
     @property
@@ -692,7 +695,7 @@ class WriteGuard:
             self._refuse(Refusal.CHECK_FAILED, f"write entry {entry.name!r} has no evaluable check", req, confirm)
         assert check is not None and baseline is not None
         try:
-            context = build_msr_context(self._policy, int(req.msr), platform_info=self._platform_info())
+            context = build_msr_context(self._policy, int(req.msr), platform_info=self._platform_info(), favored_words=self.favored_words())
             ok, detail = check(req, baseline, entry.params, context)
         except Exception as exc:
             ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
@@ -803,7 +806,20 @@ class WriteGuard:
             fused_word=self._baselines.get((int(Cmd.VOLTAGE_FLOOR_READ), cpu, 0x11, 0)),
             vf_word_sent=self._last_vf_word_sent(cpu),
             max_voltage_word=self._baselines.get((int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), cpu, 0, 0)),
+            favored_words_of_kind=self.favored_words(self._policy.core_kind(cpu)).values() if self._policy.ratio_auto else None,
         )
+
+    def favored_words(self, kind: str | None = None) -> dict[int, int]:
+        """The ``0x1C`` words read this session (cpu -> word), of one core kind if given: the data an ``"auto"`` ratio ceiling is derived from."""
+        words = {c: w for c, w in self._seed_favored.items() if kind is None or self._policy.core_kind(c) == kind}
+        words.update(
+            {
+                c: w
+                for (cmd, c, p1, p2), w in self._baselines.items()
+                if cmd == int(Cmd.FAVORED_CORE_READ) and (p1, p2) == (0, 0) and (kind is None or self._policy.core_kind(c) == kind)
+            }
+        )
+        return words
 
     def _last_vf_word_sent(self, cpu: int) -> int | None:
         """The data of the last 0x11 (P1=0, P2=0) this session sent to ``cpu`` that completed rc 0 (or whose outcome is unknown)."""

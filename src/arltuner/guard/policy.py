@@ -250,6 +250,17 @@ def fused_top_ratio(fused_word: int | None) -> int | None:
     return (fused_word & 0xFF) or None
 
 
+def fused_ratio_cap(kind: str, favored_words: Iterable[int | None]) -> int | None:
+    """The ``"auto"`` ratio ceiling of a core kind: the highest of ``max(0x1C[7:0], 0x1C[15:8])`` over the ``0x1C`` words of that kind read in this session
+    (registers.md 0x1C: favored ratio and fused ratio), clamped to the sanity bound. ``None`` (the no-raise value) when no ``0x1C`` of the kind was read. Never a sysfs
+    value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
+    best = 0
+    for word in favored_words:
+        if word:
+            best = max(best, word & 0xFF, (word >> 8) & 0xFF)
+    return min(best, SANITY_RATIO_MAX[kind]) if best else None
+
+
 def build_context(
     policy: Policy,
     cpu: int,
@@ -258,11 +269,15 @@ def build_context(
     fused_word: int | None,
     vf_word_sent: int | None,
     max_voltage_word: int | None = None,
+    favored_words_of_kind: Iterable[int | None] | None = None,
 ) -> CheckContext:
     """The context for a request on ``cpu``: the policy's D-015 runtime floor and D-016 limits for its core kind plus the session facts."""
     kind = policy.core_kind(cpu)
     v_max = policy.v_target_max_mv[kind]
     v_max_raw = None if v_max is None else VfWord.v_to_raw(v_max / 1000)
+    ratio_cap = policy.ratio_max[kind]
+    if kind in policy.ratio_auto:  # "auto": the fused values the CPU reported in this session (all CPUs of the kind that were read; else this CPU's own word)
+        ratio_cap = fused_ratio_cap(kind, favored_words_of_kind if favored_words_of_kind is not None else [favored_word])
     if kind in policy.v_target_auto:
         # "auto": the CPU's own 0x28 maximum minus one LSB, never above the sanity bound of the kind. An unread 0x28, or a field of 0 (hw_v_max_raw would call it
         # 2.0 V), leaves the no-raise value (None).
@@ -277,7 +292,7 @@ def build_context(
         fused_word=fused_word,
         vf_word_sent=vf_word_sent,
         max_voltage_word=max_voltage_word,
-        ratio_max=policy.ratio_max[kind],
+        ratio_max=ratio_cap,
         v_target_max_raw=v_max_raw,
         offset_ceiling_raw=VfWord.mv_to_offset_raw(policy.offset_ceiling_mv),
         max_ratio_step=policy.max_ratio_step,
@@ -301,13 +316,16 @@ class MsrCheckContext:
     base_ratio: int | None = None
 
 
-def build_msr_context(policy: Policy, msr: int, *, platform_info: int | None) -> MsrCheckContext:
+def build_msr_context(policy: Policy, msr: int, *, platform_info: int | None, favored_words: Mapping[int, int | None] | None = None) -> MsrCheckContext:
     """The context for a plain write of ``msr``: kind from the MSR (unknown MSR -> ``kind None``, which the check refuses), the policy's
     ceiling and step for that kind, and ``0xCE[15:8]`` from ``platform_info`` (the ``0xCE`` word read this session, or ``None``)."""
     kind = MSR_TURBO_KIND.get(msr)
+    ratio_cap = None if kind is None else policy.ratio_max[kind]
+    if kind is not None and kind in policy.ratio_auto:  # "auto": the 0x1C words of this kind read in this session (cpu -> word), else no raise
+        ratio_cap = fused_ratio_cap(kind, [w for c, w in (favored_words or {}).items() if policy.core_kind(c) == kind])
     return MsrCheckContext(
         kind=kind,
-        ratio_max=None if kind is None else policy.ratio_max[kind],
+        ratio_max=ratio_cap,
         max_ratio_step=policy.max_ratio_step,
         base_ratio=None if platform_info is None else (platform_info >> 8) & 0xFF,
     )
@@ -802,6 +820,7 @@ class Policy:
     ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
     v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
     v_target_auto: frozenset[str] = frozenset()  # kinds whose V target ceiling is "auto": the CPU's own 0x28 maximum minus one LSB, read in the session
+    ratio_auto: frozenset[str] = frozenset()  # kinds whose ratio ceiling is "auto": the fused value the CPU reports in 0x1C, read in the session (never a sysfs value)
     offset_ceiling_mv: int = DEFAULT_OFFSET_CEILING_MV
     max_ratio_step: int = DEFAULT_MAX_RATIO_STEP
     max_v_step_mv: int = DEFAULT_MAX_V_STEP_MV
@@ -822,6 +841,10 @@ class Policy:
         if not auto <= {KIND_P, KIND_E}:
             raise PolicyError(f"v_target_auto must be a subset of ['E', 'P'], got {sorted(auto)}")
         object.__setattr__(self, "v_target_auto", auto)
+        auto_r = frozenset(self.ratio_auto)
+        if not auto_r <= {KIND_P, KIND_E}:
+            raise PolicyError(f"ratio_auto must be a subset of ['E', 'P'], got {sorted(auto_r)}")
+        object.__setattr__(self, "ratio_auto", auto_r)
         _int_in("offset_ceiling_mv", self.offset_ceiling_mv, 0, SANITY_OFFSET_CEILING_MV)
         _int_in("max_ratio_step", self.max_ratio_step, *_RATIO_STEP_RANGE)
         _int_in("max_v_step_mv", self.max_v_step_mv, *_V_STEP_MV_RANGE)
@@ -1043,19 +1066,14 @@ def _read_source(source: str | os.PathLike[str]) -> str:
 AUTO = "auto"
 
 
-def _live_ratio_max(topology: Topology, kind: str) -> int | None:
-    """"auto" ratio ceiling of a kind: the highest ``cpuinfo_max_freq`` ratio among that kind's CPUs (live hardware maximum), clamped to the sanity bound; ``None`` (the
-    no-raise value) when sysfs gave no number."""
-    values = [c.max_ratio for c in topology.cores if c.kind == kind and c.max_ratio]
-    return min(max(values), SANITY_RATIO_MAX[kind]) if values else None
-
-
 def load_policy(source: str | os.PathLike[str], topology: Topology | None = None) -> Policy:
     """Load a policy from TOML text or a file path. Strict: unknown keys, unknown checks, bad types -> ``PolicyError``.
 
-    ``topology`` (D-036): the live topology. ``cpus = "auto"`` / ``e_cpus = "auto"`` / ``ratio_max.<K> = "auto"`` are derived from it and are a ``PolicyError`` without
-    one (never a default); a policy without an ``e_cpus`` key takes the topology's E CPUs when one is given. ``v_target_max_mv.<K> = "auto"`` needs no topology: the
-    guard uses the CPU's own ``0x28`` maximum minus one LSB when the session read it, else the no-raise value. Numeric values keep working unchanged."""
+    ``topology`` (D-036): the live topology. ``cpus = "auto"`` / ``e_cpus = "auto"`` are derived from it and are a ``PolicyError`` without one (never a default); a
+    policy without an ``e_cpus`` key takes the topology's E CPUs when one is given. ``ratio_max.<K> = "auto"`` and ``v_target_max_mv.<K> = "auto"`` need no topology
+    and are not numbers at load time: they are CPU data of the session, resolved per request (``build_context``). Ratio: the highest ``max(0x1C[7:0], 0x1C[15:8])`` of
+    that kind's CPUs read in the session; V target: the CPU's own ``0x28`` maximum minus one LSB; both clamped to the sanity bounds, and no raise when the word was
+    not read. Never a sysfs value (``cpuinfo_max_freq`` follows OC writes: a ceiling from it would ratchet). Numeric values keep working unchanged."""
     text = _read_source(source)
     try:
         doc = tomllib.loads(text)
@@ -1097,6 +1115,7 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
             raise PolicyError("assumed_bios_offset_mv must be a table with the keys 'P' and/or 'E'")
         kwargs["assumed_bios_offset_mv"] = {**DEFAULT_ASSUMED_BIOS_OFFSET_MV, **table}  # a missing kind keeps its default
     auto_v: set[str] = set()
+    auto_r: set[str] = set()
     for key in _KIND_TABLE_KEYS:  # D-016 ceilings: a missing kind stays None = the no-raise value; values are range-checked by Policy
         if key in doc:
             table = doc[key]
@@ -1105,14 +1124,13 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
             resolved = dict(table)
             for kind, value in table.items():
                 if value == AUTO:
-                    if key == "ratio_max":
-                        resolved[kind] = _live_ratio_max(needs_topology(f"ratio_max.{kind}"), kind)
-                    else:
-                        resolved[kind] = None
-                        auto_v.add(kind)
+                    resolved[kind] = None
+                    (auto_r if key == "ratio_max" else auto_v).add(kind)
             kwargs[key] = resolved
     if auto_v:
         kwargs["v_target_auto"] = frozenset(auto_v)
+    if auto_r:
+        kwargs["ratio_auto"] = frozenset(auto_r)
     for key in _SCALAR_KEYS:
         if key in doc:
             kwargs[key] = doc[key]

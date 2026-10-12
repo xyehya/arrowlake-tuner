@@ -304,7 +304,9 @@ def predict(policy: Policy, req: Request, baseline_word: int | None, ctx: CheckC
     return OK_VERDICT
 
 
-def predict_msr(policy: Policy, req: MsrRequest, baseline_word: int | None, platform_info: int | None = None) -> Verdict:
+def predict_msr(
+    policy: Policy, req: MsrRequest, baseline_word: int | None, platform_info: int | None = None, favored_words: Mapping[int, int | None] | None = None
+) -> Verdict:
     """What the guard will answer for the plain-MSR ``req`` (the plain twin of :func:`predict`): CPU set, ``msr_allow`` entry (and its CPUs), then
     for a write the verify CPU (other core kind, covered by a read entry) and ``turbo_ratio_bounded`` on the word read earlier (``baseline_word``)
     with ``platform_info`` = the ``0xCE`` word read this session. Limits / dwell / lock / gates are not predictable here."""
@@ -327,7 +329,7 @@ def predict_msr(policy: Policy, req: MsrRequest, baseline_word: int | None, plat
     if check is None or baseline_word is None:
         return Verdict(False, Refusal.CHECK_FAILED.value, f"write entry {entry.name!r} has no evaluable check")
     try:
-        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr, platform_info=platform_info))
+        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr, platform_info=platform_info, favored_words=favored_words))
     except Exception as exc:
         ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
     if ok is not True:
@@ -658,11 +660,15 @@ def build_plan(
     misc_word: int | None = None,
     msr_words: Mapping[int, int] | None = None,
     point_words: Mapping[tuple[int, int], int] | None = None,
+    favored_words: Mapping[int, int] | None = None,
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
 
     ``msr_words`` (T-023): the plain MSR words read on the write CPU (``0xCE``, ``0x650``, ``0x1AD``); every ``[turbo]`` table of the profile needs
     its MSR here (else ``PlanError``). The turbo writes are ordered by direction (module docstring).
+
+    ``favored_words`` (cpu -> raw ``0x1C`` word): the CPU's own fused ratios known to the session beyond the ``baseline`` rows (a turbo-table-only plan has none);
+    an ``"auto"`` ``ratio_max`` is derived from them and from the baseline rows' words, nothing else.
 
     ``point_words`` (T-025): the ``0x10 P2=point`` word read for every ``[[point]]`` target, keyed ``(cpu, point)`` (else ``PlanError``).
 
@@ -738,7 +744,7 @@ def build_plan(
         down = any(n < o for n, o in zip(turbo_bytes(new), turbo_bytes(old)))
         purpose = f"apply: write {_TURBO_LABEL[msr]} (plain wrmsr, cpu {write_cpu}): {_bytes_text(old)} -> {_bytes_text(new)}"
         mreq = MsrRequest(write_cpu, msr, new, purpose, "write", verify_cpu)
-        verdict = predict_msr(policy, mreq, old, msr_words.get(PLATFORM_INFO_MSR))
+        verdict = predict_msr(policy, mreq, old, msr_words.get(PLATFORM_INFO_MSR), {**(favored_words or {}), **{c: r.favored for c, r in baseline.items()}})
         if up and down and verdict.allowed:
             verdict = Verdict(
                 False,

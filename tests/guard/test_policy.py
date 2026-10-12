@@ -273,40 +273,78 @@ class AutoLimitsTests(unittest.TestCase):
 
     TOML = 'cpus = "auto"\ne_cpus = "auto"\n[ratio_max]\nP = "auto"\nE = "auto"\n[v_target_max_mv]\nP = "auto"\nE = "auto"\n'
 
-    def ctx(self, policy, cpu, vmax=None):
+    def ctx(self, policy, cpu, vmax=None, favored=None, kind_words=None):
         from arltuner.guard.policy import build_context
 
-        return build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None, max_voltage_word=vmax)
+        return build_context(
+            policy, cpu, favored_word=favored, fused_word=None, vf_word_sent=None, max_voltage_word=vmax, favored_words_of_kind=kind_words
+        )
 
     def test_auto_needs_the_live_topology_never_a_default(self) -> None:
-        for text in ('cpus = "auto"\n', 'cpus = [0]\ne_cpus = "auto"\n', 'cpus = [0]\n[ratio_max]\nP = "auto"\n'):
+        for text in ('cpus = "auto"\n', 'cpus = [0]\ne_cpus = "auto"\n'):
             with self.subTest(text=text), self.assertRaisesRegex(PolicyError, "live topology"):
                 load_policy(text)
 
-    def test_cpus_and_ratio_ceilings_come_from_the_topology(self) -> None:
+    def test_cpus_come_from_the_topology_and_auto_ratios_are_not_numbers_at_load(self) -> None:
         from arltuner.topology import arl_s_285k, synthetic
 
         p = load_policy(self.TOML, arl_s_285k())
         self.assertEqual((p.cpus, p.e_cpus), (frozenset(range(24)), frozenset(range(8, 24))))
-        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (57, 49))  # the highest cpuinfo_max_freq ratio of each kind
-        six = load_policy(self.TOML, synthetic(6, 8, favored_p=(0,), p_ratio=50, favored_ratio=52, e_ratio=40))
+        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"], p.ratio_auto), (None, None, frozenset({"P", "E"})))  # CPU data of the session, not sysfs
+        six = load_policy(self.TOML, synthetic(6, 8))
         self.assertEqual((six.cpus, six.e_cpus), (frozenset(range(14)), frozenset(range(6, 14))))
-        self.assertEqual((six.ratio_max["P"], six.ratio_max["E"]), (52, 40))
         self.assertEqual((six.core_kind(5), six.core_kind(6)), ("P", "E"))
+        load_policy('cpus = [0]\n[ratio_max]\nP = "auto"\n')  # needs no topology
 
-    def test_a_ratio_ceiling_with_no_sysfs_number_is_the_no_raise_value(self) -> None:
-        from arltuner.topology import Core, Topology
+    def test_auto_ratio_is_the_fused_value_the_cpu_reported_in_0x1c(self) -> None:
+        from arltuner.topology import arl_s_285k
 
-        bare = Topology((Core("P", 0, 0, None, False), Core("E", 0, 1, 0, False)))
-        p = load_policy(self.TOML, bare)
-        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (None, None))
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 57)  # P: 0x1C[15:8] = [7:0] = 57
+        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 48)  # E: max(48, 46)
+        self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 55)
+        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 57)  # the larger byte
+        self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 57)  # per kind: the highest word read
 
-    def test_a_live_ratio_above_the_sanity_bound_is_clamped(self) -> None:
+    def test_auto_ratio_unread_or_zero_allows_no_raise(self) -> None:
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertIsNone(self.ctx(p, 0, None, None).ratio_max)
+        self.assertIsNone(self.ctx(p, 0, None, 0).ratio_max)
+
+    def test_auto_ratio_is_clamped_to_the_sanity_bound(self) -> None:
         from arltuner.guard.policy import SANITY_RATIO_MAX
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        self.assertEqual(self.ctx(p, 0, None, 0xFFFF).ratio_max, SANITY_RATIO_MAX["P"])
+        self.assertEqual(self.ctx(p, 8, None, 0xFFFF).ratio_max, SANITY_RATIO_MAX["E"])
+
+    def test_a_cpuinfo_max_freq_change_does_not_move_the_cap(self) -> None:
         from arltuner.topology import synthetic
 
-        p = load_policy(self.TOML, synthetic(2, 4, p_ratio=90, favored_ratio=90, e_ratio=90))
-        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"]), (SANITY_RATIO_MAX["P"], SANITY_RATIO_MAX["E"]))
+        before = load_policy(self.TOML, synthetic(8, 16, favored_p=(0,), e_ratio=49))
+        after = load_policy(self.TOML, synthetic(8, 16, favored_p=(0,), e_ratio=50))  # an OC write raised cpuinfo_max_freq by one bin
+        self.assertEqual(before.ratio_max, after.ratio_max)
+        self.assertEqual(self.ctx(before, 8, None, 0x2E30).ratio_max, self.ctx(after, 8, None, 0x2E30).ratio_max)  # the cap follows the fused word only
+
+    def test_numeric_ratio_values_are_unchanged(self) -> None:
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy('cpus = ["0-23"]\n[ratio_max]\nP = 57\nE = 49\n', arl_s_285k())
+        self.assertEqual((self.ctx(p, 0, None, 0x3737).ratio_max, self.ctx(p, 8, None, 0x2E30).ratio_max), (57, 49))
+
+    def test_auto_ratio_applies_to_the_plain_turbo_write_context(self) -> None:
+        from arltuner.guard.policy import build_msr_context
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939})
+        self.assertEqual(e.ratio_max, 48)  # only the E CPUs' words count for the E table
+        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}).ratio_max, 57)
+        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}).ratio_max)
+        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None).ratio_max)
 
     def test_numeric_values_keep_working_and_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
         from arltuner.topology import synthetic
