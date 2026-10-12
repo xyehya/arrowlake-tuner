@@ -30,13 +30,16 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   0x01 binding): 3 profiles applied (65 + 51 + 51 ops), all P-cores + EC0/EC3 match; **EC1 (OC word 48× + 1.137 V) and EC2 (OC word 46× +
   1.137 V) differ only in the OC word** — cannot be zeroed at runtime, a cold boot clears them. `fingerprint.json` recorded (tuning untouched).
 - Tune controls exercised in Chrome on live data (OC ratio 58× on P0 → adaptive voltage enabled + prefilled 1.4248 V → Review 17 ops → discarded).
-- GUI started by the orchestrator with `--helper sudo -n PKEXEC_UID=1000 …` (no polkit prompt; **no system change was made for this**).
+- **TEMPORARY polkit rule (operator request 2026-10-12, while away):** `/etc/polkit-1/rules.d/49-arltuner-temporary-nopasswd.rules` lets user
+  `yk` start the helper without the password (action `io.github.arrowlake-tuner.helper` only, any session). install.sh's self-check refuses
+  while it exists (by design) ⇒ move it aside around a reinstall. **Remove only when the operator says so:** `sudo rm` that file.
 - MCE count 0 all session.
 
 ## Operator to-do
 1. Cold boot when convenient (clears the EC1/EC2 OC words) → Tune → Restore accepted (or `bash tools/lnx/restore_tuning.sh`) → 12/12 match.
-2. Choose a LICENSE (public repo has none).
-3. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
+2. Say when to remove the temporary polkit rule (above).
+3. Choose a LICENSE (public repo has none).
+4. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
 ## Next / open
 - Windows restore path entirely untested on Windows (scripts, ACL checks, identity read, `vf-dump --json`); driver blocklist: `windows-path.md` [MEASURED] says it loaded with the blocklist on, `preflight.ps1` flags it FIX — decide after the first Windows run.
