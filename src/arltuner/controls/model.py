@@ -180,6 +180,7 @@ class StepKind(str, Enum):
     READ_GRANULAR = "read_granular"  # cmd 0x26, P1=0 P2=0
     READ_VF_POINT = "read_vf_point"  # T-025: cmd 0x10, P1=0, P2=point (1..): baseline word of one V/F point of one CPU
     READ_MSR = "read_msr"  # T-023: plain rdmsr (0xCE, a turbo table); not a WRMSR, not counted in the budget
+    READ_OC_CAP = "read_oc_cap"  # G-137 (D-039): cmd 0x01, P1=0 P2=0 on one CPU of a core kind: [7:0] fused max OC ratio, the CPU's own ratio limit
     READ_VMAX = "read_vmax"  # cmd 0x28, P1=0 P2=0: hardware maximum voltage (D-016; only when the profile sets an OC-point voltage)
     WRITE_PERCORE_ENABLE = "write_percore_enable"  # cmd 0x15 with old|8
     WRITE_VF = "write_vf"  # cmd 0x11, P1=0 P2=0, whole word

@@ -64,7 +64,7 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
-from arltuner.controls.planner import POINT_CAVEAT, kept_word
+from arltuner.controls.planner import POINT_CAVEAT, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.msr import MailboxTransport
@@ -1783,7 +1783,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    ops_needed = count_operations(targets, None, tables, len(points)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
+    ops_needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
     steps, writes, reads = _predicted_steps(profile, topology)
@@ -2035,7 +2035,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    needed = count_operations(targets, None, tables, len(points))
+    needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile))
     progress_steps = 0
     freq_before = _cpufreq_before(helper, sorted({t.cpu for t in targets}))  # G-126: the old cpuinfo / cap, before any write
 

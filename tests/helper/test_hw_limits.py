@@ -134,15 +134,38 @@ class ApplyUsesTheLiveLimits(HwLimitsCase):
         self.apply_ok(h, self.plan(h, rows(row("P0", ratio=60))))
         self.assertTrue([q for q in self.sim.requests if q.cmd == 0x11])  # the limits read by tune.read bound the policy of the plan and of the apply session
 
-    def test_without_the_cpu_limits_the_same_raise_is_refused_as_no_raise_and_nothing_is_written(self) -> None:
+    def test_when_the_limits_are_not_known_the_apply_reads_0x01_itself_first(self) -> None:
         self.set_policy(p=90)
         h = self.boot()
         self.read(h)
         h.helper._tune_state.hw_limits = None  # a state in which the CPU limits are not known (a read that could not get them)
-        r = self.apply(h, self.plan(h, rows(row("P0", ratio=60))))
+        plan = self.plan(h, rows(row("P0", ratio=60)))
+        before = len(self.sim.requests)
+        self.apply_ok(h, plan)
+        asked = [(q.cmd, q.cpu) for q in self.sim.requests[before:]]
+        self.assertEqual(asked.index((0x01, 0)), asked.index((0x26, 0)) + 1)  # the 0x01 read ends the read phase, before the first write
+        self.assertLess(asked.index((0x01, 0)), asked.index((0x11, 0)))
+        self.assertEqual(sum(1 for q in asked if q[0] == 0x01), 1)  # one per kind in the plan
+
+    def test_the_budget_includes_the_0x01_read_only_while_the_limit_is_unknown(self) -> None:
+        self.set_policy(p=90)
+        h = self.boot()
+        self.read(h)
+        known = self.plan(h, rows(row("P0", ratio=60)))["ops_needed"]
+        h.helper._tune_state.hw_limits = None
+        self.assertEqual(self.plan(h, rows(row("P0", ratio=60)))["ops_needed"], known + 1)
+
+    def test_a_policy_without_the_read_entry_refuses_the_plan_and_nothing_is_written(self) -> None:
+        text = ADVANCED.read_text()
+        start = text.index('name = "oc_capability_read"')
+        start = text.rindex("[[allow]]", 0, start)
+        text = text[:start] + text[text.index("[[allow]]", start + 1):]
+        self.policy.write_text(text.replace('[ratio_max]\nP = "auto"\nE = "auto"', "[ratio_max]\nP = 90\nE = 49"))
+        h = self.boot()
+        self.read(h)
+        r = h.call("plan9", "tune.plan", {"intent": rows(row("P0", ratio=60))})  # refused before anything is sent: the plan needs a read the policy does not allow
         self.assertFalse(r["ok"], r)
-        self.assertIn("no-raise value: policy ratio_max P = 90", r["error"]["message"])
-        self.assertIn("the CPU's own limit (cmd 0x01) was not read this session", r["error"]["message"])
+        self.assertIn("cmd 0x01", r["error"]["message"])
         self.assertEqual([q for q in self.sim.requests if q.cmd == 0x11], [])
 
 

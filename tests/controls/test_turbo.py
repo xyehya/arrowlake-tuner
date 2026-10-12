@@ -417,7 +417,6 @@ class TurboOnly(unittest.TestCase):
 
 
 class CliTurbo(CliCase):
-    CPU_RATIO_LIMITS = {"P": 120, "E": 120}  # see CliCase: plan / apply do not read 0x01 yet
     POLICY = POLICY_TOML + """
 [[msr_allow]]
 name = "r_ce"

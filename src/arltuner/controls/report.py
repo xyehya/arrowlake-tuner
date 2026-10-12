@@ -18,7 +18,7 @@ from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import TurboTables
 
 from .model import REVERT_NOTE, ApplyPlan, PlanStep, PointTarget, StepKind, Target
-from .planner import count_operations
+from .planner import count_operations, oc_cap_kinds
 
 __all__ = [
     "ApplyReport",
@@ -166,6 +166,7 @@ _SHORT_OF_CORE = {
     StepKind.READ_FAVORED: "read favored-core word of",
     StepKind.READ_FUSED: "read fused V/F point of",
     StepKind.READ_GRANULAR: "read granular-ratio word of",
+    StepKind.READ_OC_CAP: "read the CPU's own ratio limit (0x01) of",
     StepKind.READ_VMAX: "read hardware maximum voltage (0x28) of",
     StepKind.WRITE_VF: "write V/F word of",
     StepKind.READ_VF_POINT: "read V/F point baseline of",
@@ -284,7 +285,7 @@ def format_preview(
     n = len(targets)
     n_cpus = len({t.cpu for t in (*targets, *points)})
     tables = [] if turbo is None else [(k, getattr(turbo, k)) for k in ("e", "p") if getattr(turbo, k) is not None]
-    worst = count_operations(tuple(targets), None, len(tables), len(points))
+    worst = count_operations(tuple(targets), None, len(tables), len(points), len(oc_cap_kinds(policy, targets, [k.upper() for k, _ in tables])))
     lines = [f"Plan for profile {profile_name!r}: {n_cpus} CPU(s); baseline words are read through the guard after confirmation"]
     for t in targets:
         lines.append(f"  {t.label} (cpu {t.cpu}): {t.describe()}")
@@ -329,6 +330,8 @@ def _read_word_text(kind: StepKind, data: int) -> str:
         return f"word {data:#06x}: favored ratio {data & 0xFF}, fused ratio {(data >> 8) & 0xFF}"
     if kind is StepKind.READ_FUSED:
         return f"word {data:#010x}: fused point {describe_word(VfWord.from_u32(data))}"
+    if kind is StepKind.READ_OC_CAP:
+        return f"word {data:#x}: CPU limit (fused max OC ratio) {data & 0xFF}x, ratio overclocking {'ok' if data & 0x100 else 'NOT ok'}"
     if kind is StepKind.READ_VMAX:
         return f"word {data:#x}: hardware maximum voltage raw {data & 0xFFF} -> V target limit raw {hw_v_max_raw(data)} (XTU raw-1 rule)"
     return f"word {data:#x}"
@@ -363,7 +366,7 @@ def _result_line(r: StepResult) -> str:
         parts.append(f"word {r.response_data:#010x}, PerCore Voltage Enable {'set' if r.response_data & 0x8 else 'clear'}")
     elif s.kind is StepKind.READ_VF and r.after is not None:
         parts.append(describe_word(r.after))
-    elif s.kind in (StepKind.READ_FAVORED, StepKind.READ_FUSED, StepKind.READ_GRANULAR, StepKind.READ_VMAX, StepKind.READ_VF_POINT) and r.response_data is not None:
+    elif s.kind in (StepKind.READ_FAVORED, StepKind.READ_FUSED, StepKind.READ_GRANULAR, StepKind.READ_VMAX, StepKind.READ_VF_POINT, StepKind.READ_OC_CAP) and r.response_data is not None:
         parts.append(_read_word_text(s.kind, r.response_data))
     elif s.kind.is_write:
         parts.append(f"read-back {'equal' if r.verified else 'DIFFERS' if r.verified is False else 'not done'}")

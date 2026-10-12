@@ -63,7 +63,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from arltuner.guard import CHECKS, MSR_CHECKS, AllowEntry, MsrAllowEntry, MsrRequest, Policy, Refusal, Request
-from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, fused_top_ratio, turbo_bytes
+from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, fused_top_ratio, hw_ratio_max, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import PLATFORM, Profile
 from arltuner.topology import Topology
@@ -97,6 +97,8 @@ __all__ = [
     "TURBO_MSR",
     "build_plan",
     "count_operations",
+    "oc_cap_kinds",
+    "oc_cap_reads_of",
     "pack_turbo",
     "plan_warnings",
     "predict",
@@ -227,7 +229,7 @@ def _max_writes_of(target: Target) -> int:
     return (WRITES_PER_CPU if target.ratio is not None else OFFSET_ONLY_WRITES) + (SPLIT_EXTRA_WRITES if both else 0)
 
 
-def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0) -> int:
+def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0, oc_cap_reads: int = 0) -> int:
     """Mailbox WRMSRs of a plan (worst case for the targets given): the 0x14 read, per target its reads (0x10, 0x1C, 0x09, 0x26, and 0x28 with an
     OC-point voltage) and writes (0x11, 0x1D, 0x27, and a second 0x11 when ratio and OC-point voltage are both set), plus the 0x15 write unless
     PerCore Voltage Enable is known to be set -- and **one read-back per write** (the guard reads every write back through the same transport;
@@ -242,11 +244,13 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
     G-117: with no targets, no points and ``msr_writes > 0`` (a turbo-table-only plan) nothing touches the mailbox: no ``0x14`` read, no ``0x15`` write; the
     count is the plain-MSR writes alone.
 
+    ``oc_cap_reads`` (G-137, D-039): the ``0x01`` reads of the plan (one per core kind whose ratio ceiling needs the CPU's own limit; see ``oc_cap_kinds``).
+
     ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves. G-122: a target that sets no OC ratio writes the 0x11 alone (no 0x1D / 0x27)."""
     if isinstance(msr_writes, int) and not isinstance(msr_writes, bool) and msr_writes > 0 and n_points == 0 and not isinstance(targets, int):
         try:
             if not tuple(targets):
-                return msr_writes
+                return msr_writes + oc_cap_reads
         except TypeError:
             pass
     if isinstance(n_points, bool) or not isinstance(n_points, int) or n_points < 0:
@@ -265,9 +269,22 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
             raise ValueError(f"count_operations needs a number of targets >= 1 or Target objects, got {targets!r}")
         reads = 1 + sum(_reads_of(t) for t in listed)
         writes = sum(_max_writes_of(t) for t in listed)
-    reads += n_points
+    reads += n_points + oc_cap_reads
     writes += n_points + (0 if per_core_enabled is True else 1)
     return reads + writes + writes + msr_writes
+
+
+def oc_cap_kinds(policy: Policy, targets: Sequence[Target], table_kinds: Sequence[str] = ()) -> tuple[str, ...]:
+    """G-137 (D-039): the core kinds (``"P"``, ``"E"``) whose ``0x01`` limit the plan reads: a kind with a ratio target (or a ``[turbo]`` table, ``table_kinds``) whose policy
+    ratio ceiling is set (a number or ``"auto"``) and whose CPU limit is not yet bound to the policy (``Policy.hw_ratio_max``, e.g. by the helper's ``tune.read``). A ceiling
+    is the policy value clamped by that limit, and an unread limit is no raise."""
+    need = {t.kind for t in targets if t.ratio is not None} | set(table_kinds)
+    return tuple(k for k in ("P", "E") if k in need and policy.hw_ratio_max[k] is None and (k in policy.ratio_auto or policy.ratio_max[k] is not None))
+
+
+def oc_cap_reads_of(policy: Policy, targets: Sequence[Target], profile: Profile | None = None) -> int:
+    """Number of ``0x01`` reads of a plan (``oc_cap_kinds``), for ``count_operations(..., oc_cap_reads=...)``."""
+    return len(oc_cap_kinds(policy, targets, [MSR_TURBO_KIND[msr] for msr, _ in _turbo_tables(profile)]))
 
 
 def _address_verdict(policy: Policy, req: Request) -> tuple[AllowEntry | None, Verdict]:
@@ -387,6 +404,7 @@ _CPU_READS = (
     (StepKind.READ_FUSED, int(Cmd.VOLTAGE_FLOOR_READ), _FUSED_P1, "fused V/F point (0x09 P1=0x11)"),
     (StepKind.READ_GRANULAR, int(Cmd.GRANULAR_RATIO_READ), 0, "granular-ratio word (0x26)"),
 )
+_OC_CAP_READ = (StepKind.READ_OC_CAP, int(Cmd.OC_CAPABILITY_READ), 0, "the CPU's own ratio limit (0x01)")
 _VMAX_READ = (StepKind.READ_VMAX, int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), 0, "hardware maximum voltage (0x28)")
 
 
@@ -395,8 +413,24 @@ def read_steps(
 ) -> tuple[PlanStep, ...]:
     """The read phase (T-025: ``0x10 P2=point`` of each ``[[point]]`` target follows the ``0x14`` read): with a ``profile`` and ``topology`` (T-023) first the plain ``rdmsr`` steps (``0xCE`` and the ``[turbo]`` tables, or ``0x650``
     for the capped-raise warning) on the first P CPU; then 0x14 on the first target CPU, then per target 0x10, 0x1C, 0x09 P1=0x11 and 0x26 (P2=0 for
-    all), and 0x28 when the target sets an OC-point voltage (D-016: the hardware maximum bounds a raised V target)."""
+    all), and 0x28 when the target sets an OC-point voltage (D-016: the hardware maximum bounds a raised V target). G-137 (D-039): last, ``0x01`` once per core kind
+    whose ratio ceiling needs the CPU's own limit and whose limit the policy is not bound to yet (``oc_cap_kinds``): on the first target CPU of the kind, else on the
+    first CPU of the kind in ``topology``."""
     steps: list[PlanStep] = []
+
+    def with_oc_cap_reads() -> tuple[PlanStep, ...]:
+        kinds = oc_cap_kinds(policy, targets, [MSR_TURBO_KIND[msr] for msr, _ in _turbo_tables(profile)])
+        for kind in kinds:
+            cpu = next((t.cpu for t in targets if t.kind == kind), None)
+            if cpu is None and topology is not None:
+                cpu = next((c.cpu for c in topology.cores if c.kind == kind), None)
+            if cpu is None:
+                continue
+            _, cmd, p1, text = _OC_CAP_READ
+            req = Request(cpu, cmd, p1, 0, 0, f"apply: read {text} of a {kind} CPU")
+            steps.append(PlanStep(len(steps) + 1, StepKind.READ_OC_CAP, cpu, cmd, p1, 0, 0, req.purpose, f"{kind} CPUs", verdict=predict(policy, req, None), core_kind=kind))
+        return tuple(steps)
+
     points = resolve_point_targets(profile, topology) if profile is not None and topology is not None else ()
     wants = _msr_read_wants(profile, targets, topology, policy)
     if wants:
@@ -410,8 +444,8 @@ def read_steps(
                     len(steps) + 1, StepKind.READ_MSR, write_cpu, 0, 0, 0, 0, mreq.purpose, what, verdict=predict_msr(policy, mreq, None), msr=msr
                 )
             )
-    if not points and not targets:  # G-117: a turbo-table-only plan reads the plain MSRs only; no mailbox request, no 0x14
-        return tuple(steps)
+    if not points and not targets:  # G-117: a turbo-table-only plan reads the plain MSRs only (and, G-137, the CPU's ratio limit); no 0x14
+        return with_oc_cap_reads()
     number = len(steps) + 1
     first_cpu = points[0].cpu if points else targets[0].cpu  # 0x14 is package-wide: read it on the first CPU the plan touches
     req = Request(first_cpu, int(Cmd.MISC_GLOBAL_CONFIG_READ), 0, 0, 0, "apply: read PerCore Voltage Enable state (0x14) before any write")
@@ -432,7 +466,7 @@ def read_steps(
             number += 1
             req = Request(t.cpu, cmd, p1, 0, 0, f"apply: read {text} of {t.label}")
             steps.append(PlanStep(number, kind, t.cpu, cmd, p1, 0, 0, req.purpose, t.label, verdict=predict(policy, req, None), core_kind=t.kind))
-    return tuple(steps)
+    return with_oc_cap_reads()
 
 
 #: Warning on every plan with a ``[[point]]`` (T-025). ASCII only.
@@ -661,8 +695,12 @@ def build_plan(
     msr_words: Mapping[int, int] | None = None,
     point_words: Mapping[tuple[int, int], int] | None = None,
     favored_words: Mapping[int, int] | None = None,
+    oc_cap_words: Mapping[int, int] | None = None,
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
+
+    ``oc_cap_words`` (G-137, D-039; cpu -> raw ``0x01`` word): the CPU's own ratio limit as this session read it; the policy used for every ratio ceiling is bound to it
+    (``Policy.with_hw_limits``), as the guard's own context is by its baselines. The plan's read steps are still those of the policy as given.
 
     ``msr_words`` (T-023): the plain MSR words read on the write CPU (``0xCE``, ``0x650``, ``0x1AD``); every ``[turbo]`` table of the profile needs
     its MSR here (else ``PlanError``). The turbo writes are ordered by direction (module docstring).
@@ -709,6 +747,15 @@ def build_plan(
             raise PlanError(f"no baseline reading of MSR {msr:#x} for the profile's turbo table")
     steps = list(read_steps(targets, policy, profile, topology))
     number = len(steps)
+    if oc_cap_words:  # bound only after the read steps: they follow the policy the executor ran with
+        limits: dict[str, int | None] = {}
+        for kind in ("P", "E"):
+            words = [w for c, w in oc_cap_words.items() if policy.core_kind(c) == kind]
+            if words:
+                seen = hw_ratio_max(words)
+                known = policy.hw_ratio_max[kind]
+                limits[kind] = None if seen is None else seen if known is None else min(seen, known)
+        policy = policy.with_hw_limits(limits)
     mailbox = bool(targets or point_targets)  # G-117: False for a turbo-table-only plan (no 0x14, no 0x15, no mailbox word)
     first_cpu = point_targets[0].cpu if point_targets else (targets[0].cpu if targets else 0)
     if mailbox and per_core_enabled is not True:
@@ -968,7 +1015,8 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
     targets = resolve_targets(profile, topology)
     point_targets = resolve_point_targets(profile, topology)
     tables = _turbo_tables(profile)
-    required = count_operations(targets, None, len(tables), len(point_targets))
+    n_oc = len(oc_cap_kinds(policy, targets, [MSR_TURBO_KIND[msr] for msr, _ in tables]))
+    required = count_operations(targets, None, len(tables), len(point_targets), n_oc)
     if required > policy.max_operations_per_session:
         raise NeedsHigherLimit(required, policy.max_operations_per_session)
     remaining = max(policy.max_operations_per_boot - boot_ops_used, 0)
@@ -979,7 +1027,7 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
         if not step.verdict.allowed:
             refusals.append(PredictedRefusal(step.number, step.cpu, step.cmd, step.verdict.reason, step.verdict.detail, step.msr))
     mailbox = bool(targets or point_targets)  # G-117: a turbo-table-only plan has no 0x14 read and no 0x15 write
-    number = (2 if mailbox else 0) + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy))  # reads are 1..N; the worst case puts the 0x15 write right after
+    number = (2 if mailbox else 0) + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy)) + n_oc  # reads are 1..N; the worst case puts the 0x15 write right after
     for pt in point_targets:  # T-025: the point writes come first; the address checks and the offset window are decidable before the words are read
         number += 1
         _, verdict = _address_verdict(policy, Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, 0, "preflight"))

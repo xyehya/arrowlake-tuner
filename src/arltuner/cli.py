@@ -779,7 +779,10 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
     point_words = {  # T-025: the V/F point words, as the simulator holds them (a peek, not a mailbox request)
         (pt.cpu, pt.point): sim.vf(pt.cpu, 0, pt.point).to_u32() for pt in resolve_point_targets(profile, topology)
     }
+    oc_cap_words: dict[int, int] = {}  # G-137: the 0x01 reads of the plan, as the simulator would answer them
     for step in read_steps(resolve_targets(profile, topology), policy, profile, topology):
+        if step.kind is StepKind.READ_OC_CAP:
+            oc_cap_words[step.cpu] = sim.capability_word(step.cpu)
         if step.kind is StepKind.READ_MSR and step.msr is not None:
             try:
                 msr_words[step.msr] = sim.plain_msr(step.cpu, step.msr)
@@ -794,6 +797,7 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
         policy=policy,
         msr_words=msr_words,
         point_words=point_words,
+        oc_cap_words=oc_cap_words,
     )
 
 

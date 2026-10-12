@@ -249,6 +249,7 @@ def apply_profile(
     words: dict[int, dict[StepKind, int]] = {}
     point_words: dict[tuple[int, int], int] = {}  # T-025: (cpu, point) -> the 0x10 P2=point word
     msr_words: dict[int, int] = {}
+    oc_cap_words: dict[int, int] = {}  # G-137 (D-039): cpu -> the 0x01 word read in this run
 
     try:
         for step in read_steps(targets, policy, profile, topology):
@@ -261,6 +262,8 @@ def apply_profile(
                 misc_word = word
             elif step.kind is StepKind.READ_VF_POINT:
                 point_words[(step.cpu, step.p2)] = word
+            elif step.kind is StepKind.READ_OC_CAP:  # G-137: the CPU's own ratio limit of a core kind, not a per-target reading
+                oc_cap_words[step.cpu] = word
             else:
                 words.setdefault(step.cpu, {})[step.kind] = word
     except _Stop as stop:
@@ -288,6 +291,7 @@ def apply_profile(
         msr_words=msr_words,
         point_words=point_words,
         favored_words=getattr(guard, "favored_words", lambda: None)(),
+        oc_cap_words=oc_cap_words,
     )
     try:
         plan.require_allowed()
