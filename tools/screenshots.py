@@ -7,9 +7,11 @@
 
 The launcher (default: $XDG_RUNTIME_DIR/arltuner/launcher.html, as written by tools/arltuner-gui.py) carries a single-use token: if it is gone
 (the page was already opened), run ``python3 tools/arltuner-gui.py`` again - it asks the running GUI for a fresh launcher. Only the one-time
-bootstrap token is used; the tool never talks to the helper itself.
+bootstrap token is used; the tool never talks to the helper itself. The launcher and its directory must be yours and private (not a symlink, not
+writable by others, file 0600) or the tool refuses to read the token. Chrome is driven over a private pipe (--remote-debugging-pipe), not a TCP
+port, and runs in a throw-away 0700 profile that is deleted at exit.
 
-What it does to the page: opens tabs, switches display segments (chart / table, Simple / Per unit, "Per point" of one row), waits for data and
+What it does to the page: opens tabs, switches display segments (chart / table, Simple / Per-Core, the per-V/F-point offsets of one row), waits for data and
 crops elements to PNG files at 1440 CSS px wide. It reads only what the page shows on its own; it never presses Read, Review, Apply, Measure,
 Stress, Save or Accept. Belt and braces: every ``/api/call`` the page makes is intercepted and any operation outside a read-only allowlist
 (READ_OPS below) is blocked and reported. The Tune shots need a stored read (``tune.last``) already on the page; without one they are skipped.
@@ -21,17 +23,16 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
+import fcntl
 import json
 import os
 import re
+import select
 import shutil
-import socket
-import struct
+import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -49,7 +50,7 @@ READ_OPS = frozenset({"preflight", "audit.tail", "telemetry.start", "profiles.li
 SAFE_CLICKS = (
     re.compile(r"^#tab-(dashboard|curves|tune|stress|profiles|system|audit)$"),                       # tabs
     re.compile(r"^#(dash-sub|cv-view|cv-table-mode|tn-scope|map-metric) button$"),                     # display segments only
-    re.compile(r"^#tn-rows \.tn-rowwrap:nth-of-type\(\d+\) \.tn-cell \.seg button$"),     # one Tune row: Whole curve / Per point (view only)
+    re.compile(r"^#tn-rows \.tn-rowwrap:nth-of-type\(\d+\) \.tn-cell \.seg button$"),     # one Tune row: whole curve / per-point offsets (view only)
 )
 
 WIDTH = 1440
@@ -62,104 +63,66 @@ class ToolError(Exception):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------
-# minimal websocket client (RFC 6455, client side, text frames, no extensions) - only what the DevTools endpoint needs
+# DevTools protocol over a pipe (Chrome --remote-debugging-pipe: JSON messages, each ended by a NUL byte, on fds 3 (to Chrome) / 4 (from Chrome)).
+# No TCP port is opened, so no other local user can attach to the browser while it holds the session cookie.
 # ---------------------------------------------------------------------------------------------------------------------------------------
-class WebSocket:
-    def __init__(self, url: str, timeout: float = 30.0):
-        u = urllib.parse.urlsplit(url)
-        if u.scheme != "ws":
-            raise ToolError("only ws:// DevTools URLs are supported")
-        self.sock = socket.create_connection((u.hostname, u.port), timeout=timeout)
-        try:
-            self._handshake(u)
-        except BaseException:
-            self.sock.close()
-            raise
-
-    def _handshake(self, u) -> None:
-        key = base64.b64encode(os.urandom(16)).decode()
-        path = u.path + (("?" + u.query) if u.query else "")
-        self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                           f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
-        head = b""
-        while b"\r\n\r\n" not in head:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ToolError("websocket handshake: connection closed")
-            head += chunk
-        head, _, self._buf = head.partition(b"\r\n\r\n")
-        lines = head.decode("latin-1").split("\r\n")
-        if " 101 " not in lines[0]:
-            raise ToolError("websocket handshake refused: " + lines[0])
-        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
-        hdrs = {k.strip().lower(): v.strip() for k, _, v in (ln.partition(":") for ln in lines[1:])}
-        if hdrs.get("sec-websocket-accept") != accept:
-            raise ToolError("websocket handshake: bad accept key")
-
-    def _read(self, n: int) -> bytes:
-        while len(self._buf) < n:
-            chunk = self.sock.recv(max(65536, n - len(self._buf)))
-            if not chunk:
-                raise ToolError("websocket closed")
-            self._buf += chunk
-        out, self._buf = self._buf[:n], self._buf[n:]
-        return out
-
-    def _send_frame(self, opcode: int, payload: bytes) -> None:
-        head = bytes([0x80 | opcode])
-        n = len(payload)
-        if n < 126:
-            head += bytes([0x80 | n])
-        elif n < 65536:
-            head += bytes([0x80 | 126]) + struct.pack(">H", n)
-        else:
-            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
-        mask = os.urandom(4)
-        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload)) if n < 4096 else _xor_mask(payload, mask)
-        self.sock.sendall(head + mask + masked)
+class PipeTransport:
+    def __init__(self, rfd: int, wfd: int):
+        """``rfd``: read end of Chrome's output; ``wfd``: write end of Chrome's input (both ours, closed by ``close``)."""
+        self.rfd, self.wfd = rfd, wfd
+        self._buf = b""
 
     def send_text(self, text: str) -> None:
-        self._send_frame(0x1, text.encode())
+        data = text.encode() + b"\0"
+        try:
+            while data:
+                data = data[os.write(self.wfd, data):]
+        except OSError as e:
+            raise ToolError("the browser's pipe is closed: " + (e.strerror or str(e))) from None
 
     def recv_text(self, timeout: float | None = None) -> str | None:
-        """Next complete text message, or None when ``timeout`` seconds pass with nothing to read."""
-        self.sock.settimeout(timeout if timeout is not None else 60.0)
-        msg = b""
-        try:
-            while True:
-                b0, b1 = self._read(2)
-                fin, opcode, n = b0 & 0x80, b0 & 0x0F, b1 & 0x7F
-                if n == 126:
-                    n = struct.unpack(">H", self._read(2))[0]
-                elif n == 127:
-                    n = struct.unpack(">Q", self._read(8))[0]
-                data = self._read(n) if not (b1 & 0x80) else None
-                if data is None:
-                    raise ToolError("server frames must not be masked")
-                if opcode == 0x9:
-                    self._send_frame(0xA, data)
-                elif opcode == 0x8:
-                    raise ToolError("websocket closed by the browser")
-                elif opcode in (0x0, 0x1, 0x2):
-                    msg += data
-                    if fin:
-                        return msg.decode()
-        except socket.timeout:
-            if not msg and not self._buf:
+        """Next complete message, or None when ``timeout`` seconds pass with nothing complete to read."""
+        end = time.monotonic() + (timeout if timeout is not None else 60.0)
+        while b"\0" not in self._buf:
+            left = end - time.monotonic()
+            if left <= 0 or not select.select([self.rfd], [], [], left)[0]:
                 return None
-            raise ToolError("websocket timed out in the middle of a message") from None
+            chunk = os.read(self.rfd, 1 << 20)
+            if not chunk:
+                raise ToolError("the browser closed its DevTools pipe (Chrome exited)")
+            self._buf += chunk
+        msg, _, self._buf = self._buf.partition(b"\0")
+        return msg.decode()
 
     def close(self) -> None:
-        try:
-            self._send_frame(0x8, b"")
-        except OSError:
-            pass
-        self.sock.close()
+        for fd in (self.wfd, self.rfd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.rfd = self.wfd = -1
 
 
-def _xor_mask(payload: bytes, mask: bytes) -> bytes:
-    k = (mask * (len(payload) // 4 + 1))[:len(payload)]
-    return (int.from_bytes(payload, "big") ^ int.from_bytes(k, "big")).to_bytes(len(payload), "big")
+def spawn_chrome_pipe(args: list[str]) -> tuple[subprocess.Popen, PipeTransport]:
+    """Start Chrome with ``--remote-debugging-pipe``: it reads commands on fd 3 and writes replies on fd 4, so a small ``sh`` puts our pipe ends there
+    (``exec`` keeps the same process) and closes the originals. Both pipes are private to this process and Chrome."""
+    to_r, to_w = os.pipe()          # us -> Chrome
+    from_r, from_w = os.pipe()      # Chrome -> us
+    hi = [fcntl.fcntl(fd, fcntl.F_DUPFD, 10) for fd in (to_r, from_w)]   # numbers >= 10 so the redirections below cannot clash with 3 and 4
+    for fd in (to_r, from_w):
+        os.close(fd)
+    r, w = hi
+    try:
+        proc = subprocess.Popen(["sh", "-c", f'exec "$0" "$@" 3<&{r} 4>&{w} {r}<&- {w}>&-', *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, pass_fds=(r, w))
+    except BaseException:
+        for fd in (to_w, from_r):
+            os.close(fd)
+        raise
+    finally:
+        for fd in (r, w):
+            os.close(fd)
+    return proc, PipeTransport(from_r, to_w)
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------
@@ -177,33 +140,26 @@ class Browser:
     """A headless Chrome with its own throw-away profile, one page, driven over CDP."""
 
     def __init__(self, chrome: str, theme: str = "dark"):
-        self.profile = tempfile.mkdtemp(prefix="arltuner-shots-")
-        args = [chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={self.profile}", "--no-first-run",
+        self.profile = tempfile.mkdtemp(prefix="arltuner-shots-")   # 0700, ours; removed again by close()
+        os.chmod(self.profile, 0o700)
+        args = [chrome, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={self.profile}", "--no-first-run",
                 "--no-default-browser-check", "--disable-gpu", "--hide-scrollbars", "--mute-audio", f"--window-size={WIDTH},{HEIGHT}", "about:blank"]
         if os.geteuid() == 0:
             args.append("--no-sandbox")
-        self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._id = 0
-        self.events: list[dict] = []
+        self.session: str | None = None
         self.console_errors: list[str] = []
         self.blocked: list[str] = []
         self.ops_seen: dict[str, int] = {}
-        self.ws: WebSocket | None = None
+        self.ws: PipeTransport | None = None
+        self.proc: subprocess.Popen | None = None
         try:
-            port = self._wait_port()
-            targets = []
-            for _ in range(50):
-                try:
-                    targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=5))
-                except (OSError, ValueError):
-                    targets = []
-                pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-                if pages:
-                    break
-                time.sleep(0.1)
-            else:
-                raise ToolError("Chrome started but offered no page target")
-            self.ws = WebSocket(pages[0]["webSocketDebuggerUrl"])
+            self.proc, self.ws = spawn_chrome_pipe(args)
+            targets = self.call("Target.getTargets", timeout=60).get("targetInfos", [])
+            page = next((t["targetId"] for t in targets if t.get("type") == "page"), None)
+            if page is None:
+                page = self.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+            self.session = self.call("Target.attachToTarget", {"targetId": page, "flatten": True})["sessionId"]
             self.call("Page.enable")
             self.call("Runtime.enable")
             self.call("Log.enable")
@@ -215,24 +171,18 @@ class Browser:
             self.close()
             raise
 
-    def _wait_port(self) -> int:
-        f = Path(self.profile) / "DevToolsActivePort"
-        for _ in range(100):
-            if self.proc.poll() is not None:
-                raise ToolError("Chrome exited at start (exit %s)" % self.proc.returncode)
-            try:
-                line = f.read_text().splitlines()[0]
-                return int(line)
-            except (OSError, ValueError, IndexError):
-                time.sleep(0.1)
-        raise ToolError("Chrome did not publish its DevTools port")
+    def _msg(self, mid: int, method: str, params: dict | None) -> str:
+        m = {"id": mid, "method": method, "params": params or {}}
+        if self.session and not method.startswith("Target."):
+            m["sessionId"] = self.session
+        return json.dumps(m)
 
     # -- protocol -----------------------------------------------------------------------------------------------------------------------
     def call(self, method: str, params: dict | None = None, timeout: float = 60.0) -> dict:
         assert self.ws
         self._id += 1
         mid = self._id
-        self.ws.send_text(json.dumps({"id": mid, "method": method, "params": params or {}}))
+        self.ws.send_text(self._msg(mid, method, params))
         end = time.monotonic() + timeout
         while True:
             left = end - time.monotonic()
@@ -291,13 +241,13 @@ class Browser:
             else:
                 self.blocked.append(label)
                 self.call_nowait("Fetch.failRequest", {"requestId": rid, "errorReason": "BlockedByClient"})
-        except OSError:
+        except ToolError:
             pass
 
     def call_nowait(self, method: str, params: dict) -> None:
         assert self.ws
         self._id += 1
-        self.ws.send_text(json.dumps({"id": self._id, "method": method, "params": params}))
+        self.ws.send_text(self._msg(self._id, method, params))
 
     # -- page helpers -------------------------------------------------------------------------------------------------------------------
     def eval(self, expr: str):
@@ -322,13 +272,14 @@ class Browser:
         self.pump(0.5)
         self.wait_for("document.readyState === 'complete'", 15)
 
-    def click(self, selector: str, text: str | None = None) -> bool:
-        """Press one allowlisted display control (by CSS selector, optionally the button whose label is ``text``). False when it is not there."""
+    def click(self, selector: str, value: str | None = None) -> bool:
+        """Press one allowlisted display control: the first match of ``selector``, or the button whose ``data-value`` is ``value`` (a segment's value
+        does not change when its label is reworded). False when it is not there or disabled."""
         if not any(rx.match(selector) for rx in SAFE_CLICKS):
             raise ToolError(f"refusing to click {selector!r}: not an allowlisted display control")
-        js = ("(() => { const q = %s, t = %s; const all = Array.from(document.querySelectorAll(q)); "
-              "const b = t === null ? all[0] : all.find((x) => x.textContent.trim() === t); if (!b || b.disabled) return false; b.click(); return true; })()"
-              % (json.dumps(selector), json.dumps(text)))
+        js = ("(() => { const q = %s, v = %s; const all = Array.from(document.querySelectorAll(q)); "
+              "const b = v === null ? all[0] : all.find((x) => x.dataset.value === v); if (!b || b.disabled) return false; b.click(); return true; })()"
+              % (json.dumps(selector), json.dumps(value)))
         ok = bool(self.eval(js))
         self.pump(0.3)
         return ok
@@ -350,36 +301,70 @@ class Browser:
         return base64.b64decode(res["data"])
 
     def close(self) -> None:
-        try:
-            if self.ws:
-                self.ws.close()
-        except OSError:
-            pass
-        if self.proc.poll() is None:
-            self.proc.terminate()
+        if self.ws:
+            self.ws.close()   # Chrome sees its input pipe close and exits by itself; terminate below is the backstop
+        if self.proc and self.proc.poll() is None:
             try:
-                self.proc.wait(timeout=5)
+                self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
-        shutil.rmtree(self.profile, ignore_errors=True)
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
+        for _ in range(5):   # Chrome's helper processes may still be flushing into the profile for a moment
+            shutil.rmtree(self.profile, ignore_errors=True)
+            if not os.path.exists(self.profile):
+                break
+            time.sleep(0.2)
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------
 # login (the launcher's single-use token -> a session cookie)
 # ---------------------------------------------------------------------------------------------------------------------------------------
+def open_launcher(path: Path) -> str:
+    """The text of the launcher file, after checking that nobody else could have planted it: the file and the directory holding it must be ours
+    (effective uid), not symlinks, and not writable by group/other; the file (it holds a secret) must have no group/other access, as
+    ``tools/arltuner-gui.py`` writes it (0600 inside a 0700 directory). The file is opened with O_NOFOLLOW and checked on the open descriptor."""
+    path = Path(os.path.abspath(path))
+    fix = " Run 'python3 tools/arltuner-gui.py' to get a launcher it wrote itself."
+    try:
+        dst = os.lstat(path.parent)
+    except OSError as e:
+        raise ToolError(f"cannot use the launcher {path}: {e.strerror}.{fix}") from None
+    if not stat.S_ISDIR(dst.st_mode):   # lstat: a symlinked directory is not a directory here
+        raise ToolError(f"refusing the launcher {path}: its directory is a symlink or not a directory.{fix}")
+    if dst.st_uid != os.geteuid():
+        raise ToolError(f"refusing the launcher {path}: its directory is owned by uid {dst.st_uid}, not by you.{fix}")
+    if dst.st_mode & 0o022:
+        raise ToolError(f"refusing the launcher {path}: its directory is writable by others (mode {stat.S_IMODE(dst.st_mode):04o}; the GUI makes it 0700).{fix}")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        raise ToolError(f"cannot read the launcher {path}: {e.strerror}.{fix}") from None
+    with os.fdopen(fd, "rb") as f:
+        fst = os.fstat(f.fileno())
+        if not stat.S_ISREG(fst.st_mode):
+            raise ToolError(f"refusing the launcher {path}: not a regular file.{fix}")
+        if fst.st_uid != os.geteuid():
+            raise ToolError(f"refusing the launcher {path}: owned by uid {fst.st_uid}, not by you.{fix}")
+        if fst.st_mode & 0o077:
+            raise ToolError(f"refusing the launcher {path}: mode {stat.S_IMODE(fst.st_mode):04o} lets others in (the GUI writes it 0600).{fix}")
+        data = f.read(65536)
+    return data.decode("utf-8", "replace")
+
+
 def read_launcher(path: Path) -> tuple[str, str]:
     """(origin, token) out of the launcher page tools/arltuner-gui.py wrote (a form posting the token to <origin>/bootstrap)."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        raise ToolError(f"cannot read the launcher {path}: {e.strerror}. Run 'python3 tools/arltuner-gui.py' again for a fresh one.") from None
+    text = open_launcher(path)
     import html
     m_action = re.search(r'<form[^>]*action="([^"]+)/bootstrap"', text)
     m_token = re.search(r'name="token" value="([^"]+)"', text)
     if not m_action or not m_token:
         raise ToolError(f"{path} is not an arrowlake-tuner launcher page")
     origin = html.unescape(m_action.group(1))
-    if not re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d+", origin):
+    if not re.fullmatch(r"http://127\.0\.0\.1:\d+", origin):
         raise ToolError(f"refusing a launcher that points at {origin!r}: only a local GUI (http://127.0.0.1:PORT)")
     return origin, html.unescape(m_token.group(1))
 
@@ -389,7 +374,7 @@ def bootstrap(origin: str, token: str) -> tuple[str, str]:
     req = urllib.request.Request(origin + "/bootstrap", data=urllib.parse.urlencode({"token": token}).encode(), method="POST",
                                  headers={"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10) as r:   # never via an environment proxy
             cookie = r.headers.get("Set-Cookie", "")
     except urllib.error.HTTPError as e:
         raise ToolError(f"login refused (HTTP {e.code}): the launcher token was used already or expired. Run 'python3 tools/arltuner-gui.py' for a fresh launcher.") from None
@@ -418,15 +403,15 @@ def show_tab(b: Browser, tab: str, ready: str, timeout: float = 12.0) -> None:
 
 def shot_dashboard(b: Browser) -> list[str]:
     show_tab(b, "dashboard", "document.querySelectorAll('#die-cores > *').length > 8 && !/n\\/a/.test(document.getElementById('t-pkgw').textContent)")
-    b.click("#dash-sub button", "Overview")
+    b.click("#dash-sub button", "overview")
     b.pump(1.0)
     return [".ov-grid"]
 
 
 def shot_dashboard_vid(b: Browser) -> list[str]:
     show_tab(b, "dashboard", "document.querySelectorAll('#die-cores > *').length > 8")
-    b.click("#dash-sub button", "Overview")
-    if not b.click("#map-metric button", "VID"):
+    b.click("#dash-sub button", "overview")
+    if not b.click("#map-metric button", "vid"):
         raise Skip("no VID colouring on the core map")
     b.pump(1.2)
     return [".die-card"]
@@ -434,7 +419,7 @@ def shot_dashboard_vid(b: Browser) -> list[str]:
 
 def shot_dashboard_cores(b: Browser) -> list[str]:
     show_tab(b, "dashboard", "document.querySelectorAll('#die-cores > *').length > 8")
-    if not b.click("#dash-sub button", "Cores") or not b.wait_for("document.querySelectorAll('#core-body tr').length > 8", 8):
+    if not b.click("#dash-sub button", "cores") or not b.wait_for("document.querySelectorAll('#core-body tr').length > 8", 8):
         raise Skip("the per-core table did not fill")
     b.pump(1.0)
     return [".cores-grid .card.scroll"]
@@ -442,7 +427,7 @@ def shot_dashboard_cores(b: Browser) -> list[str]:
 
 def shot_dashboard_memory(b: Browser) -> list[str]:
     show_tab(b, "dashboard", "!!document.querySelector('#mem-body .mem-big')")
-    b.click("#dash-sub button", "Overview")
+    b.click("#dash-sub button", "overview")
     return ["#mem-card"]
 
 
@@ -452,14 +437,14 @@ def _curves_ready(b: Browser) -> None:
 
 def shot_curves(b: Browser) -> list[str]:
     _curves_ready(b)
-    b.click("#cv-view button", "Chart")
+    b.click("#cv-view button", "chart")
     b.pump(0.8)
     return ["#cv-card"]
 
 
 def shot_curves_table(b: Browser) -> list[str]:
     _curves_ready(b)
-    b.click("#cv-view button", "Table")
+    b.click("#cv-view button", "table")
     if not b.wait_for("document.querySelectorAll('#cv-table tbody tr').length > 0", 5):
         raise Skip("the table has no rows")
     return ["#cv-card"]
@@ -469,13 +454,13 @@ def shot_tune_per_core(b: Browser) -> list[str]:
     # tune.last is asked by the page on load; no stored read -> nothing to show, and the tool does not press Read
     if not b.click("#tab-tune") or not b.wait_for("!document.getElementById('tn-console').hidden", 8):
         raise Skip("no stored tuning read on the page (tune.last empty): read it once in Tune, then run again")
-    b.click("#tn-scope button", "Per-Core")
+    b.click("#tn-scope button", "unit")
     b.pump(0.8)
     # one P row with its Per-V/F-point offsets open (a view toggle; no value is changed)
     if not b.wait_for("document.querySelectorAll('#tn-rows .tn-rowwrap').length > 4", 5):
         raise Skip("the Tune rows did not build")
-    if not b.click("#tn-rows .tn-rowwrap:nth-of-type(2) .tn-cell .seg button", "Per V/F point Offsets"):
-        raise Skip("no 'Per point' control on the first P row")
+    if not b.click("#tn-rows .tn-rowwrap:nth-of-type(2) .tn-cell .seg button", "points"):
+        raise Skip("no per-V/F-point control on the first P row")
     b.wait_for("document.querySelectorAll('#tn-rows .tn-rowwrap:nth-of-type(2) .tn-points select').length > 0", 5)
     b.pump(0.6)
     return ["#tn-console"]

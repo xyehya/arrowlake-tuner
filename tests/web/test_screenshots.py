@@ -1,22 +1,21 @@
-"""G-136: the README screenshot tool (``tools/screenshots.py``): websocket framing, launcher parsing, the click and API allowlists (offline), and a
-browser smoke against the simulator GUI (opt-in: ``ARLTUNER_BROWSER_TESTS=1`` and a Chrome binary). No hardware, no real helper."""
+"""G-136 / G-136b: the README screenshot tool (``tools/screenshots.py``): the DevTools pipe transport, launcher trust checks, the click and API
+allowlists (offline), and a browser smoke against the simulator GUI (opt-in: ``ARLTUNER_BROWSER_TESTS=1`` and a Chrome binary). No hardware, no
+real helper."""
 from __future__ import annotations
 
-import base64
 import contextlib
-import io
-import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
-import socket
+import stat
 import struct
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("screenshots_tool", ROOT / "tools" / "screenshots.py")
@@ -24,100 +23,103 @@ tool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tool)
 
 CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or shutil.which("chromium") or ""
-GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+BROWSER = os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and bool(CHROME)
+
+FAKE_CHROME = r"""#!/usr/bin/env python3
+# stands in for Chrome: speaks the --remote-debugging-pipe framing on fds 3 (in) / 4 (out) and reports what it was started with
+import json, os, sys
+buf = b""
+while True:
+    chunk = os.read(3, 65536)
+    if not chunk:
+        break
+    buf += chunk
+    while b"\0" in buf:
+        raw, _, buf = buf.partition(b"\0")
+        m = json.loads(raw)
+        extra = []
+        for x in os.listdir("/proc/self/fd"):
+            try:
+                if int(x) > 4 and os.readlink("/proc/self/fd/" + x).startswith("pipe:"):
+                    extra.append(int(x))
+            except OSError:   # the descriptor listdir itself used is already gone
+                pass
+        m["result"] = {"argv": sys.argv[1:], "high_fds": extra}
+        os.write(4, json.dumps(m).encode() + b"\0")
+"""
 
 
-def frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
-    n = len(payload)
-    head = bytes([(0x80 if fin else 0) | opcode])
-    head += bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n)
-    return head + payload
+class TestPipeTransport(unittest.TestCase):
+    def test_framing_split_and_joined_messages_and_timeout(self):
+        r, w = os.pipe()
+        r2, w2 = os.pipe()
+        t = tool.PipeTransport(r, w2)   # we read what "Chrome" writes on r; we write to w2
+        os.write(w, b'{"a":1}\0{"b"')   # one whole message and half of the next
+        self.assertEqual(t.recv_text(1), '{"a":1}')
+        self.assertIsNone(t.recv_text(0.05))   # the half message is not delivered; a timeout, not an error
+        os.write(w, b':2}\0')
+        self.assertEqual(t.recv_text(1), '{"b":2}')
+        t.send_text("hello é")
+        self.assertEqual(os.read(r2, 100), "hello é".encode() + b"\0")   # NUL-terminated frames go out
+        os.close(w)
+        with self.assertRaises(tool.ToolError):   # Chrome gone: EOF is an error
+            t.recv_text(1)
+        os.close(r2)
+        t.close()
+
+    def test_spawn_puts_the_pipes_on_fds_3_and_4_and_nothing_else_leaks(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        fake = d / "fakechrome"
+        fake.write_text(FAKE_CHROME)
+        fake.chmod(0o755)
+        proc, t = tool.spawn_chrome_pipe([str(fake), "--remote-debugging-pipe", "x"])
+        self.addCleanup(proc.kill)
+        self.addCleanup(t.close)
+        t.send_text(json.dumps({"id": 7, "method": "Ping"}))
+        reply = json.loads(t.recv_text(10))
+        self.assertEqual(reply["id"], 7)
+        self.assertEqual(reply["result"]["argv"], ["--remote-debugging-pipe", "x"])
+        self.assertEqual(reply["result"]["high_fds"], [])   # the original (>= 10) pipe ends were closed in the child
+        t.close()   # closing our end of Chrome's input ends it
+        proc.wait(timeout=5)
 
 
-class EchoServer:
-    """A one-connection websocket server that plays a script of server frames and records the (unmasked) client text frames."""
+class TestBrowserSession(unittest.TestCase):
+    def test_messages_carry_the_session_except_target_commands(self):
+        b = tool.Browser.__new__(tool.Browser)
+        b.session = "S1"
+        self.assertEqual(json.loads(b._msg(1, "Page.enable", None))["sessionId"], "S1")
+        self.assertNotIn("sessionId", json.loads(b._msg(2, "Target.getTargets", None)))
 
-    def __init__(self, script: list[bytes]):
-        self.script = script
-        self.got: list[bytes] = []
-        self.all_masked = True
-        self.sock = socket.socket()
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(1)
-        self.port = self.sock.getsockname()[1]
-        self.t = threading.Thread(target=self.run, daemon=True)
-        self.t.start()
-
-    def run(self):
-        c, _ = self.sock.accept()
-        c.settimeout(5)
-        data = b""
-        while b"\r\n\r\n" not in data:
-            data += c.recv(4096)
-        key = [ln.split(b":", 1)[1].strip() for ln in data.split(b"\r\n") if ln.lower().startswith(b"sec-websocket-key")][0]
-        acc = base64.b64encode(hashlib.sha1(key + GUID.encode()).digest())
-        c.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + acc + b"\r\n\r\n")
-        for f in self.script:
-            c.sendall(f)
-        buf = b""
-        try:
-            while True:
-                chunk = c.recv(1 << 16)
-                if not chunk:
-                    break
-                buf += chunk
-        except OSError:
-            pass
-        while len(buf) >= 6:
-            b0, b1 = buf[0], buf[1]
-            n, off = b1 & 0x7F, 2
-            if n == 126:
-                n, off = struct.unpack(">H", buf[2:4])[0], 4
-            self.all_masked = self.all_masked and bool(b1 & 0x80)
-            mask = buf[off:off + 4]
-            body = bytes(x ^ mask[i % 4] for i, x in enumerate(buf[off + 4:off + 4 + n]))
-            if b0 & 0x0F == 0x1:
-                self.got.append(body)
-            buf = buf[off + 4 + n:]
-        c.close()
-        self.sock.close()
-
-
-class TestWebSocket(unittest.TestCase):
-    def test_handshake_frames_ping_fragments_and_masking(self):
-        big = ("x" * 70000).encode()
-        srv = EchoServer([frame(0x1, b"hello"), frame(0x9, b"p"), frame(0x1, b"frag", fin=False), frame(0x0, b"ment"), frame(0x1, big)])
-        ws = tool.WebSocket(f"ws://127.0.0.1:{srv.port}/devtools/page/x")
-        self.assertEqual(ws.recv_text(2), "hello")
-        self.assertEqual(ws.recv_text(2), "fragment")   # the ping in front was answered, the fragments joined
-        self.assertEqual(ws.recv_text(2).encode(), big)  # 64-bit length form
-        self.assertIsNone(ws.recv_text(0.1))             # nothing more: a timeout, not an error
-        ws.send_text(json.dumps({"id": 1, "method": "X"}))
-        payload = "x" * 3000   # 126-form length
-        ws.send_text(payload)
-        ws.sock.shutdown(socket.SHUT_WR)
-        srv.t.join(5)
-        self.assertEqual(srv.got, [b'{"id": 1, "method": "X"}', payload.encode()])
-        self.assertTrue(srv.all_masked)
-        ws.sock.close()
-
-    def test_bad_accept_key_is_refused(self):
-        s = socket.socket()
-        s.bind(("127.0.0.1", 0))
-        s.listen(1)
-
-        def bad():
-            c, _ = s.accept()
-            c.recv(4096)
-            c.sendall(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: nope\r\n\r\n")
-            c.close()
-        threading.Thread(target=bad, daemon=True).start()
-        with self.assertRaises(tool.ToolError):
-            tool.WebSocket(f"ws://127.0.0.1:{s.getsockname()[1]}/")
-        s.close()
+    @unittest.skipUnless(BROWSER, "set ARLTUNER_BROWSER_TESTS=1 (needs a Chrome binary)")
+    def test_chrome_has_no_debug_port_and_a_private_profile_that_is_removed(self):
+        b = tool.Browser(CHROME)
+        prof = Path(b.profile)
+        self.assertEqual(stat.S_IMODE(os.stat(prof).st_mode), 0o700)
+        cmd = Path(f"/proc/{b.proc.pid}/cmdline").read_bytes().replace(b"\0", b" ")   # Chrome rewrites its argv into one string
+        self.assertIn(b"--remote-debugging-pipe", cmd)
+        self.assertNotIn(b"--remote-debugging-port", cmd)
+        self.assertEqual(b.eval("1 + 1"), 2)
+        b.close()
+        self.assertFalse(prof.exists())
+        self.assertIsNotNone(b.proc.poll())
 
 
 class TestLauncherAndGuards(unittest.TestCase):
+    GOOD = '<form method="post" action="http://127.0.0.1:5123/bootstrap"><input type="hidden" name="token" value="t">'
+
+    def _launcher(self, text=GOOD, dmode=0o700, fmode=0o600) -> Path:
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        sub = d / "arltuner"
+        sub.mkdir()
+        sub.chmod(dmode)
+        f = sub / "launcher.html"
+        f.write_text(text)
+        f.chmod(fmode)
+        return f
+
     def test_read_launcher_matches_what_the_gui_writes(self):
         sys.path.insert(0, str(ROOT / "src"))
         from arltuner.web.launcher import write_launcher
@@ -128,14 +130,37 @@ class TestLauncherAndGuards(unittest.TestCase):
         self.assertEqual(tool.read_launcher(p), ("http://127.0.0.1:5123", "tok&en<1>"))
 
     def test_launcher_must_point_at_a_local_gui(self):
-        d = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, d, True)
-        p = d / "l.html"
-        p.write_text('<form method="post" action="http://evil.example:80/bootstrap"><input type="hidden" name="token" value="t">')
+        for action in ("http://evil.example:80", "http://localhost:5123", "https://127.0.0.1:5123"):
+            f = self._launcher(f'<form method="post" action="{action}/bootstrap"><input type="hidden" name="token" value="t">')
+            with self.assertRaises(tool.ToolError, msg=action):
+                tool.read_launcher(f)
         with self.assertRaises(tool.ToolError):
-            tool.read_launcher(p)
+            tool.read_launcher(f.parent / "missing.html")
+        self.assertEqual(tool.read_launcher(self._launcher()), ("http://127.0.0.1:5123", "t"))
+
+    def test_launcher_trust_checks(self):
+        ok = self._launcher()
+        self.assertIn("bootstrap", tool.open_launcher(ok))
+        for what, f in (("file group-readable", self._launcher(fmode=0o640)), ("file world-writable", self._launcher(fmode=0o602)),
+                        ("dir group-writable", self._launcher(dmode=0o770)), ("dir world-writable", self._launcher(dmode=0o757))):
+            with self.assertRaises(tool.ToolError, msg=what):
+                tool.open_launcher(f)
+        real = self._launcher()   # a symlinked launcher file, a symlinked directory
+        link = real.parent / "link.html"
+        link.symlink_to(real)
         with self.assertRaises(tool.ToolError):
-            tool.read_launcher(d / "missing.html")
+            tool.open_launcher(link)
+        dlink = real.parent.parent / "dirlink"
+        dlink.symlink_to(real.parent)
+        with self.assertRaises(tool.ToolError):
+            tool.open_launcher(dlink / "launcher.html")
+        fifo = real.parent / "fifo.html"   # something that is not a regular file, planted in its place: refused without blocking
+        os.mkfifo(fifo, 0o600)
+        with self.assertRaises(tool.ToolError):
+            tool.open_launcher(fifo)
+        with mock.patch.object(tool.os, "geteuid", return_value=os.geteuid() + 1):   # owned by somebody else
+            with self.assertRaises(tool.ToolError):
+                tool.open_launcher(ok)
 
     def test_click_allowlist(self):
         ok = ["#tab-tune", "#tab-dashboard", "#dash-sub button", "#cv-view button", "#tn-scope button", "#map-metric button",
@@ -177,7 +202,7 @@ class TestLauncherAndGuards(unittest.TestCase):
             self.assertNotIn(op, tool.READ_OPS)
 
 
-@unittest.skipUnless(os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and CHROME, "set ARLTUNER_BROWSER_TESTS=1 (needs a Chrome binary)")
+@unittest.skipUnless(BROWSER, "set ARLTUNER_BROWSER_TESTS=1 (needs a Chrome binary)")
 class TestShotsAgainstSimulator(unittest.TestCase):
     def test_every_shot_is_taken_without_a_blocked_call(self):
         out = Path(tempfile.mkdtemp())
