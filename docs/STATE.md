@@ -53,7 +53,8 @@ BIOS: **PL1 250 W** (operator 2026-10-08; PL2 250 per the 10-05/10-07 notes) · 
    priority: `write_percore_enable` predicted as worst case; ring/NGU not in scope (SPEC §2); P OC ratio 58× is above the D-032 cap (P 57); light theme dropped; restore scripts still use their checkout
    policy (session-2026-10-02) — move them onto the helper later. Testing helper without polkit: `--helper sudo -n PKEXEC_UID=1000 …`.
 3. Polkit path verified on the final build (knowledge/tuning-results.md "Polkit path"): real pkexec launch, PKEXEC_UID enforced for stress;
-   operator's own pkexec run delivered uid 1000. Normal start: `python3 tools/arltuner-gui.py --open` (one password).
+   operator's own pkexec run delivered uid 1000; 2026-10-12 operator-authenticated start ⇒ Stress P1 30 s, child ran as `yk`, 0 errors,
+   0 MCE (**done**). Normal start: `python3 tools/arltuner-gui.py --open` (one password).
 4. W: first Windows restore from this repo. Workers `sonnet`/`high`. D-034: orchestrator autonomous.
 
 ## How we work
