@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-12 · lnx · **v3 complete on the reference machine**: G-111…G-126 merged (suite 2277 OK), installed, verified on hardware end to end. User guide: `docs/USER-GUIDE.md`._
+_Updated: 2026-10-12 · lnx · **D-036 live data only**: G-127 (Tune page truth, favored ★ live), G-128 (backend live topology/limits/points, any Arrow Lake-S), G-130 (apply race, live unit list) merged + installed + checked on HW (preflight topology P0/P3 favored via CPPC, tune.read `read_at`, restore plan OK, 56/57× reach-only on non-favored). G-129 (user-owned accepted state, author material → examples/) in flight. User guide: `docs/USER-GUIDE.md`._
 
 ## Where we are
 - **G0 done.** **G1 merged:** G-101 platform file + preflight, G-102 root helper (read-only ops; 2 Sonnet review rounds), G-103 web server
