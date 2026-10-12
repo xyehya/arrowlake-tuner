@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from arltuner import vfmodel
+from arltuner import vfdump, vfmodel
 from arltuner.controls import (
     REVERT_NOTE,
     ApplyPlan,
@@ -59,7 +59,6 @@ from arltuner.guard import (
     Refusal,
     Request,
     WriteGuard,
-    anchored_wall_clock,
     default_m1_policy,
     load_policy,
     read_state,
@@ -67,6 +66,7 @@ from arltuner.guard import (
 from arltuner.controls.planner import POINT_CAVEAT, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
+from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
 from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
@@ -85,11 +85,11 @@ from .ops import (
     _refuse,
     _trust,
     _trust_refusal,
-    _VirtualClock,
     NO_ACCEPTED_NOTE,
     accepted_match,
     helper_topology,
     op_vf_dump,
+    sim_clocks,
 )
 from .protocol import BAD_REQUEST, CANCELLED, CONFIRM_MISMATCH, INTERNAL, MAX_LINE, PLAN_STALE, REFUSED, OpError
 from .state import State
@@ -108,7 +108,7 @@ _RESPONSE_SLACK = 4096  # envelope of the response line around the result (the 6
 _ACCEPTED_FILE_MAX = 256 * 1024
 _ACCEPTED_PATH_RE = re.compile(r"profiles/[A-Za-z0-9._-]{1,80}\Z")
 _NONCE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"  # contract 8: [A-Z2-9]
-_RATIO_RANGE = (1, 100)  # the profile schema's unit sanity range (the policy's ratio_max is the bound)
+_RATIO_RANGE = RATIO_RANGE  # G-141 (D-039): the field encodings of arltuner.mailbox.encoding, shared with the profile schema; the policy and the CPU's limits are the bounds
 
 
 def groups_of(topology: Topology) -> dict[str, tuple[str, ...]]:
@@ -216,6 +216,7 @@ class TuneState:
     fused: dict[int, dict[str, Any]] | None = None  # G-114 F7: cpu -> {word, ratio, v} of the last tune.read (cmd 0x09 P1=0x11 P2=0)
     turbo: dict[str, Any] | None = None  # G-114 F5: {"P": {ratios, counts}, "E": {...}, "favored": {cpu: ratio}} of the last tune.read
     hw_limits: dict[str, dict[str, Any]] | None = None  # G-137 (D-039): the CPU's own limits per kind from the last tune.read (0x01 ratio, 0x28 V target); see _hw_limits_doc
+    audit_mark: int | None = None  # G-141: byte size of the audit log when the words held were read (or last verified by an apply); a write after it makes them stale; None = unknown
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -396,7 +397,7 @@ class _Session:
     policy: Policy  # with max_operations_per_session = exactly the budget of this session
     clock: Any
     sleep: Any
-    used: int  # per-boot operations used before this session
+    used: int | None  # per-boot operations used before this session; None = the boot id is unknown (G-141: not claimed as 0)
 
 
 @contextlib.contextmanager
@@ -417,7 +418,7 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
     except TrustError as exc:
         raise _trust_refusal(exc, "LOCK_UNTRUSTED") from None
     try:
-        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o644, euid=euid, what="audit log"))
+        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=euid, what="audit log"))  # G-141: private, like install.sh creates it
     except TrustError as exc:
         raise _trust_refusal(exc, "TRUST_PATH") from None
     except OSError as exc:
@@ -431,18 +432,16 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
     except Exception:
         boot = None
     boot_id = boot.strip() or None if isinstance(boot, str) else None
-    used = state.attempts_by_boot.get(boot_id, 0)
-    left = max(policy.max_operations_per_boot - used, 0)
+    counted = state.attempts_by_boot.get(boot_id, 0)  # the guard caps an unknown boot as its own bucket, so the cap check uses it either way
+    used = counted if boot_id is not None else None  # ... but it is not "operations of this boot": the display says unknown
+    left = max(policy.max_operations_per_boot - counted, 0)
     if needed > left:
         raise _refuse(
             f"{what} needs up to {needed} mailbox operations but only {left} of the policy's {policy.max_operations_per_boot} operations per boot are left.",
             "BOOT_LIMIT", needed=needed, left=left,
         )
     if cfg.simulator:
-        if helper.sim_time is None:
-            virtual = _VirtualClock()
-            helper.sim_time = (virtual, anchored_wall_clock(virtual.clock, cfg.wall_clock))
-        virtual, wall = helper.sim_time
+        virtual, wall = sim_clocks(helper, state.last_attempt_wall)  # G-141: starts at the newest audit record when a previous process left it ahead of the real clock
         virtual.sleep(policy.min_dwell_s)
         clock, sleep = virtual.clock, virtual.sleep
         transport_sleep = sleep
@@ -492,14 +491,114 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
 # --------------------------------------------------------------------------------------------------------------
 # vf.dump / tune.read
 # --------------------------------------------------------------------------------------------------------------
+def audit_mark(helper: Helper) -> int | None:
+    """G-141: the byte size of the audit log now (0 = no log yet), a position every later record lies after; ``None`` when the log cannot be read or trusted."""
+    cfg = helper.cfg
+    try:
+        _trust(helper, cfg.audit_path, want="file", must_exist=False)
+        fd = open_checked(cfg.audit_path, write=False, create=False, euid=cfg.euid_fn(), what="audit log")
+    except FileNotFoundError:
+        return 0
+    except (OpError, TrustError, OSError):
+        return None
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            return os.fstat(handle.fileno()).st_size
+    except OSError:
+        return None
+
+
+_AUDIT_LINE_MAX = 1 << 20
+_MAILBOX_WRITE_CMDS = frozenset({0x11, 0x13, 0x15, 0x17, 0x19, 0x1B, 0x1D, 0x27})  # arltuner.mailbox.WRITE_COMMANDS as plain ints (a record's cmd is "0x11")
+
+
+def stale_since_read(helper: Helper) -> str | None:
+    """G-141: ``None`` when no hardware write happened since the words held (``helper.last_words``) were read or last verified by an apply, else why they may be stale.
+    Judged from the audit log: a mailbox write command (``0x11`` ...) or a plain MSR write ``attempt`` after the byte position ``audit_mark`` taken when the read began
+    (or when the last complete apply ended). Unknown = stale: an unreadable log, a log shorter than the mark, or a read that has no mark (stored by an older version)."""
+    _last_words(helper)  # the lazy restore brings the stored mark back after a helper restart
+    st = _state(helper)
+    with st.lock:
+        mark = st.audit_mark
+    if mark is None:
+        return "when the words in force were read is not known (an unreadable audit log, or a read stored by an older version)"
+    cfg = helper.cfg
+    try:
+        _trust(helper, cfg.audit_path, want="file", must_exist=False)
+        fd = open_checked(cfg.audit_path, write=False, create=False, euid=cfg.euid_fn(), what="audit log")
+    except FileNotFoundError:
+        return None if mark == 0 else "the audit log is gone since the read"
+    except (OpError, TrustError, OSError) as exc:
+        return f"the audit log cannot be read to prove nothing was written since the read ({getattr(exc, 'message', None) or exc})"
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size < mark:
+                return "the audit log is shorter than when the words were read"
+            if mark > 0:
+                handle.seek(mark - 1)
+                if handle.read(1) != b"\n":
+                    handle.readline(_AUDIT_LINE_MAX + 1)  # the mark landed inside a record another process was still writing: start at the next line
+            else:
+                handle.seek(0)
+            while True:
+                raw = handle.readline(_AUDIT_LINE_MAX + 1)
+                if not raw:
+                    return None
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    record = json.loads(text.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    if not raw.endswith(b"\n"):
+                        continue  # a record cut short at the end of the file: ignored, as the guard's read_state does
+                    return "an audit record after the read cannot be parsed"
+                if not isinstance(record, dict) or record.get("event") != "attempt":
+                    continue
+                cmd = record.get("cmd")
+                try:
+                    wrote = record.get("msr_kind") == "write" or (isinstance(cmd, str) and int(cmd, 16) in _MAILBOX_WRITE_CMDS)
+                except ValueError:
+                    wrote = True
+                if wrote:
+                    what = f"MSR {record.get('msr')}" if record.get("msr_kind") == "write" else f"mailbox command {cmd}"
+                    return f"the audit log shows a write ({what} on cpu {record.get('cpu')}, {record.get('ts')}) after the words were read"
+    except OSError as exc:
+        return f"the audit log cannot be read to prove nothing was written since the read ({exc.strerror or exc})"
+
+
+def _advance_mark(helper: Helper) -> None:
+    """After an apply that completed and whose verified read-backs were folded into the words held: they are current as of now."""
+    mark = audit_mark(helper)
+    st = _state(helper)
+    with st.lock:
+        st.audit_mark = mark
+
+
+def _covers_all_units(topology: Topology, words: Mapping[int, Sequence[int]]) -> bool:
+    return all(any(c in words for c in topology.unit_cpus(u)) for u in topology.unit_ids())
+
+
 def vf_dump_tracked(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    """``vf.dump`` unchanged, plus: after a *complete* dump the words are kept in ``helper.last_words`` (cpu -> [OC word, point 1, ...])."""
+    """``vf.dump`` unchanged, plus: after a *complete* dump the words are kept in ``helper.last_words`` (cpu -> [OC word, point 1, ...]) together with the audit position
+    the dump began at (``TuneState.audit_mark``, G-141): a dump of every unit replaces it, a dump of some CPUs keeps the older of the two (the rest of the words are as old)."""
+    _last_words(helper)  # restore first: the mark below must not be overwritten by a later lazy restore
+    before = audit_mark(helper)
     doc = op_vf_dump(helper, ctx, args)  # raises on a stop: a partial dump never becomes "the words in force"
     words = _words_of_document(doc)
     if words:
-        merged = {cpu: list(ws) for cpu, ws in (_last_words(helper) or {}).items()}
+        prior = _last_words(helper)
+        merged = {cpu: list(ws) for cpu, ws in (prior or {}).items()}
         merged.update(words)
         _set_last_words(helper, merged)
+        st = _state(helper)
+        with st.lock:
+            if prior is None or _covers_all_units(helper_topology(helper), words):
+                st.audit_mark = before
+            elif st.audit_mark is None or before is None:
+                st.audit_mark = None
+            else:
+                st.audit_mark = min(st.audit_mark, before)
     return doc
 
 
@@ -521,24 +620,41 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
     * ``limits`` (G-137, D-039): cmd ``0x01 P1=0`` (fused max OC ratio) and ``0x28 P1=0`` (max voltage) on the first P CPU and the first CPU of the first E cluster (4),
     * ``turbo`` (F5): plain ``rdmsr`` ``0x1AD`` / ``0x1AE`` / ``0x650`` / ``0x651`` on the first P CPU (4).
 
-    Each group degrades alone (a refusal leaves that group ``None`` with a note); a guard trip or a cancel ends the session. Returns
-    ``{fused, turbo, tables, hw_limits, notes}``."""
+    Each group degrades alone (a refusal leaves that group ``None`` with a note); a guard trip or a cancel ends the session. The mailbox requests are paced like
+    ``vf.dump`` / the executor (G-141): the first waits out the dwell since the dump that just ended, every later one the dwell since the previous one (a policy with
+    ``min_dwell_s > 0`` would otherwise refuse every group with DWELL). Returns ``{fused, turbo, tables, hw_limits, notes, ops}``; ``ops`` = the operations this session
+    executed (the guard's own count: the mailbox requests, not the plain ``rdmsr`` reads)."""
     p_cpus = sorted(c.cpu for c in topology.cores if c.kind == "P")
     e_cpus = [topology.cluster_cpus(k)[0] for k in sorted({c.cluster for c in topology.cores if c.cluster is not None})]
-    out: dict[str, Any] = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "notes": {}}
+    out: dict[str, Any] = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "notes": {}, "ops": 0}
     notes: dict[str, str] = out["notes"]
     limit_cpus = {kind: cpus[0] for kind, cpus in (("P", p_cpus), ("E", e_cpus)) if cpus}  # one CPU per kind answers for its kind
+    guards: list[WriteGuard] = []
     try:
         with _guarded_session(helper, ctx, policy, len(p_cpus) * 2 + len(e_cpus) * 2 + 4 + 2 * len(limit_cpus), "the fused-point / CPU-limit / turbo-table read") as session:
+            guards.append(session.guard)
+            pacer = vfdump.Pacer(policy.min_dwell_s, session.clock, session.sleep)
+            if not helper.cfg.simulator:
+                pacer.mark()  # the dump that just ended was a mailbox session too; the simulator's session already waited the dwell out (virtual clock)
+
             def mailbox(cpu: int, cmd: int, p1: int, what: str) -> int:
                 if ctx.cancel.is_set():
                     raise OpError(CANCELLED, "tune.read was cancelled between transactions")
-                res = session.guard.execute(Request(cpu, cmd, p1, 0, 0, f"tune.read: {what} of cpu {cpu}"), session.confirm)
+                pacer.wait()
+                if ctx.cancel.is_set():  # the dwell wait is woken by the cancel flag
+                    raise OpError(CANCELLED, "tune.read was cancelled between transactions")
+                try:
+                    res = session.guard.execute(Request(cpu, cmd, p1, 0, 0, f"tune.read: {what} of cpu {cpu}"), session.confirm)
+                finally:
+                    pacer.mark()
                 if res.response.rc != 0:
                     raise OpError(REFUSED, f"cpu {cpu}: mailbox completion code {res.response.rc} ({rc_name(res.response.rc)})")
                 return res.response.data
 
             def plain(msr: int) -> int:
+                if ctx.cancel.is_set():
+                    raise OpError(CANCELLED, "tune.read was cancelled between transactions")
+                pacer.wait()  # a plain rdmsr starts no dwell of its own (not a WRMSR) but meets the guard's dwell check since the last mailbox request
                 if ctx.cancel.is_set():
                     raise OpError(CANCELLED, "tune.read was cancelled between transactions")
                 return session.guard.execute(MsrRequest(p_cpus[0], msr, 0, f"tune.read: read {msr:#x} (plain rdmsr)", "read"), session.confirm).value
@@ -571,7 +687,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                         except (OpError, GuardRefused) as exc:  # each read degrades alone: a refused 0x01 leaves the 0x28 limit readable
                             if isinstance(exc, OpError) and exc.code == CANCELLED or isinstance(exc, GuardRefused) and exc.reason is Refusal.TRIPPED:
                                 raise
-                            why = exc.message if isinstance(exc, OpError) else f"the guard refused ({exc.reason.value}); the policy has no allow entry for it"
+                            why = exc.message if isinstance(exc, OpError) else _refused_text(exc)
                             notes["limits"] = (notes.get("limits", "") + f" {kind}: {what} not read: {why}.").strip()
 
             def do_turbo() -> None:
@@ -585,7 +701,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                         if exc.reason is Refusal.TRIPPED:
                             raise
                         counts[msr] = None
-                        notes["counts"] = f"bucket counts not read: the guard refused ({exc.reason.value}); the policy has no msr_allow read entry for {msr:#x}"
+                        notes["counts"] = f"bucket counts not read: {_refused_text(exc, f'the policy has no msr_allow read entry for {msr:#x}')}"
                 out["turbo"] = {
                     "P": {"ratios": list(turbo_bytes(ratios[0x1AD])), "counts": counts[0x1AE]},
                     "E": {"ratios": list(turbo_bytes(ratios[0x650])), "counts": counts[0x651]},
@@ -602,7 +718,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 except GuardRefused as exc:
                     if exc.reason is Refusal.TRIPPED:
                         raise
-                    notes[key] = f"{_LABEL[key]} not read: the guard refused ({exc.reason.value}); the policy has no allow entry for it"
+                    notes[key] = f"{_LABEL[key]} not read: {_refused_text(exc)}"
             if out["turbo"] is not None:
                 out["turbo"]["favored"] = {cpu: r for cpu, r in favored.items()}
             elif favored:
@@ -615,11 +731,20 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
             notes.setdefault(key, f"{_LABEL[key]} not read: {exc.message}")
     except GuardRefused as exc:
         for key in _LABEL:
-            notes.setdefault(key, f"{_LABEL[key]} not read: the guard refused ({exc.reason.value})")
+            notes.setdefault(key, f"{_LABEL[key]} not read: {_refused_text(exc)}")
     except Exception as exc:  # best effort: these reads must never fail the tuning-word read that already succeeded
         for key in _LABEL:
             notes.setdefault(key, f"{_LABEL[key]} not read: {type(exc).__name__}: {exc}")
+    finally:
+        if guards:
+            out["ops"] = guards[0].operations  # whatever ended the session, the operations it executed were counted by the guard
     return out
+
+
+def _refused_text(exc: GuardRefused, no_entry: str = "the policy has no allow entry for it") -> str:
+    """What a guard refusal of a ``tune.read`` extra says, by its reason (G-141): only ``NOT_ALLOWLISTED`` is "no allow entry"; a ``DWELL``, a ``CHECK_FAILED`` ... says itself."""
+    head = f"the guard refused ({exc.reason.value})"
+    return f"{head}; {no_entry}" if exc.reason is Refusal.NOT_ALLOWLISTED else f"{head}: {exc.detail}"
 
 
 def _fill_oc_cap(entry: dict[str, Any], word: int) -> None:
@@ -697,7 +822,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except OpError as exc:
         if exc.code == CANCELLED:
             raise
-        extras = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "notes": {k: f"{_LABEL[k]} not read: {exc.message}" for k in _LABEL}}
+        extras = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "ops": 0, "notes": {k: f"{_LABEL[k]} not read: {exc.message}" for k in _LABEL}}
     notes = extras["notes"]
     tables = extras["tables"]
     note = notes.get("turbo")
@@ -720,6 +845,9 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result["turbo"] = None if turbo is None else {**turbo, "favored": {str(c): r for c, r in turbo["favored"].items()}}  # {P: {ratios, counts}, E: {...}, favored: {cpu (string): ratio}}
     result["hw_limits"] = hw_limits  # G-137 (D-039): {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [-1000, 999]}}, the CPU's own limits; None = not read
     result["extras_notes"] = notes
+    # G-141: ops_done = every mailbox operation of this read (the page shows "N mailbox operations used"): the vf.dump words plus the guarded extras (0x09 / 0x1C / 0x01 / 0x28).
+    result["ops_words"], result["ops_extras"] = int(doc.get("ops_done", 0)), int(extras.get("ops", 0))
+    result["ops_done"] = result["ops_words"] + result["ops_extras"]
     cross = _favored_crosscheck(topology, turbo)
     if cross:
         result["problems"] = [*result.get("problems", []), cross]
@@ -776,6 +904,8 @@ def _save_last_read(helper: Helper, result: dict[str, Any], topology: Topology) 
             favored = dict(st.favored_words or {})
         if favored:
             record["favored_words"] = {str(cpu): f"{w:#010x}" for cpu, w in favored.items()}  # G-133: the "auto" ratio ceiling after a helper restart
+        with st.lock:
+            record["audit_mark"] = st.audit_mark  # G-141: where in the audit log these words are valid from (profiles.accept refuses a stale read)
         _last_store(helper).save(record)
     except (LastReadError, OSError, ValueError, TypeError) as exc:
         _log(helper, f"last-read not stored: {exc}")
@@ -809,36 +939,50 @@ def _restore_last(helper: Helper) -> None:
     """Once per helper process (lazily, on the first tune.* call): this boot's stored read becomes ``helper.last_words`` and the turbo / fused facts of
     the tune state, so ``tune.plan`` works after a helper restart without a new read. A read made in this process wins (nothing is overwritten)."""
     with _STATE_LOCK:
-        if getattr(helper, "_last_restored", False):
-            return
-        helper._last_restored = True  # type: ignore[attr-defined]
+        if getattr(helper, "_last_restored", False) or getattr(helper, "_restoring", False):
+            return  # done, or this very thread is inside the restore already (it holds the lock; another thread waits here until the restore has finished)
+        helper._restoring = True  # type: ignore[attr-defined]
         try:
-            if getattr(helper, "last_words", None):
-                return
-            record = _boot_record(helper)
-            words = _record_words(record) if record is not None else {}
-            if record is None or not words:
-                return
-            result = record["result"]
-            st = _state(helper)
-            with st.lock:
-                tables = result.get("tables")
-                if st.tables is None and isinstance(tables, dict) and all(isinstance(tables.get(k), list) for k in ("e", "p")):
-                    st.tables = {k: tuple(int(x) for x in tables[k]) for k in ("e", "p")}
-                    st.tables_note = None
-                fused = result.get("fused")
-                if st.fused is None and isinstance(fused, dict):
-                    st.fused = {int(c): dict(v) for c, v in fused.items() if isinstance(v, dict)}
-                    helper.fused_words = _fused_map(_topology(helper), st.fused)
-                limits = result.get("hw_limits")
-                if st.hw_limits is None and isinstance(limits, dict):
-                    st.hw_limits = {str(k): dict(v) for k, v in limits.items() if isinstance(v, dict)}
-                turbo = result.get("turbo")
-                if st.turbo is None and isinstance(turbo, dict):
-                    st.turbo = {**turbo, "favored": {int(c): int(r) for c, r in (turbo.get("favored") or {}).items()}}
-            _set_last_words(helper, words)
-        except Exception as exc:  # noqa: BLE001 - a bad stored record must never break a tune op
-            _log(helper, f"last-read not restored: {type(exc).__name__}: {exc}")
+            _restore_last_locked(helper)
+        finally:
+            helper._restoring = False  # type: ignore[attr-defined]
+            helper._last_restored = True  # type: ignore[attr-defined]  # G-141: set when the restore is DONE, so a concurrent tune.plan never sees "restored" before the words are there
+
+
+def _restore_last_locked(helper: Helper) -> None:
+    try:
+        if getattr(helper, "last_words", None):
+            return
+        record = _boot_record(helper)
+        words = _record_words(record) if record is not None else {}
+        if record is None or not words:
+            return
+        result = record["result"]
+        st = _state(helper)
+        with st.lock:
+            tables = result.get("tables")
+            if st.tables is None and isinstance(tables, dict) and all(isinstance(tables.get(k), list) for k in ("e", "p")):
+                st.tables = {k: tuple(int(x) for x in tables[k]) for k in ("e", "p")}
+                st.tables_note = None
+            fused = result.get("fused")
+            if st.fused is None and isinstance(fused, dict):
+                st.fused = {int(c): dict(v) for c, v in fused.items() if isinstance(v, dict)}
+                helper.fused_words = _fused_map(_topology(helper), st.fused)
+            limits = result.get("hw_limits")
+            if st.hw_limits is None and isinstance(limits, dict):
+                st.hw_limits = {str(k): dict(v) for k, v in limits.items() if isinstance(v, dict)}
+            turbo = result.get("turbo")
+            if st.turbo is None and isinstance(turbo, dict):
+                st.turbo = {**turbo, "favored": {int(c): int(r) for c, r in (turbo.get("favored") or {}).items()}}
+            favored = record.get("favored_words")  # G-141: the 0x1C words of the read: plan-time checks and the apply session's seed match the ones before the restart
+            if st.favored_words is None and isinstance(favored, dict) and favored:
+                st.favored_words = {int(c): int(w, 16) for c, w in favored.items()}
+            mark = record.get("audit_mark")
+            if st.audit_mark is None and isinstance(mark, int) and not isinstance(mark, bool) and mark >= 0:
+                st.audit_mark = mark
+        _set_last_words(helper, words)
+    except Exception as exc:  # noqa: BLE001 - a bad stored record must never break a tune op
+        _log(helper, f"last-read not restored: {type(exc).__name__}: {exc}")
 
 
 def _persist_applied_words(helper: Helper) -> None:
@@ -851,6 +995,17 @@ def _persist_applied_words(helper: Helper) -> None:
         for cpu in list(record["words"]):
             if int(cpu) in last:
                 record["words"][cpu] = [f"{w:#010x}" for w in last[int(cpu)]]
+        st = _state(helper)
+        with st.lock:
+            tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
+            turbo = None if st.turbo is None else {**st.turbo, "favored": {str(c): r for c, r in (st.turbo.get("favored") or {}).items()}}
+            record["audit_mark"] = st.audit_mark
+        result = record.get("result")
+        if isinstance(result, dict):  # G-141: tune.last and a restart must show the turbo tables the apply wrote
+            if tables is not None:
+                result["tables"] = tables
+            if turbo is not None:
+                result["turbo"] = turbo
         record["applied_at"] = helper.cfg.wall_clock()
         _last_store(helper).save(record)
     except (LastReadError, OSError, ValueError, TypeError, KeyError) as exc:
@@ -937,17 +1092,17 @@ def _canonical_row(raw: object, scope: str) -> dict[str, Any] | None:
             canon: dict[str, int] = {}
             for key, value in mvs.items():
                 if not isinstance(key, str) or not key.isdigit() or not _RATIO_RANGE[0] <= int(key) <= _RATIO_RANGE[1]:
-                    raise _bad(f"offset.mv key {key!r} is not a ratio (1..100)")
+                    raise _bad(f"offset.mv key {key!r} is not a ratio ({_RATIO_RANGE[0]}..{_RATIO_RANGE[1]}, {RATIO_SOURCE})")
                 canon[str(int(key))] = _int_mv(value, f"offset.mv[{key}]")
             canon_offset = {"kind": "points", "mv": canon}
         else:
             raise _bad(f"offset.kind {offset['kind']!r} is not 'curve' or 'points'")
     v = raw.get("v_target_v")
-    if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0.5 <= v <= 2.0):
-        raise _bad("v_target_v must be null or a voltage in volts (0.5..2.0)")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not V_TARGET_RANGE_MV[0] <= round(v * 1000) <= V_TARGET_RANGE_MV[1]):
+        raise _bad(f"v_target_v must be null or a voltage in volts ({V_TARGET_RANGE_MV[0] / 1000:g}..{V_TARGET_RANGE_MV[1] / 1000:g}, {V_TARGET_SOURCE})")
     ratio = raw.get("ratio")
     if ratio is not None and (not _is_int(ratio) or not _RATIO_RANGE[0] <= ratio <= _RATIO_RANGE[1]):
-        raise _bad(f"ratio must be null or an integer {_RATIO_RANGE[0]}..{_RATIO_RANGE[1]}")
+        raise _bad(f"ratio must be null or an integer {_RATIO_RANGE[0]}..{_RATIO_RANGE[1]} ({RATIO_SOURCE})")
     if canon_offset is None and v is None and ratio is None:
         return None  # a row that changes nothing is dropped, like an unchanged row of the UI
     return {"target": target, "offset": canon_offset, "v_target_v": None if v is None else float(v), "ratio": ratio}
@@ -959,8 +1114,8 @@ def _canonical_turbo(raw: object) -> dict[str, list[int]]:
         raise _bad("turbo must be {P: [8 ratios], E: [8 ratios]} (either key may be absent)")
     out: dict[str, list[int]] = {}
     for key, table in raw.items():
-        if not isinstance(table, list) or len(table) != 8 or not all(_is_int(r) and _RATIO_RANGE[0] <= r <= _RATIO_RANGE[1] for r in table):
-            raise _bad(f"turbo.{key} must be a list of 8 integer ratios {_RATIO_RANGE[0]}..{_RATIO_RANGE[1]}")
+        if not isinstance(table, list) or len(table) != 8 or not all(_is_int(r) and TURBO_RATIO_RANGE[0] <= r <= TURBO_RATIO_RANGE[1] for r in table):
+            raise _bad(f"turbo.{key} must be a list of 8 integer ratios {TURBO_RATIO_RANGE[0]}..{TURBO_RATIO_RANGE[1]} ({RATIO_SOURCE}, one byte per bucket)")
         out[key] = list(table)
     return out
 
@@ -1774,9 +1929,11 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     profile = resolved.profile
     _check_turbo_order(profile)
     used, budget = helper.budget.snapshot()
-    ops_left = None if used is None or budget is None else max(budget - used, 0)
+    if used is None:  # G-141: an unreadable audit log is not "0 operations used": the apply could not count them either, so the plan is refused here like the apply would be
+        raise OpError(REFUSED, "the audit log cannot be read, so the per-boot operation count is unknown and no plan can be checked against it. Nothing was sent.", {"check": "AUDIT_UNAVAILABLE"})
+    ops_left = None if budget is None else max(budget - used, 0)
     try:
-        targets = preflight(profile, topology, policy, boot_ops_used=used or 0)
+        targets = preflight(profile, topology, policy, boot_ops_used=used)
     except PreflightError as exc:
         raise _preflight_error(exc) from None
     except (PlanError, ProfileError) as exc:
@@ -1916,9 +2073,36 @@ def _report_rows(report: Any, topology: Topology) -> tuple[list[dict[str, Any]],
     return steps, readback
 
 
+_TABLE_OF_MSR = {0x650: "e", 0x1AD: "p"}
+
+
+def _fold_applied_tables(helper: Helper, report: Any) -> None:
+    """G-141: the read-backs of the turbo-table writes (``WRITE_MSR``) become the tables the helper knows (``TuneState.tables`` / ``turbo``), so ``tune.last``, the next plan's
+    raise / lower decision and the predictions see the applied table. A table that was never read stays unknown (nothing is invented)."""
+    applied: dict[str, tuple[int, ...]] = {}
+    for r in report.steps:
+        s = r.step
+        if s.kind is StepKind.WRITE_MSR and r.readback_data is not None and s.msr in _TABLE_OF_MSR:
+            applied[_TABLE_OF_MSR[s.msr]] = turbo_bytes(r.readback_data)
+    if not applied:
+        return
+    st = _state(helper)
+    with st.lock:
+        if st.tables is not None:
+            st.tables = {**st.tables, **applied}
+        if st.turbo is not None:
+            turbo = dict(st.turbo)
+            for key, ratios in applied.items():
+                cur = turbo.get(key.upper())
+                if isinstance(cur, dict):
+                    turbo[key.upper()] = {**cur, "ratios": list(ratios)}
+            st.turbo = turbo
+
+
 def _merge_applied_words(helper: Helper, report: Any) -> None:
     """The words verified (or seen differing) by the read-backs of this apply update ``helper.last_words`` if there was a complete read; the OC word is
     index 0, point n index n. Nothing is invented for a CPU that was not read."""
+    _fold_applied_tables(helper, report)
     last = _last_words(helper)
     if last is None:
         return
@@ -2043,7 +2227,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         nonlocal progress_steps
         if line.startswith("step "):
             progress_steps += 1
-            ctx.progress(progress_steps, needed, session.used + progress_steps, session.policy.max_operations_per_boot)
+            ctx.progress(progress_steps, needed, None if session.used is None else session.used + progress_steps, session.policy.max_operations_per_boot)
 
     with _guarded_session(helper, ctx, policy, needed, "this apply") as session:
         try:
@@ -2065,6 +2249,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
             helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120: an apply that died midway may have written; "stock" is never claimed after it
             raise
     _merge_applied_words(helper, report)
+    if report.ok:
+        _advance_mark(helper)  # G-141: a complete apply's verified read-backs keep the words in force current; a partial one leaves the older mark (the writes then show as "after the read")
     steps, readback = _report_rows(report, topology)
     cpufreq_warnings: list[str] = []
     favored_cpus, vf_cpus = _oc_ratio_cpus(report)
@@ -2121,11 +2307,10 @@ def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     note: str | None = None
     try:
         text = _read_accepted_text(helper, "CURRENT")
-        created = None
         for line in text.splitlines():
             m = re.fullmatch(r"\s*profile\s*=\s*(\S+)\s*", line)
             if m and _ACCEPTED_PATH_RE.fullmatch(m.group(1)) and m.group(1).endswith(".toml"):
-                out.append({"name": Path(m.group(1)).stem, "source": "accepted", "created": created})
+                out.append({"name": Path(m.group(1)).stem, "source": "accepted", "created": None})  # an accepted profile has no creation time of its own
     except OpError as exc:
         note = NO_ACCEPTED_NOTE if exc.message.startswith(NO_ACCEPTED_NOTE) else exc.message
     try:
@@ -2194,7 +2379,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
 # --------------------------------------------------------------------------------------------------------------
 def tune_ops() -> list[OpSpec]:
     from .ops import _validate_vf_dump
-    from .ops_accept import op_profiles_accept, validate_profiles_accept  # lazy: ops_accept imports this module
+    from .ops_accept import op_profiles_accept, op_profiles_fingerprint, validate_profiles_accept  # lazy: ops_accept imports this module
 
     return [
         # a mailbox read is a WRMSR (docs/SAFETY.md): write-gated on hardware, long (state machine begin/end), one at a time
@@ -2209,6 +2394,8 @@ def tune_ops() -> list[OpSpec]:
         OpSpec("profiles.get", op_profiles_get, _validate_profiles_get, slow=True),
         # G-129 (D-036): the user's accepted state, written by the root helper (a file write, no mailbox / MSR traffic; a read this boot is required)
         OpSpec("profiles.accept", op_profiles_accept, validate_profiles_accept, slow=True),
+        # G-141: records fingerprint.json for the accepted state that exists (a file write, no mailbox / MSR traffic; needs this boot's read of the fused words)
+        OpSpec("profiles.fingerprint", op_profiles_fingerprint, _no_args, slow=True),
         # G-123: the stored last read of this boot (a file read, no hardware); also restores the plan state after a helper restart
         OpSpec("tune.last", op_tune_last, _no_args, slow=True),
     ]

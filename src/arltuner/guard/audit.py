@@ -103,6 +103,19 @@ def _open_read(path: Path) -> int:
     return fd
 
 
+def _tighten(fd: int) -> None:
+    """G-141: a log created group/world-readable by an older version or by the umask becomes 0600 (``fchmod``; not available on Windows before Python 3.13, and a log
+    that is not ours cannot be changed: both are left alone, never an error of the audit write)."""
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is None:
+        return
+    try:
+        if os.fstat(fd).st_mode & 0o077:
+            fchmod(fd, 0o600)
+    except OSError:
+        pass
+
+
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
@@ -136,8 +149,9 @@ class AuditLog:
     def _open(self) -> int:
         _refuse_symlink(self._path)
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | _O_BINARY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC
-        fd = os.open(self._path, flags, 0o644)
+        fd = os.open(self._path, flags, 0o600)  # G-141: the log is private (install.sh creates it 0600; it names CPUs, words and purposes)
         _require_plain_file(fd, self._path)
+        _tighten(fd)
         return fd
 
     def append(

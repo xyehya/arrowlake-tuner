@@ -22,6 +22,19 @@ class AuditLogTests(unittest.TestCase):
         self.dir = Path(tmp.name)
         self.path = self.dir / "audit.jsonl"
 
+    def test_the_log_is_created_0600_and_a_wider_one_is_tightened(self) -> None:
+        """G-141: install.sh creates the audit log 0600; every other creation path matches it."""
+        old = os.umask(0)
+        try:
+            log = AuditLog(self.path, fsync=False)
+        finally:
+            os.umask(old)
+        log.append("result")
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+        os.chmod(self.path, 0o644)
+        log.append("result")
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+
     def test_record_format(self) -> None:
         log = AuditLog(self.path, fsync=False)
         rec = log.append(
