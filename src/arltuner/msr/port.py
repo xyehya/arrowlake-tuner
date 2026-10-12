@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-MAX_CPU = 8191  # kernel NR_CPUS upper bound; a sanity limit, not a claim about this machine (which has 24 CPUs)
+MAX_CPU = 8191  # kernel NR_CPUS upper bound; a sanity limit, not a claim about this system (which has 24 CPUs)
 MAX_MSR = 0xFFFFFFFF  # MSR addresses are 32-bit; the /dev/cpu/N/msr file offset is the MSR number
 MAX_VALUE = 0xFFFFFFFFFFFFFFFF  # MSR values are unsigned 64-bit
 

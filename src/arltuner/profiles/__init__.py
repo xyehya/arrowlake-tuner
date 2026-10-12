@@ -2,7 +2,7 @@
 
 from .schema import (
     PLATFORM,
-    POINT_COUNT,
+    POINT_RANGE,
     TURBO_BUCKETS,
     CoreSetting,
     CpuSetting,
@@ -16,7 +16,7 @@ from .schema import (
 
 __all__ = [
     "PLATFORM",
-    "POINT_COUNT",
+    "POINT_RANGE",
     "TURBO_BUCKETS",
     "CoreSetting",
     "CpuSetting",

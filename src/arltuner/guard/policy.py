@@ -64,7 +64,7 @@ cores may go **up or down**. Safety is expressed as explicit, reviewed **bounds*
 ceilings (default = the no-raise values, so the shipped policy cannot overclock; an overclock only ever comes from numbers a human wrote
 in a policy file), the D-015 offset window, the hardware maximum voltage of ``0x28``, per-operation step limits and the
 voltage-first / frequency-first ordering of ``registers.md`` ("Ordering"). Whether the hardware accepts a raise at all, the E-core write
-scope and what ``0x1C`` returns after a ``0x1D`` are ``[UNVERIFIED]`` on this machine.
+scope and what ``0x1C`` returns after a ``0x1D`` are ``[UNVERIFIED]`` on this system.
 """
 from __future__ import annotations
 
@@ -78,9 +78,11 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
 from arltuner.mailbox import Cmd, VfWord, is_write
-from arltuner.platform import default_platform
+from arltuner.topology.cpumap import KIND_E, KIND_P, Topology
+from arltuner.topology.reference import arl_s_285k
 
 __all__ = [
+    "AUTO",
     "CHECKS",
     "MSR_CHECKS",
     "POINT_P2_MAX",
@@ -108,16 +110,16 @@ __all__ = [
     "RequestLike",
     "build_context",
     "default_m1_policy",
+    "fused_top_ratio",
     "hw_v_max_raw",
     "load_policy",
 ]
 
-#: D-015 (docs/DECISIONS.md): the runtime offset ADDS to the BIOS per-core V/F offset ``[MEASURED win 2026-10-01]`` (S-04c: -15 mV
-#: runtime moved VID max 1.385 -> 1.371 V on a core with a BIOS offset of about -40...-50 mV). The BIOS offsets are the operator's
-#: stated values (``[USER]``, not readable through the mailbox): P -50 mV, E 0 mV. The effective (BIOS + runtime) offset is
-#: floored at -100 mV, so the runtime floor of a core kind is ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``
-#: (P -50 mV, E -100 mV). The values are the orchestrator's conservative choice; the operator can override them in a reviewed policy.
-DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": -50, "E": 0})
+#: D-015 (docs/DECISIONS.md): the runtime offset ADDS to the BIOS per-core V/F offset ``[MEASURED win 2026-10-01]``. The BIOS offset is not readable through
+#: the mailbox and D-036 forbids an assumed one, so the default is 0 for both kinds: the effective offset is what the CPU reports (the baseline word read in the
+#: session). A reviewed policy may still state one (``assumed_bios_offset_mv``); the runtime floor of a core kind is
+#: ``effective_offset_floor_mv - assumed_bios_offset_mv[kind]``.
+DEFAULT_ASSUMED_BIOS_OFFSET_MV: Mapping[str, int] = MappingProxyType({"P": 0, "E": 0})
 DEFAULT_EFFECTIVE_OFFSET_FLOOR_MV = -100
 
 #: D-016 defaults of the per-operation step limits and the offset ceiling: the orchestrator's conservative choice (``[UNVERIFIED]`` as
@@ -140,7 +142,10 @@ _RATIO_STEP_RANGE = (1, 8)
 _V_STEP_MV_RANGE = (2, 200)  # >= 2 mV so that every step window holds at least one whole-mV value (1 mV = 1.024 raw)
 _OFFSET_STEP_MV_RANGE = (2, 200)
 
-_E_CPUS_DEFAULT = frozenset(range(8, 24))  # Linux CPUs 8-23 are E-cores [MEASURED lnx 2026-09-29, turbostat+ CPU map]
+#: The simulated reference CPU's E CPUs: the default of a Policy that was never bound to a topology (simulator and tests). Every hardware path binds the live
+#: topology (``Policy.with_topology`` / ``load_policy(..., topology=...)``, D-036).
+_REFERENCE_TOPOLOGY = arl_s_285k()
+_E_CPUS_DEFAULT = frozenset(_REFERENCE_TOPOLOGY.cpus_of_kind(KIND_E))
 
 _U32_MAX = 0xFFFFFFFF
 _CPU_MAX = 1023  # far above any real CPU number; rejects garbage, not a hardware fact
@@ -237,11 +242,12 @@ class CheckContext:
         return replace(self, max_ratio_step=ratio, max_v_step_raw=v_raw, max_offset_step_raw=offset_raw)
 
 
-def top_fused_ratio(kind: str) -> int:
-    """The highest fused V/F point ratio of a core kind: P 57x, E 46x (``platforms/arl-s-285k.toml``; ``docs/knowledge/platform-285k.md`` section 3
-    ``[MEASURED lnx 2026-10-02]``). An OC ratio (the ``P2 = 0`` word) at or below it creates no OC point."""
-    platform = default_platform()
-    return max(platform.p_point_ratios if kind == "P" else platform.e_point_ratios)
+def fused_top_ratio(fused_word: int | None) -> int | None:
+    """The highest fused V/F point ratio of a core, live: ``[7:0]`` of its ``0x09 P1=0x11 P2=0`` word (registers.md), or ``None`` when that word was not read
+    (or reads 0). An OC ratio (the ``P2 = 0`` word) at or below it creates no OC point."""
+    if not fused_word:
+        return None
+    return (fused_word & 0xFF) or None
 
 
 def build_context(
@@ -256,15 +262,18 @@ def build_context(
     """The context for a request on ``cpu``: the policy's D-015 runtime floor and D-016 limits for its core kind plus the session facts."""
     kind = policy.core_kind(cpu)
     v_max = policy.v_target_max_mv[kind]
+    v_max_raw = None if v_max is None else VfWord.v_to_raw(v_max / 1000)
+    if kind in policy.v_target_auto and max_voltage_word is not None:
+        v_max_raw = hw_v_max_raw(max_voltage_word)  # "auto": the CPU's own 0x28 maximum minus one LSB (an unread 0x28 leaves the no-raise value)
     return CheckContext(
-        top_fused_ratio=top_fused_ratio(kind),
+        top_fused_ratio=fused_top_ratio(fused_word),
         offset_floor_raw=policy.offset_floor_raw(cpu),
         favored_word=favored_word,
         fused_word=fused_word,
         vf_word_sent=vf_word_sent,
         max_voltage_word=max_voltage_word,
         ratio_max=policy.ratio_max[kind],
-        v_target_max_raw=None if v_max is None else VfWord.v_to_raw(v_max / 1000),
+        v_target_max_raw=v_max_raw,
         offset_ceiling_raw=VfWord.mv_to_offset_raw(policy.offset_ceiling_mv),
         max_ratio_step=policy.max_ratio_step,
         max_v_step_raw=VfWord.v_to_raw(policy.max_v_step_mv / 1000),
@@ -318,7 +327,7 @@ def _check_turbo_ratio_bounded(
     4. ``|byte - baseline byte| <= max_ratio_step`` per bucket;
     5. every byte ``>= 0xCE[15:8]`` (the base ratio) if ``0xCE`` was read this session, else ``>= min(baseline bytes) - max_ratio_step``.
 
-    ``[UNVERIFIED]`` on this machine: that the hardware accepts a raised table, and the scope of the write (package vs core, hence the
+    ``[UNVERIFIED]`` on this system: that the hardware accepts a raised table, and the scope of the write (package vs core, hence the
     guard's read-back on a second CPU). A caller without a context is refused.
     """
     if ctx is None or ctx.kind is None:
@@ -351,7 +360,7 @@ def _check_turbo_ratio_bounded(
 
 def hw_v_max_raw(max_voltage_word: int) -> int:
     """The highest V target (raw S2.10) the hardware allows from a ``0x28`` word: XTU uses ``[11:0] - 1``, and a field of 0 means 2.0 V
-    (registers.md "Mailbox commands", ``[DECOMPILED]``; the values of this machine, P ``0x681`` / E ``0x56D``, are ``[MEASURED win
+    (registers.md "Mailbox commands", ``[DECOMPILED]``; the values of this system, P ``0x681`` / E ``0x56D``, are ``[MEASURED win
     2026-10-01]``)."""
     raw = max_voltage_word & 0xFFF
     return 2048 if raw == 0 else raw - 1
@@ -382,7 +391,7 @@ def _check_vf_bounded(
     The step limits are measured from the session baseline, so a session cannot drift further than one step from it by repeating writes. A
     ceiling with no reference at all (baseline 0 and no ``0x1C`` / ``0x09`` read) refuses. A caller without a ``CheckContext`` is refused.
     ``[MEASURED win 2026-10-01]``: XTU's word has ratio = the non-zero baseline ratio else ``0x1C[7:0]`` and V target = the fused voltage.
-    ``[UNVERIFIED]`` on this machine: that the hardware accepts a raise at all; that ``0x1C`` follows a ``0x1D``.
+    ``[UNVERIFIED]`` on this system: that the hardware accepts a raise at all; that ``0x1C`` follows a ``0x1D``.
     """
     if ctx is None or ctx.offset_floor_raw is None:
         return False, "no check context (the CPU's runtime offset floor is unknown); the bounds cannot be evaluated"
@@ -787,6 +796,7 @@ class Policy:
     e_cpus: frozenset[int] = _E_CPUS_DEFAULT
     ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
     v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})
+    v_target_auto: frozenset[str] = frozenset()  # kinds whose V target ceiling is "auto": the CPU's own 0x28 maximum minus one LSB, read in the session
     offset_ceiling_mv: int = DEFAULT_OFFSET_CEILING_MV
     max_ratio_step: int = DEFAULT_MAX_RATIO_STEP
     max_v_step_mv: int = DEFAULT_MAX_V_STEP_MV
@@ -803,6 +813,10 @@ class Policy:
             "v_target_max_mv",
             _kind_ceilings("v_target_max_mv", self.v_target_max_mv, {k: (_V_TARGET_MIN_MV, v) for k, v in SANITY_V_TARGET_MAX_MV.items()}),
         )
+        auto = frozenset(self.v_target_auto)
+        if not auto <= {KIND_P, KIND_E}:
+            raise PolicyError(f"v_target_auto must be a subset of ['E', 'P'], got {sorted(auto)}")
+        object.__setattr__(self, "v_target_auto", auto)
         _int_in("offset_ceiling_mv", self.offset_ceiling_mv, 0, SANITY_OFFSET_CEILING_MV)
         _int_in("max_ratio_step", self.max_ratio_step, *_RATIO_STEP_RANGE)
         _int_in("max_v_step_mv", self.max_v_step_mv, *_V_STEP_MV_RANGE)
@@ -865,6 +879,11 @@ class Policy:
     def cpu_allowed(self, cpu: object) -> bool:
         return _is_int(cpu) and cpu in self.cpus
 
+    def with_topology(self, topology: Topology) -> Policy:
+        """The same policy over a live topology (D-036): ``cpus`` and ``e_cpus`` are exactly that topology's CPUs and E CPUs. Hardware paths bind the topology
+        they derived from sysfs; an unbound policy carries the simulated reference CPU's sets."""
+        return replace(self, cpus=frozenset(c.cpu for c in topology.cores), e_cpus=frozenset(topology.cpus_of_kind(KIND_E)))
+
     def core_kind(self, cpu: int) -> str:
         """``"E"`` for a CPU listed in ``e_cpus``, else ``"P"`` (the kind with the stricter default floor)."""
         return "E" if cpu in self.e_cpus else "P"
@@ -902,12 +921,12 @@ class Policy:
 # --------------------------------------------------------------------------------------------------------------
 # Default M1 policy
 # --------------------------------------------------------------------------------------------------------------
-def default_m1_policy() -> Policy:
+def default_m1_policy(topology: Topology | None = None) -> Policy:
     """Conservative milestone-1 policy. D-016 / T-022: safety is by **bounds**, and every ceiling is left at its no-raise default (``ratio_max``
     / ``v_target_max_mv`` unset, ``offset_ceiling_mv`` 0, steps 1 ratio / 20 mV / 25 mV), so this policy still refuses every raise and every
     positive offset while allowing undervolting offsets inside the D-015 window; ``arl-voltage-topology.md`` "Implications for milestone 1".
 
-    * CPUs 0..23 (8 P + 16 E, ``lnx-turbostat-plus-facts.md`` CPU map); 1 operation per session; at most 12 operations per
+    * the CPUs of ``topology`` (the live one on hardware; without one, the simulated reference CPU); 1 operation per session; at most 12 operations per
       boot over all processes (``max_operations_per_boot``, T-016: counted from the audit log, reads included, read-back
       excluded; SAFETY.md "Mailbox-session discipline", D-011); 60 s dwell, also enforced across processes.
     * Reads (registers.md "Mailbox commands", P1/P2 columns): ``0x01`` p1 0..7 p2 0; ``0x02`` p1 0..7 p2 0; ``0x09`` p1 0x11
@@ -924,8 +943,10 @@ def default_m1_policy() -> Policy:
     """
     domains = frozenset({0, 2, 7})  # core, ring, NGU: the domains M1 cares about (registers.md "Domain P1 wire values")
     zero = frozenset({0})
+    topo = topology if topology is not None else _REFERENCE_TOPOLOGY
     return Policy(
-        cpus=frozenset(range(24)),
+        cpus=frozenset(c.cpu for c in topo.cores),
+        e_cpus=frozenset(topo.cpus_of_kind(KIND_E)),
         max_operations_per_session=1,
         max_operations_per_boot=12,
         min_dwell_s=60.0,
@@ -1014,8 +1035,22 @@ def _read_source(source: str | os.PathLike[str]) -> str:
         raise PolicyError(f"cannot read policy file {source!s}: {exc}") from exc
 
 
-def load_policy(source: str | os.PathLike[str]) -> Policy:
-    """Load a policy from TOML text or a file path. Strict: unknown keys, unknown checks, bad types -> ``PolicyError``."""
+AUTO = "auto"
+
+
+def _live_ratio_max(topology: Topology, kind: str) -> int | None:
+    """"auto" ratio ceiling of a kind: the highest ``cpuinfo_max_freq`` ratio among that kind's CPUs (live hardware maximum), clamped to the sanity bound; ``None`` (the
+    no-raise value) when sysfs gave no number."""
+    values = [c.max_ratio for c in topology.cores if c.kind == kind and c.max_ratio]
+    return min(max(values), SANITY_RATIO_MAX[kind]) if values else None
+
+
+def load_policy(source: str | os.PathLike[str], topology: Topology | None = None) -> Policy:
+    """Load a policy from TOML text or a file path. Strict: unknown keys, unknown checks, bad types -> ``PolicyError``.
+
+    ``topology`` (D-036): the live topology. ``cpus = "auto"`` / ``e_cpus = "auto"`` / ``ratio_max.<K> = "auto"`` are derived from it and are a ``PolicyError`` without
+    one (never a default); a policy without an ``e_cpus`` key takes the topology's E CPUs when one is given. ``v_target_max_mv.<K> = "auto"`` needs no topology: the
+    guard uses the CPU's own ``0x28`` maximum minus one LSB when the session read it, else the no-raise value. Numeric values keep working unchanged."""
     text = _read_source(source)
     try:
         doc = tomllib.loads(text)
@@ -1026,7 +1061,18 @@ def load_policy(source: str | os.PathLike[str]) -> Policy:
         raise PolicyError(f"unknown top-level key(s): {sorted(unknown)}")
     if "cpus" not in doc:
         raise PolicyError("policy must define cpus (no default: an absent CPU set is not 'all CPUs')")
-    kwargs: dict[str, Any] = {"cpus": frozenset(_parse_int_list("cpus", doc["cpus"]))}
+
+    def needs_topology(what: str) -> Topology:
+        if topology is None:
+            raise PolicyError(f'{what} = "auto" is derived from the live topology, which was not supplied')
+        return topology
+
+    if doc["cpus"] == AUTO:
+        kwargs: dict[str, Any] = {"cpus": frozenset(c.cpu for c in needs_topology("cpus").cores)}
+    else:
+        kwargs = {"cpus": frozenset(_parse_int_list("cpus", doc["cpus"]))}
+    if topology is not None:
+        kwargs["e_cpus"] = frozenset(topology.cpus_of_kind(KIND_E))
     if "max_operations_per_session" in doc:
         kwargs["max_operations_per_session"] = doc["max_operations_per_session"]
     if "max_operations_per_boot" in doc:
@@ -1034,7 +1080,10 @@ def load_policy(source: str | os.PathLike[str]) -> Policy:
     if "min_dwell_s" in doc:
         kwargs["min_dwell_s"] = doc["min_dwell_s"]
     if "e_cpus" in doc:
-        kwargs["e_cpus"] = frozenset(_parse_int_list("e_cpus", doc["e_cpus"]))
+        if doc["e_cpus"] == AUTO:
+            kwargs["e_cpus"] = frozenset(needs_topology("e_cpus").cpus_of_kind(KIND_E))
+        else:
+            kwargs["e_cpus"] = frozenset(_parse_int_list("e_cpus", doc["e_cpus"]))
     if "effective_offset_floor_mv" in doc:
         kwargs["effective_offset_floor_mv"] = doc["effective_offset_floor_mv"]
     if "assumed_bios_offset_mv" in doc:
@@ -1042,12 +1091,23 @@ def load_policy(source: str | os.PathLike[str]) -> Policy:
         if not isinstance(table, dict) or not set(table) <= {"P", "E"}:
             raise PolicyError("assumed_bios_offset_mv must be a table with the keys 'P' and/or 'E'")
         kwargs["assumed_bios_offset_mv"] = {**DEFAULT_ASSUMED_BIOS_OFFSET_MV, **table}  # a missing kind keeps its default
+    auto_v: set[str] = set()
     for key in _KIND_TABLE_KEYS:  # D-016 ceilings: a missing kind stays None = the no-raise value; values are range-checked by Policy
         if key in doc:
             table = doc[key]
             if not isinstance(table, dict) or not set(table) <= {"P", "E"}:
                 raise PolicyError(f"{key} must be a table with the keys 'P' and/or 'E'")
-            kwargs[key] = dict(table)
+            resolved = dict(table)
+            for kind, value in table.items():
+                if value == AUTO:
+                    if key == "ratio_max":
+                        resolved[kind] = _live_ratio_max(needs_topology(f"ratio_max.{kind}"), kind)
+                    else:
+                        resolved[kind] = None
+                        auto_v.add(kind)
+            kwargs[key] = resolved
+    if auto_v:
+        kwargs["v_target_auto"] = frozenset(auto_v)
     for key in _SCALAR_KEYS:
         if key in doc:
             kwargs[key] = doc[key]

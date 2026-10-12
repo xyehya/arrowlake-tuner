@@ -12,7 +12,7 @@ import os
 import secrets
 import stat
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,9 +35,8 @@ from arltuner.guard import (
 from arltuner.guard.audit import parse_audit_ts
 from arltuner.mailbox import VfWord
 from arltuner.msr import MailboxTransport
-from arltuner.platform import default_platform
 from arltuner.platform.preflight import PreflightReport, Status
-from arltuner.topology import TopologyError, UnknownCore
+from arltuner.topology import Topology, TopologyError, UnknownCore
 
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, MAX_LINE, PREFLIGHT_FAILED, REFUSED, OpError
 from .state import State
@@ -46,7 +45,7 @@ from .trust import TrustError, check_lock_file, check_trusted_path, open_checked
 if TYPE_CHECKING:
     from .core import Helper
 
-__all__ = ["BudgetMeter", "OpContext", "OpSpec", "accepted_match", "builtin_ops", "write_gate"]
+__all__ = ["BudgetMeter", "OpContext", "OpSpec", "accepted_match", "builtin_ops", "helper_topology", "write_gate"]
 
 AUDIT_TAIL_DEFAULT = 20
 AUDIT_TAIL_MAX = 200
@@ -294,8 +293,8 @@ class BudgetMeter:
         key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
         if key != self._policy_key:
             try:
-                self._budget = load_policy(cfg.policy_path).max_operations_per_boot
-            except (PolicyError, OSError):
+                self._budget = load_policy(cfg.policy_path, cfg.topology_fn()).max_operations_per_boot  # "auto" entries need the live topology
+            except (PolicyError, OSError, TopologyError):
                 self._budget = None
             self._policy_key = key
         return self._budget
@@ -474,14 +473,14 @@ def _hex(word: int | None) -> str | None:
     return None if word is None else f"{word:#010x}"
 
 
-def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> bool:
+def _equivalent_oc_words(fused_word: int | None, expected: int | None, actual: int | None) -> bool:
     """G-120/G-124: an OC word (P2 = 0) of a core with **no OC point** is *neutral* when it carries offset 0, adaptive mode, a ratio at or below the
     top fused ratio and a V target of 0 or the fused ``0x09`` voltage ``[MEASURED lnx 2026-10-11/12]``. Equivalent: two neutral words of the same
-    ratio (cold P0 ``0x39`` vs XTU shape ``0x5B439``), or an accepted cold word 0 vs a neutral live word at the top fused ratio with no target
-    (E after an offset-0 whole-curve write: ``0x2E``). A live 0 against a non-zero accepted word is not."""
+    ratio (cold ``0x39`` vs XTU shape ``0x5B439``), or an accepted cold word 0 vs a neutral live word at the top fused ratio with no target
+    (E after an offset-0 whole-curve write: ``0x2E``). A live 0 against a non-zero accepted word is not. ``fused_word`` is this core's live ``0x09 P1=0x11
+    P2=0`` word from this session's read (D-036: never a stored table); without it nothing is judged equivalent."""
     if expected is None or actual is None or expected == actual:
         return False
-    fused_word = default_platform().fused_point.get(cpu)
     if fused_word is None:
         return False
     fused_raw, top_ratio = (fused_word >> 8) & 0xFFF, fused_word & 0xFF
@@ -500,10 +499,14 @@ def _equivalent_oc_words(cpu: int, expected: int | None, actual: int | None) -> 
     return neutral(expected) and neutral(actual) and VfWord.from_u32(expected).ratio == VfWord.from_u32(actual).ratio
 
 
-def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
+def accepted_match(
+    helper: Helper, document: dict[str, Any], fused: Mapping[int, int] | None = None
+) -> tuple[list[dict[str, Any]] | None, str | None]:
     """Compare the dump ``document`` (``vfdump.to_json``) with the accepted EXPECTED words: ``(per_core, None)`` or ``(None, note)``.
+    ``fused``: cpu -> the live ``0x09`` word of this session (default: ``helper.fused_words``, kept by the last ``tune.read``).
     ``per_core`` has one ``{cpu, match, diffs: [{point, expected, actual}]}`` for each dumped CPU that has an expected line (``point`` 0 is the OC
     word, P2 = 0; 1..n the points; words as ``0x%08x``, ``null`` when one side has no such point). CPUs without an expected line are not listed."""
+    fused = fused if fused is not None else getattr(helper, "fused_words", None) or {}
     try:
         table, note = _load_accepted(helper)
         if table is None:
@@ -524,7 +527,7 @@ def accepted_match(helper: Helper, document: dict[str, Any]) -> tuple[list[dict[
                 for point in range(max(len(want), len(got))):
                     expected = want[point] if point < len(want) else None
                     actual = got[point] if point < len(got) else None
-                    if point == 0 and _equivalent_oc_words(cpu["cpu"], expected, actual):
+                    if point == 0 and _equivalent_oc_words(fused.get(cpu["cpu"]), expected, actual):
                         equivalents.append({"point": 0, "expected": _hex(expected), "actual": _hex(actual)})
                     elif expected != actual:
                         differing += 1
@@ -565,14 +568,19 @@ def _refuse(text: str, check: str, **detail: Any) -> OpError:
     return OpError(REFUSED, f"{text} Nothing was sent.", {"check": check, **detail})
 
 
+def helper_topology(helper: Helper) -> Topology:
+    """The topology this helper runs on (live from sysfs on hardware, the simulated part's under ``--sim``); a named refusal when it cannot be derived."""
+    try:
+        return helper.cfg.topology_fn()
+    except TopologyError as exc:
+        raise _refuse(f"this system's CPU topology could not be derived or is not an Arrow Lake-S layout: {exc}.", "TOPOLOGY") from None
+
+
 def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     """One guarded read session: every request is checked against the policy and budgeted before the first is sent; one at a time, dwell apart.
     Sends no write command whatever the policy says. Returns the ``vfdump.to_json`` document; a stop returns an error carrying it as ``detail.partial``."""
     cfg = helper.cfg
-    try:
-        topology = cfg.topology_fn()
-    except TopologyError as exc:
-        raise _refuse(f"this machine does not match the Core Ultra 9 285K map: {exc}.", "TOPOLOGY") from None
+    topology = helper_topology(helper)
     try:
         cores = vfdump.select_cpus(topology, args["cpus"], args["all_e"])
     except UnknownCore as exc:
@@ -584,11 +592,12 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
         _trust(helper, cfg.policy_path, want="file", must_exist=True)
     _trust(helper, cfg.audit_path, want="file", must_exist=False)
     try:
-        policy = default_m1_policy() if cfg.policy_path is None else load_policy(cfg.policy_path)
+        policy = default_m1_policy(topology) if cfg.policy_path is None else load_policy(cfg.policy_path, topology)
     except (PolicyError, OSError) as exc:
         raise _refuse(f"policy error: {exc}.", "POLICY_INVALID") from None
     # ---- everything decidable before the first request: allowlist, read-only entries, budget ----
-    requests = vfdump.plan_requests(cores, topology)
+    cap = vfdump.walk_cap(policy)
+    requests = vfdump.plan_requests(cores, topology, cap)
     for req in requests:
         shape = f"cmd {req.cmd:#04x} P1={req.p1:#x} P2={req.p2:#x}"
         entry = policy.match(req.cmd, req.p1, req.p2)
@@ -697,7 +706,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
             return f"refused by the guard: {exc}"
 
         pacer = vfdump.Pacer(policy.min_dwell_s, clock, sleep)
-        curves, stop = vfdump.walk(cores, topology, execute, pacer, refusal_text)
+        curves, stop = vfdump.walk(cores, topology, execute, pacer, refusal_text, cap)
         tripped = guard.tripped
         trip_reason = guard.trip_reason
     finally:

@@ -61,17 +61,17 @@ __all__ = [
 #: Warning on every plan (docs/tasks/T-021; replaces the T-014 ratio caveat): the sequence reproduces XTU's Windows behaviour, but what
 #: it does on Linux is not known. ASCII only.
 XTU_SHAPE_CAVEAT = (
-    "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sent on Windows [MEASURED win 2026-10-01]; OC words written this way read back as "
-    "sent on Linux [MEASURED lnx 2026-10-11], but the semantics of 0x1D/0x27 stay UNVERIFIED. A V target of 0 is sent only on a word with no OC point "
-    "(ratio at or below the top fused ratio, P 57 / E 46): the hardware keeps no target next to an offset there [MEASURED lnx 2026-10-11, D-035]. "
-    "A zero ratio is never sent (its acceptance is UNVERIFIED)"
+    "the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sends on Windows; OC words written this way have been read back as sent on Linux, "
+    "but the semantics of 0x1D/0x27 stay unverified. A V target of 0 is sent only on a word with no OC point "
+    "(ratio at or below the core's top fused ratio): the hardware keeps no target next to an offset there (D-035). "
+    "A zero ratio is never sent (its acceptance is unverified)"
 )
 
 #: Line of every revert plan (docs/tasks/T-021, T-022, G-125): a reboot restores whatever the BIOS programmed ([MEASURED win 2026-10-01]: XTU persisted
 #: nothing); a write puts back the word as read, which is exact except for an OC ratio above the top fused ratio.
 REVERT_NOTE = (
     "a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio (a zero word cannot be written; only a reboot clears it), "
-    "while a word without one reverts exactly [MEASURED lnx 2026-10-12, G-124] (the revert requests put back the previous XTU-shaped word, never one "
+    "while a word without one reverts exactly (G-124; the revert requests put back the previous XTU-shaped word, never one "
     "with a zero field, in the reverse of the order they were applied: after a raise the ratio first, then the voltage; a V/F point word is restored "
     "exactly as read)"
 )

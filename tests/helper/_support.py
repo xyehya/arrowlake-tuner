@@ -106,7 +106,7 @@ class HelperCase(unittest.TestCase):
             topology_fn=arl_s_285k,
             preflight_fn=lambda: GOOD_REPORT,
             sampler_factory=lambda interval: Sampler(
-                TelemetryMsr(self.msr_for_telemetry), hwmon_root=self.tmp / "h", powercap_root=self.tmp / "p", interval_s=interval
+                TelemetryMsr(self.msr_for_telemetry), hwmon_root=self.tmp / "h", powercap_root=self.tmp / "p", interval_s=interval, topology=arl_s_285k()
             ),
             simulator=True,
             heartbeat_s=0.05,

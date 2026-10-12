@@ -36,6 +36,7 @@ min_dwell_s = 60.0
 max_ratio_step = 8        # these tests are not about the D-016 step limits: relaxed to their sanity maxima
 max_v_step_mv = 200
 max_offset_step_mv = 200
+assumed_bios_offset_mv = { P = -50, E = 0 }   # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
 
 [[allow]]
 name = "misc_read"
@@ -901,7 +902,7 @@ class DeviceRefusals(CliCase):
             raise TopologyMismatch("cpu_core/cpus is [0, 1] but the 285K map expects [0..7]")
 
         _, err = self.refused(*self.device_apply(), stdin=self.confirmed(), detect_fn=mismatch)
-        self.assertIn("does not match", err)
+        self.assertIn("could not be derived", err)
 
     def test_the_real_sysfs_is_not_read_when_detect_is_injected(self) -> None:
         calls = []

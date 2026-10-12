@@ -6,6 +6,7 @@ import unittest
 from typing import Any
 
 from arltuner.telemetry import Sampler, TelemetryMsr
+from arltuner.topology import arl_s_285k
 
 from ._support import HelperCase, error_code
 
@@ -42,7 +43,7 @@ class TelemetryRestartTests(HelperCase):
         def factory(interval: float) -> CountingSampler:
             if fail_second and self.created:
                 raise RuntimeError("no sampler")
-            s = CountingSampler(Sampler(TelemetryMsr(self.msr_for_telemetry), hwmon_root=self.tmp / "h", powercap_root=self.tmp / "p", interval_s=interval), interval)
+            s = CountingSampler(Sampler(TelemetryMsr(self.msr_for_telemetry), hwmon_root=self.tmp / "h", powercap_root=self.tmp / "p", interval_s=interval, topology=arl_s_285k()), interval)
             self.created.append(s)
             return s
 

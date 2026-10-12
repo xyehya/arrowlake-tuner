@@ -96,7 +96,7 @@ class ValidationTests(StressCase):
             {}, {"kind": "disk", "duration_s": 60}, {"kind": "cpu"}, {"kind": "cpu", "duration_s": 29}, {"kind": "cpu", "duration_s": 3601},
             {"kind": "cpu", "duration_s": "60"}, {"kind": "cpu", "duration_s": True}, {"kind": "cpu", "duration_s": 60.0},
             {"kind": "cpu", "duration_s": 60, "method": "int64"}, {"kind": "cpu", "duration_s": 60, "method": "avx"},
-            {"kind": "cpu", "duration_s": 60, "units": []}, {"kind": "cpu", "duration_s": 60, "units": ["P9"]}, {"kind": "cpu", "duration_s": 60, "units": ["P0", "P0"]},
+            {"kind": "cpu", "duration_s": 60, "units": []}, {"kind": "cpu", "duration_s": 60, "units": ["Q1"]}, {"kind": "cpu", "duration_s": 60, "units": ["P0", "P0"]},
             {"kind": "cpu", "duration_s": 60, "units": "P0"}, {"kind": "cpu", "duration_s": 60, "ratio_cap": 7}, {"kind": "cpu", "duration_s": 60, "ratio_cap": 61},
             {"kind": "cpu", "duration_s": 60, "ratio_cap": "40"}, {"kind": "cpu", "duration_s": 60, "ratio_cap": True}, {"kind": "cpu", "duration_s": 60, "ratio_cap": 40.0},
             {"kind": "cpu", "duration_s": 60, "memory_mb": 1024}, {"kind": "cpu", "duration_s": 60, "taskset": "0"},
@@ -773,7 +773,7 @@ class ServerAllowlistTests(unittest.TestCase):
             self.assertTrue(check(good), good)
         for bad in (
             {}, {"kind": "cpu"}, {"kind": "disk", "duration_s": 60}, {"kind": "cpu", "duration_s": 29}, {"kind": "cpu", "duration_s": True},
-            {"kind": "cpu", "duration_s": 60, "method": "sse"}, {"kind": "cpu", "duration_s": 60, "units": ["P9"]}, {"kind": "cpu", "duration_s": 60, "units": []},
+            {"kind": "cpu", "duration_s": 60, "method": "sse"}, {"kind": "cpu", "duration_s": 60, "units": ["Q1"]}, {"kind": "cpu", "duration_s": 60, "units": []},
             {"kind": "cpu", "duration_s": 60, "ratio_cap": 61}, {"kind": "cpu", "duration_s": 60, "ratio_cap": "40"}, {"kind": "cpu", "duration_s": 60, "x": 1},
             {"kind": "memory", "duration_s": 60, "memory_mb": 10}, {"kind": "memory", "duration_s": 60, "memory_mb": 1.5},
         ):

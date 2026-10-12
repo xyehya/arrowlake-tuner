@@ -217,33 +217,34 @@ class PlanFactsTests(FactsCase):
         self.assertTrue(texts(p)[[w["code"] for w in p["warnings"]].index("NO_BASELINE")].startswith("measure a stock baseline for predictions"))
 
     def test_vccia_is_set_by_the_unit_with_the_highest_allowed_vid(self) -> None:
-        """F6: stock, all-core: P7 at 55x (1.376 V) + 0.105 V. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
+        """F6 (D-036): stock, all-core: the highest requested VID is P7 at 55x (1.376 V); no ring floor and no margin are assumed. Lowering a unit that does not set the maximum does not lower it; lowering P7 hands it to P2."""
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("P0", points={"55": -40})))
         v = p["vccia"]
         self.assertEqual(v["set_by"], {"unit": "P7", "ratio": 55})
-        self.assertAlmostEqual(v["predicted_v"], 1.481, places=3)
-        self.assertEqual(v["label"], "prediction")
-        self.assertAlmostEqual(v["before_v"], 1.481, places=3)  # P0 does not set VccIA: nothing changes
+        self.assertAlmostEqual(v["predicted_v"], 1.376, places=3)
+        self.assertEqual((v["label"], v["margin_v"]), ("highest requested VID among units", None))
+        self.assertAlmostEqual(v["before_v"], 1.376, places=3)  # P0 does not set VccIA: nothing changes
         self.assertEqual(v["light_load"]["set_by"], {"unit": "P0", "ratio": 57})  # 1-2 active cores: the favored 57x points count
         p2 = self.plan(h, rows(row("P7", points={"55": -100})))
         self.assertEqual(p2["vccia"]["set_by"], {"unit": "P2", "ratio": 55})
-        self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366 + 0.105, places=3)
-        self.assertAlmostEqual(p2["vccia"]["before_v"], 1.481, places=3)
+        self.assertAlmostEqual(p2["vccia"]["predicted_v"], 1.366, places=3)
+        self.assertAlmostEqual(p2["vccia"]["before_v"], 1.376, places=3)
         self.assertTrue(any("VccIA is a prediction" in w for w in texts(p)))
         c = p2["vccia"]["contributors"]
         self.assertEqual(set(c), {"P", "E", "ring"})
-        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]["v"]), ("P2", 55, "EC0", 48, 1.201))
+        self.assertEqual((c["P"]["unit"], c["P"]["ratio"], c["E"]["unit"], c["E"]["ratio"], c["ring"]), ("P2", 55, "EC0", 48, None))  # the ring ratio is not read: no figure
 
     def test_e_40x_offset_and_e_target_above_1_2_v_are_warned_about(self) -> None:
         h = self.boot_with()
         self.read(h)
         p = self.plan(h, rows(row("EC1", points={"40": -20}), row("EC2", v=1.25)))
-        self.assertTrue(any("EC1" in w and "40x" in w and "never offset E point 5" in w for w in texts(p)), p["warnings"])
-        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC1" in w and "40x" in w and "Community report" in w for w in texts(p)), p["warnings"])
+        self.assertTrue(any("EC2" in w and "1.250 V" in w and "WHEA" in w and "Community report" in w for w in texts(p)), p["warnings"])
+        self.assertFalse(any("this machine" in w or "MEASURED" in w for w in texts(p)), p["warnings"])  # D-036: no reference-machine lore in user-facing text
         quiet = self.plan(h, rows(row("EC1", points={"46": -25})))
-        self.assertFalse(any("point 5" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
+        self.assertFalse(any("40x" in w or "WHEA" in w for w in texts(quiet)), quiet["warnings"])
 
     def test_positive_offsets_still_warn(self) -> None:
         h = self.boot_with()
@@ -315,7 +316,7 @@ class TurboOrderTests(FactsCase):
         self.read(h)
         p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
         v = p["vccia"]
-        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("prediction", "all", 0.105))
+        self.assertEqual((v["label"], v["active_cores"], v["margin_v"]), ("highest requested VID among units", "all", None))
         self.assertIsNotNone(v["before_v"])
         self.assertEqual(set(v["light_load"]), {"predicted_v", "set_by", "active_cores"})
 

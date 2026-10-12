@@ -7,7 +7,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from arltuner.msr import FUSED_POINT, SimConfig, measured_baseline
+from arltuner.msr import SimConfig, measured_baseline
+from arltuner.msr.measured_baseline import FUSED_POINT
 from arltuner.msr.sim import PLAIN_MSR_DEFAULTS, POINT_RATIOS_ARL_S, RING_POINT_RATIOS_ARL_S
 from arltuner.platform import PlatformError, default_platform, load_platform, parse_platform
 from arltuner.platform.schema import default_platform_path

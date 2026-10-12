@@ -86,7 +86,7 @@ from .policy import (
     Policy,
     build_context,
     build_msr_context,
-    top_fused_ratio,
+    fused_top_ratio,
     turbo_bytes,
 )
 
@@ -141,21 +141,21 @@ _READBACK_MATCH: Mapping[int, Callable[[int, int], bool]] = MappingProxyType(
 )
 
 
-def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, kind: str = "P", cap_ratio: bool = True) -> int:
+def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, cap_ratio: bool = True) -> int:
     """The XTU-shaped word that puts a core's *offset* (and the other fields) back: the baseline word, with a zero ratio / V target
-    filled the way XTU fills it (``0x1C[7:0]`` / the fused ``0x09`` voltage) -- **G-122:** with ``cap_ratio`` the filled ratio is capped at the top fused ratio of
-    the core ``kind`` (P 57, E 46), so reverting a word that had no OC point never creates one (the caller passes ``False`` when the word being undone had an OC
+    filled the way XTU fills it (``0x1C[7:0]`` / the fused ``0x09`` voltage) -- **G-122:** with ``cap_ratio`` the filled ratio is capped at the core's top fused ratio
+    (``[7:0]`` of the live ``0x09`` word ``fused``), so reverting a word that had no OC point never creates one (the caller passes ``False`` when the word being undone had an OC
     ratio: its undo keeps the XTU fill, which that ratio's step limits were measured from) -- and then **the word the hardware keeps** (D-035, ``[MEASURED lnx 2026-10-11]``):
     with no OC point (ratio <= the top fused ratio) the V target is 0 whatever the offset (G-124: the hardware drops a written one, ``0xFEC5B439`` read back
     ``0xFEC00039``, and at offset 0 it kept ``0x00000039`` for ``0x0005B439`` when only the 0x11 was sent). (Same rule as ``controls.planner.kept_word`` / ``has_oc_point``, which this module cannot import.) So a baseline
     ``0xFEC00039`` is restored exactly. **A baseline word with a zero field (``0x0``, 23 of 24 cores at boot) cannot itself be written back** -- XTU never
     sends one; a reboot restores it."""
     base = VfWord.from_u32(baseline)
-    top = top_fused_ratio(kind)
+    top = fused_top_ratio(fused)  # None = the session did not read 0x09: no cap and no zeroing (the XTU-shaped word), a revert must always produce a word
     fav = (favored or 0) & 0xFF
-    ratio = base.ratio or (min(fav, top) if fav and cap_ratio else fav)
+    ratio = base.ratio or (min(fav, top) if fav and cap_ratio and top is not None else fav)
     v_target = base.v_target_raw or (((fused or 0) >> 8) & 0xFFF)
-    if 0 < ratio <= top:  # G-124: no OC point = V target 0, whatever the offset or where the target came from
+    if top is not None and 0 < ratio <= top:  # G-124: no OC point = V target 0, whatever the offset or where the target came from
         v_target = 0
     return base.with_(ratio=ratio, v_target_raw=v_target).to_u32()
 
@@ -457,9 +457,9 @@ class WriteGuard:
             return entry.prior
         if int(entry.request.p2) != 0:
             return entry.baseline
-        kind = self._policy.core_kind(entry.request.cpu)
-        written_oc_ratio = VfWord.from_u32(entry.request.data).ratio > top_fused_ratio(kind)  # G-122: that word made an OC point (e.g. XTU's E 48)
-        return _revert_vf_word(entry.baseline, entry.favored, entry.fused, kind, cap_ratio=not written_oc_ratio)
+        top = fused_top_ratio(entry.fused)
+        written_oc_ratio = top is not None and VfWord.from_u32(entry.request.data).ratio > top  # G-122: that word made an OC point (e.g. XTU's E 48)
+        return _revert_vf_word(entry.baseline, entry.favored, entry.fused, cap_ratio=not written_oc_ratio)
 
     def _inverse_data(self, entry: _Executed, entries: list[_Executed]) -> int:
         cmd = int(entry.request.cmd)

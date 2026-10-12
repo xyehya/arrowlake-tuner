@@ -119,6 +119,7 @@ class Helper:
         self.budget = BudgetMeter(self)  # heartbeat ops_used / ops_budget (G-107)
         self.sim_time: Any = None  # (virtual clock, anchored wall clock) of the simulator, created by the first vf.dump
         self.last_words: dict[int, list[int]] | None = None  # G-112: cpu -> [OC word, point 1, point 2, ...] after the last complete tune.read / vf.dump (and the read-backs of tune.apply); None = unknown
+        self.fused_words: dict[int, int] = {}  # D-036: cpu -> the live 0x09 P1=0x11 P2=0 word of the last tune.read (every CPU of a unit shares its first CPU's word); {} = not read
         self.tuned_this_boot = False  # G-120/G-122: a V/F write happened this boot (tune.apply sets it; ``run()`` derives it from the audit log of this boot_id at start); "stock" is never claimed after it
         self.measure_wiring: Any = None  # ops_measure.MeasureWiring (G-111): cpufreq / MSR read / store / journal for vf.measure, curves.*, mem.read; set by main (None: those ops answer INTERNAL)
 
@@ -163,7 +164,7 @@ class Helper:
             self.cfg.log(f"lock: {exc}")
             return EXIT_REFUSED_TO_START
         except (InstanceBusy, OSError) as exc:
-            self._send(error_response(None, REFUSED, f"the helper is already running on this machine: {exc}", {"check": "INSTANCE_LOCK"}))
+            self._send(error_response(None, REFUSED, f"the helper is already running on this system: {exc}", {"check": "INSTANCE_LOCK"}))
             self.cfg.log(f"instance lock: {exc}")
             return EXIT_INSTANCE_BUSY
         self._derive_tuned_this_boot()

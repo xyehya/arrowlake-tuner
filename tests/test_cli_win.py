@@ -8,7 +8,8 @@ from unittest import mock
 
 from arltuner import cli
 from arltuner.guard import read_all
-from arltuner.msr import FUSED_POINT, SimMsrPort
+from arltuner.msr import SimMsrPort
+from arltuner.msr.measured_baseline import FUSED_POINT
 from arltuner.topology import TopologyMismatch, arl_s_285k
 
 from .controls._support import sim_config

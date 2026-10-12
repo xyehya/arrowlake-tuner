@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from arltuner import vfdump
-from arltuner.guard import ENV_FLAG, read_all
+from arltuner.guard import ENV_FLAG, default_m1_policy, load_policy, read_all
 from arltuner.guard import policy as guard_policy
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort
@@ -23,7 +23,7 @@ from arltuner.topology import arl_s_285k
 
 from .test_cli import POLICY_TOML, TOKEN, CliCase
 
-#: A policy that can hold the whole dump: reads of P2 0..10 (the walk's cap for a P-core), session / boot caps above the 232 of ``--all-e``.
+#: A policy that can hold the whole dump: reads of P2 0..10 (the walk's cap for a P-core), session / boot caps above the 264 of ``--all-e``.
 DUMP_POLICY = (
     POLICY_TOML.replace("max_operations_per_session = 60", "max_operations_per_session = 300").replace("max_operations_per_boot = 200", "max_operations_per_boot = 400")
     + """
@@ -115,8 +115,7 @@ class Walk(DumpCase):
         code, out, _ = self.dump()
         self.assertEqual(code, 0)
         self.assertEqual(out.count("CONFIRM"), 1)
-        self.assertIn("up to 124 guard-mediated mailbox READ requests", out)  # the budget: 8 x 11 + 4 x 9 (the walk's caps)
-        self.assertIn("normally 112", out)
+        self.assertIn("up to 132 guard-mediated mailbox READ requests", out)  # the budget: 12 units x 11 (P2 0..10, as far as the policy reaches)
         code, _, err = self.run_cli("vf-dump", "--sim", "--policy", self.dump_policy, "--audit", self.audit, "--lock", self.lock, stdin="CONFIRM nope\n", sim=dump_sim())
         self.assertEqual(code, 2, err)
         self.assertEqual(len(self.sim.requests), 0)
@@ -134,8 +133,8 @@ class Walk(DumpCase):
     def test_all_e_reads_every_e_cpu(self) -> None:
         code, out, err = self.dump("--all-e")
         self.assertEqual((code, err), (0, ""), out)
-        self.assertEqual(len(self.sim.requests), 8 * 10 + 16 * 8)  # 208 actual, budget 232
-        self.assertIn("up to 232", out)
+        self.assertEqual(len(self.sim.requests), 8 * 10 + 16 * 8)  # 208 actual, budget 264
+        self.assertIn("up to 264", out)
         self.assertEqual(sorted({c for c, _, _ in self.mailbox_requests()}), list(range(24)))
         self.assertIn("[read CPU 8, 9, 10, 11]", out)
         self.assertIn("cpu 11", out)
@@ -181,8 +180,6 @@ class Walk(DumpCase):
         self.assertEqual(self.mailbox_requests(), [(0, 0x10, p) for p in range(11)] + [(8, 0x10, p) for p in range(9)])  # P: 9 points, 0x11 at 10; E: 7 points, 0x11 at 8
         self.assertIn("table end: rc 0x11 at P2=10", out)
         self.assertIn("table end: rc 0x11 at P2=8", out)
-        self.assertIn("note: cpu 0 has 9 points (known fused count 8)", out)
-        self.assertIn("note: cpu 8 has 7 points (known fused count 6)", out)
         self.assertIn("  9        58x", out)
         self.assertIn("  7        48x", out)
 
@@ -197,9 +194,8 @@ class Walk(DumpCase):
         sim = dump_sim(point_counts=None)  # a machine that never answers rc 0x11
         code, out, err = self.dump("--cpus", "0,8", sim=sim)
         self.assertEqual((code, err), (0, ""), out)
-        self.assertEqual(self.mailbox_requests(), [(0, 0x10, p) for p in range(11)] + [(8, 0x10, p) for p in range(9)])  # P2 <= 10 for P, <= 8 for E
-        self.assertIn("table end: cap reached (P2=10), no rc 0x11 seen", out)
-        self.assertIn("table end: cap reached (P2=8), no rc 0x11 seen", out)
+        self.assertEqual(self.mailbox_requests(), [(0, 0x10, p) for p in range(11)] + [(8, 0x10, p) for p in range(11)])  # P2 <= 10: as far as the policy reaches, for every kind
+        self.assertEqual(out.count("table end: cap reached (P2=10), no rc 0x11 seen"), 2)
 
     def test_dwell_is_honoured_between_every_read(self) -> None:
         times: list[float] = []
@@ -224,11 +220,11 @@ class Walk(DumpCase):
 
 class Budget(DumpCase):
     def test_session_cap_too_low_is_refused_with_the_needed_count(self) -> None:
-        low = self.write("low.toml", DUMP_POLICY.replace("max_operations_per_session = 300", "max_operations_per_session = 123"))
+        low = self.write("low.toml", DUMP_POLICY.replace("max_operations_per_session = 300", "max_operations_per_session = 131"))
         code, out, err = self.dump(policy=low)
         self.assertEqual(code, 2, out + err)
-        self.assertIn("needs up to 124 mailbox reads", err)
-        self.assertIn("allows 123 per session", err)
+        self.assertIn("needs up to 132 mailbox reads", err)
+        self.assertIn("allows 131 per session", err)
         self.nothing_sent()
         self.assertFalse(self.audit.exists() and self.audit.read_text(encoding="utf-8").strip())
 
@@ -236,18 +232,18 @@ class Budget(DumpCase):
         low = self.write("low.toml", DUMP_POLICY.replace("max_operations_per_boot = 400", "max_operations_per_boot = 50"))
         code, _, err = self.dump(policy=low)
         self.assertEqual(code, 2, err)
-        self.assertIn("needs up to 124", err)
+        self.assertIn("needs up to 132", err)
         self.assertIn("only 50", err)
         self.nothing_sent()
 
     def test_boot_budget_counts_what_the_audit_log_already_holds(self) -> None:
-        tight = self.write("tight.toml", DUMP_POLICY.replace("max_operations_per_boot = 400", "max_operations_per_boot = 250"))
-        for n, (cpus, want) in enumerate((("0", 0), (None, 0), (None, 0), (None, 2))):  # 10 used, then 112 (122), 112 (234), then only 16 are left
+        tight = self.write("tight.toml", DUMP_POLICY.replace("max_operations_per_boot = 400", "max_operations_per_boot = 270"))
+        for n, (cpus, want) in enumerate((("0", 0), (None, 0), (None, 0), (None, 2))):  # 10 used, then 112 (122), 112 (234), then only 36 are left
             t = 1_700_000_000.0 + n * 100_000
             extra = ("--cpus", cpus) if cpus else ()
             code, _, err = self.dump(*extra, policy=tight, sim=dump_sim(), wall_clock=lambda t=t: t)
             self.assertEqual(code, want, err)
-        self.assertIn("only 16", err)
+        self.assertIn("only 36", err)
 
     def test_measure_needs_one_spare_operation_in_both_caps(self) -> None:
         exact = self.write("exact.toml", PERF_POLICY.replace("max_operations_per_session = 300", "max_operations_per_session = 11"))
@@ -264,13 +260,15 @@ class Budget(DumpCase):
         self.nothing_sent()
 
     def test_an_uncovered_point_is_refused_before_anything_is_sent(self) -> None:
-        no_p10 = self.write("nop10.toml", DUMP_POLICY.replace("p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", "p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]"))  # a P-core may be read up to P2 = 10
-        code, _, err = self.dump(policy=no_p10)
+        no_p1 = self.write("nop1.toml", DUMP_POLICY.replace("p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", "p2 = [2, 3, 4, 5, 6, 7, 8, 9, 10]"))  # the first point is not covered
+        code, _, err = self.dump(policy=no_p1)
         self.assertEqual(code, 2, err)
-        self.assertIn("P2=0xa", err)
+        self.assertIn("P2=0x1", err)
         self.nothing_sent()
-        code, out, err = self.dump("--cpus", "8", policy=no_p10, sim=dump_sim())  # an E CPU only needs 0..8
+        no_p10 = self.write("nop10.toml", DUMP_POLICY.replace("p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]", "p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]"))  # the walk reads only as far as the policy reaches
+        code, out, err = self.dump("--cpus", "8", policy=no_p10, sim=dump_sim())
         self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(self.mailbox_requests()[-1], (8, 0x10, 7))  # the E table ends at rc 0x11 on P2 = 7
 
     def test_a_cpu_outside_the_policy_is_refused_before_anything_is_sent(self) -> None:
         few = self.write("few.toml", DUMP_POLICY.replace('cpus = ["0-23"]', "cpus = [0, 1, 2, 3, 4, 5, 6, 7, 8]"))
@@ -284,7 +282,7 @@ class Budget(DumpCase):
 
         with mock.patch("arltuner.cli.WriteGuard", wraps=WriteGuard) as guard_cls:
             self.assertEqual(self.dump("--cpus", "0,8")[0], 0)
-        self.assertEqual(guard_cls.call_args.args[1].max_operations_per_session, 20)  # 11 + 9, no measure: no spare
+        self.assertEqual(guard_cls.call_args.args[1].max_operations_per_session, 22)  # 11 + 11, no measure: no spare
 
     def test_env_flag_absent(self) -> None:
         code, _, err = self.dump(env={})
@@ -662,10 +660,6 @@ class MeasureGroupUnit(unittest.TestCase):
     def group(self, kind: str, cpus: tuple[int, ...], ratios: tuple[int, ...]) -> vfdump.MeasureGroup:
         return vfdump.MeasureGroup("g", kind, cpus, cpus[0], ratios)
 
-    def test_cap_math(self) -> None:
-        self.assertEqual(vfdump.cap_khz("P", 57), 5_700_000)
-        self.assertEqual(vfdump.cap_khz("E", 46), 4_700_000)
-
     def test_restore_on_keyboard_interrupt(self) -> None:
         io = FakeIO()
 
@@ -837,13 +831,19 @@ class Helpers(unittest.TestCase):
         self.assertEqual([c.cpu for c in cores], [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20])
         self.assertEqual(len(vfdump.select_cpus(arl_s_285k(), None, True)), 24)
 
-    def test_known_points_and_the_request_budget(self) -> None:
+    def test_the_walk_cap_follows_the_policy_and_the_request_budget_is_the_worst_case(self) -> None:
         topo = arl_s_285k()
-        self.assertEqual((vfdump.known_points("P"), vfdump.known_points("E")), (8, 6))
-        self.assertEqual((vfdump.p2_cap("P"), vfdump.p2_cap("E")), (10, 8))
-        reqs = vfdump.plan_requests(vfdump.select_cpus(topo, None, False), topo)
-        self.assertEqual(len(reqs), 8 * 11 + 4 * 9)  # the budget is the worst case (the caps), not the normal walk
-        self.assertTrue(all(r.cmd == 0x10 and r.p1 == 0 and r.data == 0 and r.p2 <= (10 if r.cpu < 8 else 8) for r in reqs))
+        self.assertEqual(vfdump.walk_cap(default_m1_policy()), vfdump.WALK_P2_CAP)  # no point read allowed: P2 = 1 is asked and refused by the allowlist
+        policy = load_policy(
+            'cpus = ["0-23"]\n[[allow]]\nname = "pts"\ncmd = 0x10\np1 = [0]\np2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\nkind = "read"\n'
+            '[[allow]]\nname = "far"\ncmd = 0x10\np1 = [0]\np2 = [12]\nkind = "read"\n'
+        )
+        self.assertEqual(vfdump.walk_cap(policy), 10)  # the first gap (P2 = 11) ends it: 12 is not reachable by a contiguous walk
+        cores = vfdump.select_cpus(topo, None, False)
+        reqs = vfdump.plan_requests(cores, topo, 10)
+        self.assertEqual(len(reqs), 12 * 11)  # 8 P + 4 E CPUs, P2 = 0..10 each: the budget is the worst case, not the normal walk
+        self.assertTrue(all(r.cmd == 0x10 and r.p1 == 0 and r.data == 0 and r.p2 <= 10 for r in reqs))
+        self.assertEqual(len(vfdump.plan_requests(cores, topo)), 12 * (vfdump.WALK_P2_CAP + 1))
 
 
 class NeverTouchesTheRealSystem(unittest.TestCase):

@@ -15,7 +15,7 @@ from unittest import mock
 
 import arltuner.profiles as profiles_pkg
 from arltuner.profiles import CoreSetting, CpuSetting, Profile, ProfileError, TurboTables, load_profile
-from arltuner.topology import Topology, arl_s_285k
+from arltuner.topology import Topology, arl_s_285k, synthetic
 
 HEADER = '[meta]\nname = "t"\nplatform = "arl-s-285k"\n'
 
@@ -214,8 +214,7 @@ FAILING: list[tuple[str, str, str]] = [
     ("unknown kind", HEADER + core('kind = "X"\nindex = 0\noffset_mv = -10'), "core[0].kind"),
     ("kind is lower case", HEADER + core('kind = "p"\nindex = 0\noffset_mv = -10'), "core[0].kind"),
     ("kind not a string", HEADER + core('kind = 1\nindex = 0\noffset_mv = -10'), "core[0].kind"),
-    ("P index too high", HEADER + core('kind = "P"\nindex = 8\noffset_mv = -10'), "core[0].index"),
-    ("E index too high", HEADER + core('kind = "E"\nindex = 16\noffset_mv = -10'), "core[0].index"),
+    ("index out of unit sanity", HEADER + core('kind = "P"\nindex = 256\noffset_mv = -10'), "core[0].index"),
     ("index negative", HEADER + core('kind = "E"\nindex = -1\noffset_mv = -10'), "core[0].index"),
     ("index is bool", HEADER + core('kind = "P"\nindex = true\noffset_mv = -10'), "core[0].index"),
     ("index is float", HEADER + core('kind = "P"\nindex = 1.0\noffset_mv = -10'), "core[0].index"),
@@ -272,8 +271,19 @@ class FailingProfileTests(unittest.TestCase):
         for label, text, fragment in FAILING:
             with self.subTest(label):
                 with self.assertRaises(ProfileError) as cm:
-                    load_profile(text)
+                    load_profile(text, arl_s_285k())  # the cluster rule needs a topology (D-036): the unit tests pass the simulated reference CPU
                 self.assertIn(fragment, str(cm.exception))
+
+    def test_index_and_cluster_rules_are_judged_against_the_topology_they_meet(self) -> None:
+        text = HEADER + core('kind = "P"\nindex = 8\noffset_mv = -10')
+        prof = load_profile(text)  # P-Core 8 is sane for the format; there is no such core on an 8-P part
+        with self.assertRaisesRegex(ProfileError, "P-Core 8 is not in this topology"):
+            prof.expand(arl_s_285k())
+        self.assertEqual(prof.expand(synthetic(10, 8))[0].cpu, 8)  # ... but it is core 8 of a 10-P part
+        two = load_profile(HEADER + core('kind = "E"\nindex = 0\nratio = 46') + core('kind = "E"\nindex = 3\nratio = 47'))
+        with self.assertRaisesRegex(ProfileError, "cluster 0 disagrees"):
+            two.expand(arl_s_285k())
+        self.assertEqual(len(two.expand(synthetic(8, 16, e_cluster_size=2))), 2)  # clusters of two: E-Cores 0 and 3 are in different clusters
 
     def test_cluster_rule_does_not_reject_different_clusters(self) -> None:
         text = HEADER + core('kind = "E"\nindex = 3\noffset_mv = -10') + core('kind = "E"\nindex = 4\noffset_mv = -20')
@@ -302,13 +312,12 @@ class FailingProfileTests(unittest.TestCase):
     def test_direct_construction_is_validated_too(self) -> None:
         bad: list = [
             lambda: CoreSetting("P", 0),  # nothing set
-            lambda: CoreSetting("P", 9, ratio=50),
+            lambda: CoreSetting("P", 256, ratio=50),
             lambda: CoreSetting("Q", 0, ratio=50),
             lambda: CoreSetting("P", 0, ratio=True),
             lambda: Profile("x", ()),
             lambda: Profile("", (CoreSetting("P", 0, ratio=50),)),
             lambda: Profile("x", (CoreSetting("P", 0, ratio=50), CoreSetting("P", 0, ratio=51))),
-            lambda: Profile("x", (CoreSetting("E", 0, ratio=50), CoreSetting("E", 1, ratio=51))),
         ]
         for make in bad:
             with self.subTest(inspect.getsource(make).strip()):
@@ -361,8 +370,8 @@ class PointEntries(unittest.TestCase):
         self.assertEqual((len(prof.entries), len(prof.points)), (1, 1))
         self.assertIsNone(prof.points[0].expect_ratio)
 
-    def test_the_range_of_a_point_follows_the_core_kind(self) -> None:
-        for kind, point, ok in (("E", 1, True), ("E", 6, True), ("E", 7, False), ("E", 0, False), ("P", 8, True), ("P", 9, False), ("P", 0, False)):
+    def test_the_range_of_a_point_is_the_register_field(self) -> None:
+        for kind, point, ok in (("E", 1, True), ("E", 6, True), ("E", 15, True), ("E", 16, False), ("E", 0, False), ("P", 8, True), ("P", 15, True), ("P", 0, False)):
             text = HEADER + self.point(f'kind = "{kind}"\nindex = 0\npoint = {point}\noffset_mv = -5')
             with self.subTest(kind=kind, point=point):
                 if ok:
@@ -407,11 +416,12 @@ class PointEntries(unittest.TestCase):
 
     def test_e_entries_of_one_cluster_must_agree_per_point(self) -> None:
         a = self.point('kind = "E"\nindex = 0\npoint = 6\noffset_mv = -20')
+        topo = arl_s_285k()
         with self.assertRaisesRegex(ProfileError, "cluster 0 point 6 disagrees"):
-            load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -25'))
+            load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -25'), topo)
         with self.assertRaisesRegex(ProfileError, "cluster 0 point 6 disagrees"):
-            load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20\nexpect_ratio = 46'))
-        load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20') + self.point('kind = "E"\nindex = 1\npoint = 5\noffset_mv = -9'))
+            load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20\nexpect_ratio = 46'), topo)
+        load_profile(HEADER + a + self.point('kind = "E"\nindex = 1\npoint = 6\noffset_mv = -20') + self.point('kind = "E"\nindex = 1\npoint = 5\noffset_mv = -9'), topo)
 
     def test_empty_profiles_are_refused_but_a_turbo_table_alone_is_a_profile(self) -> None:
         for text in (HEADER, "point = []\n" + HEADER):
@@ -432,7 +442,7 @@ class PointEntries(unittest.TestCase):
 
     def test_profile_dataclass_validates_points(self) -> None:
         with self.assertRaises(ProfileError):
-            Profile("t", (), points=(profiles_pkg.PointSetting("E", 8, 7, -5),))
+            Profile("t", (), points=(profiles_pkg.PointSetting("E", 8, 16, -5),))
         with self.assertRaises(ProfileError):
             Profile("t", (), points=("nope",))  # type: ignore[arg-type]
 

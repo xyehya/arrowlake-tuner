@@ -2,7 +2,7 @@
 
 Decodes (registers.md / telemetry-sources.md):
   * effective MHz = tsc_mhz * dAPERF / dMPERF ; busy % = 100 * dMPERF / (tsc_mhz * 1e6 * dt)   [DOC Intel SDM vol 3 14.2]
-    tsc_mhz = 100 MHz * PLATFORM_INFO[15:8] (= 3700 on this 285K [MEASURED lnx 2026-09-29]).
+    tsc_mhz = 100 MHz * PLATFORM_INFO[15:8].
   * 0x198 PERF_STATUS: ratio [15:8], requested VID [47:32] / 8192 V (a request, not delivered voltage) [MEASURED lnx 2026-09-29]
   * 0x19C / 0x1B1: valid [31], digital readout [22:16] (degrees below Tjmax), Tjmax = 0x1A2[23:16] [DOC SDM; 0x1A2 MEASURED]
 """

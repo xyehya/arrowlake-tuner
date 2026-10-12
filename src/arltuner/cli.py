@@ -75,9 +75,10 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.mailbox import Cmd, VfWord, rc_name
-from arltuner.msr import FUSED_POINT, DevCpuMsrPort, MailboxTransport, MsrPort, SimConfig, SimMsrPort, WinThrottleStopMsrPort, verify_machine, windows_boot_id
+from arltuner.msr import WINDOWS_P_FUSED_FINGERPRINT, DevCpuMsrPort, MailboxTransport, MsrPort, SimConfig, SimMsrPort, WinThrottleStopMsrPort, verify_machine, windows_boot_id
 from arltuner.profiles import Profile, ProfileError, load_profile
-from arltuner.topology import Topology, TopologyError, TopologyMismatch, UnknownCore, arl_s_285k, detect
+from arltuner.topology import Topology, TopologyError, TopologyMismatch, UnknownCore, detect
+from arltuner.topology.reference import arl_s_285k
 
 __all__ = [
     "EXIT_HARDWARE",
@@ -197,7 +198,7 @@ def _default_win_port() -> MsrPort:
 
 
 def _default_win_detect() -> Topology:
-    """Windows' stand-in for ``detect``: the 285K map, provided the Linux CPU -> Windows LP map matches what Windows reports."""
+    """Windows' stand-in for ``detect``: the reference topology the Windows LP map belongs to, provided that map matches what Windows reports."""
     try:
         verify_machine()
     except OSError as exc:
@@ -206,7 +207,7 @@ def _default_win_detect() -> Topology:
 
 
 def _default_sim_port() -> MsrPort:
-    """The simulator for ``--sim``: the machine as MEASURED on Windows (``SimConfig.measured()``, ``[MEASURED win 2026-10-01]``: per-core
+    """The simulator for ``--sim``: the simulated reference CPU, as MEASURED on Windows (``SimConfig.measured()``, ``[MEASURED win 2026-10-01]``: per-core
     0x10 word 0x0 except CPU 0, fused points, favored words, ...) with the one unmeasured rule switched on -- a 0x11 with a zero ratio or
     V target is rejected (``reject_zero_fields``) -- so a plan that would send one fails here too. T-025: ``per_point`` is on (P2 1..6 E / 1..8 P, past that rc 0x11)."""
     return SimMsrPort(SimConfig.measured(reject_zero_fields=True, per_point=True))
@@ -321,7 +322,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             help="kernel taint bit the health gate may ignore (repeatable; used once the health gate is wired)",
         )
 
-    p_top = sub.add_parser("topology", out=out, err=err, help="print the 24-core map (XTU name, Linux CPU, cluster, favored)")
+    p_top = sub.add_parser("topology", out=out, err=err, help="print the core map derived from sysfs (XTU name, Linux CPU, cluster, favored)")
     p_top.add_argument("--json", action="store_true", help="machine-readable output")
 
     p_plan = sub.add_parser("plan", out=out, err=err, help="dry-run a profile against the simulator's state; sends nothing")
@@ -340,7 +341,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
     common(p_apply)
 
     p_read = sub.add_parser("read-vf", out=out, err=err, help="ONE guarded cmd 0x10 read on one CPU (the T-007 instrument)")
-    p_read.add_argument("--cpu", type=int, required=True, metavar="N", help="Linux CPU 0..23")
+    p_read.add_argument("--cpu", type=int, required=True, metavar="N", help="Linux CPU number")
     mode = p_read.add_mutually_exclusive_group()
     mode.add_argument("--sim", action="store_true", help="simulator (the default)")
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; a mailbox read is a WRMSR)")
@@ -348,7 +349,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
     common(p_read)
 
     p_rd = sub.add_parser("read", out=out, err=err, help="ONE guarded mailbox READ of any allowlisted read command (kind = \"read\" entries only)")
-    p_rd.add_argument("--cpu", type=int, required=True, metavar="N", help="Linux CPU 0..23")
+    p_rd.add_argument("--cpu", type=int, required=True, metavar="N", help="Linux CPU number")
     p_rd.add_argument("--cmd", type=_cmd_byte, required=True, metavar="C", help="mailbox command, decimal or 0x hex (e.g. 0x1C)")
     p_rd.add_argument("--p1", type=_uint, default=0, metavar="N", help="parameter 1 (default 0)")
     p_rd.add_argument("--p2", type=_uint, default=0, metavar="N", help="parameter 2 (default 0)")
@@ -464,12 +465,13 @@ def _require_env_flag(ctx: _Ctx) -> None:
 
 
 def _topology_for(ctx: _Ctx, device: bool) -> Topology:
+    """The simulated reference CPU for ``--sim``; on hardware the topology derived live from sysfs (D-036), refusing when it cannot be."""
     if not device:
         return arl_s_285k()
     try:
         return (ctx.win_detect_fn if ctx.win else ctx.detect_fn)()
     except TopologyError as exc:
-        ctx.refuse(f"this machine does not match the Core Ultra 9 285K map: {exc}. Nothing was sent.")
+        ctx.refuse(f"this system's CPU topology could not be derived or is not an Arrow Lake-S layout: {exc}. Nothing was sent.")
 
 
 def _operator(ctx: _Ctx, name: str | None) -> str:
@@ -519,13 +521,13 @@ def _health_gate(ctx: _Ctx, taint_bits: Sequence[int], device: bool) -> HealthGa
     return gate
 
 
-# --device-win: the Linux CPU -> Windows LP map cannot tell the eight P-cores apart through Windows' own APIs, but the fused V/F point
-# (cmd 0x09 P1=0x11 P2=0) is distinct per physical P-core ([MEASURED lnx 2026-10-02], measured_baseline.FUSED_POINT).
-IDENTITY_CPUS = tuple(range(8))
+# --device-win: the Linux CPU -> Windows LP map cannot tell the P-cores apart through Windows' own APIs, but the fused V/F point
+# (cmd 0x09 P1=0x11 P2=0) is distinct per physical P-core ([MEASURED lnx 2026-10-02]); the expected words belong to the LP map (winport).
+IDENTITY_CPUS = tuple(range(len(WINDOWS_P_FUSED_FINGERPRINT)))
 IDENTITY_OPS = len(IDENTITY_CPUS)
 IDENTITY_NOTE = (
-    f"Identity check first (--device-win): {IDENTITY_OPS} guarded reads of cmd 0x09 P1=0x11 P2=0 on P-cores 0-7, each compared with its measured "
-    "fused V/F point; any mismatch refuses the whole session before a write."
+    f"Identity check first (--device-win): {IDENTITY_OPS} guarded reads of cmd 0x09 P1=0x11 P2=0 on the P-cores, each compared with the fused V/F point "
+    "recorded for the Windows LP map; any mismatch refuses the whole session before a write."
 )
 
 
@@ -535,7 +537,7 @@ def _identity_policy_check(ctx: _Ctx, policy: Policy) -> None:
         req = Request(cpu, int(Cmd.VOLTAGE_FLOOR_READ), 0x11, 0, 0, "identity check")
         entry = policy.match(req.cmd, req.p1, req.p2)
         if entry is None or entry.kind != "read":
-            ctx.refuse("--device-win needs the identity check (cmd 0x09 P1=0x11 P2=0 on P-cores 0-7) and no read allow entry of the policy matches it "
+            ctx.refuse("--device-win needs the identity check (cmd 0x09 P1=0x11 P2=0 on the P-cores) and no read allow entry of the policy matches it "
                        "(default deny; see policies/session-2026-10-02-points.toml 'voltage_floor_read'). Nothing was sent.")
         verdict = predict(policy, req, None)
         if not verdict.allowed:
@@ -545,7 +547,7 @@ def _identity_policy_check(ctx: _Ctx, policy: Policy) -> None:
 
 
 def _identity_check(ctx: _Ctx, guard: WriteGuard, confirm: Confirmation, sleep: Callable[[float], object], dwell: float, audit_path: Path) -> None:
-    """Read the fused V/F point of P-cores 0-7 through the guard and refuse unless each equals ``FUSED_POINT`` (the LP map is then right)."""
+    """Read the fused V/F point of the P-cores through the guard and refuse unless each equals ``WINDOWS_P_FUSED_FINGERPRINT`` (the LP map is then right)."""
     for cpu in IDENTITY_CPUS:
         req = Request(cpu, int(Cmd.VOLTAGE_FLOOR_READ), 0x11, 0, 0, f"identity check: fused V/F point of cpu {cpu} (Windows LP map)")
         try:
@@ -555,12 +557,12 @@ def _identity_check(ctx: _Ctx, guard: WriteGuard, confirm: Confirmation, sleep: 
         except Exception as exc:  # MailboxTimeout / MsrError: the guard has audited it and tripped
             ctx.fail(EXIT_HARDWARE, f"identity check: hardware error: {type(exc).__name__}: {exc}")
         got = result.response.data
-        if result.response.rc != 0 or got != FUSED_POINT[cpu]:
-            what = f"completion code {result.response.rc} ({rc_name(result.response.rc)})" if result.response.rc != 0 else f"read {got:#010x}, expected {FUSED_POINT[cpu]:#010x}"
-            ctx.refuse(f"identity check failed on cpu {cpu}: {what}. The Linux CPU -> Windows LP map does not match this machine. No write was sent.")
+        if result.response.rc != 0 or got != WINDOWS_P_FUSED_FINGERPRINT[cpu]:
+            what = f"completion code {result.response.rc} ({rc_name(result.response.rc)})" if result.response.rc != 0 else f"read {got:#010x}, expected {WINDOWS_P_FUSED_FINGERPRINT[cpu]:#010x}"
+            ctx.refuse(f"identity check failed on cpu {cpu}: {what}. The Linux CPU -> Windows LP map does not match what the CPU reports. No write was sent.")
         if dwell > 0:
             sleep(dwell)  # the guard enforces the dwell between operations; waiting is ours
-    ctx.say(f"identity check passed: fused V/F points of P-cores 0-7 match ({IDENTITY_OPS} guarded reads).")
+    ctx.say(f"identity check passed: fused V/F points of the P-cores match ({IDENTITY_OPS} guarded reads).")
 
 
 def _build_guard(
@@ -719,7 +721,7 @@ def _exit_code_of(report: ApplyReport) -> int:
 # Commands
 # --------------------------------------------------------------------------------------------------------------
 def _cmd_topology(ctx: _Ctx, args: argparse.Namespace) -> int:
-    topo = arl_s_285k()
+    topo = _topology_for(ctx, True)
     if args.json:
         rows = [
             {
@@ -763,7 +765,7 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
     device = bool(args.device)
     profile = _load_profile_or_exit(ctx, args.profile)
     policy = _load_policy_or_exit(ctx, args.policy)
-    topology = arl_s_285k()
+    topology = _topology_for(ctx, device)
     plan_policy = policy  # what the profile may spend: --device-win keeps IDENTITY_OPS of the session / boot budget for the identity check
     extra_ops = 0
     if ctx.win:
@@ -777,8 +779,6 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
     except (ProfileError, PlanError) as exc:
         ctx.fail(EXIT_USAGE, f"plan error: {exc}")
     _require_env_flag(ctx)
-    if device:
-        topology = _topology_for(ctx, True)  # refuses (before any port exists) if this is not the 285K
     sim: MsrPort | None = None
     try:
         if device:
@@ -840,18 +840,16 @@ def _cmd_read_vf(ctx: _Ctx, args: argparse.Namespace) -> int:
     cpu: int = args.cpu
     policy = _load_policy_or_exit(ctx, args.policy)
     policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
-    topology = arl_s_285k()
+    topology = _topology_for(ctx, device)
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
-        ctx.refuse(f"cpu {cpu} is not a CPU of this machine (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
+        ctx.refuse(f"cpu {cpu} is not a CPU of this system (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
     req = Request(cpu, int(Cmd.VOLTAGE_FREQ_READ), 0, 0, 0, f"read-vf: single V/F read of {topology.xtu_name(core)} (T-007 instrument)")
     verdict = predict(policy, req, None)
     if not verdict.allowed:
         ctx.refuse(f"{verdict.reason}: {verdict.detail}. Nothing was sent.")
     _require_env_flag(ctx)
-    if device:
-        _topology_for(ctx, True)
     where = ("the ThrottleStop driver (Windows)" if ctx.win else "the /dev/cpu device") if device else "the simulator (no hardware)"
     token, typed = _confirm(
         ctx,
@@ -902,7 +900,7 @@ def _decode_read(cmd: int, word: int) -> list[str]:
             f"  word     : {describe_word(vf)}",
         ]
     if cmd == int(Cmd.FAVORED_CORE_READ):
-        return [f"  favored ratio [7:0]  : {word & 0xFF}x", f"  fused/limit [15:8]   : {(word >> 8) & 0xFF}  (meaning partly [UNVERIFIED])"]
+        return [f"  favored ratio [7:0]  : {word & 0xFF}x", f"  fused/limit [15:8]   : {(word >> 8) & 0xFF}  (meaning partly unverified)"]
     if cmd == int(Cmd.GRANULAR_RATIO_READ):
         return [f"  granular index [2:0] : {word & 0x7}", f"  bins [15:8]          : {(word >> 8) & 0xFF}"]
     if cmd == int(Cmd.MISC_GLOBAL_CONFIG_READ):
@@ -918,11 +916,11 @@ def _cmd_read(ctx: _Ctx, args: argparse.Namespace) -> int:
     p2: int = args.p2
     policy = _load_policy_or_exit(ctx, args.policy)
     policy = dataclasses.replace(policy, max_operations_per_session=1)  # exactly one request; a policy can only lower it
-    topology = arl_s_285k()
+    topology = _topology_for(ctx, device)
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
-        ctx.refuse(f"cpu {cpu} is not a CPU of this machine (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
+        ctx.refuse(f"cpu {cpu} is not a CPU of this system (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
     shape = f"cmd {cmd:#04x} P1={p1:#x} P2={p2:#x}"
     entry = policy.match(cmd, p1, p2)
     if entry is None:
@@ -934,8 +932,6 @@ def _cmd_read(ctx: _Ctx, args: argparse.Namespace) -> int:
     if not verdict.allowed:
         ctx.refuse(f"{verdict.reason}: {verdict.detail}. Nothing was sent.")
     _require_env_flag(ctx)
-    if device:
-        _topology_for(ctx, True)
     where = ("the ThrottleStop driver (Windows)" if ctx.win else "the /dev/cpu device") if device else "the simulator (no hardware)"
     token, typed = _confirm(
         ctx,
@@ -983,11 +979,11 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
         _identity_policy_check(ctx, policy)
     ops = 2 + (IDENTITY_OPS if ctx.win else 0)
     policy = dataclasses.replace(policy, max_operations_per_session=min(policy.max_operations_per_session, ops))  # [identity reads +] read + write; a policy can only lower it
-    topology = arl_s_285k()
+    topology = _topology_for(ctx, device)
     try:
         core = topology.by_cpu(cpu)
     except UnknownCore:
-        ctx.refuse(f"cpu {cpu} is not a CPU of this machine (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
+        ctx.refuse(f"cpu {cpu} is not a CPU of this system (valid: 0..{max(c.cpu for c in topology.cores)}). Nothing was sent.")
     if p1 not in (0, 2) or not 1 <= p2 <= POINT_P2_MAX:
         ctx.refuse(f"P1 {p1} / P2 {p2}: point-offset needs P1 0 or 2 and P2 1..{POINT_P2_MAX}. Nothing was sent.")
     try:
@@ -1006,8 +1002,6 @@ def _cmd_point_offset(ctx: _Ctx, args: argparse.Namespace) -> int:
     if not verdict.allowed:
         ctx.refuse(f"{verdict.reason}: {verdict.detail}. Nothing was sent.")
     _require_env_flag(ctx)
-    if device:
-        _topology_for(ctx, True)
     where = ("the ThrottleStop driver (Windows)" if ctx.win else "the /dev/cpu device") if device else "the simulator (no hardware)"
     token, typed = _confirm(
         ctx,
@@ -1077,7 +1071,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     device = bool(args.device)
     measure = bool(args.measure)
     policy = _load_policy_or_exit(ctx, args.policy)
-    topology = arl_s_285k()
+    topology = _topology_for(ctx, device)
     try:
         cores = vfdump.select_cpus(topology, args.cpus, bool(args.all_e))
     except UnknownCore as exc:
@@ -1095,7 +1089,8 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     if measure and not device and ctx.measure_io_factory is None:
         ctx.refuse("--measure needs --device: the simulator has no cpufreq and no MSR 0x198 (and this program never writes a real cpufreq file in a simulator run). Nothing was sent.")
     # ---- everything that can be decided before the first request: allowlist, read-only entries, budget ----
-    requests = vfdump.plan_requests(cores, topology)
+    cap = vfdump.walk_cap(policy)
+    requests = vfdump.plan_requests(cores, topology, cap)
     for req in requests:
         shape = f"cmd {req.cmd:#04x} P1={req.p1:#x} P2={req.p2:#x}"
         entry = policy.match(req.cmd, req.p1, req.p2)
@@ -1134,8 +1129,6 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
                     f"{verdict.detail}. Add a kind = \"read\" msr_allow entry for {vfdump.MSR_PERF_STATUS:#x}. Nothing was sent."
                 )
     _require_env_flag(ctx)
-    if device:
-        topology = _topology_for(ctx, True)  # refuses (before any port exists) if this is not the 285K
     measure_io: vfdump.MeasureIO | None = None
     if measure:
         measure_io = ctx.measure_io_factory() if ctx.measure_io_factory is not None else _default_measure_io()
@@ -1149,7 +1142,6 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         except (OSError, ValueError) as exc:
             ctx.refuse(f"cannot read cpufreq scaling_max_freq for --measure: {exc}. Nothing was sent.")
     where = ("the ThrottleStop driver (Windows)" if ctx.win else "the /dev/cpu device") if device else "the simulator (no hardware)"
-    typical = sum(vfdump.known_points(c.kind) + 2 for c in cores)  # OC word + the known points + the rc 0x11 that ends the table
     extra = ""
     if measure:
         extra = (
@@ -1159,7 +1151,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     token, typed = _confirm(
         ctx,
         f"vf-dump: up to {needed} guard-mediated mailbox READ requests on {where}, CPUs {', '.join(str(c.cpu) for c in cores)} (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11), "
-        f"one at a time, {policy.min_dwell_s:g} s apart; normally {typical} (the budget is the worst case: P2 <= 10 for a P-core, <= 8 for an E CPU).\nA mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.{extra}" + (f"\n{IDENTITY_NOTE}" if ctx.win else ""),
+        f"one at a time, {policy.min_dwell_s:g} s apart; normally one per point of each CPU (the budget is the worst case: P2 <= {cap}, as far as the policy allows).\nA mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.{extra}" + (f"\n{IDENTITY_NOTE}" if ctx.win else ""),
     )
     audit = _open_audit(ctx, args.audit)
     gate = _health_gate(ctx, args.allow_taint_bit, device)
@@ -1178,7 +1170,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         if ctx.win:
             _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path)
         pacer = vfdump.Pacer(policy.min_dwell_s, clock, sleep)
-        curves, stop = vfdump.walk(cores, topology, lambda req: guard.execute(req, confirm), pacer, lambda exc: _refusal_text(exc, audit.path))
+        curves, stop = vfdump.walk(cores, topology, lambda req: guard.execute(req, confirm), pacer, lambda exc: _refusal_text(exc, audit.path), cap)
         units = vfdump.units_of(curves, topology)
         if stop is None and measure_io is not None:
             measured = {}

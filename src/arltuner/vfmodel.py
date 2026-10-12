@@ -1,4 +1,4 @@
-"""Pure V/F model of the 285K (SPEC-v3 section 9, F4/F5/F6): monotonic clamp, interpolation, VccIA prediction, turbo-order check.
+"""Pure V/F model of an Arrow Lake-S part (SPEC-v3 section 9, F4/F5/F6): monotonic clamp, interpolation, VccIA prediction, turbo-order check.
 
 No I/O, no hardware. Every function takes plain numbers; ``helper/ops_tune.py`` feeds it the measured baseline curve (a ``vf.measure`` record flagged
 ``baseline``), the words of the last ``tune.read`` and the turbo tables. The results are PREDICTIONS (they carry no more certainty than their inputs).
@@ -11,8 +11,8 @@ Facts (``docs/knowledge/platform-285k.md`` sections 3 and 5):
   * OC point (G-120, ``[MEASURED lnx 2026-10-11]``, ``docs/knowledge/tuning-results.md``): an OC ratio above the top fused ratio adds a point whose adaptive target is
     held up to the top fused point's effective voltage (EC1 48x target 1.117 V < point 6 1.1375 V read back 1.1375 V; target 1.147 V gave 48x 1.1475 V); the bins
     between the top fused point and the OC ratio interpolate linearly (47x = midpoint of 46x and 48x = 1.1425 V).
-  * F6 VccIA ~ highest VID ALLOWED for the active-core count + ~100-110 mV; ring (40x ~1.201 V) is a floor ``[MEASURED lnx 2026-10-03]`` (hypothesis on 3+
-    points there: callers label the result a prediction).
+  * F6 VccIA follows the highest VID ALLOWED for the active-core count (D-036: reported as that VID, no margin and no ring figure are assumed; callers label the
+    result a prediction).
   * F5 turbo tables: bucket ratios non-increasing with the active-core count ``[MEASURED lnx 2026-10-01]`` (the guard's ``turbo_ratio_bounded`` demands it).
 """
 from __future__ import annotations
@@ -23,8 +23,6 @@ from dataclasses import dataclass
 __all__ = [
     "E_NO_OFFSET_RATIO",
     "E_WHEA_V",
-    "RING_V",
-    "VCCIA_MARGIN_V",
     "CurvePoint",
     "check_turbo_order",
     "complete_baseline",
@@ -35,15 +33,10 @@ __all__ = [
     "voltage_at",
 ]
 
-#: ``[MEASURED lnx 2026-10-02]`` E point 5 (40x) -20 mV caused OCCT errors (tuning-results.md section 4): never offset it (F8).
+#: Community report (F8): a negative offset on an E-core 40x point has caused OCCT errors. Warning code ``E40_OFFSET`` only; nothing is blocked.
 E_NO_OFFSET_RATIO = 40
 #: ``[COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/]`` E-core WHEA reports above ~1.2 V (F8). A warning threshold only.
 E_WHEA_V = 1.2
-#: ``[MEASURED lnx 2026-10-03]`` ring at 40x requests ~1.201 V (UncVID); the floor under VccIA (platform-285k.md section 5).
-RING_V = 1.201
-#: ``[MEASURED lnx 2026-10-03]`` VccIA sits ~100-110 mV above the highest allowed VID (hypothesis on 3+ points); 105 mV is the mid.
-VCCIA_MARGIN_V = 0.105
-
 
 @dataclass(frozen=True)
 class CurvePoint:
@@ -132,18 +125,14 @@ def voltage_at(curve: Sequence[CurvePoint], ratio: float, oc: tuple[int, float] 
     return interpolate(known, ratio)
 
 
-def predict_vccia(
-    contributors: Sequence[tuple[str, int, float | None]], ring_v: float = RING_V, margin_v: float = VCCIA_MARGIN_V
-) -> dict[str, object] | None:
-    """F6: ``max(highest allowed VID of every unit, ring)`` + margin. ``contributors`` = ``(unit, allowed_ratio, volts)``; a unit without a voltage is
-    skipped. The ring is always a contributor (``("ring", 40, ring_v)``). Returns ``{"predicted_v", "set_by": {"unit", "ratio"}, "margin_v"}`` or None if
-    no unit has a voltage (then not even the ring floor says anything about the tuned units)."""
+def predict_vccia(contributors: Sequence[tuple[str, int, float | None]]) -> dict[str, object] | None:
+    """F6: the highest requested VID among the units. ``contributors`` = ``(unit, allowed_ratio, volts)``; a unit without a voltage is skipped. Returns
+    ``{"predicted_v", "set_by": {"unit", "ratio"}, "margin_v": None}`` or None if no unit has a voltage."""
     rows = [(u, r, v) for u, r, v in contributors if v is not None]
     if not rows:
         return None
-    rows.append(("ring", 40, ring_v))
     unit, ratio, volts = max(rows, key=lambda row: row[2])
-    return {"predicted_v": round(volts + margin_v, 4), "set_by": {"unit": unit, "ratio": ratio}, "margin_v": margin_v}
+    return {"predicted_v": round(volts, 4), "set_by": {"unit": unit, "ratio": ratio}, "margin_v": None}
 
 
 def check_turbo_order(buckets: Sequence[int]) -> int | None:

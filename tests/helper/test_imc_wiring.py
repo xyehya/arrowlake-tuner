@@ -12,6 +12,7 @@ from unittest import mock
 
 from arltuner.helper import main as helper_main
 from arltuner.telemetry import ImcStat, Sampler, TelemetryMsr
+from arltuner.topology import arl_s_285k
 
 from tests.telemetry._support import FakeMsrPort
 
@@ -54,7 +55,7 @@ class DeviceImcTests(unittest.TestCase):
 
         imc = helper_main.device_imc(interval, lstat, popen=popen)
         with tempfile.TemporaryDirectory() as td:
-            s = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", cpu_root=Path(td) / "c", imc=imc, interval_s=0.01)
+            s = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", cpu_root=Path(td) / "c", imc=imc, interval_s=0.01, topology=arl_s_285k())
             s.start()
             if imc._thread is not None:
                 imc._thread.join(2)

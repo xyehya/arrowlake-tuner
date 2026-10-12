@@ -83,15 +83,16 @@ class InterpolationTests(unittest.TestCase):
 
 
 class VcciaTests(unittest.TestCase):
-    def test_the_highest_allowed_vid_or_the_ring_plus_105_mv(self) -> None:
+    def test_the_highest_requested_vid_among_the_units(self) -> None:
         out = predict_vccia([("P7", 55, 1.376), ("P0", 55, 1.299), ("EC0", 48, 1.157)])
         self.assertEqual(out["set_by"], {"unit": "P7", "ratio": 55})
-        self.assertAlmostEqual(out["predicted_v"], 1.481, places=4)
+        self.assertAlmostEqual(out["predicted_v"], 1.376, places=4)  # D-036: no ring floor and no margin are assumed
+        self.assertIsNone(out["margin_v"])
 
-    def test_the_ring_is_the_floor(self) -> None:
+    def test_a_low_curve_is_not_lifted_by_an_assumed_ring(self) -> None:
         out = predict_vccia([("P0", 20, 0.8), ("EC0", 30, 0.775)])
-        self.assertEqual(out["set_by"], {"unit": "ring", "ratio": 40})
-        self.assertAlmostEqual(out["predicted_v"], vfmodel.RING_V + vfmodel.VCCIA_MARGIN_V, places=4)
+        self.assertEqual(out["set_by"], {"unit": "P0", "ratio": 20})
+        self.assertAlmostEqual(out["predicted_v"], 0.8, places=4)
 
     def test_nothing_known_is_none(self) -> None:
         self.assertIsNone(predict_vccia([("P0", 55, None)]))

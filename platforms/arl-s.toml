@@ -1,0 +1,30 @@
+# Platform file: the Intel Core Ultra 200S family (Arrow Lake-S). Identity is the CPU family, not one die (D-036): CPUID family/model, plus a live topology
+# check (P and E CPU sets non-empty, E clusters of equal size) done at preflight from sysfs. Nothing here describes a particular SKU: core counts, favored
+# cores, V/F point ratios, fused words and turbo tables are all read live from the CPU or sysfs.
+# Loaded and validated by arltuner.platform (stdlib tomllib). Only MEASURED / DECOMPILED / DOC facts belong here (AGENTS.md evidence rules).
+schema = 2
+
+[platform]
+id = "arl-s"
+name = "Intel Core Ultra (Arrow Lake-S)"
+
+# /proc/cpuinfo "cpu family" 6, "model" 198 (0xC6) = CPUID leaf 1 family 6 / model 0xC6 [MEASURED lnx 2026-10-12 on a Core Ultra 9 285K; the Linux kernel names the
+# model INTEL_ARROWLAKE, shared by the whole desktop family].
+# A stepping that is not listed is a preflight WARN, never a refusal (a new stepping is still the same family).
+[cpuid]
+vendor = "GenuineIntel"
+family = 6
+model = 198
+steppings = [2]
+
+[sensors]
+temp_hwmon_name = "coretemp"
+
+# Board Vcore channel, keyed by the DMI board name (/sys/class/dmi/id/board_name). Temperatures come from coretemp on every board; Vcore comes from the
+# board's Super-I/O, whose hwmon labels are generic, so the channel is recorded per board. An unknown board has NO Vcore reading (never a guess).
+# ASRock Z890 Steel Legend WiFi: hwmon name "nct6686" (kernel driver nct6683), Vcore (VCCCORE VR output) is in0 labelled "VIN16";
+# VIN0 / in1 is NOT Vcore (CPU-0-activity-gated signal) [MEASURED lnx 2026-10-11].
+[boards."Z890 Steel Legend WiFi"]
+vcore_hwmon_vendor = "Nuvoton"
+vcore_hwmon_name = "nct6686"
+vcore_hwmon_label = "VIN16"
