@@ -125,6 +125,6 @@ restore-only path and is not tested from this repository.
 python3 tools/run_tests.py
 ```
 Runs the whole offline suite with `unittest` against the simulator and fake sysfs. No hardware, no root. The browser tests are opt-in
-(`ARLTUNER_BROWSER_TESTS=1`, per the G-133 task); they need a browser and are not required for normal use.
+(`ARLTUNER_BROWSER_TESTS=1`, per the G-133 task); they need Playwright and Chrome, which the project does not install, and are not required for normal use.
 
 Next: [11 Troubleshooting and FAQ](11-troubleshooting-faq.md) · Previous: [09 Profiles and restore](09-profiles-and-restore.md)
