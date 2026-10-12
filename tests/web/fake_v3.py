@@ -199,9 +199,9 @@ def topology_view() -> dict:
     return {"units": units, "favored_source": TOPOLOGY["source"]}
 
 
-def limits_view(ratio_max: dict) -> dict:
+def limits_view(ratio_max: dict, window: tuple | None = None) -> dict:
     """The ``limits`` object of the G-133 tune.read / tune.last contract: the bound policy per kind (offsets in mV, V target max in V, ratio max)."""
-    return {"offset_mv": {k: {"min": -OFFSET_LIMIT, "max": OFFSET_LIMIT} for k in ("P", "E")},
+    return {"offset_mv": {k: {"min": (window or (-OFFSET_LIMIT, OFFSET_LIMIT))[0], "max": (window or (-OFFSET_LIMIT, OFFSET_LIMIT))[1]} for k in ("P", "E")},
             "v_target_max_v": dict(V_TARGET_MAX), "ratio_max": dict(ratio_max),
             "source": {"ratio_max": {"P": "auto", "E": "policy"}, "v_target_max": {"P": "auto", "E": "auto"}}}
 
@@ -269,6 +269,8 @@ class V3Ops:
         self.read_at_enabled = True       # G-128 contract: tune.read / tune.last carry ``read_at`` (ISO UTC)
         self.limits_enabled = True        # G-133 contract: tune.read / tune.last carry ``limits``; False simulates a helper without them
         self.ratio_max = dict(RATIO_MAX)  # the policy's ratio ceiling per kind (the live ``limits.ratio_max``); a test sets e.g. {"P": 60, "E": 49}
+        self.offset_window: tuple | None = None   # the policy's offset window (min, max) mV in ``limits``; None = ±OFFSET_LIMIT
+        self.hw_limits: dict | None = None        # D-039 / G-137: ``hw_limits`` {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [lo, hi]}} of the tune.read result; None = a helper without it
         self.fixture_result: dict | None = None   # a recorded tune.last ``result`` (tests/web/fixtures) served instead of the fake's own tuning words
         self.memory = memory_fixture()
         self.curves: dict[str, dict] = {}
@@ -585,7 +587,9 @@ class V3Ops:
         if self.read_at_enabled and self.last_read_at is not None:
             out["read_at"] = read_at_iso(self.last_read_at)
         if self.limits_enabled:
-            out["limits"] = limits_view(self.ratio_max)
+            out["limits"] = limits_view(self.ratio_max, self.offset_window)
+        if self.hw_limits is not None:
+            out["hw_limits"] = copy.deepcopy(self.hw_limits)
         return out
 
     def seed_last_read(self, at: float | None = None) -> None:

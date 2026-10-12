@@ -3218,7 +3218,7 @@
       }
       if (open) r.offCell.classList.toggle("changed", nPtChanged > 0);
       r.offSel.disabled = !lim;
-      for (const ratio of Object.keys(r.ptSels)) r.ptSels[ratio].sel.disabled = !lim;
+      for (const ratio of Object.keys(r.ptSels)) { r.ptSels[ratio].sel.disabled = !lim; r.ptSels[ratio].sel.title = limitLine(def.kind, "offset"); }
       if (open) for (const ratio of Object.keys(r.ptSels)) refreshPointFacts(r, Number(ratio));
       if (open) refreshOcCell(r);
       if (open && r.eNote) { const nt = eVfFact(def.units); r.eNote.textContent = nt; r.eNote.hidden = !nt; }
@@ -3229,7 +3229,7 @@
       r.rSel.disabled = !lim || !!r.rWhy;
       const rCh = def.units.some((u) => effRatio(u) !== curRatio(u));
       r.rCell.classList.toggle("changed", rCh);
-      r.rCell.title = r.rSel.disabled && !lim ? NO_LIMITS : OC_TIP;
+      r.rCell.title = (r.rSel.disabled && !lim ? NO_LIMITS : OC_TIP) + " " + limitLine(def.kind, "ratio");
       r.rHint.textContent = info.text + inactiveNote(def.units);
       r.rNote.textContent = lim ? r.rWhy : (T.words.limitsNote || NO_LIMITS);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
@@ -3238,12 +3238,13 @@
       r.vtCell.classList.toggle("changed", vtCh);
       const vtNo = !lim ? NO_LIMITS : info.cls !== "oc" ? NEED_RATIO : !isNum(lim.vtMax) ? "your policy states no v_target_max_mv (/etc/arltuner/policy.toml)" : "";
       r.vtSel.disabled = vtNo !== "";
-      r.vtCell.title = vtNo || OC_TIP;
+      r.vtCell.title = (vtNo || OC_TIP) + " " + limitLine(def.kind, "vt");
+      r.offCell.title = limitLine(def.kind, "offset");
       r.vtHint.textContent = vtCh && isNum(effVtv) ? "writes " + snapV(effVtv).toFixed(4) + " V" + (def.units.some((u) => T.draft[u] && T.draft[u].vtAuto) ? " \u00b7 the fused top point\u2019s voltage (0x09), nothing was set" : "") : "";
     }
-    const ln = $("tn-limits-note");
-    ln.hidden = !!(T.words && T.words.limits);
-    ln.textContent = ln.hidden ? "" : (T.words && T.words.limitsNote) || NO_LIMITS;
+    const ln = $("tn-limits-note");   // D-039: always said; the numbers per kind are in the controls' tooltips
+    ln.hidden = !T.words;
+    ln.textContent = !T.words ? "" : T.words.limits ? "Limits are your policy, not the tool\u2019s: edit " + POLICY_FILE + " to go further (hard ceiling = what your CPU reports). Hover a control for its limit." : (T.words.limitsNote || NO_LIMITS);
     updateTuneFoot();
     renderPredNote();
     renderVccia();
@@ -3364,6 +3365,7 @@
       for (let i = 0; i < 8; i++) {
         const lim = limitsOf(k), sel = r.sels[i], hi = i === 0 ? Math.max(cur[0], eff[0], lim && isNum(lim.ratioMax) ? lim.ratioMax : 0) : eff[i - 1];   // no ceiling stated = no raise above what was read (G-133)
         sel.disabled = !lim;
+        sel.title = limitLine(k, "ratio");
         const opts = [];
         for (let v = 8; v <= hi; v++) opts.push(Object.assign(el("option", "", v + "\u00d7" + (v === cur[i] ? "  \u00b7 now" : "")), { value: String(v) }));
         fill(sel, opts);
@@ -3467,7 +3469,7 @@
     } else if (tables && tables.p.length === 8 && tables.e.length === 8) turbo = { P: { ratios: tables.p.slice(), counts: null }, E: { ratios: tables.e.slice(), counts: null }, favored: {} };
     return { units: units, raw: r, accepted: r.accepted_match, acceptedNote: typeof r.accepted_note === "string" ? r.accepted_note : null, fused: fused, turbo: turbo, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
       tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true,
-      limits: normLimits(r.limits), limitsNote: typeof r.limits_note === "string" ? r.limits_note : null };
+      limits: normLimits(r.limits), hw: normHw(r.hw_limits), limitsNote: typeof r.limits_note === "string" ? r.limits_note : null };
   }
 
   // G-133: the live policy limits of tune.read / tune.last (`limits`, ARCHITECTURE contract 9 addendum): {P: {offMin, offMax, vtMax, ratioMax, ratioSrc, vtSrc}, E: {...}}, or null.
@@ -3484,6 +3486,30 @@
     return out;
   }
   function limitsOf(kind) { return T.words && T.words.limits ? T.words.limits[kind] || null : null; }
+  // D-039: what the CPU itself reports, `hw_limits` {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [lo, hi]}}; absent on a helper without it (then only "editable in policy.toml" is said).
+  function normHw(h) {
+    if (!isObj(h)) return null;
+    const out = {};
+    for (const k of ["P", "E"]) {
+      const o = h[k];
+      if (!isObj(o)) continue;
+      out[k] = { ratioOc: isNum(o.ratio_max_oc) ? o.ratio_max_oc : null, vtMaxV: isNum(o.v_target_max_mv) ? o.v_target_max_mv / 1000 : null,
+        off: Array.isArray(o.offset_mv) && o.offset_mv.length === 2 && o.offset_mv.every(isNum) ? o.offset_mv : null };
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  const POLICY_FILE = "/etc/arltuner/policy.toml";
+  // The one-line provenance of a limit (D-039): it is the user's policy, editable; the CPU's own ceiling only where the helper reported it. what: "offset" | "vt" | "ratio".
+  function limitLine(kind, what) {
+    const lim = limitsOf(kind), hw = T.words && T.words.hw ? T.words.hw[kind] : null;
+    if (!lim) return "";
+    const sgn = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
+    let mine, cpu = null;
+    if (what === "offset") { mine = sgn(lim.offMin) + "\u2026" + sgn(lim.offMax) + " mV"; if (hw && hw.off) cpu = sgn(hw.off[0]) + "\u2026" + sgn(hw.off[1]) + " mV"; }
+    else if (what === "vt") { mine = isNum(lim.vtMax) ? "up to " + lim.vtMax.toFixed(3) + " V" : null; if (hw && isNum(hw.vtMaxV)) cpu = "up to " + hw.vtMaxV.toFixed(3) + " V"; }
+    else { mine = isNum(lim.ratioMax) ? "up to " + lim.ratioMax + "\u00d7" : null; if (hw && isNum(hw.ratioOc)) cpu = "OC ratios up to " + hw.ratioOc + "\u00d7"; }
+    return "Limit: " + (mine || "none stated") + " from your policy (" + POLICY_FILE + ")" + (cpu ? " \u2014 editable; your CPU allows " + cpu + "." : " \u2014 editable in " + POLICY_FILE + ".");
+  }
   const NO_LIMITS = "The helper did not report the policy limits (update the helper), so the controls are disabled.";
 
   function appliedFromWords(w) {
