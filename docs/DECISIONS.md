@@ -193,3 +193,17 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   `allow_nan=False` towards the helper; dead `plan` / `apply` / `restore` allowlist entries removed; a duplicate session cookie is a 401; `signal_running` and
   `install.sh` `helper_pids` match the program's argv, not a substring. (6) The health gate's window is a known limitation (SAFETY, finding 14). Policy limits
   (D-032) unchanged.
+- **D-043 · 2026-10-12 · No polkit: the helper is a root service on a Unix socket (operator).** Operator: "can we totally get rid of our
+  dependency to polkit. i want to expand this later for more linux distros and i want to decrease all friction and unify the experience."
+  Design: the root helper listens on `/run/arltuner/helper.sock` (stream, the existing framed protocol), started by a shipped systemd
+  socket + service (socket activation via `LISTEN_FDS`), or by `arltuner-helper --device --socket` under any other init (the code does not
+  depend on systemd). The GUI connects instead of spawning `pkexec`; `--helper …` stays for the simulator/dev path. **Access:** an allowlist
+  in `/etc/arltuner/helper.toml` (`[access] users`, optional `group`), enforced by the socket's owner/mode (0660 root:arltuner) **and** a
+  `SO_PEERCRED` check per connection (uid in `users` suffices — no re-login needed after install; root is never an invoker for stress).
+  The peer uid replaces `PKEXEC_UID` (stress child privilege drop, workdir, audit `operator`). One client at a time; on disconnect telemetry
+  stops, an op in flight completes its read-back/restore, no new op starts; the service exits after ~10 min idle with no client and no op.
+  **Security model change, accepted by the operator's request:** before, elevated access needed a password once per GUI start; now any
+  process of an allowlisted user can drive the helper without a prompt. Compensations: guard + policy limits, allowlist, one transaction at a
+  time, read-back, health gate, audit log, read-only web scope, idle exit, nothing applied on its own (autostart OD-3/OD-4 stays unsigned).
+  Supersedes the pkexec/polkit parts of D-029 (root argv: exactly `--device` or `--device --socket`), D-028 and D-042; the polkit action
+  file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go.
