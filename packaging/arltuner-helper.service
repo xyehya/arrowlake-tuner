@@ -1,0 +1,24 @@
+# arltuner root helper (D-043): MSR / cpufreq / /dev/mem access for the GUI, one allowlisted client at a time on /run/arltuner/helper.sock.
+# Started by arltuner-helper.socket (never enabled by itself: there is no [Install] section). Runs as root with its normal capabilities: the helper
+# writes MSRs (/dev/cpu/*/msr), cpufreq sysfs, and files under /var/lib/arltuner, /run/arltuner and /etc/arltuner, and drops privileges for stress children.
+# Hardening is deliberately minimal and each line is safe for that work:
+#   NoNewPrivileges / RestrictSUIDSGID / LockPersonality : no privilege gain through exec, no setuid files, no personality changes
+#   PrivateNetwork                                       : the helper needs no network (the AF_UNIX socket is a file, handed over as fd 3)
+# NOT set on purpose: PrivateDevices (hides /dev/cpu/*/msr), ProtectKernelTunables / ProtectSystem (cpufreq sysfs, /etc/arltuner), ProtectHome and
+# PrivateTmp (stress working directories under /run/user/<uid> and /tmp), CapabilityBoundingSet (CAP_SYS_RAWIO and friends are needed).
+[Unit]
+Description=arrowlake-tuner root helper
+Documentation=https://github.com/xyehya/arrowlake-tuner
+Requires=arltuner-helper.socket
+After=arltuner-helper.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/arltuner/arltuner-helper --device --socket
+KillSignal=SIGTERM
+# A measurement or stress run in flight restores cpufreq before the helper exits; give it time before systemd kills it.
+TimeoutStopSec=120
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateNetwork=yes

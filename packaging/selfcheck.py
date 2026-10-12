@@ -1,11 +1,12 @@
-"""Post-install trust self-check (G-106). Installed as ``/usr/lib/arltuner/arltuner-selfcheck`` and run by ``install.sh`` as
+"""Post-install trust self-check (G-106, D-043). Installed as ``/usr/lib/arltuner/arltuner-selfcheck`` and run by ``install.sh`` as
 ``python3 -I /usr/lib/arltuner/arltuner-selfcheck`` - i.e. from the installed, root-owned tree, never from the checkout.
 
 It asks the question the root helper will ask at start-up (SPEC 4.4): is everything it will load or open root-owned, not group/world-writable,
 free of symlinks, with root-owned parents? It reuses ``arltuner.helper.trust`` (the helper's own checks) and adds what only the install can know:
-the launcher is executable, the polkit action pins the launcher and asks for ``auth_admin`` everywhere (no ``_keep``, never ``allow_active=yes``),
-the audit log is 0600. Pure over injectable ``lstat_fn`` / ``listdir_fn`` / ``read_fn`` / ``root_uid``: tests feed fake stat results. Exit 0: all
-checks passed; 1: at least one failed (each is named); the install is then NOT usable and ``uninstall.sh`` removes it.
+the launcher is executable, the systemd socket + service units are present and pin the launcher and the socket's owner / group / mode, the group they name
+exists, no polkit action file is left over from the old install, ``helper.toml`` has an ``[access]`` that admits somebody, the audit log is 0600.
+Pure over injectable ``lstat_fn`` / ``listdir_fn`` / ``read_fn`` / ``getgrnam`` / ``root_uid``: tests feed fake stat results. Exit 0: all checks passed;
+1: at least one failed (each is named); the install is then NOT usable and ``uninstall.sh`` removes it.
 """
 from __future__ import annotations
 
@@ -14,7 +15,6 @@ import os
 import re
 import stat
 import sys
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,18 +22,26 @@ from typing import Any
 CODE_DIR = Path("/usr/lib/arltuner")
 HELPER = CODE_DIR / "arltuner-helper"
 SELFCHECK = CODE_DIR / "arltuner-selfcheck"
-POLKIT_FILE = Path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")
+OLD_POLKIT_FILE = Path("/usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy")  # the G-106 install's action: must be gone (D-043)
+UNIT_DIRS = (Path("/etc/systemd/system"), Path("/usr/lib/systemd/system"))  # install.sh uses the first; a distribution package may use the second
+SOCKET_UNIT, SERVICE_UNIT = "arltuner-helper.socket", "arltuner-helper.service"
+SOCKET_PATH = Path("/run/arltuner/helper.sock")
+SOCKET_GROUP = "arltuner"
+EXEC_START = f"/usr/bin/python3 -I {HELPER} --device --socket"
 TMPFILES_FILE = Path("/usr/lib/tmpfiles.d/arltuner.conf")
 ETC_DIR = Path("/etc/arltuner")
 STATE_DIR = Path("/var/lib/arltuner")
 RUN_DIR = Path("/run/arltuner")
-POLKIT_ACTION = "io.github.arrowlake-tuner.helper"
-EXEC_PATH_KEY = "org.freedesktop.policykit.exec.path"
-LAUNCHER_SHA256 = "7a455955bc8a124694dd3b77761372a2f1a9d47ffa99ea7488f85891e92004c4"  # sha256 of packaging/arltuner-helper (a test keeps the two in step)
+LAUNCHER_SHA256 = "01e88e7ca735e8d658e02edcb5b73d5716375525016b9a37513fa731aee701f4"  # sha256 of packaging/arltuner-helper (a test keeps the two in step)
 LAUNCHER_SHEBANG = b"#!/usr/bin/python3 -I"
-POLKIT_RULES_DIRS = (Path("/etc/polkit-1/rules.d"), Path("/usr/share/polkit-1/rules.d"))  # a rule here could grant the action without a password
 # Staging leftovers of an interrupted install (swap_dir / seeding): "<name>.old.<pid>", "<name>.new.<pid>", ".accepted.new.<pid>", ".tmp.<pid>", ".audit.new.<pid>"
 LEFTOVER = re.compile(r"(^|.*\.)(old|new)\.\d+$|^\.(tmp|audit\.new|accepted\.new)\.\d+$")
+# [Service] settings that would break the helper's MSR / cpufreq / state access (or change who it runs as / what it runs): none may appear.
+FORBIDDEN_SERVICE_KEYS = (
+    "User", "Group", "DynamicUser", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "Environment", "EnvironmentFile",
+    "PrivateDevices", "ProtectKernelTunables", "ProtectSystem", "ReadOnlyPaths", "InaccessiblePaths", "BindPaths", "BindReadOnlyPaths", "DeviceAllow",
+)
+SOCKET_KEYS_ALLOWED = {"ListenStream", "SocketUser", "SocketGroup", "SocketMode", "DirectoryMode", "RemoveOnStop", "Accept", "Service", "Backlog"}
 
 Result = tuple[str, str | None]  # (what was checked, None = ok / the reason it failed)
 
@@ -43,31 +51,67 @@ def _read(path: Path) -> bytes:
         return fh.read(1 << 20)
 
 
-def check_polkit_text(data: bytes, helper: Path = HELPER) -> None:
-    """Raise ``ValueError`` unless the polkit file declares exactly one action, ``auth_admin`` for all three defaults (so no ``_keep`` and never
-    ``allow_active=yes``) and an ``exec.path`` annotation equal to the installed helper."""
-    if b"<!ENTITY" in data:  # stdlib expat: no external entities are fetched, but nothing here needs entity declarations at all
-        raise ValueError("entity declarations are not accepted")
+def unit_sections(data: bytes) -> dict[str, dict[str, list[str]]]:
+    """A systemd unit file as ``{section: {key: [values...]}}`` (comments and blank lines dropped; a repeated key keeps every value, in order).
+    ``ValueError`` for a line that is neither a section header, a comment nor ``key=value``."""
     try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        raise ValueError(f"not valid XML: {exc}") from None
-    actions = root.findall("action")
-    if [a.get("id") for a in actions] != [POLKIT_ACTION]:
-        raise ValueError(f"expected exactly one action {POLKIT_ACTION!r}, found {[a.get('id') for a in actions]}")
-    action = actions[0]
-    defaults = action.find("defaults")
-    if defaults is None:
-        raise ValueError("no <defaults>")
-    got = {child.tag: (child.text or "").strip() for child in defaults}
-    for tag in ("allow_any", "allow_inactive", "allow_active"):
-        if got.get(tag) != "auth_admin":
-            raise ValueError(f"<{tag}> is {got.get(tag)!r}, must be 'auth_admin' (no _keep, never yes)")
-    if set(got) - {"allow_any", "allow_inactive", "allow_active"}:
-        raise ValueError(f"unexpected <defaults> children {sorted(got)}")
-    paths = [a.text.strip() for a in action.findall("annotate") if a.get("key") == EXEC_PATH_KEY and a.text]
-    if paths != [str(helper)]:
-        raise ValueError(f"{EXEC_PATH_KEY} is {paths}, must be exactly [{str(helper)!r}]")
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"not valid UTF-8: {exc}") from None
+    out: dict[str, dict[str, list[str]]] = {}
+    section: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+            out.setdefault(section, {})
+        elif section is not None and "=" in line:
+            key, _, value = line.partition("=")
+            out[section].setdefault(key.strip(), []).append(value.strip())
+        else:
+            raise ValueError(f"unparsable line {raw!r}")
+    return out
+
+
+def check_socket_unit_text(data: bytes) -> None:
+    """``ValueError`` unless the socket unit listens on exactly ``/run/arltuner/helper.sock``, owned by root, group ``arltuner``, mode 0660 (no access for
+    "other"), and does not hand each connection to its own service instance (``Accept=no``)."""
+    sock = unit_sections(data).get("Socket")
+    if sock is None:
+        raise ValueError("no [Socket] section")
+    for key, want in (("ListenStream", [str(SOCKET_PATH)]), ("SocketUser", ["root"]), ("SocketGroup", [SOCKET_GROUP]), ("SocketMode", ["0660"])):
+        if sock.get(key) != want:
+            raise ValueError(f"{key} is {sock.get(key)}, must be exactly {want}")
+    if sock.get("Accept", ["no"]) != ["no"]:
+        raise ValueError(f"Accept is {sock.get('Accept')}, must be no (the helper serves its one client itself)")
+    extra = sorted(set(sock) - SOCKET_KEYS_ALLOWED)
+    if extra:
+        raise ValueError(f"unexpected [Socket] setting(s) {extra}")
+
+
+def check_service_unit_text(data: bytes) -> None:
+    """``ValueError`` unless the service runs exactly the pinned command as root, and none of the settings that would break MSR / sysfs access (or change the
+    command or the user) is present."""
+    svc = unit_sections(data).get("Service")
+    if svc is None:
+        raise ValueError("no [Service] section")
+    if svc.get("ExecStart") != [EXEC_START]:
+        raise ValueError(f"ExecStart is {svc.get('ExecStart')}, must be exactly [{EXEC_START!r}]")
+    if svc.get("Type", ["simple"]) != ["simple"]:
+        raise ValueError(f"Type is {svc.get('Type')}, must be simple")
+    present = [k for k in FORBIDDEN_SERVICE_KEYS if k in svc]
+    if present:
+        raise ValueError(f"{present} must not be set in [Service]: the helper runs exactly the pinned command, as root, with access to MSRs / sysfs / its state")
+
+
+def check_old_polkit_gone(lstat_fn: Callable[[str], Any]) -> None:
+    try:
+        lstat_fn(str(OLD_POLKIT_FILE))
+    except FileNotFoundError:
+        return
+    raise ValueError(f"{OLD_POLKIT_FILE} is still installed: the old polkit action must be removed (the helper is a socket service now)")
 
 
 def selfcheck(
@@ -76,6 +120,7 @@ def selfcheck(
     listdir_fn: Callable[[str], list[str]] = os.listdir,
     read_fn: Callable[[Path], bytes] = _read,
     root_uid: int = 0,
+    getgrnam: Callable[[str], Any] | None = None,
 ) -> list[Result]:
     from arltuner.helper.trust import TrustError, check_code_tree, check_trusted_path
 
@@ -130,12 +175,53 @@ def selfcheck(
     if results[-2][1] is None:  # read only after the launcher passed the trust check
         run("helper launcher content = packaged launcher, isolated-python shebang", launcher_content)
     path("self-check script", SELFCHECK)
-    path("polkit action file", POLKIT_FILE)
-    if results[-1][1] is None:  # content is parsed only after the file itself passed the trust check
-        run("polkit action content", lambda: check_polkit_text(read_fn(POLKIT_FILE)))
+
+    def unit(label: str, name: str, content_check: Callable[[bytes], None]) -> None:
+        """The first unit directory that has the file: trusted path, then (only then) pinned content."""
+        found = None
+        for directory in UNIT_DIRS:
+            try:
+                lstat_fn(str(directory / name))
+            except OSError:
+                continue
+            found = directory / name
+            break
+        if found is None:
+            results.append((label, f"{name} is in none of {[str(d) for d in UNIT_DIRS]}"))
+            return
+        path(label, found)
+        if results[-1][1] is None:
+            run(f"{label}: content", lambda: content_check(read_fn(found)))
+
+    unit("systemd socket unit arltuner-helper.socket", SOCKET_UNIT, check_socket_unit_text)
+    unit("systemd service unit arltuner-helper.service", SERVICE_UNIT, check_service_unit_text)
+
+    def group_exists() -> None:
+        lookup = getgrnam
+        if lookup is None:
+            import grp
+
+            lookup = grp.getgrnam
+        try:
+            lookup(SOCKET_GROUP)
+        except KeyError:
+            raise ValueError(f"the group {SOCKET_GROUP!r} named by the socket unit does not exist (groupadd -r {SOCKET_GROUP})") from None
+
+    run(f"group {SOCKET_GROUP} exists (the socket's group)", group_exists)
+    run("no old polkit action file", lambda: check_old_polkit_gone(lstat_fn))
     path("tmpfiles.d file", TMPFILES_FILE)
     path("policy /etc/arltuner/policy.toml", ETC_DIR / "policy.toml")
-    path("helper.toml (may be absent)", ETC_DIR / "helper.toml", must_exist=False)
+    path("helper.toml", ETC_DIR / "helper.toml")
+    if results[-1][1] is None:  # content is parsed only after the file itself passed the trust check
+
+        def access_nonempty() -> None:
+            from arltuner.helper.settings import parse_helper_toml
+
+            where = str(ETC_DIR / "helper.toml")
+            if parse_helper_toml(read_fn(ETC_DIR / "helper.toml").decode("utf-8", "replace"), where).access.empty:
+                raise ValueError("no [access] users or group: nobody may use the helper (sudo bash install.sh --add-user NAME)")
+
+        run("helper.toml is valid and its [access] admits somebody", access_nonempty)
     tree_if_present("accepted state /etc/arltuner/accepted (optional: absent until the user saves one)", ETC_DIR / "accepted")
     path("state dir /var/lib/arltuner", STATE_DIR, want="dir")
     path("audit log (may be absent)", STATE_DIR / "audit.jsonl", must_exist=False)
@@ -165,25 +251,6 @@ def selfcheck(
             raise ValueError(f"leftover staging paths of an interrupted install: {sorted(found)}")
 
     run("no leftover .old.*/.new.* staging paths", leftovers)
-
-    def polkit_rules() -> None:
-        hits = []
-        for directory in POLKIT_RULES_DIRS:
-            try:
-                names = listdir_fn(str(directory))
-            except OSError:
-                continue
-            for name in names:
-                try:
-                    data = read_fn(directory / name)
-                except OSError as exc:
-                    raise ValueError(f"cannot read {directory / name}: {exc.strerror or exc}") from None
-                if POLKIT_ACTION.encode() in data:
-                    hits.append(str(directory / name))
-        if hits:
-            raise ValueError(f"polkit rule file(s) mention {POLKIT_ACTION} (a rule can override the action's auth_admin): {sorted(hits)}")
-
-    run("no polkit rules.d file mentions the helper action", polkit_rules)
     return results
 
 
