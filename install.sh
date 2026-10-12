@@ -115,21 +115,6 @@ helper_pids() {  # PIDs running the helper: argv[0] is the helper itself, or a w
         done
     done
 }
-if [ "$SYSTEMD" -eq 1 ]; then  # the socket first (no new activation), then the service (an operation in flight completes; TimeoutStopSec)
-    systemctl stop arltuner-helper.socket arltuner-helper.service 2>/dev/null || true
-fi
-RUNNING=$(helper_pids | tr '\n' ' ')
-if [ -n "$RUNNING" ] && [ -z "$DESTDIR" ]; then  # an old pkexec-started helper (G-106) or a manual one: SIGTERM is its orderly stop
-    echo "stopping the running helper (pid ${RUNNING% }) ..."
-    # shellcheck disable=SC2086
-    kill -TERM $RUNNING 2>/dev/null || true
-    for _ in $(seq 1 120); do
-        sleep 0.5
-        RUNNING=$(helper_pids | tr '\n' ' ')
-        [ -n "$RUNNING" ] || break
-    done
-fi
-[ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 
 # --- sanity: sources and interpreter -------------------------------------------------------------------------------------------------
 # Every directory we copy from, and every file we need, must be a real entry of THIS checkout: no symlink, and its realpath stays under $SRC.
@@ -160,6 +145,23 @@ if [ -n "${SUDO_USER:-}" ]; then
     INVOKER=$SUDO_USER
 fi
 [ "$INVOKER" != root ] || INVOKER=""  # never root
+
+# --- stop a running helper (after every check that can refuse: a refused install leaves a running helper alone) ----------------------------------------
+if [ "$SYSTEMD" -eq 1 ]; then  # the socket first (no new activation), then the service (an operation in flight completes; TimeoutStopSec)
+    systemctl stop arltuner-helper.socket arltuner-helper.service 2>/dev/null || true
+fi
+RUNNING=$(helper_pids | tr '\n' ' ')
+if [ -n "$RUNNING" ] && [ -z "$DESTDIR" ]; then  # an old pkexec-started helper (G-106) or a manual one: SIGTERM is its orderly stop
+    echo "stopping the running helper (pid ${RUNNING% }) ..."
+    # shellcheck disable=SC2086
+    kill -TERM $RUNNING 2>/dev/null || true
+    for _ in $(seq 1 120); do
+        sleep 0.5
+        RUNNING=$(helper_pids | tr '\n' ' ')
+        [ -n "$RUNNING" ] || break
+    done
+fi
+[ -z "$RUNNING" ] || die "an arltuner-helper process is running (pid ${RUNNING% }): stop the GUI / helper first, then re-run the install"
 
 copy_one() {  # copy_one SRC DST MODE: copy WITHOUT dereferencing, then insist the result is a regular file (a source swapped for a link is not followed)
     local from=$1 to=$2 mode=$3
@@ -277,13 +279,16 @@ ACCESS_ARGS=()
 [ -z "$INVOKER" ] && [ "${#ADD_USERS[@]}" -eq 0 ] || ACCESS_ARGS+=(--seed-group "$GROUP")  # a group is seeded only together with somebody to admit
 for u in ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do ACCESS_ARGS+=(--add-user "$u"); done
 [ "$RESEED" -eq 0 ] || ACCESS_ARGS+=(--reseed)
-(cd / && "$PYTHON" -I "$LIB/arltuner-access" "$ETC/helper.toml" ${ACCESS_ARGS[@]+"${ACCESS_ARGS[@]}"}) || die "could not write $ETC/helper.toml"
+ACCESS_OUT=$(cd / && "$PYTHON" -I "$LIB/arltuner-access" "$ETC/helper.toml" ${ACCESS_ARGS[@]+"${ACCESS_ARGS[@]}"}) || die "could not write $ETC/helper.toml"
+printf '%s\n' "$ACCESS_OUT"
+SEEDED=$(printf '%s\n' "$ACCESS_OUT" | sed -n 's/^seeded: //p')  # the invoking user, only when the allowlist was empty and they were put into it
 if ! grep -q '^users = \[.\+\]' "$ETC/helper.toml" && ! grep -q '^group = ' "$ETC/helper.toml"; then
     echo "WARNING: nobody is allowed to use the helper yet (no invoking user found). Run: sudo bash install.sh --add-user NAME" >&2
 fi
 
-# the users who may use the helper get the socket's group, so they can open the socket (a user already in the allowlist is not touched)
-for u in ${INVOKER:+"$INVOKER"} ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do
+# the users just admitted get the socket's group, so they can open the socket: the seeded invoker and the --add-user names - never a user who merely
+# re-ran the installer against an existing allowlist (that would widen it through the group)
+for u in ${SEEDED:+"$SEEDED"} ${ADD_USERS[@]+"${ADD_USERS[@]}"}; do
     if [ -n "$DESTDIR" ]; then
         echo "usermod -aG $GROUP $u: skipped (DESTDIR install)"
     else

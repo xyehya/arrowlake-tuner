@@ -474,9 +474,11 @@ class AccessAllowlist(InstallCase):
         self.assertEqual(self.path("/etc/arltuner/helper.toml").read_bytes(), before)
 
     def test_a_rerun_with_another_sudo_user_does_not_widen_an_existing_allowlist(self) -> None:
-        self.ok_install(extra_env={"SUDO_USER": "alice"})
-        self.ok_install(extra_env={"SUDO_USER": "mallory"})
+        first = self.ok_install(extra_env={"SUDO_USER": "alice"})
+        self.assertIn("usermod -aG arltuner alice", first.stdout)
+        r = self.ok_install(extra_env={"SUDO_USER": "mallory"})
         self.assertEqual(self.toml()["access"]["users"], ["alice"])
+        self.assertNotIn("mallory", r.stdout)  # not put in the group either (the usermod line), not only absent from the list
 
     def test_an_old_helper_toml_without_access_keeps_its_taint_bits_and_gets_the_invoking_user(self) -> None:
         self.ok_install()
