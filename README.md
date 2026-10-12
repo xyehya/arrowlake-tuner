@@ -18,6 +18,34 @@ XTU alternative · stress test · stressapptest · stress-ng.
 **Supported:** Intel Core Ultra 200S, Arrow Lake-S desktop (CPU family 6, model 198), on Linux. Developed and verified on a Core Ultra 9 285K
 (`docs/HARDWARE.md`); everything the app shows is read from your machine. Other CPUs are refused or read-only.
 
+## Screenshots
+Everything below is the app's own web page, captured from one example machine (Core Ultra 9 285K); the numbers are that machine's, yours will differ.
+
+![Dashboard: live core map coloured by clock, with package power, temperature, clock, Vcore, core power and DRAM traffic beside it](docs/img/dashboard.png)
+*Dashboard: every core's live clock on the die layout (recolour by busy, temperature or VID), with package and core power, temperatures and DRAM traffic.*
+
+![Curves: measured voltage per frequency for each P-core and E-cluster, drawn against the fused stock table](docs/img/curves.png)
+*Curves: the measured V/F curve of every P-core and E-cluster, so you can see which cores need the most voltage.*
+
+![Tune: per-core voltage offsets, OC point and ratio, with one core's per-V/F-point offsets open](docs/img/tune-per-core.png)
+*Tune: one row per core or cluster, a whole-curve or per-point voltage offset, the OC point and ratio. Nothing is written until Review, then Apply, then read-back.*
+
+<details>
+<summary>More pages</summary>
+
+| | |
+|---|---|
+| ![Memory card: DDR5 speed, gear, main timings and DIMM temperatures](docs/img/dashboard-memory.png) | ![Core map coloured by VID, the voltage each core asks for](docs/img/dashboard-vid.png) |
+| *Memory: speed, gear, timings and DIMM temperatures, read from the memory controller.* | *Core map by VID: the voltage each core is requesting right now.* |
+| ![Per-core table with clock, busy, ratio, VID and temperature and a 60 s trend](docs/img/dashboard-cores.png) | ![Measured curve values as a table, volts per unit and ratio](docs/img/curves-table.png) |
+| *Cores: every core's clock, load, ratio, VID and temperature with a 60 s trend.* | *Curves as a table: the measured volts per unit and ratio.* |
+| ![Stress screen, idle: choose CPU or memory load, length and which cores](docs/img/stress.png) | ![Profiles: accepted state, saved profiles, save and compare](docs/img/profiles.png) |
+| *Stress: a quick screen of chosen cores (not an acceptance gate); shown idle.* | *Profiles: save your Tune settings, set the accepted state that Restore brings back.* |
+| ![System: helper state, mailbox operations used this boot and the preflight checks](docs/img/system.png) | |
+| *System: helper state, the per-boot mailbox budget and the preflight checks.* | |
+
+</details>
+
 ## Safety
 Writing CPU voltages can corrupt data or crash the machine. Every write goes through a guard (allowlist, policy limits), one mailbox transaction
 at a time, a review → apply step, read-back and an audit log. **A cold boot reverts every change** — that is also the universal undo. Rules:
