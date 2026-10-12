@@ -62,6 +62,10 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 
 3a. (resolved by G-145/G-146) knowledge citations now point at `platform-arl-s.md`, `examples/reference-285k/notes/*`; `[USER]` tags removed from the sources and from guide 04/01.
 
+11. (G-146) Stale polkit wording in files I do not own: `docs/ARCHITECTURE.md:227` (G-116 addendum `PKEXEC_UID`; the G-144 addendum supersedes it), `docs/STATE.md:7`, `docs/ORCHESTRATION.md:38`, `docs/SPEC.md` §10 (D-021 draft).
+    `docs/SAFETY.md` has no paragraph on the D-043 access model (any process of an allowed user can drive the helper); guide 12 §7 carries it. Consider a short paragraph there.
+12. (G-146) "21 self-check checks" is from the coordinator; I did not run the installed self-check. Behaviour when the helper service is stopped while the GUI is open (page shows `helper: n/a`) is inferred from the code, not observed.
+
 ## Recheck after merges (all done 2026-10-12 against main c5eba92)
 - Tune labels All-Core/Per-Core, Whole Curve Offset/Per V/F point Offsets, OC box texts (with `·` and `×`), "No OC ratio" dropdown rules, "above 55× limit" tag, header "runs up to N×", live limits: verified in `web/app.js`.
 - D-038 +3: `policies/default.toml` header and ARCHITECTURE G-137; clamped by cmd `0x01`.
