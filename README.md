@@ -149,3 +149,6 @@ python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --s
 The project began as per-core tuning research on the reference machine (Core Ultra 9 285K, ASRock Z890) and became this application on 2026-10-08;
 `docs/knowledge/` holds the facts that research established. Register facts were established by measurement and by studying vendor tools for
 interoperability; no vendor code or binaries are included.
+
+## License
+MIT — see [LICENSE](LICENSE). Use, change and redistribute freely, including commercially; keep the copyright notice.
