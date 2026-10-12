@@ -10,8 +10,8 @@ XTU alternative · stress test · stressapptest · stress-ng.
 - **GUI (local web app + root helper) working on the reference machine:** live dashboard with memory timings, V/F curve **measurement** and
   storage, **tuning** (Per V/F point Offsets / Whole Curve Offset, OC point + adaptive voltage, OC ratios, turbo tables) with plan → review → apply →
   read-back, stress/validation screens, profiles. Verified on hardware 2026-10-11/12 (`docs/knowledge/tuning-results.md`). Start with
-  **`docs/USER-GUIDE.md`**.
-- **CLI + restore scripts** (Linux and Windows) unchanged. Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).
+  the **user guide, `docs/guide/README.md`**.
+- **CLI + restore scripts** (Linux and Windows; the Windows restore finds your cores from a fingerprint recorded on Linux and is not yet tested on real Windows in its current form). Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).
 - **No tuning ships with the repo (D-036).** A fresh install has no accepted state: you create it in the app (Tune, then Profiles > Set as accepted).
   One chip's results are kept as an illustration only in `examples/reference-285k/` — never apply them to another CPU.
 
@@ -58,7 +58,7 @@ at a time, a review → apply step, read-back and an audit log. **A cold boot re
 | OS | Linux on bare metal (no VM), systemd + polkit + a desktop polkit agent (GNOME/KDE) | System tab → preflight |
 | Python | ≥ 3.12, standard library only (nothing to pip-install) | `python3 --version` |
 | Kernel | `msr` driver (`/dev/cpu/*/msr`); kernel lockdown `none`; `msr.allow_writes` not `off` | `cat /sys/kernel/security/lockdown` |
-| Browser | any current Chromium/Firefox (the GUI is a local web page on 127.0.0.1) | |
+| Browser | any current Chromium/Firefox (the GUI is a local web page on a random loopback address `127.x.y.z`, printed when it starts; not reachable from the network) | |
 | Optional tools | `stress-ng`, `stressapptest` (Stress tab), `turbostat`, `perf`, `lm_sensors` | Fedora: `sudo dnf install stress-ng stressapptest kernel-tools perf lm_sensors` |
 
 Secure Boot normally switches the kernel into lockdown, which blocks MSR writes: the app then runs **read-only** (dashboard, curves still work).
@@ -81,11 +81,11 @@ git clone https://github.com/xyehya/arrowlake-tuner && cd arrowlake-tuner
 python3 tools/run_tests.py          # optional: offline test suite (simulator, ~3 min)
 sudo bash install.sh                # code → /usr/lib/arltuner, GUI → /usr/share/arltuner/web, policy → /etc/arltuner, audit → /var/lib/arltuner
 ```
-The installer ends with a self-check ("all 17 checks passed"). It never applies any tuning and never touches an existing policy or accepted state.
+The installer ends with a self-check ("all N checks passed"). It never applies any tuning and never touches an existing policy or accepted state.
 
 ## 4. Run
 ```
-python3 tools/arltuner-gui.py --open    # one polkit password prompt, then the browser opens the dashboard
+python3 tools/arltuner-gui.py --open    # one polkit password prompt, then the browser opens the dashboard (a random http://127.x.y.z:PORT address)
 ```
 - Forgot the login link or closed the tab: run `python3 tools/arltuner-gui.py` again — it prints a fresh one-time link for the running GUI.
 - Stop the GUI: Ctrl+C in that terminal (the root helper exits with it).
@@ -95,7 +95,7 @@ python3 tools/arltuner-gui.py --open    # one polkit password prompt, then the b
 2. **Tune → Read ratios & voltages**, change one thing (e.g. one core's top point −20 mV) → **Review → Apply** → read-back must match.
 3. **Stress** the changed cores (5–15 min), then your own long gate (e.g. OCCT/Linpack 60 min) before trusting it.
 4. **Profiles → Save**, then **Set as accepted** — this is what "Restore accepted" brings back after a reboot.
-Details per tab: `docs/USER-GUIDE.md`.
+Details per tab and the background facts: the user guide, `docs/guide/README.md`.
 
 ## 5. After every reboot
 A **cold boot clears every runtime change** (a warm reboot may keep some). To get your accepted tuning back, either:
@@ -114,8 +114,10 @@ Nothing is applied automatically at boot (by design, for now).
 The installer refuses to run while the GUI's helper is running — stop the GUI first.
 
 ## 7. Limits (policy `/etc/arltuner/policy.toml`)
-Default: offsets −200…+200 mV; ratio and voltage-target ceilings read from **your** CPU (fused maximum ratio, the CPU's own maximum voltage).
-Edit the file (root) for other limits. One mailbox transaction at a time, the guard, read-back and the audit log always stay on.
+**Every limit is your policy, not a built-in rule (D-039).** The shipped defaults are conservative: offsets −200…+200 mV; the voltage-target and OC-ratio ceilings are `"auto"` (the CPU's own
+maximum voltage from mailbox command `0x28`; the fused ratio + 3). Edit the numbers in `/etc/arltuner/policy.toml` as root to go further (extreme-cooling users can); they apply from the next read or plan. The only
+ceilings you cannot edit are what **your CPU itself reports** (OC-ratio limit `0x01`, maximum voltage `0x28`, read live) and the register field widths (offset −1000…+999 mV), at your own risk. The Tune
+page and System → Tuning limits show each limit next to what your CPU allows. One mailbox transaction at a time, the guard, read-back and the audit log always stay on. Details: `docs/guide/12-safety-and-internals.md`.
 
 ## 8. Troubleshooting
 | Symptom | Likely cause |
@@ -138,6 +140,7 @@ python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --s
 | `AGENTS.md`, `CLAUDE.md`, `docs/ORCHESTRATION.md` | rules for agent sessions; how the orchestrator runs the project; `docs/START-PROMPT.md` = how to resume |
 | `docs/STATE.md` · `docs/SPEC.md` · `docs/ROADMAP.md` · `docs/tasks/` | live state · product spec · phases · tasks |
 | `docs/SAFETY.md` · `docs/DECISIONS.md` · `docs/ARCHITECTURE.md` | write protocol · decision log · module contracts |
+| `docs/guide/` | the user guide: requirements, install, first run, V/F primer, measuring, undervolting, overclocking, stability, profiles and restore, CLI, FAQ, safety |
 | `docs/knowledge/` | distilled facts: registers (single source of truth), platform, tuning results, Linux/Windows paths |
 | `src/arltuner/`, `tests/`, `tools/` | library + CLI, tests, Linux/Windows scripts |
 | `policies/` · `examples/` | the generic root policy installed as the default · one chip's results, illustration only (nothing reads them) |
