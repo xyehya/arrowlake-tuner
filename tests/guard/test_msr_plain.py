@@ -137,7 +137,7 @@ class DefaultPolicyIsInert(unittest.TestCase):
         self.assertIsNone(p.match_msr(0x650, "read"))
 
     def test_the_example_policy_stays_inert_for_plain_writes(self) -> None:
-        p = load_policy(Path(__file__).resolve().parents[2] / "policies" / "example-oc-ramp.toml")
+        p = load_policy(Path(__file__).resolve().parents[2] / "examples" / "reference-285k" / "policies" / "example-oc-ramp.toml")
         self.assertFalse([e for e in p.msr_allow if e.kind == "write"])
         self.assertEqual(p.ratio_max["E"], 49)  # D-017
 

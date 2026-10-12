@@ -9,9 +9,10 @@
 #   /usr/share/arltuner/web/               static GUI files
 #   /usr/share/polkit-1/actions/io.github.arrowlake-tuner.helper.policy      auth_admin everywhere, no _keep
 #   /usr/lib/tmpfiles.d/arltuner.conf      /run/arltuner 0755 root (mailbox lock directory)
-#   /etc/arltuner/{policy.toml,helper.toml}   operator-owned limits: seeded from the checkout ONLY when absent (--reseed-config replaces them)
-#   /etc/arltuner/accepted/                CURRENT + EXPECTED-words.txt + the profiles it lists: replaced from the checkout on EVERY run (the repo is
-#                                          the acceptance record, and the dashboard compares live words against this copy)
+#   /etc/arltuner/{policy.toml,helper.toml}   operator-owned limits: seeded from the checkout (policies/default.toml) ONLY when absent
+#                                          (--reseed-config replaces them)
+#   /etc/arltuner/accepted/                the USER's accepted state (D-036): never created, changed or removed by this script. The app writes it
+#                                          (Profiles > Set as accepted); a fresh install has none ("No accepted state yet")
 #   /var/lib/arltuner/audit.jsonl          0600; seeded once from the invoking user's legacy ~/.local/state/linuxmon/audit.jsonl
 #
 # The checkout is only ever COPIED. After the copy, the only Python that runs (compileall, the self-check) is the installed, root-owned tree, in
@@ -29,7 +30,7 @@ RESEED=0
 for arg in "$@"; do
     case $arg in
         --reseed-config) RESEED=1 ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $arg (usage: install.sh [--reseed-config])" ;;
     esac
 done
@@ -77,11 +78,11 @@ RUNNING=$(helper_pids | tr '\n' ' ')
 
 # --- sanity: sources and interpreter -------------------------------------------------------------------------------------------------
 # Every directory we copy from, and every file we need, must be a real entry of THIS checkout: no symlink, and its realpath stays under $SRC.
-for f in src platforms web packaging profiles policies; do
+for f in src platforms web packaging policies; do
     [ -d "$SRC/$f" ] || die "incomplete checkout: $SRC/$f is missing"
 done
-for f in src src/arltuner src/arltuner/__init__.py platforms web packaging profiles policies packaging/arltuner-helper packaging/selfcheck.py \
-         packaging/io.github.arrowlake-tuner.helper.policy packaging/arltuner.tmpfiles.conf profiles/CURRENT profiles/EXPECTED-words.txt; do
+for f in src src/arltuner src/arltuner/__init__.py platforms web packaging policies policies/default.toml packaging/arltuner-helper packaging/selfcheck.py \
+         packaging/io.github.arrowlake-tuner.helper.policy packaging/arltuner.tmpfiles.conf; do
     [ -e "$SRC/$f" ] || die "incomplete checkout: $SRC/$f is missing"
     [ ! -L "$SRC/$f" ] || die "$SRC/$f is a symlink; refusing"
     real=$(realpath -e -- "$SRC/$f") || die "cannot resolve $SRC/$f"
@@ -148,7 +149,7 @@ normalize() {  # normalize DIR: dirs 0755, files 0644, root-owned when we can be
 # --- 1. code: copy, precompile in place, then swap in -----------------------------------------------------------------------------------
 mkdir -p "$DESTDIR/usr/lib/tmpfiles.d" "$DESTDIR/usr/share/polkit-1/actions"  # system directories: created if missing, never re-moded
 NEW=$DESTDIR/usr/lib/.arltuner.new.$$
-trap 'rm -rf "$NEW" "${WEB}.new.$$" "$ETC/.accepted.new.$$" "$ETC/.tmp.$$" "$STATE/.audit.new.$$"' EXIT
+trap 'rm -rf "$NEW" "${WEB}.new.$$" "$ETC/.tmp.$$" "$STATE/.audit.new.$$"' EXIT
 rm -rf "$NEW"
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$NEW" "$NEW/arltuner" "$NEW/platforms"
 copy_files "$SRC/src/arltuner" "$NEW/arltuner" -name '*.py'
@@ -184,21 +185,9 @@ fi
 # --- 4. /etc/arltuner: seeded from the repo only when absent ------------------------------------------------------------------------
 install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$ETC"
 
-current_values() {  # current_values KEY: the values of "KEY = value" lines of profiles/CURRENT, each validated
-    local key=$1 v
-    sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*\\(.*[^[:space:]]\\)[[:space:]]*\$/\\1/p" "$SRC/profiles/CURRENT" | while IFS= read -r v; do
-        printf '%s\n' "$v" | grep -Eq '^(profiles|policies)/[A-Za-z0-9._-]+$' || die "profiles/CURRENT: unacceptable path '$v'"
-        case $v in *..*) die "profiles/CURRENT: unacceptable path '$v'" ;; esac
-        [ -f "$SRC/$v" ] && [ ! -L "$SRC/$v" ] || die "profiles/CURRENT names $v, which is not a regular file"
-        printf '%s\n' "$v"
-    done
-}
-
-RESTORE_POLICY=$(current_values policy)  # the restore scripts' policy (profiles/CURRENT): captured whole (no head: no SIGPIPE), and there must be exactly one
-[ -n "$RESTORE_POLICY" ] || die "profiles/CURRENT has no 'policy =' line"
-case $RESTORE_POLICY in *$'\n'*) die "profiles/CURRENT has more than one 'policy =' line; refusing to pick one" ;; esac
-# D-032 (operator yes, 2026-10-11): the root policy that /etc/arltuner/policy.toml is seeded from is the advanced-user policy, whatever CURRENT names.
-POLICY_SRC=policies/advanced-2026-10-11.toml
+# D-032 (operator yes, 2026-10-11) / D-036: the root policy that /etc/arltuner/policy.toml is seeded from is the generic advanced-user policy
+# (offsets +-200 mV; ratio, V-target ceilings and the CPU sets are "auto": derived from the CPU in the session). No machine-specific numbers.
+POLICY_SRC=policies/default.toml
 [ -f "$SRC/$POLICY_SRC" ] && [ ! -L "$SRC/$POLICY_SRC" ] || die "incomplete checkout: $SRC/$POLICY_SRC is not a regular file"
 
 if [ -e "$ETC/policy.toml" ] && [ "$RESEED" -eq 0 ]; then
@@ -224,20 +213,9 @@ else
     echo "helper.toml: kept"
 fi
 
-if true; then  # accepted state follows the repo on every run (not coupled to --reseed-config)
-    ACC=$ETC/.accepted.new.$$
-    rm -rf "$ACC"
-    install -d -m 0755 ${OWN[@]+"${OWN[@]}"} "$ACC" "$ACC/profiles"
-    copy_one "$SRC/profiles/CURRENT" "$ACC/CURRENT" 0644
-    copy_one "$SRC/profiles/EXPECTED-words.txt" "$ACC/EXPECTED-words.txt" 0644
-    PROFILES=$(current_values profile)  # a captured value, so a refused path aborts the install (a process substitution would not)
-    while IFS= read -r prof; do
-        [ -n "$prof" ] || continue
-        copy_one "$SRC/$prof" "$ACC/$prof" 0644
-    done <<< "$PROFILES"
-    swap_dir "$ACC" "$ETC/accepted"
-    echo "accepted/: replaced from profiles/CURRENT"
-fi
+# The accepted state (/etc/arltuner/accepted) is user data (D-036): it is not seeded, replaced or removed here. An existing one (this machine's earlier
+# installs, or one saved in the app) is left exactly as it is; a fresh install has none until the user saves a profile as accepted.
+if [ -d "$ETC/accepted" ]; then echo "accepted/: kept (the user's accepted state is never touched)"; else echo "accepted/: none yet (created by Profiles > Set as accepted)"; fi
 
 # --- 5. /var/lib/arltuner: audit log, seeded once from the legacy per-user log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"

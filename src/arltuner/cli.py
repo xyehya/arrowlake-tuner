@@ -539,7 +539,7 @@ def _identity_policy_check(ctx: _Ctx, policy: Policy) -> None:
         entry = policy.match(req.cmd, req.p1, req.p2)
         if entry is None or entry.kind != "read":
             ctx.refuse("--device-win needs the identity check (cmd 0x09 P1=0x11 P2=0 on the P-cores) and no read allow entry of the policy matches it "
-                       "(default deny; see policies/session-2026-10-02-points.toml 'voltage_floor_read'). Nothing was sent.")
+                       "(default deny; see policies/default.toml 'voltage_floor_read'). Nothing was sent.")
         verdict = predict(policy, req, None)
         if not verdict.allowed:
             ctx.refuse(f"identity check: {verdict.reason}: {verdict.detail} (cpu {cpu}). Nothing was sent.")

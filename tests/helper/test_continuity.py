@@ -189,11 +189,11 @@ class ProfilesGet(TuneCase):
     def accepted(self, chain: bool = True) -> Path:
         acc = self.tmp / "accepted"
         (acc / "profiles").mkdir(parents=True)
-        shutil.copy(REPO / "profiles/CURRENT", acc / "CURRENT")
-        for line in (REPO / "profiles/CURRENT").read_text().splitlines():
+        shutil.copy(REPO / "examples/reference-285k/profiles/CURRENT", acc / "CURRENT")
+        for line in (REPO / "examples/reference-285k/profiles/CURRENT").read_text().splitlines():
             if line.startswith("profile"):
                 rel = line.split("=", 1)[1].strip()
-                shutil.copy(REPO / rel, acc / rel)
+                shutil.copy(REPO / "examples/reference-285k" / rel, acc / rel)
         return acc
 
     def get(self, h: Harness, name: str) -> dict[str, Any]:

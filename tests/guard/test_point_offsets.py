@@ -348,9 +348,9 @@ params = { offset_raw_min = -40 }
 
 
 class ExamplePolicy(unittest.TestCase):
-    """``policies/example-oc-ramp.toml``: the point entries are comments (inert); uncommented they load and bind the check correctly."""
+    """``examples/reference-285k/policies/example-oc-ramp.toml``: the point entries are comments (inert); uncommented they load and bind the check correctly."""
 
-    PATH = Path(__file__).resolve().parents[2] / "policies" / "example-oc-ramp.toml"
+    PATH = Path(__file__).resolve().parents[2] / "examples" / "reference-285k" / "policies" / "example-oc-ramp.toml"
 
     def test_the_example_is_inert_for_points_as_shipped(self) -> None:
         policy = load_policy(self.PATH)

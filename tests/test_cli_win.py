@@ -188,7 +188,7 @@ class Identity(WinCli):
         fused = dict(FUSED_POINT)
         fused[4], fused[5] = fused[5], fused[4]
         self.sim = self.sim_with(fused)
-        points = Path(__file__).resolve().parents[1] / "policies" / "session-2026-10-02-points.toml"
+        points = Path(__file__).resolve().parents[1] / "examples" / "reference-285k" / "policies" / "session-2026-10-02-points.toml"
         policy = self.write("pts.toml", points.read_text(encoding="utf-8").replace("min_dwell_s", "min_dwell_s = 0.0 #", 1))
         args = ["point-offset", "--device-win", "--cpu", 0, "--p2", 1, "--offset-mv", -5, "--policy", policy, "--audit", self.audit, "--lock", self.lock]
         code, out, err = self.run_win(*args, stdin=self.confirmed(), sleep=lambda s: None)

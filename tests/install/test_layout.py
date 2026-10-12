@@ -21,7 +21,7 @@ from ._support import REPO, copy_checkout, run_script
 
 NOT_ROOT = os.geteuid() != 0  # tests that run a script WITHOUT a DESTDIR are only safe (they die at the root check) when we are not root
 
-ADVANCED_POLICY = "policies/advanced-2026-10-11.toml"  # D-032: the seed source of /etc/arltuner/policy.toml
+DEFAULT_POLICY = "policies/default.toml"  # D-032 / D-036: the generic seed source of /etc/arltuner/policy.toml
 
 PY_FILES = sorted(p.relative_to(REPO / "src") for p in (REPO / "src" / "arltuner").rglob("*.py") if "__pycache__" not in p.parts)
 
@@ -84,11 +84,6 @@ class InstallLayout(InstallCase):
                 "usr/lib/tmpfiles.d/arltuner.conf": 0o644,
                 "etc/arltuner/policy.toml": 0o644,
                 "etc/arltuner/helper.toml": 0o644,
-                "etc/arltuner/accepted/CURRENT": 0o644,
-                "etc/arltuner/accepted/EXPECTED-words.txt": 0o644,
-                "etc/arltuner/accepted/profiles/e-p6-split3.toml": 0o644,
-                "etc/arltuner/accepted/profiles/p-boot-ramp.toml": 0o644,
-                "etc/arltuner/accepted/profiles/p-step7.toml": 0o644,
                 "var/lib/arltuner/audit.jsonl": 0o600,
             }
         )
@@ -114,17 +109,14 @@ class InstallLayout(InstallCase):
         self.assertNotIn(str(self.dest).encode(), pyc.read_bytes())
 
     def test_seeded_config_comes_from_the_repo(self) -> None:
-        current = (REPO / "profiles" / "CURRENT").read_text(encoding="utf-8")
-        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / ADVANCED_POLICY).read_bytes())  # D-032: the seed is the advanced policy
-        self.assertEqual(self.path("/etc/arltuner/accepted/CURRENT").read_bytes(), (REPO / "profiles" / "CURRENT").read_bytes())
-        self.assertEqual(self.path("/etc/arltuner/accepted/EXPECTED-words.txt").read_bytes(), (REPO / "profiles" / "EXPECTED-words.txt").read_bytes())
-        for line in current.splitlines():
-            if line.startswith("profile"):
-                rel = line.split("=", 1)[1].strip()
-                self.assertEqual(self.path(f"/etc/arltuner/accepted/{rel}").read_bytes(), (REPO / rel).read_bytes())
-        words = self.path("/etc/arltuner/accepted/EXPECTED-words.txt")  # what the helper's accepted_dir points at (G-107): regular, 0644, one link
-        self.assertEqual((stat.S_IMODE(words.lstat().st_mode), words.lstat().st_nlink, words.is_symlink()), (0o644, 1, False))
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / DEFAULT_POLICY).read_bytes())  # D-036: the seed is the generic default
         self.assertEqual(tomllib.loads(self.path("/etc/arltuner/helper.toml").read_text()), {"allow_taint_bits": [2]})
+
+    def test_a_fresh_install_has_no_accepted_state(self) -> None:
+        """D-036: the accepted state is the user's; nothing from the repo (or any reference machine) is installed as one."""
+        self.assertFalse(os.path.lexists(self.path("/etc/arltuner/accepted")))
+        self.assertIn("none yet", self.result.stdout)
+        self.assertEqual([p for p in (self.dest / "etc").rglob("*") if "CURRENT" in p.name or "EXPECTED" in p.name], [])
 
     def test_audit_is_seeded_from_the_legacy_log_with_mode_0600(self) -> None:
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_bytes(), self.legacy.read_bytes())
@@ -146,7 +138,6 @@ class InstallLayout(InstallCase):
         listdir = lambda p: os.listdir(self.dest / str(p).lstrip("/"))  # noqa: E731
         check_code_tree("/usr/lib/arltuner/arltuner", lstat_fn=lstat, listdir_fn=listdir, root_uid=uid)
         check_code_tree("/usr/lib/arltuner/platforms", lstat_fn=lstat, listdir_fn=listdir, root_uid=uid)
-        check_code_tree("/etc/arltuner/accepted", lstat_fn=lstat, listdir_fn=listdir, root_uid=uid)
         for f in ("/usr/lib/arltuner/arltuner-helper", "/etc/arltuner/policy.toml", "/etc/arltuner/helper.toml", "/var/lib/arltuner/audit.jsonl"):
             check_trusted_path(f, want="file", lstat_fn=lstat, root_uid=uid)
 
@@ -195,21 +186,44 @@ class Idempotence(InstallCase):
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "legacy\nroot-wrote-this\n")
         self.assertIn("KEPT", r.stdout)
 
-    def test_accepted_state_follows_the_repo_on_every_run(self) -> None:
-        self.ok_install()
-        (self.path("/etc/arltuner/accepted") / "EXPECTED-words.txt").write_text("stale\n")
-        (self.path("/etc/arltuner/accepted") / "junk").write_text("x")
-        self.ok_install()
+    def seed_accepted(self) -> dict[str, bytes]:
         acc = self.path("/etc/arltuner/accepted")
-        self.assertEqual((acc / "EXPECTED-words.txt").read_bytes(), (REPO / "profiles/EXPECTED-words.txt").read_bytes())
-        self.assertFalse((acc / "junk").exists())
+        (acc / "profiles").mkdir(parents=True)
+        (acc / "CURRENT").write_text("# written by the app\nprofile = profiles/mine.toml\n")
+        (acc / "EXPECTED-words.txt").write_text("0 39 8 14 F9A00035\n")
+        (acc / "profiles" / "mine.toml").write_text('[meta]\nname = "mine"\nplatform = "arl-s"\n')
+        return self.accepted_bytes()
+
+    def accepted_bytes(self) -> dict[str, bytes]:
+        acc = self.path("/etc/arltuner/accepted")
+        return {p.relative_to(acc).as_posix(): p.read_bytes() for p in sorted(acc.rglob("*")) if p.is_file()}
+
+    def test_an_existing_accepted_state_is_left_exactly_as_it_is(self) -> None:
+        """The reference machine's own /etc/arltuner/accepted survives every re-install (D-036); --reseed-config does not touch it either."""
+        self.ok_install()
+        before = self.seed_accepted()
+        mtimes = {p: p.stat().st_mtime_ns for p in sorted(self.path("/etc/arltuner/accepted").rglob("*"))}
+        for args in ((), ("--reseed-config",)):
+            r = self.ok_install(*args)
+            self.assertEqual(self.accepted_bytes(), before, args)
+            self.assertEqual({p: p.stat().st_mtime_ns for p in sorted(self.path("/etc/arltuner/accepted").rglob("*"))}, mtimes, args)
+            self.assertIn("accepted/: kept", r.stdout)
+
+    def test_the_policy_is_seeded_only_when_absent(self) -> None:
+        self.assertIn("policy.toml: installed", self.ok_install().stdout)
+        self.path("/etc/arltuner/policy.toml").unlink()
+        self.assertIn("policy.toml: installed", self.ok_install().stdout)
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / DEFAULT_POLICY).read_bytes())
+        self.path("/etc/arltuner/policy.toml").write_text("# the operator's reference-machine policy\n")
+        self.assertIn("policy.toml: KEPT", self.ok_install().stdout)
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_text(), "# the operator's reference-machine policy\n")
 
     def test_reseed_config_restores_the_repo_config_but_never_the_audit_log(self) -> None:
         self.ok_install()
         self.path("/etc/arltuner/policy.toml").write_text("# operator edit\n")
         self.path("/var/lib/arltuner/audit.jsonl").write_text("keep me\n")
         self.ok_install("--reseed-config")
-        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / ADVANCED_POLICY).read_bytes())
+        self.assertEqual(self.path("/etc/arltuner/policy.toml").read_bytes(), (REPO / DEFAULT_POLICY).read_bytes())
         self.assertEqual(self.path("/var/lib/arltuner/audit.jsonl").read_text(), "keep me\n")
 
     def test_no_legacy_log_gives_an_empty_0600_audit_log(self) -> None:
@@ -257,22 +271,6 @@ class HostileCheckout(InstallCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("Python >= 3.12", r.stderr)
         self.assertEqual(list(self.dest.iterdir()), [])
-
-    def test_a_current_file_that_points_outside_profiles_and_policies_is_refused(self) -> None:
-        for bad in ("../../../etc/passwd", "/etc/passwd", "profiles/../x.toml"):
-            src = copy_checkout(self.tmp / ("c" + str(abs(hash(bad)))))
-            (src / "profiles" / "CURRENT").write_text(f"policy = {bad}\nprofile = profiles/p-step7.toml\n")
-            r = self.install(script=src / "install.sh")
-            self.assertNotEqual(r.returncode, 0, bad)
-            self.assertIn("unacceptable path", r.stderr)
-
-    def test_a_symlinked_profile_is_refused(self) -> None:
-        src = copy_checkout(self.tmp / "checkout")
-        (src / "profiles" / "p-step7.toml").unlink()
-        (src / "profiles" / "p-step7.toml").symlink_to("/etc/passwd")
-        r = self.install(script=src / "install.sh")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("not a regular file", r.stderr)
 
     def fake_proc(self, **cmdlines: list[str]) -> Path:
         proc = self.tmp / "proc"
@@ -334,7 +332,7 @@ def run_bash(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 class SourceTreeAttacks(InstallCase):
     def test_a_symlinked_source_directory_is_refused_and_nothing_is_installed(self) -> None:
-        for rel in ("src", "src/arltuner", "platforms", "web", "packaging", "profiles", "policies"):
+        for rel in ("src", "src/arltuner", "platforms", "web", "packaging", "policies"):
             with self.subTest(rel):
                 src = copy_checkout(self.tmp / ("c-" + rel.replace("/", "_")))
                 elsewhere = self.tmp / ("elsewhere-" + rel.replace("/", "_"))
@@ -355,15 +353,6 @@ class SourceTreeAttacks(InstallCase):
         self.ok_install(script=src / "install.sh")
         self.assertFalse((self.path("/usr/lib/arltuner/arltuner") / "leak.py").exists())
         self.assertNotIn(b"SECRET", b"".join(p.read_bytes() for p in self.path("/usr/lib/arltuner").rglob("*.py")))
-
-    def test_two_policy_lines_in_current_are_refused(self) -> None:
-        src = copy_checkout(self.tmp / "checkout")
-        cur = src / "profiles" / "CURRENT"
-        cur.write_text("policy = policies/example-oc-ramp.toml\n" + cur.read_text())
-        r = self.install(script=src / "install.sh")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("more than one 'policy =' line", r.stderr)
-        self.assertFalse((self.dest / "etc/arltuner/policy.toml").exists())
 
     def test_no_bare_empty_array_expansion_under_set_u(self) -> None:
         self.assertNotIn('"${OWN[@]}"', (REPO / "install.sh").read_text().replace('${OWN[@]+"${OWN[@]}"}', ""))
