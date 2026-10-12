@@ -41,7 +41,7 @@ write whole word with 0x11 (read-modify-write; for P2≠0 the read word is maske
 Ordering: raising performance → voltage first, lowering → frequency first; markers `0xE0000002/4` bracket a batch. No hardware rollback on failure (watchdog + persistence only). `decomp` (T-002 §Apply flow)
 
 ## Voltage semantics (ARL-S) — behaviour in `platform-arl-s.md` §3
-Adaptive voltage `[19:8]` (mode `[20]`=0) sets the **OC-ratio point** only (P-core point 9, E-core point 7, added when the OC ratio exceeds the top fused ratio); fused points accept **offsets only** `[COMMUNITY SkatterBencher]` `[MEASURED lnx 2026-10-02]`; `[31:21]` offset with P2=0 = whole-curve offset `[MEASURED lnx 2026-10-11]`;
+Adaptive voltage `[19:8]` (mode `[20]`=0) sets the **OC-ratio point** only (P-core point 9, E-core point 7, added when the OC ratio exceeds the top fused ratio); fused points accept **offsets only** (no ratio or target) `[COMMUNITY SkatterBencher]`; per-point offset writes work `[MEASURED lnx 2026-10-02]`; `[31:21]` offset with P2=0 = whole-curve offset `[MEASURED lnx 2026-10-11]`;
 per-point offsets = P2 1..n (n = table length, read live; hidden by XTU on ARL-S) `[MEASURED lnx 2026-10-02]`. E-core voltage is per **cluster of 4** `[COMMUNITY]`. Default voltage ceiling = top fused VID + 200 mV (285K: P 1.581 V, E 1.270 V; absolute max 1.681 / 1.370 V) `[COMMUNITY]`.
 
 ## Mailbox commands (rd/wr; P1 = domain or index; P2)  `decomp` unless noted
@@ -111,7 +111,7 @@ Values: `examples/reference-285k/notes/platform.md` §4-5. What the readings est
 - CPU map and Windows LP numbering: `platform-arl-s.md` §2.
 
 ## Measured via XTU's level-4 log on Windows (S-03d…S-07, 2026-10-01) `measured win`
-Raw baseline and write-sequence tables: `src/arltuner/msr/measured_baseline.py`, `tests/fixtures/win_reference.py`, notes §4.
+Raw tables: baseline words `src/arltuner/msr/measured_baseline.py`, write sequences `tests/controls/test_measured_apply.py`, values in notes §4.
 - At stock (OC lock off, UVP off, no XTU tuning) `0x10 P1=0 P2=0` is `0x0` on every core except where the BIOS wrote an OC word; `0x14` = `0x8`
   (PerCore Voltage Enable already set). GT `0x10 P1=1` = `0xF8600000` = −59.6 mV matched the GT −0.060 V applied in XTU: **offset decode confirmed**.
 - **`0x09 P1=17 P2=0` returns the fused V/F top point per core** (ratio `[7:0]`, voltage `[19:8]`): these — not the `0x10` word — are the "Voltage

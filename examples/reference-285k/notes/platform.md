@@ -56,8 +56,8 @@ cpufreq caps on this chip (kernel 7.2.9): P 42/47/52x and E 13/18/21/23/26/29/31
   monitor ~100000; `0x24` TVB cutoff 70 C; `0x1C` LP 0 / LP 11 = 57.
 - OCCT/HWiNFO trace words: ring 40x target `0x4C8` = 1195.31 mV; NGU 34x `0x4BD` = 1184.57 mV; domain 6 ratios 0, 32, 84, 96.
 - XTU level-4 trace (Windows, S-03d...S-07): first per-core write on LP 0 = `GET 0x14` -> `GET 0x10` -> `SET 0x11 0xFF65B439` (-5 mV, V target =
-  fused) -> `SET 0x1D` -> `GET 0x26` -> `SET 0x27`, all RC 0; revert `0x0005B439` (not the original `0x39`). These tables are transcribed in
-  `src/arltuner/msr/measured_baseline.py` and `tests/fixtures/win_reference.py`.
+  fused) -> `SET 0x1D` -> `GET 0x26` -> `SET 0x27`, all RC 0; revert `0x0005B439` (not the original `0x39`). Transcribed in
+  `src/arltuner/msr/measured_baseline.py` (baseline words, LP map) and `tests/controls/test_measured_apply.py` (write sequences).
 - Linux 2026-10-01 reads: `0x10` CPU 4 `0x0`, CPU 0 `0x39`, CPU 8 `0x4A931` (XTU's E 49x word, persisted over a warm reboot), CPUs 12-23 `0x49A31`;
   `0x1C` CPU 8 `0x2E30` -> `0x2E31` after `0x1D` = 49.
 

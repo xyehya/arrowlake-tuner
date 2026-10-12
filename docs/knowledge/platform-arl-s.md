@@ -23,7 +23,8 @@ numbers do not. Ratios marked "285K" are that SKU's values (other SKUs have othe
 
 ## 3. V/F points (P2 index in cmd 0x10/0x11; P2 = 0 is the OC-ratio word)
 - **Structure** [MEASURED lnx 2026-10-02; COMMUNITY SkatterBencher 285K guide, "Advanced Voltage Offset" slides 39/40]: every P-core has the same fused
-  point table, every E-cluster another; ring (P1 = 2) has its own. Fused points take **offsets only** (no ratio, no absolute voltage). P2 past the
+  point table, every E-cluster another; ring (P1 = 2) has its own. Fused points take **offsets only** (no ratio, no absolute voltage) [COMMUNITY];
+  per-point offset writes are proven [MEASURED]. P2 past the
   table answers rc `0x11`. Points 10-15 are unused. 285K: P points 1-8 = 8/20/30/48/53/55/56/57x, E points 1-6 = 8/15/23/30/40/46x, ring 1-8 =
   8/14/20/28/34/37/38/39x. Read the tables live (`tune.read` walks P2 until rc `0x11`).
 - **OC point** = the `P2 = 0` word: ratio + adaptive target. An OC ratio above the top fused ratio adds a point after the table (SkatterBencher: P
