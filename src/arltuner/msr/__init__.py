@@ -9,11 +9,11 @@ from .devcpu import DevCpuMsrPort
 from .port import MailboxTimeout, MsrError, MsrPort
 from .sim import SimConfig, SimCpuState, SimMsrPort, SimRequest
 from .transport import MailboxTransport
-from .winport import WINDOWS_P_FUSED_FINGERPRINT, WinThrottleStopMsrPort, verify_machine, windows_boot_id
+from .winport import IdentityError, WinThrottleStopMsrPort, identity_cpus, resolve_identity, verify_machine, windows_boot_id
 
 __all__ = [
-    "WINDOWS_P_FUSED_FINGERPRINT",
     "DevCpuMsrPort",
+    "IdentityError",
     "MailboxTimeout",
     "MailboxTransport",
     "MsrError",
@@ -23,6 +23,8 @@ __all__ = [
     "SimMsrPort",
     "SimRequest",
     "WinThrottleStopMsrPort",
+    "identity_cpus",
+    "resolve_identity",
     "verify_machine",
     "windows_boot_id",
 ]

@@ -53,6 +53,7 @@ class HelperConfig:
     sampler_factory: Callable[[float], Any]  # interval_s -> object with start() / stop() / snapshot() (arltuner.telemetry.Sampler)
     simulator: bool = True
     accepted_dir: Path | None = None  # root-owned accepted state (``EXPECTED-words.txt`` inside); None = no accepted-state compare (simulator, tests)
+    cpuinfo_path: Path | None = None  # G-138: where profiles.accept reads the CPU's family / model / brand for fingerprint.json (``/proc/cpuinfo`` on hardware; None = not recorded)
     enforce_trust: bool = False  # SPEC 4.4 path checks on policy and audit paths; the launcher turns it on for hardware
     lstat_fn: Callable[[str], Any] = os.lstat
     euid_fn: Callable[[], int] = getattr(os, "geteuid", lambda: 0)  # who must own every file the helper opens for writing (root on hardware)

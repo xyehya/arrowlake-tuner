@@ -73,10 +73,22 @@ Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go t
 | `restore_tuning.ps1 [-Orchestrated]` | after any boot: checks → driver start → vf-dump → apply `profiles/CURRENT` → vf-dump compared word-for-word with the accepted state → driver stop | writes point offsets via the guard |
 
 ## Safety nets built in (2026-10-02)
-- **Core identity check:** every `apply` / `point-offset` / `vf-dump` with `--device-win` first reads the fused V/F point (cmd `0x09 P1=0x11`) of P-cores
-  0–7 and compares it with the values read on Linux (`captures/lnx/fused-0x09-cpu*.txt`: `0x5B439 0x53839 0x57439 0x59439 0x54439 0x56C39 0x56039 0x58039`,
-  all distinct). A mismatch = the Linux→Windows core map is wrong ⇒ refused, nothing written. The E clusters / P-vs-E split are checked from Windows' own
-  CPU-set and L2-cache data before the driver is even opened.
+- **Core map and identity check (G-138):** nothing about a particular chip is stored in the code or the scripts. The accepted state carries `fingerprint.json`
+  (written by *Profiles > Set as accepted* on Linux: per Linux CPU its kind, E cluster and fused V/F point word, plus the CPU's family / model / brand); copy the whole
+  accepted directory, it must be in `-From DIR`. Without it the scripts stop with "re-accept on Linux to record the fingerprint" (an accepted state from before this
+  existed has none: set it as accepted again on Linux). At run time `--device-win` (`--fingerprint FILE`, the scripts pass it):
+  1. refuses unless Windows reports the same CPU family / model / brand as the fingerprint, before the driver is opened;
+  2. derives a first guess of the Linux CPU -> Windows logical-processor map from Windows' own data: P LPs = the higher EfficiencyClass (ascending), E clusters =
+     LP sets sharing one L2 (ordered by lowest LP), and holds it against what Windows reports (P private L2, E cluster = one L2, counts);
+  3. every `apply` / `point-offset` / `vf-dump` then reads the fused V/F point (cmd `0x09 P1=0x11`) through the guard on each P LP and the first LP of each E cluster
+     (8 + 4 reads on an 8P + 16E part; the audit log notes them as provisional slots) and matches the words with the recorded ones: every P word distinct, each
+     matching exactly one recorded P-core (this settles the P order, which Windows cannot tell), each E cluster reading its recorded word. Any other outcome is a refusal and
+     nothing is written.
+  `read-vf` and `read` with `--device-win` send one request and run no identity check (they print a note): the P-core they hit is only the first guess.
+- **What the Windows restore refuses** (all before any write): no `fingerprint.json` ("re-accept on Linux to record the fingerprint"); a fingerprint without CPU identity or
+  without a fused word for every P-core / E cluster; two P-cores with the same recorded word; another CPU (vendor / family / model / brand) or one Windows will not name;
+  a layout that differs from the fingerprint (LP counts per class, E cluster sizes, processor groups other than 0, no L2 data); P words read twice, not recorded, or not
+  all read; an E cluster reading another word than recorded.
 - **Health bracket:** new WHEA-Logger events in the System log during a session ⇒ fail (Windows' stand-in for the Linux taint/MCE check).
 - `reapply_current.ps1` records each apply with `Start-Transcript` (Windows PowerShell 5.1 may not capture native output in a transcript); the complete
   record of every request is the audit log `%LOCALAPPDATA%\linuxmon\audit.jsonl`.

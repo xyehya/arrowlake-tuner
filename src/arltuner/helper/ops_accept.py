@@ -1,7 +1,7 @@
 """G-129 helper op ``profiles.accept`` (D-036): the **user** makes a profile the accepted state, in the app. Nothing is shipped as one.
 
 ``profiles.accept {name}`` takes a saved profile, ``profiles.accept {from: "read"}`` the state this boot's last ``tune.read`` found, and replaces
-``/etc/arltuner/accepted/`` (``CURRENT`` + ``profiles/<name>.toml`` + ``EXPECTED-words.txt``, see :mod:`arltuner.profiles.accepted`) as a whole.
+``/etc/arltuner/accepted/`` (``CURRENT`` + ``profiles/<name>.toml`` + ``EXPECTED-words.txt`` + ``fingerprint.json``, see :mod:`arltuner.profiles.accepted`) as a whole.
 
 Contract (what "accepted" means, so the restore and the comparison stay honest):
 
@@ -13,6 +13,10 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
   refused (``NOT_REPRESENTABLE``) rather than rounded, because the restore would then write a different word than the one recorded.
 * Needs a read this boot (``NO_READ``); the policy still judges a saved profile (its range check runs as for a plan); writes nothing to the hardware.
 * The op appends one audit record before the swap (and refuses if it cannot): ``event result``, ``op profiles.accept``, the name, what was replaced.
+
+* G-138: ``fingerprint.json`` records, per Linux CPU, its kind / cluster / favored flag and the fused 0x09 word of this boot's last read, plus the CPU's
+  family / model / brand (``/proc/cpuinfo``; none under the simulator): what the Windows restore needs to find the same cores again. A read that did not
+  cover the 0x09 words writes the file with ``null`` words, which the Windows restore refuses (the reply says ``fingerprint: incomplete``).
 
 No mailbox traffic, no MSR. A root file write under the helper's trust rules, like ``profiles.save``.
 """
@@ -27,6 +31,7 @@ from arltuner.guard.policy import fused_top_ratio
 from arltuner.mailbox import VfWord
 from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError
 from arltuner.profiles.accepted import SAFE_PROFILE_NAME, AcceptedError, AcceptedStore
+from arltuner.profiles.fingerprint import CpuId, FingerprintError, build_fingerprint, cpu_id_from_cpuinfo
 from arltuner.profiles.serialize import dump_profile
 from arltuner.profiles.store import ProfileStoreError
 from arltuner.topology import Topology
@@ -134,6 +139,17 @@ def _expected_text(last: Mapping[int, Sequence[int]], header: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _cpu_id(cfg: Any) -> CpuId | None:
+    """The CPU's identity from ``cfg.cpuinfo_path`` (``/proc/cpuinfo`` on hardware; None under the simulator and when unreadable)."""
+    path = getattr(cfg, "cpuinfo_path", None)
+    if path is None:
+        return None
+    try:
+        return cpu_id_from_cpuinfo(Path(path).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+
+
 def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     cfg = helper.cfg
     directory = getattr(cfg, "accepted_dir", None)
@@ -177,14 +193,21 @@ def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> 
     except ProfileError as exc:
         raise _refused(f"the profile cannot be written: {exc}.", "NOT_REPRESENTABLE") from None
     words_text = _expected_text(last, header)
+    fingerprint = build_fingerprint(topology, fused, _cpu_id(cfg))
+    try:
+        fingerprint.require_restorable()
+        fingerprint_note = "complete"
+    except FingerprintError as exc:
+        fingerprint_note = f"incomplete: {exc}"
     T._trust(helper, cfg.audit_path, want="file", must_exist=False)
     try:
         AuditLog(cfg.audit_path).append("result", op="profiles.accept", accepted=name, source=source, replaced=replaced, cpus=len(last))
     except (OSError, ValueError) as exc:
         raise _refused(f"cannot record this in the audit log: {exc}.", "AUDIT_UNAVAILABLE") from None
     try:
-        AcceptedStore(directory, euid=cfg.euid_fn()).replace(name, profile_toml, words_text, header)
+        AcceptedStore(directory, euid=cfg.euid_fn()).replace(name, profile_toml, words_text, header, fingerprint.to_json(stamp))
     except AcceptedError as exc:
         raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code}) from None
     return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced, "cpus": len(last),
-            "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None}
+            "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None,
+            "fingerprint": fingerprint_note}

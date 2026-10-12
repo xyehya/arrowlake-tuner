@@ -39,6 +39,18 @@ class Static(unittest.TestCase):
             self.assertNotIn(needle, text)
         self.assertNotIn("profiles\\CURRENT", (REPO / "tools/win/reapply_current.ps1").read_text())
 
+    def test_the_windows_scripts_need_the_fingerprint_before_they_touch_the_driver(self) -> None:
+        """G-138: no map of any chip in the scripts; the accepted state's fingerprint.json is checked first and handed to every --device-win command."""
+        for rel in ("tools/win/restore_tuning.ps1", "tools/win/reapply_current.ps1"):
+            text = (REPO / rel).read_text()
+            self.assertIn("Re-accept on Linux to record the fingerprint", text, rel)
+            self.assertIn("'--fingerprint', $fingerprint", text, rel)
+            self.assertLess(text.index("fingerprint.json in"), text.index("--device-win"), rel)
+            for word in ("0x5B439", "5B439", "WINDOWS_LP_OF_CPU", "fused-0x09-cpu"):
+                self.assertNotIn(word, text, rel)
+        text = (REPO / "tools/win/restore_tuning.ps1").read_text()
+        self.assertLess(text.index("fingerprint.json in"), text.index("sc.exe start ThrottleStop"))
+
 
 class Stops(unittest.TestCase):
     def setUp(self) -> None:

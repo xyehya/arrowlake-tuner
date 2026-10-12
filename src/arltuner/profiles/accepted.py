@@ -4,6 +4,8 @@ Layout (the same the restore scripts and the helper's ``accepted_match`` / ``_ac
 
     accepted/CURRENT                  ``profile = profiles/<name>.toml``  (one line per profile, applied in order)
     accepted/EXPECTED-words.txt       ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x), one line per core / E-cluster
+    accepted/fingerprint.json         G-138: per Linux CPU its kind / cluster / fused 0x09 word + the CPU's family / model / brand, for the Windows restore
+                                      (:mod:`arltuner.profiles.fingerprint`); absent in a state accepted before G-138
     accepted/profiles/<name>.toml     the profile
 
 The directory is **replaced as a whole**, atomically from a reader's point of view: the new tree is built next to it (``.accepted.new.<pid>``, files
@@ -19,6 +21,8 @@ import shutil
 import stat
 import threading
 from pathlib import Path
+
+from .fingerprint import FINGERPRINT_FILE
 
 __all__ = ["AcceptedError", "AcceptedStore", "SAFE_PROFILE_NAME"]
 
@@ -87,8 +91,8 @@ class AcceptedStore:
         if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise AcceptedError("UNTRUSTED", f"{parent} mode {stat.S_IMODE(st.st_mode):04o} is group- or world-writable")
 
-    def replace(self, name: str, profile_toml: str, expected_words: str, current_header: str = "") -> None:
-        """Make ``name`` the whole accepted state: ``CURRENT`` (one ``profile =`` line), the profile and ``EXPECTED-words.txt``."""
+    def replace(self, name: str, profile_toml: str, expected_words: str, current_header: str = "", fingerprint: str | None = None) -> None:
+        """Make ``name`` the whole accepted state: ``CURRENT`` (one ``profile =`` line), the profile and ``EXPECTED-words.txt`` (and ``fingerprint.json`` when given)."""
         if not SAFE_PROFILE_NAME.match(name) or ".." in name:
             raise AcceptedError("BAD_NAME", "an accepted profile name is 1..64 characters of a-z 0-9 . _ - without '..'")
         self._check_parent()
@@ -106,6 +110,8 @@ class AcceptedStore:
                 os.chmod(new / "profiles", 0o755)
                 _write_file(new / "CURRENT", current)
                 _write_file(new / "EXPECTED-words.txt", expected_words)
+                if fingerprint is not None:
+                    _write_file(new / FINGERPRINT_FILE, fingerprint)
                 _write_file(new / "profiles" / f"{name}.toml", profile_toml)
                 self._swap(new, old)
             except OSError as exc:

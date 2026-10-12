@@ -11,13 +11,17 @@ driver executes on whatever logical processor the calling thread is on. So every
 
 Any failure is an ``MsrError``; a read-only port refuses ``wrmsr`` before anything is opened.
 
-CPU numbering: arltuner uses LINUX CPU numbers; Windows numbers logical processors differently and cannot be asked for the Linux numbering, so the
-mapping is an input: the table ``WINDOWS_LP_OF_CPU`` below (the Windows restore's map, MEASURED once on the operator's own part) or one the caller passes.
-The P CPUs and E clusters are taken from the topology the caller gives (default: the simulated reference topology that table belongs to). At construction
-the map is cross-checked against what Windows reports (CPU-set EfficiencyClass per LP, L2 cache sharing per LP) and the port refuses to exist if the machine
-does not match (fail closed).
-**Limit of the cross-check:** it proves P vs E and the E clusters, not the order of the eight P-cores among themselves (they
-look identical to Windows); that part rests on the measured table alone.
+CPU numbering: arltuner uses LINUX CPU numbers; Windows numbers logical processors differently and cannot be asked for the Linux numbering. Nothing about
+a particular chip is stored here (D-036). The map is **derived at run time** from the accepted state's ``fingerprint.json``
+(``arltuner.profiles.fingerprint``: per Linux CPU its kind, E cluster and fused 0x09 word, plus the CPU's family / model / brand):
+
+1. ``provisional_lp_map``: P LPs (the higher EfficiencyClass of ``GetSystemCpuSetInformation``) in ascending order <-> the Linux P CPUs in ordinal order; E clusters
+   (LP sets that share one L2) in the order of their lowest LP <-> the Linux clusters in order, LPs ascending <-> CPUs ascending. ``check_lp_map`` holds that against
+   what Windows reports (P vs E, private P L2, E clusters = one L2 each). The port is built with this provisional map.
+2. The CLI's identity check reads cmd 0x09 P1=0x11 (the fused V/F point word) through the guard, one request at a time, on each provisional P CPU and the first CPU of
+   each E cluster. ``resolve_identity`` matches every P word to the Linux P-core that recorded the same word (all words distinct, every one matched exactly once,
+   else refuse); an E cluster must read the word recorded for its cluster. ``WinThrottleStopMsrPort.apply_identity`` then rebinds the P order. Until it has run,
+   the order of the P-cores among themselves is a guess (they look identical to Windows): only the identity check makes it a fact.
 
 Importing this module touches no Windows API (``ctypes.windll`` / ``WinDLL`` are only looked up when ``Win32Api`` is
 instantiated), so it imports on Linux, where the suite exercises everything against a fake ``Win32Api``.
@@ -25,6 +29,7 @@ instantiated), so it imports on Linux, where the suite exercises everything agai
 from __future__ import annotations
 
 import errno
+import re
 import struct
 import sys
 import threading
@@ -32,24 +37,14 @@ from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import NamedTuple, Protocol
 
+from arltuner.profiles.fingerprint import CpuId, Fingerprint, FingerprintError
 from arltuner.topology.cpumap import Topology
-from arltuner.topology.reference import arl_s_285k
 
 from .port import MsrError, MsrPort, check_cpu, check_msr, check_value
 
 DEVICE_PATH = "\\\\.\\ThrottleStop"
 IOCTL_RDMSR = 0x80006448
 IOCTL_WRMSR = 0x8000644C
-
-#: Linux CPU -> Windows logical processor for the Windows restore (order-preserving map, ``[MEASURED win 2026-10-01]``): P ordinal order and E ordinal order.
-#: Inherently per part (Windows cannot report Linux numbering); the construction-time cross-check below is the refusal when it does not fit.
-_P_LP = (0, 1, 10, 11, 12, 13, 22, 23)
-_E_LP = (2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21)
-WINDOWS_LP_OF_CPU: Mapping[int, int] = {**{cpu: lp for cpu, lp in zip(range(8), _P_LP)}, **{cpu: lp for cpu, lp in zip(range(8, 24), _E_LP)}}
-#: Fused V/F point word (cmd 0x09 P1=0x11 P2=0) of each P-core, in Linux P order [MEASURED win 2026-10-01 / lnx 2026-10-02]: distinct per physical P-core, so the
-#: ``--device-win`` identity check can tell the P-cores apart (Windows' own APIs cannot). It belongs to ``WINDOWS_LP_OF_CPU`` and is the check OF that map, not a
-#: statement about any other part.
-WINDOWS_P_FUSED_FINGERPRINT: tuple[int, ...] = (0x5B439, 0x53839, 0x57439, 0x59439, 0x54439, 0x56C39, 0x56039, 0x58039)
 
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
@@ -90,6 +85,7 @@ class Win32(Protocol):
     def current_processor(self) -> tuple[int, int]: ...  # (group, number within the group)
     def cpu_sets(self) -> list[CpuSet]: ...
     def l2_caches(self) -> list[L2Cache]: ...
+    def cpu_identity(self) -> CpuId | None: ...  # vendor / family / model / brand of the CPU; None = Windows does not say
 
 
 # ----------------------------------------------------------------------------------------------- record parsing (pure)
@@ -131,16 +127,21 @@ def parse_l2_caches(buf: bytes) -> list[L2Cache]:
     return found
 
 
-# --------------------------------------------------------------------------------------------------- LP map cross-check
+# --------------------------------------------------------------------------------------------------- LP map: derive, cross-check
 def _bits(mask: int) -> frozenset[int]:
     return frozenset(i for i in range(mask.bit_length()) if mask >> i & 1)
 
 
-def check_lp_map(
-    cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None
-) -> list[str]:
+def _layout(topology: Topology) -> tuple[tuple[int, ...], tuple[int, ...], list[tuple[int, ...]]]:
+    """``(P CPUs, E CPUs, E clusters as CPU tuples in cluster order)`` of the Linux topology."""
+    p_cpus, e_cpus = topology.cpus_of_kind("P"), topology.cpus_of_kind("E")
+    clusters = [topology.cluster_cpus(k) for k in sorted({c.cluster for c in topology.cores if c.cluster is not None})]
+    return p_cpus, e_cpus, clusters
+
+
+def check_lp_map(cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], lp_of_cpu: Mapping[int, int], topology: Topology) -> list[str]:
     """Problems found when ``lp_of_cpu`` (Linux CPU -> Windows LP) is held against what Windows reports; ``[]`` means it matches.
-    ``topology`` gives the P CPUs and the E clusters (default: the simulated reference topology the default map belongs to).
+    ``topology`` is the Linux topology of the accepted state (P CPUs and E clusters).
 
     * as many LPs as the topology has CPUs, one processor group (0), the map is a bijection onto them;
     * exactly two EfficiencyClasses; every P-CPU's LP has the higher one, every E-CPU's LP the lower one;
@@ -148,9 +149,7 @@ def check_lp_map(
       the LP set of one L2 mask, i.e. its LPs share an L2 and no other LP does.
     Not provable here: the order of the P-cores among themselves (see the module docstring)."""
     problems: list[str] = []
-    topo = topology if topology is not None else arl_s_285k()
-    p_cpus, e_cpus = topo.cpus_of_kind("P"), topo.cpus_of_kind("E")
-    e_clusters = [topo.cluster_cpus(k) for k in sorted({c.cluster for c in topo.cores if c.cluster is not None})]
+    p_cpus, e_cpus, e_clusters = _layout(topology)
     cpus = p_cpus + e_cpus
     if sorted(lp_of_cpu) != sorted(cpus):
         return [f"the LP map covers CPUs {sorted(lp_of_cpu)}, expected {list(cpus)}"]
@@ -163,7 +162,7 @@ def check_lp_map(
             problems.append(f"logical processor {cs.lp} is in processor group {cs.group} (only group 0 is supported)")
         by_lp[cs.lp] = cs
     if len(cpu_sets) != len(cpus):
-        problems.append(f"Windows reports {len(cpu_sets)} logical processors, expected {len(cpus)}")
+        problems.append(f"Windows reports {len(cpu_sets)} logical processors, the accepted state has {len(cpus)} CPUs")
     if problems:
         return problems
     for lp in lps:
@@ -194,6 +193,85 @@ def check_lp_map(
         if want not in l2:
             problems.append(f"E cluster {cluster[0]}-{cluster[-1]} -> LPs {sorted(lp_of_cpu[c] for c in cluster)} is not exactly one shared L2 cache")
     return problems
+
+
+def provisional_lp_map(cpu_sets: Sequence[CpuSet], l2_caches: Sequence[L2Cache], topology: Topology) -> dict[int, int]:
+    """Derive the Linux CPU -> Windows LP map from what Windows reports (no constants): P LPs ascending <-> Linux P CPUs in ordinal order; E clusters (the E LP
+    sets that share one L2) by their lowest LP <-> the Linux clusters in order, LPs ascending <-> CPUs ascending. The E side is fixed by that ordering; the P order is
+    only a first guess until ``resolve_identity`` has run. ``ValueError`` (the problems, joined) when Windows does not look like the accepted state's CPU."""
+    p_cpus, e_cpus, e_clusters = _layout(topology)
+    groups = sorted({cs.group for cs in cpu_sets})
+    if groups != [0]:
+        raise ValueError(f"expected processor group 0 only, Windows reports groups {groups}")
+    classes = sorted({cs.efficiency_class for cs in cpu_sets})
+    if len(classes) != 2:
+        raise ValueError(f"expected two EfficiencyClasses (P and E), Windows reports {classes}")
+    e_class, p_class = classes
+    p_lps = sorted(cs.lp for cs in cpu_sets if cs.efficiency_class == p_class)
+    e_lps = sorted(cs.lp for cs in cpu_sets if cs.efficiency_class == e_class)
+    if len(p_lps) != len(p_cpus) or len(e_lps) != len(e_cpus):
+        raise ValueError(f"Windows reports {len(p_lps)} performance + {len(e_lps)} efficiency logical processors, the accepted state has {len(p_cpus)} P + {len(e_cpus)} E CPUs")
+    e_set = frozenset(e_lps)
+    masks = sorted((_bits(c.mask) for c in l2_caches if c.group == 0), key=lambda b: min(b) if b else -1)
+    clusters = [b for b in masks if b and b <= e_set]
+    covered = [lp for b in clusters for lp in b]
+    if sorted(covered) != e_lps:
+        raise ValueError("the efficiency-class logical processors are not partitioned into L2-sharing clusters by Windows' cache information")
+    want_sizes = [len(c) for c in e_clusters]
+    if [len(b) for b in clusters] != want_sizes:
+        raise ValueError(f"Windows' E clusters have sizes {[len(b) for b in clusters]}, the accepted state's have {want_sizes}")
+    mapping = dict(zip(p_cpus, p_lps))
+    for cpus, lps in zip(e_clusters, clusters):
+        mapping.update(zip(cpus, sorted(lps)))
+    problems = check_lp_map(cpu_sets, l2_caches, mapping, topology)
+    if problems:
+        raise ValueError("; ".join(problems))
+    return mapping
+
+
+class IdentityError(Exception):
+    """The fused words read on Windows do not establish the Linux -> Windows core map; the text says why. Nothing may be written."""
+
+
+def identity_cpus(topology: Topology) -> tuple[int, ...]:
+    """The CPUs whose fused word the identity check reads: every P CPU, then the first CPU of each E cluster."""
+    p_cpus, _e, clusters = _layout(topology)
+    return p_cpus + tuple(c[0] for c in clusters)
+
+
+def resolve_identity(fingerprint: Fingerprint, read: Mapping[int, int]) -> dict[int, int]:
+    """Match the fused words ``read`` on the provisional map (provisional Linux CPU -> word, for every ``identity_cpus``) with the recorded ones.
+    Returns ``{Linux P-core: the provisional CPU whose LP is that core}``; ``IdentityError`` unless every P word is read, all read words are distinct, and each
+    equals exactly one P-core's recorded word, and every E cluster reads the word recorded for it."""
+    topology = fingerprint.topology()
+    p_cpus, _e, clusters = _layout(topology)
+    recorded: dict[int, int] = {}
+    for cpu in p_cpus:
+        word = fingerprint.word_of(cpu)
+        if word is None:
+            raise IdentityError(f"the accepted state records no fused word for P-core CPU {cpu}")
+        if word in recorded:
+            raise IdentityError(f"the accepted state records the same fused word {word:#x} for P-cores CPU {recorded[word]} and CPU {cpu}: they cannot be told apart")
+        recorded[word] = cpu
+    seen: dict[int, int] = {}
+    permutation: dict[int, int] = {}
+    for prov in p_cpus:
+        if prov not in read:
+            raise IdentityError(f"the fused word of P-core slot CPU {prov} was not read")
+        word = read[prov]
+        if word in seen:
+            raise IdentityError(f"two P-core logical processors (slots CPU {seen[word]} and CPU {prov}) read the same fused word {word:#x}: the P-cores cannot be told apart")
+        seen[word] = prov
+        if word not in recorded:
+            raise IdentityError(f"the P-core logical processor of slot CPU {prov} reads fused word {word:#x}, which no P-core of the accepted state recorded")
+        permutation[recorded[word]] = prov
+    for k, cluster in enumerate(clusters):
+        first = cluster[0]
+        want = fingerprint.word_of(first)
+        if first not in read or want is None or read[first] != want:
+            got = "not read" if first not in read else f"{read[first]:#x}"
+            raise IdentityError(f"E cluster {k} (slot CPU {first}) reads fused word {got}, the accepted state recorded {'nothing' if want is None else f'{want:#x}'}")
+    return permutation
 
 
 # --------------------------------------------------------------------------------------------------------- the real Win32
@@ -297,36 +375,80 @@ class Win32Api:
     def l2_caches(self) -> list[L2Cache]:
         return parse_l2_caches(self._query(lambda buf, n, ret: self._k.GetLogicalProcessorInformationEx(_RELATION_CACHE, buf, ret)))
 
+    def cpu_identity(self) -> CpuId | None:
+        """Vendor / family / model / brand from ``HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0`` (``VendorIdentifier``, ``Identifier`` =
+        ``"Intel64 Family 6 Model 198 Stepping 2"``, ``ProcessorNameString``). [UNVERIFIED: value names and format are from Windows documentation, not yet read on
+        a Windows machine from this repo.]"""
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                vendor = str(winreg.QueryValueEx(key, "VendorIdentifier")[0])
+                ident = str(winreg.QueryValueEx(key, "Identifier")[0])
+                brand = str(winreg.QueryValueEx(key, "ProcessorNameString")[0])
+        except OSError:
+            return None
+        match = re.search(r"Family\s+(\d+)\s+Model\s+(\d+)", ident)
+        if match is None or not vendor.strip() or not brand.strip():
+            return None
+        return CpuId(vendor.strip(), int(match.group(1)), int(match.group(2)), " ".join(brand.split()))
+
 
 # ------------------------------------------------------------------------------------------------------------------ port
-def verify_machine(api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None) -> None:
-    """Hold ``lp_of_cpu`` against what Windows reports (read-only APIs, no device); raise ``MsrError(ENODEV)`` on any mismatch
-    or if Windows cannot be asked."""
+def verify_machine(api: Win32 | None, fingerprint: Fingerprint) -> dict[int, int]:
+    """Hold the accepted state's CPU against what Windows reports (read-only APIs, no device) and derive the provisional Linux CPU -> LP map; raise
+    ``MsrError(ENODEV)`` if the fingerprint is not enough for a restore, the CPU differs (family / model / brand), the layout does not fit, or Windows cannot be asked."""
     try:
+        topology = fingerprint.require_restorable()
         api = api if api is not None else Win32Api()
-        problems = check_lp_map(api.cpu_sets(), api.l2_caches(), lp_of_cpu, topology)
+        here = api.cpu_identity()
+        if here is None:
+            raise ValueError("Windows does not report the CPU's family / model / brand, so it cannot be compared with the accepted state")
+        assert fingerprint.cpu_id is not None  # require_restorable
+        different = fingerprint.cpu_id.mismatch(here)
+        if different is not None:
+            raise ValueError(f"this is not the CPU the state was accepted on: {different}")
+        return provisional_lp_map(api.cpu_sets(), api.l2_caches(), topology)
+    except FingerprintError as exc:
+        raise MsrError(errno.ENODEV, str(exc)) from exc
     except (OSError, ValueError) as exc:
-        raise MsrError(errno.ENODEV, f"cannot verify the Linux CPU -> Windows LP map: {exc}") from exc
-    if problems:
-        raise MsrError(
-            errno.ENODEV,
-            "the Linux CPU -> Windows logical-processor map (winport.WINDOWS_LP_OF_CPU) does not match what Windows reports: " + "; ".join(problems),
-        )
+        raise MsrError(errno.ENODEV, f"the Linux CPU -> Windows logical-processor map cannot be derived or does not match what Windows reports: {exc}") from exc
 
 
 class WinThrottleStopMsrPort(MsrPort):
     """``MsrPort`` over the ThrottleStop driver. ``cpu`` is a LINUX CPU number; it is translated to a Windows LP and the calling
-    thread is pinned there for the duration of one access. The device is opened lazily (``close()`` / ``with`` releases it)."""
+    thread is pinned there for the duration of one access. The device is opened lazily (``close()`` / ``with`` releases it).
 
-    def __init__(
-        self, writable: bool = False, *, api: Win32 | None = None, lp_of_cpu: Mapping[int, int] = WINDOWS_LP_OF_CPU, topology: Topology | None = None
-    ) -> None:
+    The map comes from ``verify_machine`` (provisional until ``apply_identity``); the port refuses to exist if the machine does not match ``fingerprint``."""
+
+    def __init__(self, writable: bool = False, *, fingerprint: Fingerprint, api: Win32 | None = None) -> None:
         self.writable = bool(writable)
-        self._lp_of_cpu = dict(lp_of_cpu)
         self._api: Win32 = api if api is not None else Win32Api()
         self._handle: int | None = None
         self._lock = threading.Lock()  # one pinned access at a time
-        verify_machine(self._api, self._lp_of_cpu, topology)  # fail closed: no port on a machine the map does not describe
+        self._fingerprint = fingerprint
+        self._lp_of_cpu = verify_machine(self._api, fingerprint)  # fail closed: no port on a machine the accepted state does not describe
+
+    @property
+    def lp_of_cpu(self) -> dict[int, int]:
+        """A copy of the current Linux CPU -> Windows LP map."""
+        return dict(self._lp_of_cpu)
+
+    def apply_identity(self, permutation: Mapping[int, int]) -> None:
+        """Rebind the P order after ``resolve_identity``: Linux CPU ``c`` takes the LP that provisional CPU ``permutation[c]`` had. The result is held against
+        Windows again (``check_lp_map``) before it replaces the map; ``MsrError(ENODEV)`` and no change otherwise."""
+        with self._lock:
+            keys = sorted(permutation)
+            if keys != sorted(permutation.values()) or not set(keys) <= set(self._lp_of_cpu):
+                raise MsrError(errno.EINVAL, "the identity permutation is not a permutation of CPUs of the map")
+            new = {cpu: self._lp_of_cpu[permutation.get(cpu, cpu)] for cpu in self._lp_of_cpu}
+            try:
+                problems = check_lp_map(self._api.cpu_sets(), self._api.l2_caches(), new, self._fingerprint.topology())
+            except (OSError, ValueError) as exc:
+                raise MsrError(errno.ENODEV, f"cannot verify the resolved Linux CPU -> Windows LP map: {exc}") from exc
+            if problems:
+                raise MsrError(errno.ENODEV, "the resolved Linux CPU -> Windows LP map does not match what Windows reports: " + "; ".join(problems))
+            self._lp_of_cpu = new
 
     def _device(self) -> int:
         if self._handle is None:

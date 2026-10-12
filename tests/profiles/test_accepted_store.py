@@ -54,6 +54,14 @@ class Store(unittest.TestCase):
             self.assertEqual(p.lstat().st_uid, os.geteuid())
         self.assertEqual(sorted(p.name for p in self.etc.iterdir()), ["accepted"])
 
+    def test_the_fingerprint_is_written_as_a_fourth_file_when_given(self) -> None:
+        self.store.replace("mine", "[meta]\n", "0  39 8\n", fingerprint='{"schema": 1}\n')
+        acc = self.etc / "accepted"
+        self.assertEqual((acc / "fingerprint.json").read_text(), '{"schema": 1}\n')
+        self.assertEqual(stat.S_IMODE((acc / "fingerprint.json").stat().st_mode), 0o644)
+        self.store.replace("two", "[meta]\n", "0  39 8\n")  # replaced as a whole: the old fingerprint does not survive a state without one
+        self.assertFalse((acc / "fingerprint.json").exists())
+
     def test_the_umask_does_not_decide_the_modes(self) -> None:
         old = os.umask(0o077)
         try:
