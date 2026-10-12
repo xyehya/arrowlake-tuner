@@ -149,3 +149,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   live-derived, a labelled community/reference hint, a simulator/test fixture, or are removed. Favored cores: P-cores with the highest
   `acpi_cppc/highest_perf` (fallback `cpuinfo_max_freq`), none if all equal; cross-checked with `0x1C` after a read. Board Vcore channel stays a
   per-board table keyed by DMI board name (labels are generic, not discoverable). Work: G-127 (Tune page), G-128 (backend), G-129 (repo/install).
+- **D-037 · 2026-10-12 · One-off: a Sonnet worker runs a cpufreq/power-profile experiment on the real machine (operator).** Operator: "can u run
+  a sonnet worker to investigate this point? it can run tests on the cpu for capping and measuring if needed im not using the machine and it can
+  toggle the performance". Scope of the exception (T-research R-001 only): power profile switch, cpufreq `scaling_max_freq`/`scaling_min_freq`/
+  EPP writes, pinned `stress-ng` load, MSR **reads** (0x198, 0x774, 0x771, 0xE7/0xE8). Still forbidden to the worker: any WRMSR, any OC-mailbox
+  request, the arltuner helper's write ops, BIOS. Initial state recorded and restored, verified at the end. Other workers keep the AGENTS.md rule.
