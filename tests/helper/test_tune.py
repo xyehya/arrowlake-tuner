@@ -173,7 +173,7 @@ class PlanTests(TuneCase):
         cases = {
             "P V target 1.626": row("P4", v=1.626),
             "E V target 1.356": row("EC2", v=1.356),
-            "P ratio 58": row("P4", ratio=58),
+            "P ratio 61": row("P4", ratio=61),  # fused 57 + 3 (D-038) = 60
             "E ratio 50": row("EC0", ratio=50),
         }
         for label, bad in cases.items():
@@ -182,7 +182,7 @@ class PlanTests(TuneCase):
                 self.assertEqual(error_code(r), "REFUSED")
                 self.assertEqual(r["error"]["detail"]["check"], "POLICY_RANGE")
                 self.assertRegex(r["error"]["message"], r"policy (v_target_max_mv|ratio_max)")
-        self.plan(h, rows(row("P0", ratio=57)))
+        self.plan(h, rows(row("P0", ratio=60)))  # the D-038 headroom: fused 57 + 3
         self.plan(h, rows(row("EC3", ratio=49)))
 
     def test_shape_errors_are_bad_requests(self) -> None:

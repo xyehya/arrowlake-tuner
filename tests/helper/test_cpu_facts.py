@@ -289,8 +289,8 @@ class TurboOrderTests(FactsCase):
 
     def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
         h = self.boot_with(baseline=False)
-        self.read(h)  # "auto": the cap is the fused 0x1C value the read reported
-        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
+        self.read(h)  # "auto": the cap is the fused 0x1C value the read reported + 3 (D-038)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [61] * 8}}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
 
     def test_an_intent_turbo_table_before_any_read_is_left_to_the_guard(self) -> None:

@@ -136,6 +136,9 @@ DEFAULT_OFFSET_CEILING_MV = 0
 #: sanity bounds (``[UNVERIFIED]``: not hardware limits; the simulator's pcode cap is its own SIM-ONLY model).
 SANITY_V_TARGET_MAX_MV: Mapping[str, int] = MappingProxyType({"P": 1625, "E": 1355})
 SANITY_RATIO_MAX: Mapping[str, int] = MappingProxyType({"P": 62, "E": 60})
+#: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
+#: above the top fused point is reachable without a hand-written ``ratio_max``; still clamped to ``SANITY_RATIO_MAX``.
+AUTO_OC_HEADROOM = 3
 SANITY_OFFSET_CEILING_MV = 200  # D-032 (operator yes, 2026-10-11): was 100; the menus never go beyond +/-200 mV
 _V_TARGET_MIN_MV = 500  # the profile schema's lower sanity bound for an OC-point voltage
 _RATIO_STEP_RANGE = (1, 8)
@@ -251,14 +254,14 @@ def fused_top_ratio(fused_word: int | None) -> int | None:
 
 
 def fused_ratio_cap(kind: str, favored_words: Iterable[int | None]) -> int | None:
-    """The ``"auto"`` ratio ceiling of a core kind: the highest of ``max(0x1C[7:0], 0x1C[15:8])`` over the ``0x1C`` words of that kind read in this session
-    (registers.md 0x1C: favored ratio and fused ratio), clamped to the sanity bound. ``None`` (the no-raise value) when no ``0x1C`` of the kind was read. Never a sysfs
-    value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
+    """The ``"auto"`` ratio ceiling of a core kind (D-038): the highest ``max(0x1C[7:0], 0x1C[15:8])`` over the ``0x1C`` words of that kind read in this session
+    (registers.md 0x1C: favored ratio and fused ratio) plus ``AUTO_OC_HEADROOM`` bins, clamped to the sanity bound. ``None`` (the no-raise value) when no ``0x1C`` of the
+    kind was read. Never a sysfs value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
     best = 0
     for word in favored_words:
         if word:
             best = max(best, word & 0xFF, (word >> 8) & 0xFF)
-    return min(best, SANITY_RATIO_MAX[kind]) if best else None
+    return min(best + AUTO_OC_HEADROOM, SANITY_RATIO_MAX[kind]) if best else None
 
 
 def build_context(
