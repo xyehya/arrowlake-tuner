@@ -56,7 +56,7 @@ class Topology:
     cores: tuple[Core, ...]
     def by_cpu(self, cpu: int) -> Core ; def resolve(self, kind: str, index: int) -> Core
     def cluster_cpus(self, cluster: int) -> tuple[int, ...] ; def xtu_name(self, core: Core) -> str   # "P-Core 4" / "E-Core 12"
-def arl_s_285k() -> Topology                          # from platforms/arl-s-285k.toml (G-101, arltuner.platform)
+def arl_s_285k() -> Topology                          # from platforms/arl-s.toml (G-101/G-128, arltuner.platform)
 def detect(sysfs_root: Path = Path("/sys")) -> Topology  # /sys/devices/cpu_core/cpus + /sys/devices/cpu_atom/cpus ; falls back/validates against arl_s_285k(); raises TopologyMismatch
 ```
 ## Contract 4 — `arltuner.msr` (T-011)

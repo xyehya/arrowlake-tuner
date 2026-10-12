@@ -49,7 +49,7 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
    Guide 09 says "start as it is, follow preflight only if `start` fails with 1275/577/blocked". Decide which is right.
 3. **Stale lines in files I do not own** (not edited): `docs/knowledge/windows-path.md` §3 still describes the hard-coded 285K identity check, a 55 mV step and 600 ops/boot; `docs/SAFETY.md` still says default dwell 60 s
    and cap 12 in places; `docs/ARCHITECTURE.md` contract 3 / `SPEC.md` §3 name `platforms/arl-s-285k.toml` (the file is `arl-s.toml`); `docs/SPEC-v3.md` §6 "ratio <= P 57 / E 49" and "Read tuning words";
-   `docs/STATE.md` mentions "all 17 passed" and the linuxmon log; `docs/DECISIONS.md` D-033 "Read tuning words".
+   `docs/STATE.md` mentions "all 17 passed" and the pre-D-041 log name; `docs/DECISIONS.md` D-033 "Read tuning words".
 4. `tools/win/preflight.ps1` shows "driver service ThrottleStop" as FIX until a run has started the service (the restore script creates it). Guide says so; a clearer preflight wording would help.
 5. Dense measurement: tooltip "about 10 minutes", measured about 12 (2026-10-11); guide gives both.
 6. Helper measure uses settle 0.3 s / 10 samples, CLI `vf-dump --measure` 2.5 s / 30 samples; documented separately.
@@ -72,6 +72,6 @@ Next time: re-grep button names in `web/index.html`, `--help` of every CLI comma
 ## Log (newest first)
 - 2026-10-12 (update run, branch task/G-143-guide-update from main c5eba92): checked the recheck list against merged G-133..G-142 code; updated 01, 02, 03, 04, 05, 06, 07, 08, 09 (Windows fingerprint flow,
   %ProgramData%, new button, STALE_READ), 10 (--fingerprint, D-041 paths, Windows scripts table, screenshots tool), 11, 12 (limits section, D-042 hardening, socketpair, health-gate limitation), README
-  limits paragraph; `docs/USER-GUIDE.md` is now a pointer; root `README.md` lines on setup/URL/limits/self-check refreshed (Screenshots section untouched). Scrubbed linuxmon / predecessor / operator wording and
+  limits paragraph; `docs/USER-GUIDE.md` is now a pointer; root `README.md` lines on setup/URL/limits/self-check refreshed (Screenshots section untouched). Scrubbed private-repo / predecessor / operator wording and
   non-existent citation file names. Commands re-verified with `--help` only; no hardware, no sudo.
 - 2026-10-12 (first run, branch task/G-135-user-guide): created NOTES.md and all 13 pages from the repo; link check clean.

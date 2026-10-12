@@ -23,7 +23,7 @@ Open operator decisions are marked **OD-n** (§14) and block the phase named the
   platform file; bundling closed tools (OCCT, Intel Linpack, y-cruncher); an OCCT launcher (R29).
 
 ## 3. Platform support and preflight (R9, R32)
-Runs on any distro; **writes only on a recognised platform** described in `platforms/arl-s-285k.toml` (CPUID, topology, V/F point ratios, fused
+Runs on any distro; **writes only on a recognised platform** described in `platforms/arl-s.toml` (CPUID, topology, V/F point ratios, fused
 words, turbo-table defaults, sensor chip). Recognition = CPUID match **and** the fused-word identity check (as Windows already does, D-020) — not
 CPUID alone. Each failure is a named refusal, never a workaround; preflight re-runs immediately before every apply.
 | Check | On failure |

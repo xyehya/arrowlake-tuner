@@ -42,7 +42,7 @@ the real volts-vs-frequency curve *as currently tuned* (offsets included). Metho
   3. *Library*: list of stored curves (name, date, mode, tuning state, units), rename, set baseline, delete (confirm), export JSON (download).
 
 ## 4. Tune — XTU-style controls, from what was measured
-Top strip: **"Read tuning words"** (the old `vf.dump`, renamed; mailbox, ~112 ops, shows ratios + offsets + V target per point in mV, never hex
+Top strip: **"Read ratios & voltages"** (the old `vf.dump`, renamed twice: "Read tuning words" until G-127; mailbox, ~112 ops, shows ratios + offsets + V target per point in mV, never hex
 by default; hex toggle) and the current state chip. Two **scopes** (segmented control):
 - **Simple:** "All P-cores" + "All E-clusters" — two rows.
 - **Per unit:** 12 rows (P0–P7, EC0–EC3).
