@@ -338,6 +338,7 @@ progress { width: 100%; max-width: 320px; height: 10px; accent-color: var(--sign
 .vf-curve:focus { outline: none; }
 
 /* ---- System ---- */
+#sys-limits { grid-column: 1 / -1; }
 .sys-grid { display: grid; grid-template-columns: minmax(320px, 460px) minmax(0, 1fr); gap: 20px; align-items: start; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
 dl.kv dt { color: var(--text-2); }
