@@ -38,6 +38,8 @@ UNITS = [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)]
 UNIT_CPUS = {**{f"P{i}": [i] for i in range(8)}, **{f"EC{i}": list(range(8 + 4 * i, 12 + 4 * i)) for i in range(4)}}
 DEFAULT_FAVORED = ("P0", "P3")   # a simulator fixture, not the page's knowledge: the P-cores the fake reports as favored; FakeHelper.favored changes it
 FAVORED = DEFAULT_FAVORED
+TOPOLOGY = {"source": "acpi_cppc", "favored": None}   # what preflight's topology says: favored_source (also with no favored core: the source judged every P-core equal; None = no source
+# could judge) and the favored set (None = the same as FAVORED, which also shapes the 0x1C ratios of a read)
 P_QUICK = [8, 20, 30, 48, 53, 55, 56, 57]
 E_QUICK = [8, 15, 23, 30, 40, 46]
 P_POINTS = [8, 20, 30, 48, 53, 55, 56, 57]   # F1: every P-core carries these 8 points; no per-core tables [MEASURED lnx 2026-10-02]
@@ -181,9 +183,9 @@ def topology_view() -> dict:
     units = []
     for u in UNITS:
         p = kind_of(u) == "P"
-        fav = p and u in FAVORED
+        fav = p and u in (FAVORED if TOPOLOGY["favored"] is None else TOPOLOGY["favored"])
         units.append({"id": u, "kind": kind_of(u), "cpus": list(UNIT_CPUS[u]), "favored": fav, "max_ratio": reach_ratio(u), "perf": (255 if fav else 236) if p else None})
-    return {"units": units, "favored_source": "acpi_cppc" if FAVORED else None}
+    return {"units": units, "favored_source": TOPOLOGY["source"]}
 
 
 def read_at_iso(epoch: float | None) -> str | None:
@@ -220,6 +222,10 @@ def predict_unit(rec: dict | None, unit: str, points: list[dict]) -> dict[int, d
 class V3Ops:
     """Mixed into ``FakeHelper`` (which provides ``_reply``, ``_err``, ``progress`` / ``emit``)."""
 
+    def set_topology(self, *, source="acpi_cppc", favored=None) -> None:
+        """What the preflight topology reports, independent of the 0x1C ratios a read returns (``favored=()`` = the source judged every P-core equal)."""
+        TOPOLOGY.update(source=source, favored=None if favored is None else tuple(favored))
+
     @property
     def favored(self) -> tuple:
         return FAVORED
@@ -232,6 +238,7 @@ class V3Ops:
 
     def _init_v3(self) -> None:
         self.favored = DEFAULT_FAVORED
+        TOPOLOGY.update(source="acpi_cppc", favored=None)
         self.topology_enabled = True      # G-128 contract: preflight carries ``topology``; False simulates a helper without it
         self.read_at_enabled = True       # G-128 contract: tune.read / tune.last carry ``read_at`` (ISO UTC)
         self.memory = memory_fixture()

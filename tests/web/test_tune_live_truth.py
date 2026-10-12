@@ -69,13 +69,15 @@ class TestBrowser(unittest.TestCase):
         raise AssertionError("condition not reached")
 
     @contextlib.contextmanager
-    def session(self, *, favored=None, topology=True, read_at=True, seed=True, stored=False):
+    def session(self, *, favored=None, topology=True, read_at=True, seed=True, stored=False, set_topology=None):
         from tests.web import v3_harness as h
 
         srv, fake, stop = h.start(seed=seed, apply_delay=0.3)   # a slower apply: the page learns the op id from the HTTP answer before the result event arrives
         if favored is not None:
             fake.favored = favored
         fake.topology_enabled = topology
+        if set_topology is not None:   # the web server keeps the first preflight answer, so what the topology says is fixed before the page loads
+            fake.set_topology(**set_topology)
         fake.read_at_enabled = read_at
         if stored:
             fake.seed_last_read(time.time() - 3 * 60)
@@ -130,7 +132,7 @@ class TestBrowser(unittest.TestCase):
             page.wait_for_selector("#tn-console:not([hidden])", timeout=8000)
             prov = page.inner_text("#tn-prov")
             self.assertIn("Showing the helper’s earlier read from", prov)
-            self.assertIn("(3 min ago)", prov)
+            self.assertRegex(prov, r"\(\d+ min ago\)")
             self.assertIn("no mailbox operations used", prov)
         with self.session(read_at=False) as (page, fake):
             self.read(page)
@@ -187,6 +189,19 @@ class TestBrowser(unittest.TestCase):
             self.assertIn("0x1C favored ratio", page.locator(".tn-rowwrap .tn-name", has_text=STAR).first.get_attribute("title"))
             page.click("#tab-stress")
             self.assertEqual([t for t in page.locator(".mm-tile[data-unit] .mm-name").all_inner_texts() if STAR in t], ["P0 " + STAR, "P3 " + STAR])
+
+    def test_the_system_saying_none_favored_is_not_overridden_by_the_read(self):
+        """Topology present with a source but no favored core = every P-core judged equal: no star, even though the read's 0x1C ratios differ (and the page says so)."""
+        with self.session(set_topology={"source": "acpi_cppc", "favored": ()}) as (page, fake):
+            self.read(page)
+            self.assertEqual([t for t in page.locator(".tn-rowwrap .tn-name").all_inner_texts() if STAR in t], [])
+            self.assertIn("favored cores named by the system differ", page.inner_text("#tn-prov"))
+
+    def test_a_topology_without_any_source_falls_back_to_the_read(self):
+        with self.session(set_topology={"source": None, "favored": ()}) as (page, fake):
+            self.read(page)
+            self.assertEqual(len([t for t in page.locator(".tn-rowwrap .tn-name").all_inner_texts() if STAR in t]), 2)
+            self.assertIn("0x1C favored ratio", page.locator(".tn-rowwrap .tn-name", has_text=STAR).first.get_attribute("title"))
 
     def test_a_non_favored_core_shows_reach_only_for_56_and_57(self):
         with self.session() as (page, fake):

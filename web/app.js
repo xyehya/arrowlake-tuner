@@ -1100,7 +1100,8 @@
   function favFromTopology(topo) {
     if (!isObj(topo) || !Array.isArray(topo.units)) return null;
     const ids = topo.units.filter((x) => isObj(x) && x.favored === true && typeof x.id === "string" && x.id.charAt(0) === "P" && UNIT_IDS.indexOf(x.id) >= 0).map((x) => x.id);
-    return { ids: ids, source: topo.favored_source === "cpuinfo_max_freq" ? "cpuinfo_max_freq" : "acpi_cppc" };
+    // determined: the system had a source to judge by (an empty set then means every P-core is equal: none favored), so the read must not override it
+    return { ids: ids, source: topo.favored_source === "cpuinfo_max_freq" ? "cpuinfo_max_freq" : "acpi_cppc", determined: ids.length > 0 || typeof topo.favored_source === "string" };
   }
   function favFromRead(turbo) {   // {unit: ratio}: the P-cores at the highest favored ratio, only when the cores differ
     if (!isObj(turbo) || !isObj(turbo.favored)) return null;
@@ -1111,7 +1112,7 @@
   }
   function recomputeFav() {
     let ids = [], source = null;
-    if (FAV.pre && FAV.pre.ids.length) { ids = FAV.pre.ids; source = FAV.pre.source; }
+    if (FAV.pre && FAV.pre.determined) { ids = FAV.pre.ids; source = ids.length ? FAV.pre.source : null; }
     else if (FAV.read && FAV.read.length) { ids = FAV.read; source = "0x1C"; }
     const key = ids.join(",") + "|" + source;
     if (key === FAV.key) return;
@@ -1130,8 +1131,8 @@
   function coreUnit(c) { return c.kind === "P" && /^\d+$/.test(String(c.cpu)) ? "P" + c.cpu : null; }   // a dashboard core -> its tuning unit (P-core n is unit Pn)
   function coreMark(c) { const u = coreUnit(c); return u && isFav(u) ? " \u2605" : ""; }
   function coreFavTitle(c) { const u = coreUnit(c); return u && isFav(u) ? ", " + favTitle(u) : ""; }
-  // The preflight and the read disagree: both name favored cores and they are not the same set.
-  function favMismatch() { return !!(FAV.pre && FAV.pre.ids.length && FAV.read && FAV.read.length && FAV.pre.ids.join() !== FAV.read.join()); }
+  // The system's answer and the 0x1C favored ratios of the read disagree (an empty set counts: "none favored" against a core with a higher ratio).
+  function favMismatch() { return !!(FAV.pre && FAV.pre.determined && FAV.read && FAV.pre.ids.join() !== FAV.read.join()); }
   const POLICY = {
     offsetMin: -200, offsetMax: 200, offsetStep: 5,                 // mV
     vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005,     // V, adaptive target at the OC point
@@ -2937,17 +2938,10 @@
 
   function renderVccia() {
     const card = $("tn-vccia-card");
-    card.hidden = !T.words;
-    if (!T.words) return;
+    card.hidden = !T.words || !baselineId();   // without a baseline the one hint is in the Tune header (tn-pred-note)
+    if (card.hidden) return;
     renderTuneVcore();
     const line = $("tn-vccia-line"), list = $("tn-vccia-list");
-    if (!baselineId()) {
-      line.textContent = "Measure a stock curve (Curves) to see predicted voltages.";
-      fill(list, []);
-      setText("tn-vccia-basis", "");
-      setText("tn-vccia-note", "");
-      return;
-    }
     const all = vidFor("all"), few = vidFor("few");
     if (!all) { line.textContent = "Turbo tables not read, so the highest VID cannot be predicted."; fill(list, []); return; }
     const rec = CV.cache[baselineId()];
