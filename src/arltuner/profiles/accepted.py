@@ -22,8 +22,8 @@ from pathlib import Path
 
 __all__ = ["AcceptedError", "AcceptedStore", "SAFE_PROFILE_NAME"]
 
-#: A name an accepted profile can carry: the helper's ``_accepted_chain`` accepts ``profiles/[A-Za-z0-9._-]{1,80}.toml`` without ``..``.
-SAFE_PROFILE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+#: A name an accepted profile can carry: what ``profiles.get`` / ``profiles.list`` handle (a-z 0-9 . _ -, 1..64) and ``_accepted_chain`` accepts (no ``..``).
+SAFE_PROFILE_NAME = re.compile(r"[a-z0-9_][a-z0-9._-]{0,63}\Z")
 _LOCK = threading.Lock()
 
 
@@ -90,7 +90,7 @@ class AcceptedStore:
     def replace(self, name: str, profile_toml: str, expected_words: str, current_header: str = "") -> None:
         """Make ``name`` the whole accepted state: ``CURRENT`` (one ``profile =`` line), the profile and ``EXPECTED-words.txt``."""
         if not SAFE_PROFILE_NAME.match(name) or ".." in name:
-            raise AcceptedError("BAD_NAME", "an accepted profile name is 1..64 characters of A-Z a-z 0-9 . _ - without '..'")
+            raise AcceptedError("BAD_NAME", "an accepted profile name is 1..64 characters of a-z 0-9 . _ - without '..'")
         self._check_parent()
         pid = os.getpid()
         new = self.directory.parent / f".accepted.new.{pid}"

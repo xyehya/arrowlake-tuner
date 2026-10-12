@@ -142,7 +142,12 @@
     POLICY_RANGE: "a value is outside the policy range",
     NO_READ: "this helper session has not read the ratios and voltages yet: use Read ratios & voltages first",
     NOTHING_TO_DO: "nothing would change",
-    NO_ACCEPTED_STATE: "no accepted state is installed",
+    NO_ACCEPTED_STATE: "there is no usable accepted state yet (save a profile as accepted on the Profiles tab)",
+    NOT_APPLIED: "the profile is not what the CPU holds now: apply it first, then set it as accepted",
+    NOT_REPRESENTABLE: "a word of the current state cannot be written to a profile file exactly, so it is not recorded",
+    NO_READ: "nothing was read this boot: read the tuning words first",
+    NO_ACCEPTED_DIR: "this helper keeps no accepted state",
+    AUDIT_UNAVAILABLE: "the audit log cannot be written, so nothing was changed",
     STEP_LIMIT: "the plan needs more steps in one go than the policy allows: change fewer units at once",
     SESSION_LIMIT: "the plan needs more mailbox operations than one session may use",
     BOOT_LIMIT: "the per-boot mailbox budget does not fit this plan",
@@ -3189,7 +3194,7 @@
       turbo = { P: tb(r.turbo.P), E: tb(r.turbo.E), favored: {} };
       if (isObj(r.turbo.favored)) for (const k of Object.keys(r.turbo.favored)) { const id = unitOfCpu(k); if (id && id.charAt(0) === "P" && isNum(r.turbo.favored[k])) turbo.favored[id] = r.turbo.favored[k]; }
     } else if (tables && tables.p.length === 8 && tables.e.length === 8) turbo = { P: { ratios: tables.p.slice(), counts: null }, E: { ratios: tables.e.slice(), counts: null }, favored: {} };
-    return { units: units, raw: r, accepted: r.accepted_match, fused: fused, turbo: turbo, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
+    return { units: units, raw: r, accepted: r.accepted_match, acceptedNote: typeof r.accepted_note === "string" ? r.accepted_note : null, fused: fused, turbo: turbo, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
       tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true };
   }
 
@@ -3308,11 +3313,17 @@
     fill(host, [el("h3", "dlg-sub", "Turbo ratio tables"), t, el("p", "muted", "An OC ratio at or below bucket 0 raises no table, so asking for a ratio the table already reads at bucket 0 changes nothing there. Only a ratio above bucket 0 makes the plan write a table." + (w.tablesNote ? " " + w.tablesNote : ""))]);
   }
 
+  // D-036: a fresh install has no accepted state; the helper says so ("No accepted state yet: ...") and profiles.list reports accepted: false.
+  const NO_ACCEPTED_TEXT = "No accepted state yet: save a profile as accepted (Profiles)";
+  function noAcceptedYet(w) {
+    return (isObj(w) && w.accepted === null && typeof w.acceptedNote === "string" && w.acceptedNote.indexOf("No accepted state yet") === 0) || PR.accepted === false;
+  }
+
   function renderAccepted(w) {
     const m = w.accepted;
     const sum = $("acc-summary");
     if (m === undefined) { sum.textContent = "This helper does not report an accepted-state comparison."; return; }
-    if (m === null) { sum.textContent = "No accepted state installed, so there is nothing to compare with."; return; }
+    if (m === null) { sum.textContent = noAcceptedYet(w) ? NO_ACCEPTED_TEXT + "." : "There is nothing to compare with" + (w.acceptedNote ? ": " + w.acceptedNote : ".") + (w.acceptedNote && !/[.]$/.test(w.acceptedNote) ? "." : ""); return; }
     if (!Array.isArray(m)) { sum.textContent = "The accepted-state comparison has an unexpected shape."; return; }
     const bad = m.filter((x) => !isObj(x) || x.match !== true);
     sum.textContent = (bad.length === 0 ? "Matches the accepted state on all " + m.length + " compared cores." : "Differs from the accepted state on " + bad.length + " of " + m.length + " cores: cpu " +
@@ -3331,7 +3342,8 @@
     const idle = idleGate() === "";
     $("btn-tn-plan").disabled = !idle || (unitsChanged().length === 0 && turboKinds().length === 0);
     $("btn-tn-reset").disabled = !idle || !T.words;
-    $("btn-tn-restore").disabled = !idle || !T.words;
+    $("btn-tn-restore").disabled = !idle || !T.words || noAcceptedYet(T.words);
+    $("btn-tn-restore").title = T.words && noAcceptedYet(T.words) ? NO_ACCEPTED_TEXT + "." : "Applies the accepted state again (plan, review, then apply).";
     $("btn-pr-save").disabled = unitsChanged().length === 0 || !PROFILE_RE.test($("pr-name").value);
     for (const b of document.querySelectorAll(".pr-act")) b.disabled = !idle;
   }
@@ -4252,7 +4264,7 @@
   // profiles.list names them; profiles.get (G-123) says what each holds: {contents: {rows: [{target: unit, offset, v_target_v, ratio}], turbo}, summary}, and for an
   // accepted step also {position, of, chain, cumulative} = the state after applying the chain up to that step (what "Load into Tune" loads).
   const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;
-  const PR = { list: [], loaded: false, note: "", info: {}, open: new Set(), basis: "applied", seq: 0 };
+  const PR = { list: [], loaded: false, note: "", info: {}, open: new Set(), basis: "applied", seq: 0, accepted: null };
   V.pr = PR;
 
   async function loadProfiles() {
@@ -4262,6 +4274,7 @@
     if (status === 200 && body.ok && isObj(body.result) && Array.isArray(body.result.profiles)) {
       PR.list = body.result.profiles.filter((p) => isObj(p) && typeof p.name === "string");
       PR.note = typeof body.result.note === "string" ? body.result.note : "";   // e.g. "no accepted state directory is configured"
+      PR.accepted = typeof body.result.accepted === "boolean" ? body.result.accepted : null;   // G-129: false = "No accepted state yet"
     }
     else { PR.list = []; setText("pr-empty", "Profiles unavailable: " + errText(body)); }
     renderProfiles();
@@ -4319,8 +4332,12 @@
 
   function renderChain() {
     const acc = PR.list.filter((p) => p.source === "accepted");
-    $("pr-chain-card").hidden = acc.length === 0;
-    if (!acc.length) return;
+    $("pr-chain-card").hidden = !PR.loaded;
+    if (!acc.length) {
+      setText("pr-chain-note", NO_ACCEPTED_TEXT + ".");
+      fill($("pr-chain"), []);
+      return;
+    }
     setText("pr-chain-note", "Restore accepted applies these in this order. Each step builds on the one before.");
     fill($("pr-chain"), acc.map((p, i) => {
       const li = el("li", "pr-step" + (i === acc.length - 1 ? " tip" : ""));
@@ -4387,10 +4404,10 @@
       rev.addEventListener("click", () => requestPlan({ profile: p.name }, (m) => setText("pr-status", "Could not plan \"" + p.name + "\": " + m)));
       act.append(det, load, rev);
       if (p.source !== "accepted") {
-        const acc = el("button", "", "Propose as accepted");
+        const acc = el("button", "pr-act pr-accept", "Set as accepted");
         acc.type = "button";
-        acc.disabled = true;
-        acc.title = "Marking a profile as accepted is a deliberate step outside this page (SPEC 6.4): the helper has no op for it.";
+        acc.title = "Makes this profile the accepted state (Restore accepted and the dashboard comparison use it). It must be what the CPU holds now. Nothing is written to the CPU.";
+        acc.addEventListener("click", () => acceptState(p.name));
         act.append(acc);
       }
       li.append(main, act);
@@ -4553,7 +4570,39 @@
     }
   }
 
+  // D-036 / G-129: the user makes a profile (or the state of the last read) the accepted state. The helper writes /etc/arltuner/accepted; the CPU is not touched.
+  async function acceptState(name) {
+    if (idleGate() !== "") return;
+    const names = PR.list.filter((p) => p.source === "accepted").map((p) => p.name);
+    const what = name === null ? "The state of the last read" : "\"" + name + "\"";
+    const replaces = names.length ? "It replaces the current accepted state (" + names.join(", ") + ")." : "There is no accepted state yet, so nothing is replaced.";
+    const ok = await confirmDialog("Set as accepted?", what + " becomes the accepted state. Restore accepted re-applies it after a boot and the dashboard compares the CPU with it. " + replaces +
+      " It has to be what the CPU holds now. Nothing is written to the CPU.", "Set as accepted");
+    if (!ok) return;
+    const { status, body } = await api("profiles.accept", name === null ? { from: "read" } : { name: name });
+    if (status === 200 && body.ok && isObj(body.result)) {
+      setText("pr-status", "Accepted \"" + body.result.name + "\"" + (Array.isArray(body.result.replaced) && body.result.replaced.length ? ", replacing " + body.result.replaced.join(", ") : "") + ".");
+      PR.info = {};
+      await loadProfiles();
+      await refreshAcceptedCompare();
+    } else {
+      setText("pr-status", "Not accepted: " + (isObj(body.error) && typeof body.error.message === "string" ? body.error.message : errText(body)));
+    }
+  }
+
+  // The stored read's comparison with the accepted words, redone by the helper (tune.last) after the accepted state changed.
+  async function refreshAcceptedCompare() {
+    const { status, body } = await api("tune.last", {});
+    if (status === 200 && body.ok && isObj(body.result) && body.result.available === true && isObj(body.result.result) && T.words) {
+      T.words.accepted = body.result.result.accepted_match;
+      T.words.acceptedNote = typeof body.result.result.accepted_note === "string" ? body.result.result.accepted_note : null;
+    } else if (T.words) { T.words.accepted = undefined; T.words.acceptedNote = null; }
+    if (T.words) renderAccepted(T.words);
+    updateTuneGate();
+  }
+
   function initProfiles() {
+    $("btn-pr-accept-read").addEventListener("click", () => acceptState(null));
     $("btn-pr-refresh").addEventListener("click", () => { PR.info = {}; loadProfiles(); });
     $("pr-name").addEventListener("input", () => { updateSaveState(); });
     $("btn-pr-save").addEventListener("click", saveProfile);

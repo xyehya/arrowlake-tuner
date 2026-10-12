@@ -93,6 +93,12 @@ def _tune_plan(a: dict) -> bool:  # contract 9; outer filter, the helper (ops_tu
 def _profiles_save(a: dict) -> bool:
     return (set(a) == {"name", "intent"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))
             and isinstance(a["intent"], dict) and len(json.dumps(a["intent"])) <= 16 * 1024)
+
+
+def _profiles_accept(a: dict) -> bool:  # G-129 (D-036); the helper is the authority: a saved profile's name or {from: "read"}
+    return (set(a) == {"name"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))) or a == {"from": "read"}
+
+
 def _profiles_get(a: dict) -> bool:  # contract 9 (G-123)
     return set(a) == {"name"} and isinstance(a["name"], str) and bool(_PROFILE_NAME.match(a["name"]))
 
@@ -154,6 +160,7 @@ OPS: dict[str, tuple[Callable[[dict], bool], bool]] = {
     "tune.apply": (_apply, True),
     "profiles.list": (_empty, False),
     "profiles.save": (_profiles_save, False),
+    "profiles.accept": (_profiles_accept, False),  # G-129: writes /etc/arltuner/accepted (a file, never the hardware)
     "profiles.get": (_profiles_get, False),  # G-123: what a profile holds (saved intent / accepted chain member)
     "tune.last": (_empty, False),  # G-123: this boot's stored read, or {available: false}
     "vf.measure": (_vf_measure, True),  # G-111, contract 9

@@ -152,7 +152,7 @@ def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> 
     fused = getattr(helper, "fused_words", None) or {}
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cfg.wall_clock()))
     if "from" in args:
-        name = "read-" + stamp.replace("-", "").replace(":", "")
+        name = "read-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime(cfg.wall_clock()))
         profile = _profile_from_words(topology, name, last, fused)
         source = "the state of the last read"
     else:

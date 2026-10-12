@@ -115,8 +115,11 @@ class AcceptFromRead(AcceptCase):
         r = self.accept(h, **{"from": "read"})
         self.assertTrue(r["ok"], r)
         name = r["result"]["name"]
-        self.assertRegex(name, r"^read-\d{8}T\d{6}Z$")
+        self.assertRegex(name, r"^read-\d{8}-\d{6}$")
         files = self.accepted_files()
+        got = h.call("g", "profiles.get", {"name": name})  # the page asks for what every listed profile holds: the name must be one profiles.get takes
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(got["result"]["source"], "accepted")
         profile = load_profile(files[f"profiles/{name}.toml"])
         have = {(p.index, p.point): (p.offset_mv, p.expect_ratio) for p in profile.points if p.kind == "P"}
         self.assertEqual(have[(3, 5)], (-60, 53))
