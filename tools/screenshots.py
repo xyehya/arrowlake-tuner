@@ -469,12 +469,12 @@ def shot_tune_per_core(b: Browser) -> list[str]:
     # tune.last is asked by the page on load; no stored read -> nothing to show, and the tool does not press Read
     if not b.click("#tab-tune") or not b.wait_for("!document.getElementById('tn-console').hidden", 8):
         raise Skip("no stored tuning read on the page (tune.last empty): read it once in Tune, then run again")
-    b.click("#tn-scope button", "Per unit")
+    b.click("#tn-scope button", "Per-Core")
     b.pump(0.8)
     # one P row with its Per-V/F-point offsets open (a view toggle; no value is changed)
     if not b.wait_for("document.querySelectorAll('#tn-rows .tn-rowwrap').length > 4", 5):
         raise Skip("the Tune rows did not build")
-    if not b.click("#tn-rows .tn-rowwrap:nth-of-type(2) .tn-cell .seg button", "Per point"):
+    if not b.click("#tn-rows .tn-rowwrap:nth-of-type(2) .tn-cell .seg button", "Per V/F point Offsets"):
         raise Skip("no 'Per point' control on the first P row")
     b.wait_for("document.querySelectorAll('#tn-rows .tn-rowwrap:nth-of-type(2) .tn-points select').length > 0", 5)
     b.pump(0.6)

@@ -140,8 +140,10 @@ class TestBrowser(unittest.TestCase):
                 page.click("#btn-tune-read")
                 page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
                 row = page.locator(".tn-rowwrap").nth(1)  # all E-clusters: OC ratio not set -> 49x (cpuinfo 4.9 -> 5.0 GHz) at 1.165 V
-                row.locator("select.tn-sel").nth(1).select_option("1.165")
-                row.locator("select.tn-sel").nth(2).select_option("49")
+                self.assertTrue(row.locator("select.tn-sel").nth(2).is_disabled())   # G-133: the adaptive voltage belongs to the OC point: set the OC ratio first
+                row.locator("select.tn-sel").nth(1).select_option("49")
+                self.assertFalse(row.locator("select.tn-sel").nth(2).is_disabled())
+                row.locator("select.tn-sel").nth(2).select_option("1.165")
                 page.click("#btn-tn-plan")
                 page.wait_for_selector("#dlg-plan[open]")
                 page.wait_for_function("!document.getElementById('plan-go').disabled")

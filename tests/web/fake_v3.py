@@ -199,6 +199,13 @@ def topology_view() -> dict:
     return {"units": units, "favored_source": TOPOLOGY["source"]}
 
 
+def limits_view(ratio_max: dict, window: tuple | None = None) -> dict:
+    """The ``limits`` object of the G-133 tune.read / tune.last contract: the bound policy per kind (offsets in mV, V target max in V, ratio max)."""
+    return {"offset_mv": {k: {"min": (window or (-OFFSET_LIMIT, OFFSET_LIMIT))[0], "max": (window or (-OFFSET_LIMIT, OFFSET_LIMIT))[1]} for k in ("P", "E")},
+            "v_target_max_v": dict(V_TARGET_MAX), "ratio_max": dict(ratio_max),
+            "source": {"ratio_max": {"P": "auto", "E": "policy"}, "v_target_max": {"P": "auto", "E": "auto"}}}
+
+
 def read_at_iso(epoch: float | None) -> str | None:
     return None if epoch is None else datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -260,6 +267,11 @@ class V3Ops:
         TOPOLOGY.update(source="acpi_cppc", favored=None)
         self.topology_enabled = True      # G-128 contract: preflight carries ``topology``; False simulates a helper without it
         self.read_at_enabled = True       # G-128 contract: tune.read / tune.last carry ``read_at`` (ISO UTC)
+        self.limits_enabled = True        # G-133 contract: tune.read / tune.last carry ``limits``; False simulates a helper without them
+        self.ratio_max = dict(RATIO_MAX)  # the policy's ratio ceiling per kind (the live ``limits.ratio_max``); a test sets e.g. {"P": 60, "E": 49}
+        self.offset_window: tuple | None = None   # the policy's offset window (min, max) mV in ``limits``; None = ±OFFSET_LIMIT
+        self.hw_limits: dict | None = None        # D-039 / G-137: ``hw_limits`` {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [lo, hi]}} of the tune.read result; None = a helper without it
+        self.fixture_result: dict | None = None   # a recorded tune.last ``result`` (tests/web/fixtures) served instead of the fake's own tuning words
         self.memory = memory_fixture()
         self.curves: dict[str, dict] = {}
         self.tuning = initial_tuning()
@@ -569,8 +581,15 @@ class V3Ops:
         out = {"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
                "ops_done": 112, "accepted_match": match, "accepted_note": "No accepted state yet: save a profile as accepted (Profiles)" if self.no_accepted else None, "tune": tune, "tables": copy.deepcopy(self.tables),
                "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)}
+        if self.fixture_result is not None:
+            out = copy.deepcopy(self.fixture_result)
+            out.pop("limits", None)
         if self.read_at_enabled and self.last_read_at is not None:
             out["read_at"] = read_at_iso(self.last_read_at)
+        if self.limits_enabled:
+            out["limits"] = limits_view(self.ratio_max, self.offset_window)
+        if self.hw_limits is not None:
+            out["hw_limits"] = copy.deepcopy(self.hw_limits)
         return out
 
     def seed_last_read(self, at: float | None = None) -> None:
@@ -705,8 +724,8 @@ class V3Ops:
             if not (isinstance(ratios, list) and len(ratios) == 8 and all(isinstance(x, int) and not isinstance(x, bool) for x in ratios)):
                 self._err(rid, "BAD_REQUEST", f"turbo.{k} must be 8 integer ratios")
                 return False
-            if any(not (8 <= x <= RATIO_MAX[k]) for x in ratios):
-                self._refuse_range(rid, f"turbo.{k}", f"8..{RATIO_MAX[k]}")
+            if any(not (8 <= x <= self.ratio_max[k]) for x in ratios):
+                self._refuse_range(rid, f"turbo.{k}", f"8..{self.ratio_max[k]}")
                 return False
             for i in range(1, 8):
                 if ratios[i] > ratios[i - 1]:
@@ -813,8 +832,8 @@ class V3Ops:
                         warnings.append(f"target above fused on {u}: {vt:.3f} V > {self.fused_vt[u]:.3f} V")
                 ratio = row.get("ratio")
                 if ratio is not None:
-                    if not (isinstance(ratio, int) and ratio <= RATIO_MAX[k]):
-                        self._refuse_range(rid, "ratio", f"at most {RATIO_MAX[k]} for {k}")
+                    if not (isinstance(ratio, int) and ratio <= self.ratio_max[k]):
+                        self._refuse_range(rid, "ratio", f"at most {self.ratio_max[k]} for {k}")
                         return True
                     new[u]["oc"]["ratio"] = ratio
                     written.setdefault(u, set()).add(0)

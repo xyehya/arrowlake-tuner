@@ -239,6 +239,15 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     helper at its start. Server `OPS`: `stress.start` (long), `stress.stop`, `stress.list`. `--sim`: simulated children and telemetry, 12× faster than real time.
 - **Addendum (G-119):** `tune.apply` result gains `msr_writes` (plain-MSR turbo-table writes); `ops_used` includes them. A turbo-only profile
   (`[turbo]` table, no core/point entries) is valid.
+- **Addendum "G-133" (live policy limits, D-036/D-039; `helper/ops_tune.py`):** `tune.read` and `tune.last` results gain `limits` (no mailbox, no MSR: the bound policy with `"auto"` resolved, recomputed by `tune.last` from
+  the policy file as it is now): `{offset_mv: {P|E: {min, max}} (int mV; min = effective_offset_floor_mv - assumed_bios_offset_mv[kind], max = offset_ceiling_mv), v_target_max_v: {P|E: float|null}
+  ("auto" = the code sanity bound of the kind: tune.read does not read cmd 0x28, the guard checks the CPU's own maximum at apply; null = the policy states none = no raise), ratio_max: {P|E: int|null} (policy number, or
+  "auto" = the fused 0x1C values read this boot, kept with the stored read so a helper restart resolves it too; null = none / not read), source: {ratio_max, v_target_max: {P|E: "policy"|"auto"|"none"}}}`; `limits: null` plus
+  `limits_note` when the policy cannot be loaded (never an error of the read). A stored read also keeps `favored_words` `{cpu: "0x..."}` (record top level). The page reads these and nothing else for the dropdown windows and
+  ceilings (no literal in `web/app.js`; only the 5 mV / 5 mV grids); without `limits` its value controls are disabled with one reason. Optional `hw_limits` (G-137, D-039) `{P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [lo, hi]}}`
+  adds "your CPU allows ..." to the tooltips. Page model: per unit `stockMax` (P: min(`turbo.favored[u]`, top fused ratio); E: top fused ratio) and `fusedTop` (`fused[cpu].ratio`); an OC ratio `r` is none (`r <= stockMax`), a
+  fused-point ratio (`r <= fusedTop`, offset only) or an OC point (`r > fusedTop`: the only case with an adaptive voltage). Tests: `tests/helper/test_g133_limits.py`, `tests/web/test_g133_page.py` (fixture
+  `tests/web/fixtures/tune-last-285k-2026-10-12.json`).
 - **Addendum "G-123" (UX continuity; `helper/ops_tune.py`, `profiles/lastread.py`, `profiles/contents.py`):** no mailbox, no MSR, not write-gated; both ops are `slow` (own thread).
   - **`tune.last {}`** ⇒ `{available: false}` or `{available: true, boot_id, at: <epoch s>, applied_at: <epoch s>|null, result: <the tune.read result>}`. A *complete* `tune.read`
     (all 12 units, known boot id) is stored `<state>/last-read.json` (`<state>` = `dirname(audit)/state` = `/var/lib/arltuner/state`; **dir 0700, file 0600**, created

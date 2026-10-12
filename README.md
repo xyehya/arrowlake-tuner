@@ -8,7 +8,7 @@ XTU alternative · stress test · stressapptest · stress-ng.
 
 ## Status (2026-10-12)
 - **GUI (local web app + root helper) working on the reference machine:** live dashboard with memory timings, V/F curve **measurement** and
-  storage, **tuning** (per-point / whole-curve offsets, OC point + adaptive voltage, OC ratios, turbo tables) with plan → review → apply →
+  storage, **tuning** (Per V/F point Offsets / Whole Curve Offset, OC point + adaptive voltage, OC ratios, turbo tables) with plan → review → apply →
   read-back, stress/validation screens, profiles. Verified on hardware 2026-10-11/12 (`docs/knowledge/tuning-results.md`). Start with
   **`docs/USER-GUIDE.md`**.
 - **CLI + restore scripts** (Linux and Windows) unchanged. Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).

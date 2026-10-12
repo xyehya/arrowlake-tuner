@@ -1190,11 +1190,8 @@
   function coreFavTitle(c) { const u = coreUnit(c); return u && isFav(u) ? ", " + favTitle(u) : ""; }
   // The system's answer and the 0x1C favored ratios of the read disagree (an empty set counts: "none favored" against a core with a higher ratio).
   function favMismatch() { return !!(FAV.pre && FAV.pre.determined && FAV.read && FAV.pre.ids.join() !== FAV.read.join()); }
-  const POLICY = {
-    offsetMin: -200, offsetMax: 200, offsetStep: 5,                 // mV
-    vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005,     // V, adaptive target at the OC point
-    ratioMax: { P: 57, E: 49 },
-  };
+  // G-133 (D-036): the dropdown grids only. What the policy allows (offset window, V target max, ratio max) comes from the helper's live `limits` (T.words.limits), never from here.
+  const GRID = { offsetStep: 5, vtMin: 0.900, vtStep: 0.005 };   // mV step of the offset dropdowns; V (floor, step) of the adaptive-target dropdown
   function unitKind(id) { return UNIT_INFO[id] ? UNIT_INFO[id].kind : id.charAt(0) === "P" ? "P" : "E"; }
   function unitCpus(id) {
     if (UNIT_INFO[id]) return UNIT_INFO[id].cpus;
@@ -2615,7 +2612,7 @@
     return p.offset_mv;
   }
   function curVt(u) { const w = wUnit(u); return w && w.oc && isNum(w.oc.v_target_v) ? w.oc.v_target_v : null; }
-  function curRatio(u) { const w = wUnit(u); return w && w.oc && isNum(w.oc.ratio) ? w.oc.ratio : null; }
+  function curRatio(u) { const w = wUnit(u); return w && w.oc && isNum(w.oc.ratio) && w.oc.ratio > 0 ? w.oc.ratio : null; }   // a word that reads 0 has no OC ratio
   function effVt(u) { const d = T.draft[u]; return d && d.vt !== undefined ? d.vt : curVt(u); }
   function effRatio(u) { const d = T.draft[u]; return d && d.ratio !== undefined ? d.ratio : curRatio(u); }
 
@@ -2633,9 +2630,67 @@
   // F1 point numbering as overclockers know it (SkatterBencher / XTU): points 1..n are fused (offset only), the OC point follows (P 9, E 7).
   function ocPointNo(units) { return Math.max(0, ...units.map((u) => curPts(u).length)) + 1; }
   function ocHeadText(units) { return "Point " + ocPointNo(units) + " \u00b7 OC"; }
-  const OC_TIP = "ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)";
+  const OC_TIP = "An OC ratio is a ratio above what the unit runs at stock. The OC point (ratio + adaptive voltage) exists once that ratio is above the top fused ratio; it is written through the P2=0 word.";
+  const NEED_RATIO = "set an OC ratio first: the adaptive voltage belongs to the OC point";
 
   function fusedOf(u) { return T.words && T.words.fused ? T.words.fused[u] || null : null; }
+
+  // ---- G-133: the OC ratio model ---------------------------------------------------------------------------------------------------------
+  // stockMax: the highest ratio a unit runs without an OC ratio: a P-core's own 0x1C ratio (turbo.favored; capped at the fused top, because a written OC ratio is followed by 0x1C), an E-cluster's
+  // fused top (it has no 0x1C of its own). fusedTop: the ratio of the top fused point (0x09). A ratio up to stockMax is no OC ratio; above it and up to fusedTop it lands on a fused point (offset only);
+  // above fusedTop it creates the OC point, the only point whose adaptive voltage can be set. Null = not read: nothing is claimed.
+  function fusedTopOf(u) {
+    const f = fusedOf(u);
+    if (f && isNum(f.ratio)) return f.ratio;
+    const rs = curPts(u).map((p) => p.ratio);
+    return rs.length ? Math.max(...rs) : null;
+  }
+  function stockMaxOf(u) {
+    const ft = fusedTopOf(u);
+    if (unitKind(u) !== "P") return ft;
+    const fav = T.words && T.words.turbo && T.words.turbo.favored ? T.words.turbo.favored[u] : null;
+    return isNum(fav) && ft !== null ? Math.min(fav, ft) : null;
+  }
+  function ocClass(u, r) {   // "none" | "middle" | "oc" | "unknown"
+    if (!isNum(r) || r <= 0) return "none";
+    const sm = stockMaxOf(u), ft = fusedTopOf(u);
+    if (sm === null || ft === null) return "unknown";
+    return r <= sm ? "none" : r <= ft ? "middle" : "oc";
+  }
+  // The OC state of a row (one unit or a group), from the values read (eff false) or as edited: class, the ratio, and the one line the row and the OC box show.
+  function ocInfo(units, eff) {
+    const cls = units.map((u) => ocClass(u, eff ? effRatio(u) : curRatio(u)));
+    const cls0 = cls.every((c) => c === cls[0]) ? cls[0] : "mixed";
+    const rt = ratioOf(units, eff), rtxt = isNum(rt) ? rt + "×" : "mixed ratios";
+    let text;
+    if (cls0 === "none") text = "No OC ratio configured";
+    else if (cls0 === "unknown") text = "OC ratio not judged: this unit’s stock ratio was not read";
+    else if (cls0 === "mixed") text = "mixed: the units differ";
+    else if (cls0 === "middle") {
+      const p = isNum(rt) ? curPts(units[0]).filter((q) => q.ratio >= rt).sort((a, b) => a.ratio - b.ratio)[0] : null;
+      text = "OC ratio " + rtxt + " · uses fused point " + (p && isNum(p.point) ? p.point : "?") + " (offset only)";
+    } else text = "OC point " + ocPointNo(units) + " · " + rtxt + " · adaptive V";
+    return { cls: cls0, ratio: rt, text: text };
+  }
+  // The highest ratio a unit runs now: the turbo table's top bucket (0x1AD P / 0x650 E), for a P-core also bounded by its own 0x1C ratio or a configured OC ratio. Null when not read.
+  function runsUpTo(u) {
+    const t = turboCur(unitKind(u));
+    if (!t || !t.length) return null;
+    if (unitKind(u) !== "P") return t[0];
+    const sm = stockMaxOf(u);
+    return sm === null ? null : Math.min(t[0], Math.max(sm, isNum(curRatio(u)) ? curRatio(u) : 0));
+  }
+  function runsText(units) {
+    const v = units.map(runsUpTo);
+    if (!v.length || v.some((x) => x === null)) return null;
+    return Math.min(...v) === Math.max(...v) ? v[0] + "×" : Math.min(...v) + "–" + Math.max(...v) + "×";
+  }
+  function runsTitle(units) {
+    const k = unitKind(units[0]), t = turboCur(k);
+    if (!t) return "";
+    return "From the turbo ratio table read from the CPU (" + (k === "P" ? "0x1AD" : "0x650") + ", top bucket " + t[0] + "×)" +
+      (k === "P" ? ", limited by the core’s own 0x1C ratio (" + units.map(stockMaxOf).join(", ") + "×) or its OC ratio" : "") + ".";
+  }
   function baselineRec() {
     const id = baselineId();
     if (!id) return null;
@@ -2650,6 +2705,14 @@
     const p = recAllPoints(rec, u).find((q) => q.ratio === ratio && (q.status === "ok" || q.status === "interpolated") && isNum(q.vid_v));
     if (p) return { v: p.vid_v, src: p.status === "interpolated" ? "interpolated" : "baseline", exact: p.status === "interpolated" && p.exact === true };   // G-132: a point nobody could measure uses its interpolated value
     const f = fusedOf(u), rc = reachOf(u);
+    if (!(isNum(rc) && ratio > rc)) {   // G-133: a point the baseline did not measure (any record, old or new) is the straight line between the nearest measured points on both sides, clamped into their voltages
+      const ok = recAllPoints(rec, u).filter((q) => q.status === "ok" && isNum(q.vid_v) && isNum(q.ratio));
+      const lo = ok.filter((q) => q.ratio < ratio).sort((a, b) => b.ratio - a.ratio)[0], hi = ok.filter((q) => q.ratio > ratio).sort((a, b) => a.ratio - b.ratio)[0];
+      if (lo && hi) {
+        const v = lo.vid_v + ((hi.vid_v - lo.vid_v) * (ratio - lo.ratio)) / (hi.ratio - lo.ratio);
+        return { v: Math.min(Math.max(v, Math.min(lo.vid_v, hi.vid_v)), Math.max(lo.vid_v, hi.vid_v)), src: "interpolated", exact: lo.vid_v === hi.vid_v, from: [lo.ratio, hi.ratio] };
+      }
+    }
     return f && f.ratio === ratio && !(isNum(rc) && ratio > rc) ? { v: f.v, src: "fused" } : null;   // a top point above the unit's reach has no voltage to stand in for
   }
   // F4: effective V(n) = max(baseline VID(n) + offset(n), V(n-1)). byRatio[ratio] = {v, want, by, src} or null (no measured VID).
@@ -2744,14 +2807,26 @@
     }
   }
   function setVt(units, v) {
-    for (const u of units) { const d = ensureDraft(u); if (same(curVt(u), v, V_TOL)) delete d.vt; else d.vt = v; tidy(u); }
+    for (const u of units) { const d = ensureDraft(u); if (same(curVt(u), v, V_TOL)) delete d.vt; else d.vt = v; delete d.vtAuto; tidy(u); }
   }
+  // r = null: "No OC ratio" (back to what was read). A ratio above a unit's top fused point creates the OC point, which needs a target: where the unit has none the draft takes the fused top
+  // voltage (0x09) on the dropdown grid, marked `vtAuto` so the row shows it as changed and dropping the ratio again takes it back (D-035: the plan never sends a zero target).
   function setRatio(units, r) {
-    for (const u of units) { const d = ensureDraft(u); if (curRatio(u) === r) delete d.ratio; else d.ratio = r; tidy(u); }
+    for (const u of units) {
+      const d = ensureDraft(u);
+      if (r === null || curRatio(u) === r) delete d.ratio; else d.ratio = r;
+      const cls = ocClass(u, effRatio(u));
+      if (cls === "oc" && !(isNum(effVt(u)) && effVt(u) > 0)) {
+        const f = fusedOf(u), lim = limitsOf(unitKind(u));
+        if (f && isNum(f.v)) { d.vt = Math.min(Math.max(snapGrid(f.v), GRID.vtMin), lim && isNum(lim.vtMax) ? lim.vtMax : Infinity); d.vtAuto = true; }
+      } else if (cls !== "oc" && d.vtAuto) { delete d.vt; delete d.vtAuto; }
+      tidy(u);
+    }
   }
+  function snapGrid(v) { return Math.round((GRID.vtMin * 1000 + Math.round((v - GRID.vtMin) / GRID.vtStep) * GRID.vtStep * 1000)) / 1000; }
   function unitsChanged() { return UNIT_IDS.filter((u) => T.draft[u]); }
 
-  // The intent contract 9 describes: one row per changed unit, merged to "P" / "E" rows when the Simple scope made them identical.
+  // The intent contract 9 describes: one row per changed unit, merged to "P" / "E" rows when the All-Core scope made them identical.
   function buildIntent() {
     const rows = {};
     for (const u of unitsChanged()) {
@@ -2780,15 +2855,19 @@
   // ---- policy ranges (D-032) -> dropdown options -------------------------------------------------------------------------------------------
   function snapMv(mv) { return Math.round(mv * 1.024) / 1.024; }   // the hardware offset is a 1/1024 V raw
   function snapV(v) { return Math.round(v * 1024) / 1024; }
-  function offsetValues(cur) {
-    const out = [];
-    for (let v = POLICY.offsetMin; v <= POLICY.offsetMax; v += POLICY.offsetStep) out.push(v);
+  // The dropdown values inside the live policy window of the kind (T.words.limits); no limits = no values, the control is disabled (G-133).
+  function offsetValues(kind, cur) {
+    const out = [], lim = limitsOf(kind);
+    if (lim) {
+      for (let v = lim.offMin; v <= lim.offMax + 1e-9; v += GRID.offsetStep) out.push(v);
+      if (out[out.length - 1] !== lim.offMax) out.push(lim.offMax);
+    }
     if (isNum(cur) && !out.some((x) => same(x, cur, MV_TOL))) { out.push(Math.round(cur * 100) / 100); out.sort((a, b) => a - b); }
     return out;
   }
   function vtValues(kind, cur) {
-    const out = [], max = POLICY.vtMax[kind];
-    for (let i = 0; POLICY.vtMin + i * POLICY.vtStep <= max + 1e-9; i++) out.push(Math.round((POLICY.vtMin + i * POLICY.vtStep) * 1000) / 1000);
+    const out = [], lim = limitsOf(kind), max = lim && isNum(lim.vtMax) ? lim.vtMax : null;
+    if (max !== null) for (let i = 0; GRID.vtMin + i * GRID.vtStep <= max + 1e-9; i++) out.push(Math.round((GRID.vtMin + i * GRID.vtStep) * 1000) / 1000);
     if (isNum(cur) && !out.some((x) => same(x, cur, V_TOL))) { out.push(Math.round(cur * 10000) / 10000); out.sort((a, b) => a - b); }
     return out;
   }
@@ -2816,9 +2895,10 @@
     if (!T.words) { fill($("tn-rows"), []); return; }
     const defs = rowDefs();
     const head = el("div", "tn-row tn-head");
-    for (const t of ["Unit", "Voltage offset", "OC point: adaptive target voltage", "OC point: ratio", ""]) {
+    for (const t of ["Unit", "Voltage offset", "OC ratio", "Adaptive voltage (OC point)", ""]) {
       const c = el("span", "tn-col", t);
-      if (t.indexOf("OC point") === 0) c.title = OC_TIP;
+      if (t === "OC ratio") c.title = OC_TIP;
+      if (t.indexOf("Adaptive") === 0) c.title = "Belongs to the OC point only; the other points are offset only. " + NEED_RATIO + ".";
       head.append(c);
     }
     const nodes = [head];
@@ -2835,44 +2915,42 @@
       // offset
       const offCell = el("div", "tn-cell");
       const mode = el("div", "seg seg-s");
-      segmented(mode, [{ value: "curve", label: "Whole curve" }, { value: "points", label: "Per point" }], T.uiMode[def.id] || "curve", (m) => {
+      segmented(mode, [{ value: "curve", label: "Whole Curve Offset" }, { value: "points", label: "Per V/F point Offsets" }], T.uiMode[def.id] || "curve", (m) => {
         T.uiMode[def.id] = m;
         if (m === "points") T.expanded.add(def.id); else T.expanded.delete(def.id);
         refreshRows();
       });
       const offSel = el("select", "tn-sel");
-      offSel.setAttribute("aria-label", def.label + ": voltage offset for the whole curve");
+      offSel.setAttribute("aria-label", def.label + ": Whole Curve Offset");
       offSel.addEventListener("change", () => { setCurve(def.units, Number(offSel.value)); refreshRows(); });
       const offHint = el("span", "tn-hint muted");
       offCell.append(mode, offSel, offHint);
       // target
       const vtCell = el("div", "tn-cell");
       const vtSel = el("select", "tn-sel");
-      vtSel.setAttribute("aria-label", def.label + ": adaptive target voltage at the OC point");
+      vtSel.setAttribute("aria-label", def.label + ": adaptive voltage at the OC point");
       vtSel.addEventListener("change", () => { setVt(def.units, Number(vtSel.value)); refreshRows(); });
       const vtHint = el("span", "tn-hint muted");
       vtCell.append(vtSel, vtHint);
-      vtCell.title = OC_TIP;
       // ratio
       const rCell = el("div", "tn-cell");
       const rSel = el("select", "tn-sel");
       rSel.setAttribute("aria-label", def.label + ": OC ratio");
-      rSel.addEventListener("change", () => { setRatio(def.units, Number(rSel.value)); refreshRows(); });
-      const rHint = el("span", "tn-hint muted");
-      rCell.append(rSel, rHint);
-      rCell.title = OC_TIP;
+      rSel.addEventListener("change", () => { setRatio(def.units, rSel.value === "__none" ? null : Number(rSel.value)); refreshRows(); });
+      const rHint = el("span", "tn-hint muted"), rNote = el("span", "tn-hint muted");
+      rCell.append(rSel, rHint, rNote);
       const undo = el("button", "small", "Undo");
       undo.type = "button";
       undo.title = "Put this row back to what was read";
       undo.addEventListener("click", () => { for (const u of def.units) delete T.draft[u]; refreshRows(); });
-      line.append(name, offCell, vtCell, rCell, undo);
+      line.append(name, offCell, rCell, vtCell, undo);
       const warn = el("ul", "tn-warn");
       warn.hidden = true;
       const panel = el("div", "tn-points");
       panel.id = "tn-pts-" + def.id;
       row.append(line, warn, panel);
       nodes.push(row);
-      T.refs[def.id] = { def: def, row: row, line: line, now: now, mode: mode, offSel: offSel, offHint: offHint, vtSel: vtSel, vtHint: vtHint, rSel: rSel, rHint: rHint, undo: undo, panel: panel, warn: warn, oc: null,
+      T.refs[def.id] = { def: def, row: row, line: line, now: now, mode: mode, offSel: offSel, offHint: offHint, vtSel: vtSel, vtHint: vtHint, rSel: rSel, rHint: rHint, rNote: rNote, rWhy: "", undo: undo, panel: panel, warn: warn, oc: null,
         offCell: offCell, vtCell: vtCell, rCell: rCell, ptsKey: "", ptSels: {} };
     }
     fill($("tn-rows"), nodes);
@@ -2880,18 +2958,39 @@
     for (const id of Object.keys(T.refs)) {
       const r = T.refs[id], def = r.def, kind = def.kind;
       const cur = curveOf(def.units, false);
-      fillSelect(r.offSel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
+      fillSelect(r.offSel, offsetValues(kind, isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
       const vt = vtOf(def.units, false);
       fillSelect(r.vtSel, vtValues(kind, isNum(vt) ? vt : null), isNum(vt) ? vt : null, (v) => v.toFixed(Math.abs(v * 1000 - Math.round(v * 1000)) < 1e-6 ? 3 : 4) + " V", "mixed", V_TOL);
-      const rt = ratioOf(def.units, false);
-      const topPt = (u) => { const p = curPts(u); return p.length ? Math.max(...p.map((q) => q.ratio)) : POLICY.ratioMax[kind]; };
-      const maxCur = Math.max(POLICY.ratioMax[kind], ...def.units.map((u) => (isNum(curRatio(u)) ? curRatio(u) : 0)));
-      const minCur = Math.min(...def.units.map((u) => (isNum(curRatio(u)) ? curRatio(u) : topPt(u))));
-      const rv = [];
-      for (let q = minCur; q <= maxCur; q++) rv.push(q);
-      fillSelect(r.rSel, rv, isNum(rt) ? rt : null, (v) => v + "×", "mixed", 0.5);
+      fillRatioSelect(r);
     }
     refreshRows();
+  }
+
+  // The OC ratio dropdown of a row (G-133): "No OC ratio", then stockMax + 1 ... the live ratio max of the policy. A group starts above its highest stockMax, so every value is an OC ratio for
+  // every unit in it. A ratio held now stays an option. r.rWhy is the one-line reason when nothing can be chosen (a muted hint under the box, never a guess).
+  function fillRatioSelect(r) {
+    const units = r.def.units, lim = limitsOf(r.def.kind), sms = units.map(stockMaxOf);
+    const max = lim && isNum(lim.ratioMax) ? lim.ratioMax : null;
+    const values = [];
+    if (max !== null && sms.every((x) => x !== null)) for (let q = Math.max(...sms) + 1; q <= max; q++) values.push(q);
+    const held = units.map(curRatio).filter((c, i) => isNum(c) && ocClass(units[i], c) !== "none");
+    for (const c of held) if (values.indexOf(c) < 0) values.push(c);
+    values.sort((a, b) => a - b);
+    r.rWhy = "";
+    if (!lim) r.rWhy = "policy limits not reported";
+    else if (sms.some((x) => x === null)) r.rWhy = "this unit’s stock ratio (0x1C) was not read";
+    else if (max === null) r.rWhy = lim.ratioSrc === "auto" ? "ratio_max is “auto” and could not be resolved from this read: state a number in /etc/arltuner/policy.toml ratio_max" : "your policy states no ratio_max (/etc/arltuner/policy.toml)";
+    else if (max <= Math.max(...sms)) r.rWhy = "OC ratios above " + max + "× are not allowed by your policy (/etc/arltuner/policy.toml ratio_max)";
+    const none = el("option", "", "No OC ratio"), mixed = el("option", "", "mixed");
+    none.value = "__none"; mixed.value = "__mixed";
+    mixed.disabled = mixed.hidden = true;
+    const heldNone = units.some((u) => ocClass(u, curRatio(u)) !== "none");
+    none.disabled = heldNone;   // an OC ratio cannot be cleared at runtime
+    if (heldNone) none.title = "an OC ratio cannot be cleared at runtime; a cold boot clears it";
+    const opts = [none, mixed];
+    const now = ratioOf(units, false);
+    for (const v of values) { const o = el("option", "", v + "×" + (isNum(now) && v === now && held.length ? "  · now" : "")); o.value = String(v); opts.push(o); }
+    fill(r.rSel, opts);
   }
 
   function pointRatios(units) {
@@ -2903,6 +3002,8 @@
     return null;
   }
 
+  const FUSED_TAG = "fused \u00b7 offset only";
+
   function buildPointPanel(r) {
     const ratios = pointRatios(r.def.units);
     const key = ratios.join(",") + "|" + r.def.kind;
@@ -2912,11 +3013,12 @@
     const cells = ratios.map((ratio) => {
       const lab = el("label", "tn-pt");
       const no = pointNo(r.def.units, ratio);
-      lab.append(el("span", "tn-pt-ratio", "Point " + (no === null ? "?" : no) + " \u00b7 " + ratio + "\u00d7"), el("span", "tn-pt-tag muted", "fused \u00b7 offset only"));
+      const tag = el("span", "tn-pt-tag muted", FUSED_TAG);
+      lab.append(el("span", "tn-pt-ratio", "Point " + (no === null ? "?" : no) + " \u00b7 " + ratio + "\u00d7"), tag);
       const sel = el("select", "tn-sel tn-sel-s");
       sel.setAttribute("aria-label", r.def.label + ": offset at point " + (no === null ? "?" : no) + ", " + ratio + "x");
       const cur = pointOf(r.def.units, ratio, false);
-      fillSelect(sel, offsetValues(isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
+      fillSelect(sel, offsetValues(r.def.kind, isNum(cur) ? cur : null), isNum(cur) ? cur : null, (v) => fmtMv(v), "mixed", MV_TOL);
       sel.addEventListener("change", () => { setPoint(r.def.units, ratio, Number(sel.value)); refreshRows(); });
       const eff = el("span", "tn-pt-eff", "");
       const badge = el("span", "tn-badge", "clamped to Vn\u22121");
@@ -2924,7 +3026,7 @@
       const reach = el("span", "tn-pt-reach", "");
       reach.hidden = true;
       lab.append(sel, eff, badge, reach);
-      r.ptSels[ratio] = { sel: sel, lab: lab, eff: eff, badge: badge, reach: reach };
+      r.ptSels[ratio] = { sel: sel, lab: lab, eff: eff, badge: badge, reach: reach, tag: tag };
       return lab;
     });
     if (!cells.length) cells.push(el("p", "na", "n/a: the read returned no V/F points for this unit."));
@@ -2933,11 +3035,11 @@
     box.title = OC_TIP;
     const head = el("span", "tn-pt-ratio", ocHeadText(r.def.units));
     const tag = el("span", "tn-pt-tag muted", "ratio + voltage");
-    const rText = el("span", "tn-oc-line", ""), vText = el("span", "tn-oc-line", ""), fText = el("span", "tn-oc-fused muted", "");
-    box.append(head, tag, rText, vText, fText);
-    r.oc = { box: box, ratio: rText, vt: vText, fused: fText };
+    const rText = el("span", "tn-oc-line", ""), vText = el("span", "tn-oc-line", "");
+    box.append(head, tag, rText, vText);
+    r.oc = { box: box, ratio: rText, vt: vText };
     cells.push(box);
-    r.eNote = null;
+    r.eNote = null;   // E: the one V/F fact about the ratios above the top point (eVfFact)
     if (r.def.kind === "E") { r.eNote = el("p", "tn-points-note muted", ""); cells.push(r.eNote); }
     fill(r.panel, cells);
   }
@@ -2976,13 +3078,17 @@
       const x = cl[0];
       c.badge.title = x.u + " " + ratio + "\u00d7 would be " + fmtV(x.pr.want, 3) + ", below the " + x.pr.by + "\u00d7 point; the hardware holds every point at or above the one before it, so it lands on " + fmtV(x.pr.v, 3) + ".";
     }
-    c.lab.classList.toggle("unreach", un.length === def.units.length && un.length > 0);
-    c.reach.hidden = un.length === 0;
-    if (un.length) {
-      const tops = Array.from(new Set(un.map(reachOf))), topTxt = tops.length === 1 ? ", tops at " + tops[0] + "\u00d7" : "";
-      const noun = def.kind === "E" ? (un.length === 1 ? "this cluster" : "these clusters") : (un.length === 1 ? "this core" : "these cores");
-      c.reach.textContent = un.length === def.units.length ? "not reachable on " + noun + topTxt : "not reachable on " + un.join(", ") + topTxt;
-      c.reach.title = "The point still shapes the table and can be edited, but " + (un.length === 1 ? un[0] : "these units") + " top" + (un.length === 1 ? "s" : "") + " out at " + reachOf(un[0]) + "\u00d7 (read from the CPU).";
+    // G-133: a P-core point above the core's own 0x1C ratio is tagged, muted, still editable, with no predicted voltage; nothing is claimed about whether the core can run it (favored-cores.md section 5).
+    const over = def.units.filter((u) => unitKind(u) === "P" && isNum(stockMaxOf(u)) && ratio > stockMaxOf(u));
+    const all = over.length === def.units.length && over.length > 0;
+    const lims = Array.from(new Set(over.map(stockMaxOf))), limTxt = lims.length === 1 ? lims[0] + "\u00d7 " : "";
+    c.tag.textContent = FUSED_TAG + (all ? " \u00b7 above " + (def.units.length === 1 ? "this core\u2019s " : "these cores\u2019 ") + limTxt + "limit" : "");
+    c.tag.title = all ? "Fused into every P-core\u2019s table, but above this core\u2019s own 0x1C ratio" + (limTxt ? " (" + limTxt.trim() + ")" : "") + ". The offset can be set and is written like any other; no voltage is predicted, and nothing is claimed about whether the core can run this ratio." : "";
+    c.lab.classList.toggle("unreach", all);
+    c.reach.hidden = over.length === 0 || all;
+    if (over.length && !all) {
+      c.reach.textContent = "above the " + limTxt + "limit of " + over.join(", ");
+      c.reach.title = "These cores\u2019 own 0x1C ratio is lower than this point. The offset can be set; no voltage is predicted for them.";
     }
   }
 
@@ -3005,18 +3111,37 @@
     return "E turbo table: up to " + hi + "\u00d7 (" + t[t.length - 1] + "\u00d7 all-core); ratios above point " + top.point + " (" + top.ratio + "\u00d7) run on point " + top.point + "\u2019s voltage.";
   }
 
+  // Hex view only: a word that holds a ratio at or below the unit's stock ratio (and maybe a retained target) is read back as it is but does nothing.
+  function inactiveNote(units) {
+    if (!T.hex || units.length !== 1) return "";
+    const u = units[0], w = wUnit(u), r = curRatio(u);
+    if (!w || !w.oc || r === null || ocClass(u, r) !== "none") return "";
+    return " (word holds " + r + "\u00d7" + (isNum(w.oc.v_target_v) && w.oc.v_target_v > 0 ? " + " + w.oc.v_target_v.toFixed(3) + " V" : "") + ", inactive)";
+  }
+
+  // G-133: the OC box of the per-point panel says what the OC ratio is; the fused top point (0x09) is in its tooltip.
   function refreshOcCell(r) {
     if (!r.oc) return;
-    const units = r.def.units;
-    const rt = ratioOf(units, true), vt = vtOf(units, true), chR = !same(ratioOf(units, false), rt, 0.5) && isNum(rt), chV = isNum(vt) && !same(vtOf(units, false), vt, V_TOL);
-    const fused = units.map(fusedOf);
-    const atFused = isNum(rt) && !chR && fused.every((f) => f && f.ratio === rt);
-    r.oc.ratio.textContent = "ratio " + (isNum(rt) ? rt + "\u00d7" + (atFused ? " = fused top (no OC point)" : "") : rt === MIXED ? "mixed" : "not set");
-    r.oc.vt.textContent = "target " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "mixed" : "not set");
+    const units = r.def.units, info = ocInfo(units, true), vt = vtOf(units, true);
+    const chR = units.some((u) => effRatio(u) !== curRatio(u)), chV = units.some((u) => !same(effVt(u), curVt(u), V_TOL) && (isNum(effVt(u)) || isNum(curVt(u))));
+    r.oc.ratio.textContent = info.text + inactiveNote(units);
+    r.oc.vt.textContent = info.cls === "oc" ? "target " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "mixed" : "not set") : "";
     r.oc.box.classList.toggle("changed", chR || chV);
-    r.oc.box.classList.toggle("unset", !isNum(rt) && !isNum(vt));
-    const known = fused.filter(Boolean);
-    r.oc.fused.textContent = known.length ? "fused top point (0x09): " + known[0].ratio + "\u00d7, " + fmtVRange(known.map((f) => f.v), 4) : "fused top point: not read";
+    r.oc.box.classList.toggle("unset", info.cls === "none");
+    const known = units.map(fusedOf).filter(Boolean);
+    r.oc.box.title = (known.length ? "Fused top point (0x09): " + known[0].ratio + "\u00d7, " + fmtVRange(known.map((f) => f.v), 4) + ". " : "Fused top point: not read. ") + OC_TIP;
+  }
+
+  // The one V/F fact about E ratios above the top fused point: with no OC point they run on that point's voltage (the turbo table decides how far they go). Empty for a group that differs.
+  function eVfFact(units) {
+    const facts = units.map((u) => {
+      const pts = curPts(u), up = runsUpTo(u);
+      if (!pts.length || up === null || ocClass(u, effRatio(u)) === "oc") return "";
+      const top = pts.reduce((x, y) => (y.ratio > x.ratio ? y : x));
+      if (up <= top.ratio) return "";
+      return up === top.ratio + 1 ? up + "\u00d7 runs on point " + top.point + "\u2019s voltage (no OC point)" : (top.ratio + 1) + "\u2013" + up + "\u00d7 run on point " + top.point + "\u2019s voltage (no OC point)";
+    });
+    return facts.every((f) => f === facts[0]) ? facts[0] : "";
   }
 
   // F8 warnings from the values as they will be written.
@@ -3048,14 +3173,16 @@
     }
   }
 
+  // The header line of a unit, as read: its offsets, its OC ratio, and how far it runs (G-133). Nothing about targets or fused points here; the OC box has those.
   function nowText(def) {
-    const c = curveOf(def.units, false);
-    const lows = def.units.flatMap((u) => curPts(u).map((p) => p.offset_mv));
-    const off = isNum(c) ? fmtMv(c) : lows.length ? fmtMv(Math.min(...lows)) + " to " + fmtMv(Math.max(...lows)) : "n/a";
-    const vt = vtOf(def.units, false), rt = ratioOf(def.units, false);
-    const f = def.units.length === 1 ? fusedOf(def.units[0]) : null;
-    return "now " + off + " · " + (isNum(vt) ? vt.toFixed(3) + " V" : vt === MIXED ? "target mixed" : "target n/a") + " · " + (isNum(rt) ? rt + "×" : rt === MIXED ? "ratio mixed" : "ratio n/a") +
-      (f ? " · fused top " + f.ratio + "× " + f.v.toFixed(4) + " V" : "");
+    const offs = def.units.flatMap((u) => curPts(u).map((p) => p.offset_mv)).filter(isNum);
+    const num = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
+    const lo = Math.round(Math.min(...offs)), hi = Math.round(Math.max(...offs));
+    const off = !offs.length ? "offsets n/a" : lo === hi ? "offset " + num(lo) + " mV" : "offsets " + num(lo) + "…" + num(hi) + " mV";
+    const info = ocInfo(def.units, false);
+    const oc = info.cls === "none" ? "none" : info.cls === "unknown" ? "n/a" : info.cls === "mixed" || !isNum(info.ratio) ? "mixed" : info.ratio + "×";
+    const runs = runsText(def.units);
+    return off + " · OC ratio: " + oc + (runs ? " · runs up to " + runs : "");
   }
 
   function refreshRows() {
@@ -3066,6 +3193,8 @@
       r.row.classList.toggle("changed", changed);
       r.undo.disabled = !changed;
       r.now.textContent = nowText(def) + (T.hex && def.units.length === 1 && wUnit(def.units[0]) && wUnit(def.units[0]).oc && wUnit(def.units[0]).oc.word ? " · " + wUnit(def.units[0]).oc.word : "");
+      r.now.title = runsText(def.units) ? "Runs up to: " + runsTitle(def.units) : "";
+      const lim = limitsOf(def.kind);   // without the helper's live limits nothing can be offered (D-036): every value control stays disabled
       const mode = T.uiMode[id] || (isNum(curveOf(def.units, false)) ? "curve" : "points");
       T.uiMode[id] = mode;
       syncSegmented(r.mode, mode);
@@ -3088,33 +3217,39 @@
         if (ch) nPtChanged++;
       }
       if (open) r.offCell.classList.toggle("changed", nPtChanged > 0);
+      r.offSel.disabled = !lim;
+      for (const ratio of Object.keys(r.ptSels)) { r.ptSels[ratio].sel.disabled = !lim; r.ptSels[ratio].sel.title = limitLine(def.kind, "offset"); }
       if (open) for (const ratio of Object.keys(r.ptSels)) refreshPointFacts(r, Number(ratio));
       if (open) refreshOcCell(r);
-      if (open && r.eNote) { const nt = eTurboNote(def.units); r.eNote.textContent = nt; r.eNote.hidden = !nt; }
+      if (open && r.eNote) { const nt = eVfFact(def.units); r.eNote.textContent = nt; r.eNote.hidden = !nt; }
       refreshRowWarn(r);
+      // OC ratio first; the adaptive voltage belongs to the OC point, so it is editable only while the (edited) ratio is above the unit's top fused point
+      const info = ocInfo(def.units, true);
+      setSel(r.rSel, info.cls === "none" ? null : info.cls === "mixed" || !isNum(info.ratio) ? MIXED : info.ratio, 0.5, (v) => v + "\u00d7");
+      r.rSel.disabled = !lim || !!r.rWhy;
+      const rCh = def.units.some((u) => effRatio(u) !== curRatio(u));
+      r.rCell.classList.toggle("changed", rCh);
+      r.rCell.title = (r.rSel.disabled && !lim ? NO_LIMITS : OC_TIP) + " " + limitLine(def.kind, "ratio");
+      r.rHint.textContent = info.text + inactiveNote(def.units);
+      r.rNote.textContent = lim ? r.rWhy : (T.words.limitsNote || NO_LIMITS);
       const effVtv = vtOf(def.units, true), curVtv = vtOf(def.units, false);
       setSel(r.vtSel, effVtv, V_TOL, (v) => v.toFixed(4) + " V");
       const vtCh = !(effVtv === curVtv || (isNum(effVtv) && isNum(curVtv) && same(effVtv, curVtv, V_TOL)));
       r.vtCell.classList.toggle("changed", vtCh);
-      r.vtHint.textContent = vtCh && isNum(effVtv) ? "writes " + snapV(effVtv).toFixed(4) + " V" : "";
-      const effR = ratioOf(def.units, true), curR = ratioOf(def.units, false);
-      setSel(r.rSel, effR, 0.5, (v) => v + "\u00d7");
-      const rCh = !(effR === curR || (isNum(effR) && isNum(curR) && effR === curR));
-      r.rCell.classList.toggle("changed", rCh);
-      r.rHint.textContent = rCh && isNum(effR) ? ratioHint(def.kind, effR) : (!rCh && curR === null ? "OC ratio reads 0 (not set)" : "");
+      const vtNo = !lim ? NO_LIMITS : info.cls !== "oc" ? NEED_RATIO : !isNum(lim.vtMax) ? "your policy states no v_target_max_mv (/etc/arltuner/policy.toml)" : "";
+      r.vtSel.disabled = vtNo !== "";
+      r.vtCell.title = (vtNo || OC_TIP) + " " + limitLine(def.kind, "vt");
+      r.offCell.title = limitLine(def.kind, "offset");
+      r.vtHint.textContent = vtCh && isNum(effVtv) ? "writes " + snapV(effVtv).toFixed(4) + " V" + (def.units.some((u) => T.draft[u] && T.draft[u].vtAuto) ? " \u00b7 the fused top point\u2019s voltage (0x09), nothing was set" : "") : "";
     }
+    const ln = $("tn-limits-note");   // D-039: always said; the numbers per kind are in the controls' tooltips
+    ln.hidden = !T.words;
+    ln.textContent = !T.words ? "" : T.words.limits ? "Limits are your policy, not the tool\u2019s: edit " + POLICY_FILE + " to go further (hard ceiling = what your CPU reports). Hover a control for its limit." : (T.words.limitsNote || NO_LIMITS);
     updateTuneFoot();
     renderPredNote();
     renderVccia();
     renderTurbo();
     renderTunePreview();
-  }
-
-  // The turbo ratio tables (0x1AD P, 0x650 E; bucket 0 = fewest active cores) from tune.read: a ratio at or below bucket 0 does not raise any table.
-  function ratioHint(kind, r) {
-    const t = T.words && T.words.tables ? T.words.tables[kind === "P" ? "p" : "e"] : null;
-    if (!t || !t.length) return "turbo tables not read" + (T.words && T.words.tablesNote ? ": " + T.words.tablesNote : "");
-    return r > t[0] ? "above the top turbo bucket (" + t[0] + "\u00d7): the plan raises the table" : "inside the turbo table (top bucket " + t[0] + "\u00d7): no table write";
   }
 
   function updateTuneFoot() {
@@ -3228,7 +3363,9 @@
       r.undo.disabled = !dirty;
       r.box.classList.toggle("changed", dirty);
       for (let i = 0; i < 8; i++) {
-        const sel = r.sels[i], hi = i === 0 ? POLICY.ratioMax[k] : eff[i - 1];
+        const lim = limitsOf(k), sel = r.sels[i], hi = i === 0 ? Math.max(cur[0], eff[0], lim && isNum(lim.ratioMax) ? lim.ratioMax : 0) : eff[i - 1];   // no ceiling stated = no raise above what was read (G-133)
+        sel.disabled = !lim;
+        sel.title = limitLine(k, "ratio");
         const opts = [];
         for (let v = 8; v <= hi; v++) opts.push(Object.assign(el("option", "", v + "\u00d7" + (v === cur[i] ? "  \u00b7 now" : "")), { value: String(v) }));
         fill(sel, opts);
@@ -3331,8 +3468,49 @@
       if (isObj(r.turbo.favored)) for (const k of Object.keys(r.turbo.favored)) { const id = unitOfCpu(k); if (id && id.charAt(0) === "P" && isNum(r.turbo.favored[k])) turbo.favored[id] = r.turbo.favored[k]; }
     } else if (tables && tables.p.length === 8 && tables.e.length === 8) turbo = { P: { ratios: tables.p.slice(), counts: null }, E: { ratios: tables.e.slice(), counts: null }, favored: {} };
     return { units: units, raw: r, accepted: r.accepted_match, acceptedNote: typeof r.accepted_note === "string" ? r.accepted_note : null, fused: fused, turbo: turbo, complete: r.complete !== false, simulator: r.simulator === true, at: Date.now(), fromPlan: false,
-      tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true };
+      tables: tables, tablesNote: typeof r.tables_note === "string" ? r.tables_note : null, truncated: r.tune_truncated === true,
+      limits: normLimits(r.limits), hw: normHw(r.hw_limits), limitsNote: typeof r.limits_note === "string" ? r.limits_note : null };
   }
+
+  // G-133: the live policy limits of tune.read / tune.last (`limits`, ARCHITECTURE contract 9 addendum): {P: {offMin, offMax, vtMax, ratioMax, ratioSrc, vtSrc}, E: {...}}, or null.
+  // A null number is a limit the policy does not state (or an "auto" one that could not be resolved): that control is disabled with the reason, never given a guess.
+  function normLimits(l) {
+    if (!isObj(l) || !isObj(l.offset_mv)) return null;
+    const out = {}, src = isObj(l.source) ? l.source : {};
+    for (const k of ["P", "E"]) {
+      const o = l.offset_mv[k];
+      if (!isObj(o) || !isNum(o.min) || !isNum(o.max)) return null;
+      const pick = (obj) => (isObj(obj) && isNum(obj[k]) ? obj[k] : null), why = (obj) => (isObj(obj) && typeof obj[k] === "string" ? obj[k] : null);
+      out[k] = { offMin: o.min, offMax: o.max, vtMax: pick(l.v_target_max_v), ratioMax: pick(l.ratio_max), vtSrc: why(src.v_target_max), ratioSrc: why(src.ratio_max) };
+    }
+    return out;
+  }
+  function limitsOf(kind) { return T.words && T.words.limits ? T.words.limits[kind] || null : null; }
+  // D-039: what the CPU itself reports, `hw_limits` {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [lo, hi]}}; absent on a helper without it (then only "editable in policy.toml" is said).
+  function normHw(h) {
+    if (!isObj(h)) return null;
+    const out = {};
+    for (const k of ["P", "E"]) {
+      const o = h[k];
+      if (!isObj(o)) continue;
+      out[k] = { ratioOc: isNum(o.ratio_max_oc) ? o.ratio_max_oc : null, vtMaxV: isNum(o.v_target_max_mv) ? o.v_target_max_mv / 1000 : null,
+        off: Array.isArray(o.offset_mv) && o.offset_mv.length === 2 && o.offset_mv.every(isNum) ? o.offset_mv : null };
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  const POLICY_FILE = "/etc/arltuner/policy.toml";
+  // The one-line provenance of a limit (D-039): it is the user's policy, editable; the CPU's own ceiling only where the helper reported it. what: "offset" | "vt" | "ratio".
+  function limitLine(kind, what) {
+    const lim = limitsOf(kind), hw = T.words && T.words.hw ? T.words.hw[kind] : null;
+    if (!lim) return "";
+    const sgn = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
+    let mine, cpu = null;
+    if (what === "offset") { mine = sgn(lim.offMin) + "\u2026" + sgn(lim.offMax) + " mV"; if (hw && hw.off) cpu = sgn(hw.off[0]) + "\u2026" + sgn(hw.off[1]) + " mV"; }
+    else if (what === "vt") { mine = isNum(lim.vtMax) ? "up to " + lim.vtMax.toFixed(3) + " V" : null; if (hw && isNum(hw.vtMaxV)) cpu = "up to " + hw.vtMaxV.toFixed(3) + " V"; }
+    else { mine = isNum(lim.ratioMax) ? "up to " + lim.ratioMax + "\u00d7" : null; if (hw && isNum(hw.ratioOc)) cpu = "OC ratios up to " + hw.ratioOc + "\u00d7"; }
+    return "Limit: " + (mine || "none stated") + " from your policy (" + POLICY_FILE + ")" + (cpu ? " \u2014 editable; your CPU allows " + cpu + "." : " \u2014 editable in " + POLICY_FILE + ".");
+  }
+  const NO_LIMITS = "The helper did not report the policy limits (update the helper), so the controls are disabled.";
 
   function appliedFromWords(w) {
     // the OC word (P2 = 0) carries the whole-curve offset, so it counts too: a curve offset on it is tuning even when every point reads 0
@@ -3401,7 +3579,7 @@
   }
 
   function renderScopeNote() {
-    setText("tn-scope-note", T.scope === "simple" ? "All P-cores move together, and all E-clusters move together." : UNIT_IDS.length + " curves (" + unitsOfKind("P").length + " P-cores + " + unitsOfKind("E").length + " E-clusters), each on its own.");
+    setText("tn-scope-note", T.scope === "simple" ? "All-Core: all P-cores move together, and all E-clusters move together." : "Per-Core: " + UNIT_IDS.length + " curves (" + unitsOfKind("P").length + " P-cores + " + unitsOfKind("E").length + " E-clusters), each on its own.");
   }
 
   function renderWordsTable() {
@@ -4037,7 +4215,7 @@
 
   function initTune() {
     T.chart = makeVfChart($("tn-chart"), { label: "Measured curve with the predicted curve for the pending edit" });
-    segmented($("tn-scope"), [{ value: "simple", label: "Simple" }, { value: "unit", label: "Per unit" }], T.scope, (m) => { T.scope = m; renderScopeNote(); buildRows(); });
+    segmented($("tn-scope"), [{ value: "simple", label: "All-Core" }, { value: "unit", label: "Per-Core" }], T.scope, (m) => { T.scope = m; renderScopeNote(); buildRows(); });
     $("btn-tune-read").addEventListener("click", startRead);
     $("btn-tune-cancel").addEventListener("click", cancelOp);
     $("btn-tn-hex").addEventListener("click", () => {

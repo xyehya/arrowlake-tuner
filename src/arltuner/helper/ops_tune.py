@@ -260,6 +260,45 @@ def _topology(helper: Helper) -> Topology:
     return helper_topology(helper)
 
 
+def _ratio_limit(policy: Policy, kind: str, favored_words: Mapping[int, int] | None) -> int | None:
+    """The ratio ceiling of a kind: the policy's number; for ``"auto"`` the fused ``0x1C`` values of that kind in ``favored_words`` (``None`` = not read)."""
+    if kind in policy.ratio_auto:
+        return fused_ratio_cap(kind, [w for cpu, w in (favored_words or {}).items() if policy.core_kind(cpu) == kind])
+    return policy.ratio_max[kind]
+
+
+def _limits(policy: Policy, topology: Topology, favored_words: Mapping[int, int] | None) -> dict[str, Any]:
+    """G-133 / D-036: the limits of the bound policy, ``"auto"`` resolved, so the page offers exactly what the guard would accept and no literal. Per kind ``P`` / ``E``:
+
+    * ``offset_mv`` ``{min, max}``: the runtime floor of the kind (the lowest ``offset_floor_raw`` over its CPUs, in mV) and ``offset_ceiling_mv``,
+    * ``v_target_max_v``: ``v_target_max_mv`` / 1000; for ``"auto"`` the code sanity bound of the kind (the CPU's own ``0x28`` maximum is not read by ``tune.read``; the guard checks
+      it when the plan is applied and never allows more than this bound); ``None`` = the policy sets no ceiling (no raise),
+    * ``ratio_max``: the policy number, or the ``"auto"`` ceiling from the ``0x1C`` words read this boot; ``None`` = none (no raise / not read),
+    * ``source``: ``{ratio_max, v_target_max}`` -> ``"policy"`` | ``"auto"`` | ``"none"`` (what the number comes from), for the page's one-line reasons."""
+    out: dict[str, Any] = {"offset_mv": {}, "v_target_max_v": {}, "ratio_max": {}, "source": {"ratio_max": {}, "v_target_max": {}}}
+    for kind in ("P", "E"):
+        cpus = [c.cpu for c in topology.cores if (c.kind == "E") == (kind == "E")]
+        floor_raw = min((policy.offset_floor_raw(c) for c in cpus), default=0)
+        out["offset_mv"][kind] = {"min": min(0, round(floor_raw * 1000 / 1024)), "max": policy.offset_ceiling_mv}
+        vmax = policy.v_target_max_mv[kind]
+        if kind in policy.v_target_auto:
+            vmax = SANITY_V_TARGET_MAX_MV[kind]
+        out["v_target_max_v"][kind] = None if vmax is None else round(vmax / 1000, 4)
+        out["source"]["v_target_max"][kind] = "auto" if kind in policy.v_target_auto else "none" if vmax is None else "policy"
+        out["ratio_max"][kind] = _ratio_limit(policy, kind, favored_words)
+        out["source"]["ratio_max"][kind] = "auto" if kind in policy.ratio_auto else "none" if policy.ratio_max[kind] is None else "policy"
+    return out
+
+
+def _add_limits(helper: Helper, result: dict[str, Any], topology: Topology, favored_words: Mapping[int, int] | None) -> None:
+    """``result["limits"]`` from the policy as it is now; ``None`` plus ``limits_note`` when the policy cannot be loaded (never an error of a read)."""
+    try:
+        result["limits"] = _limits(_load_policy(helper), topology, favored_words)
+        result.pop("limits_note", None)
+    except OpError as exc:
+        result["limits"], result["limits_note"] = None, f"policy limits not available: {exc.message}"
+
+
 # --------------------------------------------------------------------------------------------------------------
 # Words: decode, remember
 # --------------------------------------------------------------------------------------------------------------
@@ -625,6 +664,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if cross:
         result["problems"] = [*result.get("problems", []), cross]
     result["read_at"] = _read_at(helper.cfg.wall_clock())
+    _add_limits(helper, result, topology, extras.get("favored_words"))
     result = _fit(result)
     _save_last_read(helper, result, topology)
     return result
@@ -671,6 +711,11 @@ def _save_last_read(helper: Helper, result: dict[str, Any], topology: Topology) 
             "version": 1, "boot_id": boot, "at": helper.cfg.wall_clock(), "applied_at": None,
             "words": {str(cpu): [f"{w:#010x}" for w in ws] for cpu, ws in words.items()}, "result": result,
         }
+        st = _state(helper)
+        with st.lock:
+            favored = dict(st.favored_words or {})
+        if favored:
+            record["favored_words"] = {str(cpu): f"{w:#010x}" for cpu, w in favored.items()}  # G-133: the "auto" ratio ceiling after a helper restart
         _last_store(helper).save(record)
     except (LastReadError, OSError, ValueError, TypeError) as exc:
         _log(helper, f"last-read not stored: {exc}")
@@ -776,6 +821,15 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     matched, note = accepted_match(helper, result, helper.fused_words)  # G-129: always redone (a file read, no hardware): the accepted state can change after the read (profiles.accept)
     result["accepted_match"], result["accepted_note"] = matched, note
     result["tune"] = _decode_document(result, topology, helper.fused_words)
+    st = _state(helper)
+    with st.lock:
+        favored = dict(st.favored_words or {})
+    if not favored:  # a helper restarted since the read: the 0x1C words stored with it
+        try:
+            favored = {int(c): int(w, 16) for c, w in (record.get("favored_words") or {}).items()}
+        except (AttributeError, TypeError, ValueError):
+            favored = {}
+    _add_limits(helper, result, topology, favored)  # G-133: the policy as it is now, not as it was at the read
     if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
         result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored
     return {"available": True, "boot_id": record["boot_id"], "at": record.get("at"), "applied_at": applied_at, "result": _fit(result)}
@@ -1009,12 +1063,10 @@ def _no_read(unit: str, why: str) -> OpError:
 def _ratio_cap(helper: Helper, policy: Policy, kind: str) -> int | None:
     """The ratio ceiling of a kind at plan time: the policy's number; for ``"auto"`` the fused ``0x1C`` values of that kind read by this boot's ``tune.read`` (None = not
     read: the guard judges it when the plan is applied, from the session's own reads)."""
-    if kind in policy.ratio_auto:
-        st = _state(helper)
-        with st.lock:
-            words = dict(st.favored_words or {})
-        return fused_ratio_cap(kind, [w for cpu, w in words.items() if policy.core_kind(cpu) == kind])
-    return policy.ratio_max[kind]
+    st = _state(helper)
+    with st.lock:
+        words = dict(st.favored_words or {})
+    return _ratio_limit(policy, kind, words)
 
 
 def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any], ratio_cap: int | None = None) -> None:

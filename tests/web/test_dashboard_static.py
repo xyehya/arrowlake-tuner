@@ -270,9 +270,9 @@ class TestScript(unittest.TestCase):
         self.assertIn('"This plan needs "', JS)
 
     def test_policy_ranges_are_the_d032_numbers_and_voltages_are_dropdowns(self):
-        self.assertIn("offsetMin: -200, offsetMax: 200, offsetStep: 5", JS)
-        self.assertIn("vtMin: 0.900, vtMax: { P: 1.625, E: 1.355 }, vtStep: 0.005", JS)
-        self.assertIn("ratioMax: { P: 57, E: 49 }", JS)
+        self.assertIn("const GRID = { offsetStep: 5, vtMin: 0.900, vtStep: 0.005 };", JS)   # G-133 (D-036): the grids only; the window, V max and ratio max come from the helper's live limits
+        for literal in ("offsetMin: -200", "vtMax: { P: 1.625", "ratioMax: { P: 57"):
+            self.assertNotIn(literal, JS, literal)
         self.assertNotRegex(JS, r'type\s*=\s*"number"')
         self.assertNotRegex(HTML, r'type="number"')
         for sel in ("offSel", "vtSel", "rSel"):  # the three row controls are <select>s

@@ -67,7 +67,7 @@ class TestStatic(unittest.TestCase):
         self.assertIn('"Point " + (no === null ? "?" : no) + " \\u00b7 " + ratio', JS)   # Point 1 . 8x ... Point 8 . 57x
         self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)                  # Point 9 . OC (P) / Point 7 . OC (E)
         self.assertIn("fused \\u00b7 offset only", JS)
-        self.assertIn("ratio + adaptive/direct voltage; exists once an OC ratio above the top fused ratio is set (written through the P2=0 word)", JS)
+        self.assertIn("An OC ratio is a ratio above what the unit runs at stock. The OC point (ratio + adaptive voltage) exists once that ratio is above the top fused ratio", JS)
         self.assertIn("E turbo table: up to ", body_of("eTurboNote"))   # D-036: derived from the E turbo table that was read, not a fixed "47-48x"
         self.assertNotIn("47\\u201348", JS)
 
@@ -90,14 +90,15 @@ class TestStatic(unittest.TestCase):
         body = body_of("reachOf")
         self.assertIn("turbo.favored", body)
         self.assertNotRegex(body, r"\bFAVORED\b")   # P0 / P3 are not named: they reach 57x because the read says so
-        self.assertIn("not reachable on this core", JS)
+        self.assertIn("above this core\\u2019s ", JS)   # G-133: the tag on a point above the core's own 0x1C ratio
 
     def test_clamp_is_the_monotonic_rule(self):
         self.assertIn("want < prev.v", body_of("predictUnit"))   # V(n) = max(base + offset, V(n-1))
         self.assertIn("clamped to Vn\\u22121", JS)
 
     def test_turbo_editor_never_offers_a_rising_bucket(self):
-        self.assertIn("i === 0 ? POLICY.ratioMax[k] : eff[i - 1]", body_of("renderTurbo"))
+        self.assertIn("i === 0 ? Math.max(cur[0], eff[0], lim && isNum(lim.ratioMax) ? lim.ratioMax : 0) : eff[i - 1]", body_of("renderTurbo"))   # G-133: the live ratio max, no literal
+        self.assertNotIn("POLICY.", JS)
         self.assertIn("Math.min(t[j], v)", body_of("setBucket"))
 
     def test_f8_warnings(self):
@@ -157,8 +158,8 @@ class TestBrowser(unittest.TestCase):
                 page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
                 page.click("#btn-tune-read")
                 page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
-                page.click("#tn-scope button:has-text('Per unit')")
-                page.locator(".tn-rowwrap").nth(9).locator(".seg button:has-text('Per point')").click()
+                page.click("#tn-scope button:has-text('Per-Core')")
+                page.locator(".tn-rowwrap").nth(9).locator(".seg button:has-text('Per V/F point')").click()
                 pts = page.locator("#tn-pts-EC1 .tn-pt")
                 self.assertEqual(pts.count(), 7)   # 6 fused + the OC box
                 self.assertEqual(page.locator("#tn-pts-EC1 .tn-pt-tag:has-text('fused')").count(), 6)
@@ -187,24 +188,25 @@ class TestBrowser(unittest.TestCase):
                 page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
                 page.click("#btn-tune-read")
                 page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
-                page.click("#tn-scope button:has-text('Per unit')")
+                page.click("#tn-scope button:has-text('Per-Core')")
                 for idx in (0, 1, 9):   # P0, P1, EC1
-                    page.locator(".tn-rowwrap").nth(idx).locator(".seg button:has-text('Per point')").click()
+                    page.locator(".tn-rowwrap").nth(idx).locator(".seg button:has-text('Per V/F point')").click()
                 # F1 / F2: the unit's real points, then the OC point column
                 p0 = page.locator("#tn-pts-P0 .tn-pt")
                 self.assertEqual(p0.count(), 9)
                 self.assertIn("Point 1 · 8×", p0.nth(0).inner_text())
                 self.assertIn("fused · offset only", p0.nth(0).inner_text())
                 self.assertIn("Point 9 · OC", p0.nth(8).inner_text())
-                self.assertIn("57× = fused top (no OC point)", p0.nth(8).inner_text())   # P0 reads 57x, the fused top
-                self.assertIn("not set", page.locator("#tn-pts-P1 .tn-oc").inner_text())
+                self.assertIn("No OC ratio configured", p0.nth(8).inner_text())   # G-133: P0 reads 57x, its stock ratio = the fused top: no OC ratio
+                self.assertIn("No OC ratio configured", page.locator("#tn-pts-P1 .tn-oc").inner_text())
                 self.assertIn("Point 7 · OC", page.locator("#tn-pts-EC1 .tn-oc").inner_text())
-                self.assertIn("E turbo table: up to 48× (46× all-core); ratios above point 6 (46×) run on point 6", page.locator("#tn-pts-EC1").inner_text())
+                self.assertIn("47–48× run on point 6’s voltage (no OC point)", page.locator("#tn-pts-EC1").inner_text())   # G-133: the one V/F fact; the E turbo text lives in the turbo section only
+                self.assertNotIn("E turbo table", page.locator("#tn-pts-EC1").inner_text())
                 # F3: 56x / 57x on P1 are dimmed; the same points on P0 (favored) are not
                 self.assertEqual(page.locator("#tn-pts-P1 .tn-pt.unreach").count(), 2)
                 self.assertEqual(page.locator("#tn-pts-P0 .tn-pt.unreach").count(), 0)
-                self.assertIn("not reachable on this core, tops at 55×", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
-                for i in range(2):   # 56x and 57x alike: the reach caption only, never a predicted voltage
+                self.assertIn("fused · offset only · above this core’s 55× limit", page.locator("#tn-pts-P1 .tn-pt.unreach").first.inner_text())
+                for i in range(2):   # 56x and 57x alike: the tag only, never a predicted voltage
                     self.assertNotIn("→", page.locator("#tn-pts-P1 .tn-pt.unreach").nth(i).inner_text())
                 # F4: a deep offset on 57x with a milder one on 56x is clamped; the badge shows
                 self.assertEqual(page.locator("#tn-pts-P0 .tn-badge:visible").count(), 0)

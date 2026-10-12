@@ -105,7 +105,7 @@ class TestBrowser(unittest.TestCase):
         page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
         page.click("#btn-tune-read")
         page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
-        page.click("#tn-scope button:has-text('Per unit')")
+        page.click("#tn-scope button:has-text('Per-Core')")
 
     def test_names_provenance_and_no_lore(self):
         with self.session(read_at=True, seed=False) as (page, fake):
@@ -161,13 +161,13 @@ class TestBrowser(unittest.TestCase):
             page.click("#tab-curves")
             self.assertIn("P2", page.locator("#cv-presets button", has_text="Favored").get_attribute("title"))
             self.assertNotIn("P0", page.locator("#cv-presets button", has_text="Favored").get_attribute("title"))
-            # P0 is no longer favored: its 56x and 57x points show the reach caption only, no predicted voltage
+            # P0 is no longer favored: its 56x and 57x points carry the limit tag only, no predicted voltage
             page.click("#tab-tune")
-            page.locator(".tn-rowwrap").nth(0).locator(".seg button:has-text('Per point')").click()
+            page.locator(".tn-rowwrap").nth(0).locator(".seg button:has-text('Per V/F point')").click()
             pts = page.locator("#tn-pts-P0 .tn-pt.unreach")
             self.assertEqual(pts.count(), 2)
             for i in range(2):
-                self.assertIn("not reachable on this core, tops at 55×", pts.nth(i).inner_text())
+                self.assertIn("fused · offset only · above this core’s 55× limit", pts.nth(i).inner_text())
                 self.assertNotIn("→", pts.nth(i).inner_text())
                 self.assertNotIn("(fused)", pts.nth(i).inner_text())
 
@@ -206,21 +206,21 @@ class TestBrowser(unittest.TestCase):
     def test_a_non_favored_core_shows_reach_only_for_56_and_57(self):
         with self.session() as (page, fake):
             self.read(page)
-            page.locator(".tn-rowwrap").nth(1).locator(".seg button:has-text('Per point')").click()
+            page.locator(".tn-rowwrap").nth(1).locator(".seg button:has-text('Per V/F point')").click()
             pts = page.locator("#tn-pts-P1 .tn-pt.unreach")
             self.assertEqual(pts.count(), 2)
             for i, ratio in enumerate((56, 57)):
                 t = pts.nth(i).inner_text()
                 self.assertIn(f"{ratio}×", t)
-                self.assertIn("not reachable on this core, tops at 55×", t)
+                self.assertIn("fused · offset only · above this core’s 55× limit", t)
                 self.assertNotIn("→", t)
-                self.assertNotIn("fused", t.replace("fused · offset only", ""))
+                self.assertNotIn("(fused)", t)
 
     def test_predictions_are_labelled_and_absent_without_a_baseline(self):
         with self.session(seed=False) as (page, fake):
             self.read(page)
             self.assertIn("Measure a stock curve (Curves) to see predicted voltages", page.inner_text("#tn-pred-note"))
-            page.locator(".tn-rowwrap").nth(0).locator(".seg button:has-text('Per point')").click()
+            page.locator(".tn-rowwrap").nth(0).locator(".seg button:has-text('Per V/F point')").click()
             self.assertNotIn("→", page.inner_text("#tn-pts-P0"))
             self.assertNotIn("needs a baseline", page.inner_text("#tn-pts-P0"))
         with self.session(seed=True) as (page, fake):
