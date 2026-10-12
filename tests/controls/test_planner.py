@@ -606,6 +606,30 @@ class Warnings(unittest.TestCase):
         self.assertTrue(REVERT_NOTE.isascii())
 
 
+class AutoRatioCeilingIsKindWide(unittest.TestCase):
+    """G-141: with ``ratio_max = "auto"`` the plan's verdict for a write uses the 0x1C words of the whole kind -- the context the guard builds -- not the target CPU's own word."""
+
+    AUTO = policy_with(ratio_auto=frozenset({"P"}), ratio_max={"P": None, "E": None}, hw_ratio_max={"P": 120, "E": 120})
+    P1 = CoreReadings(vf=VfWord(55, 0x544, False, 0), favored=0x3737, fused=0x538 << 8 | 55, granular=3)  # P1 (cpu 1): fused 55 -> its own ceiling alone would be 58
+    P0_WORD = 0x3939  # P0 (cpu 0): fused 57 -> the kind's ceiling is 57 + 3 = 60
+
+    def plan(self, ratio: int, **kwargs: object):
+        return build_plan(profile('kind = "P"\nindex = 1\nratio = %d' % ratio), TOPO, {1: self.P1}, per_core_enabled=True, policy=self.AUTO, **kwargs)
+
+    def test_a_ratio_within_the_kind_ceiling_is_allowed_on_a_non_favored_core(self) -> None:
+        plan = self.plan(59, favored_words={0: self.P0_WORD, 1: 0x3737})
+        refused = [(st.number, st.verdict.reason, st.verdict.detail) for st in plan.steps if not st.verdict.allowed]
+        self.assertEqual(refused, [])
+
+    def test_the_kind_ceiling_is_still_a_ceiling(self) -> None:
+        plan = self.plan(61, favored_words={0: self.P0_WORD, 1: 0x3737})
+        self.assertTrue(any(not st.verdict.allowed and "60" in st.verdict.detail for st in plan.steps), [st.verdict for st in plan.steps])
+
+    def test_with_only_its_own_word_known_the_ceiling_is_its_own(self) -> None:
+        plan = self.plan(59)  # nothing else was read: 55 + 3 = 58 (the guard would say the same in that session)
+        self.assertTrue(any(not st.verdict.allowed for st in plan.steps))
+
+
 class Shape(unittest.TestCase):
     def test_request_objects_are_guard_requests(self) -> None:
         plan = plan_for(profile(p4(offset_mv=-30)), misc_word=0)
