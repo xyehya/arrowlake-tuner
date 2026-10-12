@@ -126,7 +126,7 @@ Important limits:
 - The Windows port uses a Linux-to-Windows CPU map and a P-core identity fingerprint **measured on the reference 285K**
   (`src/arltuner/msr/winport.py`: `WINDOWS_LP_OF_CPU`, `WINDOWS_P_FUSED_FINGERPRINT`, the check at `cli.py` `IDENTITY_CPUS`). On any other chip the
   identity check will not match and the tool **refuses and writes nothing**. That is by design (nothing is written to a core it cannot identify), and it means
-  the Windows restore is currently usable on the reference chip only [open question for the project, see NOTES].
+  the Windows restore is currently usable on the reference chip only.
 - It restores; it does not tune. The accepted state comes from Linux: copy `/etc/arltuner/accepted` to `%LOCALAPPDATA%\arltuner\accepted` (or pass `-From DIR`)
   and put a `policy.toml` next to it (copy `/etc/arltuner/policy.toml`, or pass `-Policy FILE`).
 - It needs an elevated PowerShell, Python (`py -3`), the repository checkout, Windows **Memory integrity (HVCI/VBS) off**, the Intel XTU service stopped
