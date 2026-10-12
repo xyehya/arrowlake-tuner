@@ -52,8 +52,9 @@ AUDIT_TAIL_MAX = 200
 _TAIL_READ_BYTES = 256 * 1024  # audit.tail never reads more than the last 256 KiB
 _RESULT_SLACK = 2048  # envelope of the response line around the result
 TELEMETRY_INTERVAL_RANGE = (0.2, 60.0)
-ACCEPTED_FILE = "EXPECTED-words.txt"  # inside the helper's accepted dir (G-107): the format of profiles/EXPECTED-words.txt
+ACCEPTED_FILE = "EXPECTED-words.txt"  # inside the helper's accepted dir (G-107; written by profiles.accept, G-129): ``<cpu> <hex words>`` per line
 _ACCEPTED_MAX_BYTES = 64 * 1024
+NO_ACCEPTED_NOTE = "No accepted state yet: save a profile as accepted (Profiles)"  # D-036: the page keys on the leading "No accepted state yet"
 _AUDIT_CHUNK = 256 * 1024
 _AUDIT_LINE_MAX = 1024 * 1024  # an unterminated audit line longer than this is not our log: no count is claimed (bounds the scan buffer)
 _AUDIT_HEAD_BYTES = 4096
@@ -447,13 +448,13 @@ def _load_accepted(helper: Helper) -> tuple[dict[int, list[int]] | None, str | N
         try:
             check_trusted_path(path, want="file", must_exist=True, lstat_fn=cfg.lstat_fn)
         except TrustError as exc:
-            if exc.reason == "does not exist" and exc.path == str(path):
-                return None, f"no accepted state ({path} is absent)"
+            if exc.reason == "does not exist" and exc.path in (str(path), str(directory)):
+                return None, NO_ACCEPTED_NOTE  # D-036: a fresh install has none
             return None, f"accepted state untrusted: {exc}"
     try:
         fd = open_checked(path, write=False, create=False, euid=cfg.euid_fn(), what="accepted state")
     except FileNotFoundError:
-        return None, f"no accepted state ({path} is absent)"
+        return None, NO_ACCEPTED_NOTE
     except TrustError as exc:
         return None, f"accepted state untrusted: {exc}"
     try:
