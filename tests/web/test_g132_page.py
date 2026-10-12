@@ -148,8 +148,8 @@ class TestBrowser(unittest.TestCase):
             page.wait_for_selector("#btn-tune-read:not([disabled])", timeout=10000)
             page.click("#btn-tune-read")
             page.wait_for_selector("#tn-console:not([hidden])", timeout=15000)
-            page.click("#tn-scope button:has-text('Per unit')")
-            page.locator(".tn-rowwrap").nth(9).locator(".seg button:has-text('Per point')").click()
+            page.click("#tn-scope button:has-text('Per-Core')")
+            page.locator(".tn-rowwrap").nth(9).locator(".seg button:has-text('Per V/F point')").click()
             eff = page.locator("#tn-pts-EC1 .tn-pt").nth(2).locator(".tn-pt-eff")   # point 3 = 23x
             page.wait_for_function("(el) => el.textContent.includes('interpolated')", arg=eff.element_handle(), timeout=10000)
             self.assertRegex(eff.inner_text(), r"^→ \d\.\d{3} V \(interpolated\)$")

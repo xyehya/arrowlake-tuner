@@ -565,7 +565,7 @@ th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color:
 .tn-table { display: grid; gap: 0; }
 .tn-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(280px, 1.5fr) minmax(190px, 0.9fr) minmax(130px, 0.6fr) 64px;
+  grid-template-columns: minmax(180px, 1fr) minmax(280px, 1.5fr) minmax(210px, 1.1fr) minmax(150px, 0.7fr) 64px;
   gap: 8px 22px;
   align-items: center;
   padding: 10px 12px 10px 14px;
@@ -729,7 +729,6 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 .tn-oc.unset .tn-oc-line { color: var(--text-2); }
 .tn-oc.changed { border-color: var(--signal); border-style: solid; }
 .tn-oc-line { font-size: 13px; font-variant-numeric: tabular-nums; }
-.tn-oc-fused { font-size: 11.5px; }
 .tn-points-note { flex-basis: 100%; margin: 0; font-size: 12.5px; }
 .tn-warn { list-style: none; margin: 0 14px 6px; padding: 0; display: grid; gap: 4px; }
 .tn-warn li { padding: 5px 10px; border-radius: var(--radius-s); font-size: 13px; background: var(--warn-bg); color: var(--warn-fg); }

@@ -186,7 +186,7 @@ class TestBrowser(unittest.TestCase):
             self.assertEqual(page.locator(".tn-rowwrap").count(), 2)
             self.assertIn("6 cores", page.inner_text("#tn-rows"))
             self.assertIn("2 clusters, 8 cores", page.inner_text("#tn-rows"))
-            page.click("#tn-scope button:has-text('Per unit')")
+            page.click("#tn-scope button:has-text('Per-Core')")
             self.assertEqual(page.locator(".tn-rowwrap").count(), 8)
             self.assertIn("cpus 6–9", page.locator(".tn-rowwrap").nth(6).inner_text())
             self.assertIn("8 curves (6 P-cores + 2 E-clusters)", page.inner_text("#tn-scope-note"))

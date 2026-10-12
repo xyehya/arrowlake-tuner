@@ -256,7 +256,7 @@
       </div>
       <ol class="tn-steps" id="tn-steps">
         <li><strong>Read</strong> the ratios and voltages the CPU holds now.</li>
-        <li><strong>Choose</strong> a voltage offset, an OC target voltage or an OC ratio, per unit or for all.</li>
+        <li><strong>Choose</strong> a voltage offset, an OC ratio and its adaptive voltage, Per-Core or All-Core.</li>
         <li><strong>Review</strong> the before and after, then press Apply. Each word is read back.</li>
       </ol>
       <p class="mailbox-note" id="tn-cost">Mailbox read: <strong>each request is a WRMSR</strong>. A read costs <span id="tn-cost-n">about one operation per V/F point of each unit</span>; <span id="tn-used">n/a</span> used so far this boot.</p>
@@ -278,13 +278,14 @@
       </div>
       <p class="muted tn-prov" id="tn-prov" role="status"></p>
       <p class="muted tn-prov" id="tn-pred-note"></p>
+      <p class="muted tn-prov" id="tn-limits-note" role="status" hidden></p>
       <div class="tn-table" id="tn-rows" role="group" aria-label="Tuning controls"></div>
       <div class="tn-foot">
         <div class="tn-foot-msg" id="tn-foot-msg" role="status">No changes yet.</div>
         <div class="row-tight">
           <button type="button" id="btn-tn-discard" disabled>Discard changes</button>
           <button type="button" id="btn-tn-restore">Restore accepted</button>
-          <button type="button" id="btn-tn-reset" title="Sets every offset to 0 mV. The OC ratio, the OC target voltage and the turbo tables are left alone.">Reset offsets to 0</button>
+          <button type="button" id="btn-tn-reset" title="Sets every offset to 0 mV. The OC ratio, the adaptive voltage and the turbo tables are left alone.">Reset offsets to 0</button>
           <button type="button" id="btn-tn-plan" class="primary" disabled>Review changes</button>
         </div>
       </div>
