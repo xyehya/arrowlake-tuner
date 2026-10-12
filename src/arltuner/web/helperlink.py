@@ -186,6 +186,10 @@ class HelperLink:
         except (OSError, ValueError):
             pass
         finally:
+            try:
+                self._r.close()  # nothing more will be read; releases a socket makefile's reference
+            except (OSError, ValueError):
+                pass
             self._fail_all()
 
     def _dispatch(self, obj: dict[str, Any]) -> None:
@@ -249,6 +253,7 @@ class SocketWriter:
             self._s.shutdown(socket.SHUT_WR)
         except OSError:
             pass
+        self._s.close()  # the descriptor itself goes when the reader's makefile reference does
 
 
 def spawn_helper(cmd: list[str]) -> tuple[subprocess.Popen, HelperLink]:

@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
         h = dict(headers or {})
         if host == "default":
             host = self.srv.host_header
-        c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=5)
+        c = http.client.HTTPConnection(self.srv.addr, self.srv.port, timeout=5)
         c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
         if host is not None:
             c.putheader("Host", host)
@@ -162,15 +162,15 @@ class TestHostOrigin(Base):
         ck = self.login()
         # a classic CSRF form post: text/plain (or urlencoded) body, attacker origin, victim's cookie rides along
         for ct in ("text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"):
-            st, _, _ = self.req("POST", "/api/call", {"Content-Type": ct}, b'{"op":"apply","args":{}}', cookie=ck,
+            st, _, _ = self.req("POST", "/api/call", {"Content-Type": ct}, b'{"op":"tune.apply","args":{}}', cookie=ck,
                                 origin="http://evil.example")
             self.assertEqual(st, 403, ct)
             # even with a forged-correct Origin the content type must be JSON
-            st, _, _ = self.req("POST", "/api/call", {"Content-Type": ct}, b'{"op":"apply","args":{}}', cookie=ck, origin=self.srv.origin)
+            st, _, _ = self.req("POST", "/api/call", {"Content-Type": ct}, b'{"op":"tune.apply","args":{}}', cookie=ck, origin=self.srv.origin)
             self.assertEqual(st, 415, ct)
-        st, _, _ = self.req("POST", "/api/call", {}, b'{"op":"apply"}', cookie=ck, origin=self.srv.origin)
+        st, _, _ = self.req("POST", "/api/call", {}, b'{"op":"tune.apply"}', cookie=ck, origin=self.srv.origin)
         self.assertEqual(st, 415)
-        self.assertEqual([r for r in self.fake.requests if r["op"] == "apply"], [])
+        self.assertEqual([r for r in self.fake.requests if r["op"] == "tune.apply"], [])
 
     def test_other_methods_and_get_on_post_routes(self):
         ck = self.login()
@@ -218,7 +218,7 @@ class TestAuth(Base):
 class TestSizeAndPaths(Base):
     def test_oversize_body_rejected_before_reading(self):
         ck = self.login()
-        c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=5)
+        c = http.client.HTTPConnection(self.srv.addr, self.srv.port, timeout=5)
         c.putrequest("POST", "/api/call", skip_host=True)
         c.putheader("Host", self.srv.host_header)
         c.putheader("Origin", self.srv.origin)
@@ -228,7 +228,7 @@ class TestSizeAndPaths(Base):
         c.endheaders()  # the body is never sent
         self.assertEqual(c.getresponse().status, 413)
         c.close()
-        body = json.dumps({"op": "plan", "args": {"profile": {"x": "a" * 40000}}}).encode()
+        body = json.dumps({"op": "tune.plan", "args": {"intent": {"x": "a" * 40000}}}).encode()
         self.assertEqual(self.req("POST", "/api/call", {"Content-Type": JSON_CT}, body, cookie=ck, origin=self.srv.origin)[0], 413)
         self.assertEqual(self.fake.requests, [])
 
@@ -295,12 +295,13 @@ class TestJsonApi(Base):
     def test_plan_bound_nonce_replay(self):
         ck = self.login()
         sse = open_sse(self, ck)
-        plan = json.loads(self.call("plan", {"profile": {}}, cookie=ck)[2])["result"]
+        self.fake.simple_plans = True
+        plan = json.loads(self.call("tune.plan", {"intent": {}}, cookie=ck)[2])["result"]
         pid, nonce = plan["plan_id"], plan["nonce"]
         results = {}
 
         def apply(typed, plan_id=pid, origin="default"):
-            st, _, body = self.call("apply", {"plan_id": plan_id, "typed": typed}, cookie=ck, origin=origin)
+            st, _, body = self.call("tune.apply", {"plan_id": plan_id, "typed": typed}, cookie=ck, origin=origin)
             return st, json.loads(body)
 
         def result_of(rid):
@@ -340,7 +341,7 @@ class TestJsonApi(Base):
 
 
 def open_sse(tc, cookie, origin="", fetch_site="same-origin"):
-    s = socket.create_connection(("127.0.0.1", tc.srv.port), timeout=5)
+    s = socket.create_connection((tc.srv.addr, tc.srv.port), timeout=5)
     h = f"GET /api/events HTTP/1.1\r\nHost: {tc.srv.host_header}\r\nCookie: arltuner_session={cookie}\r\n"
     if origin:
         h += f"Origin: {origin}\r\n"
@@ -427,7 +428,7 @@ class TestSlowClient(Base):
             return True
 
     def test_stalled_headers_dropped(self):
-        s = socket.create_connection(("127.0.0.1", self.srv.port), timeout=5)
+        s = socket.create_connection((self.srv.addr, self.srv.port), timeout=5)
         self.addCleanup(s.close)
         s.sendall(b"GET / HTTP/1.1\r\nHost: " + self.srv.host_header.encode() + b"\r\nX-Slow: ")
         t0 = time.monotonic()
@@ -436,7 +437,7 @@ class TestSlowClient(Base):
 
     def test_stalled_body_gets_408(self):
         ck = self.login()
-        s = socket.create_connection(("127.0.0.1", self.srv.port), timeout=5)
+        s = socket.create_connection((self.srv.addr, self.srv.port), timeout=5)
         self.addCleanup(s.close)
         s.sendall(f"POST /api/call HTTP/1.1\r\nHost: {self.srv.host_header}\r\nOrigin: {self.srv.origin}\r\nCookie: arltuner_session={ck}\r\n"
                   f"Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{{".encode())
@@ -452,7 +453,7 @@ class TestSlowClient(Base):
 
     def test_dribbling_body_hits_total_deadline(self):
         ck = self.login()
-        s = socket.create_connection(("127.0.0.1", self.srv.port), timeout=5)
+        s = socket.create_connection((self.srv.addr, self.srv.port), timeout=5)
         self.addCleanup(s.close)
         s.sendall(f"POST /api/call HTTP/1.1\r\nHost: {self.srv.host_header}\r\nOrigin: {self.srv.origin}\r\nCookie: arltuner_session={ck}\r\n"
                   f"Content-Type: application/json\r\nContent-Length: 100\r\n\r\n".encode())

@@ -50,7 +50,7 @@ def signal_running(directory: Path, marker: bytes = b"arltuner-gui", proc_root: 
         pid = int((Path(directory) / PID_NAME).read_text().strip())
         if pid <= 1:
             return None
-        argv = Path(proc_root) / str(pid) / "cmdline".read_bytes().split(b"\0")
+        argv = (Path(proc_root) / str(pid) / "cmdline").read_bytes().split(b"\0")
         if argv and argv[-1] == b"":
             argv.pop()
         if not _is_server_argv(argv, marker):

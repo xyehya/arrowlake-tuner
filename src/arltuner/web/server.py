@@ -5,7 +5,7 @@ Content-Type -> size -> body -> op allowlist + args schema -> helper.
 Routes (fixed): ``POST /bootstrap`` (launcher form, token swap), ``GET`` manifest pages, ``GET /api/status``, ``GET /api/events`` (SSE),
 ``POST /api/call`` (allowlisted ``op`` + schema-checked ``args``), ``POST /api/logout``.
 
-Long ops (apply, restore, vf.dump) answer ``202 {"id"}`` at once; the helper's final response arrives as SSE event ``result``.
+Long ops (tune.apply, vf.dump, vf.measure, stress.start) answer ``202 {"id"}`` at once; the helper's final response arrives as SSE event ``result``.
 
 Auth: a valid session cookie is never rate-limited. Only a *wrong credential* (bad bootstrap token, unknown cookie value) counts as a failure;
 anonymous requests (no cookie) are refused with 401 and not counted. Sessions expire (idle 30 min, absolute 12 h) and can be logged out.
@@ -716,7 +716,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         validate, is_long = spec
         if self.srv.session_scope(sid) == "read" and req["op"] not in READ_OPS:
             return self._err(403, "read_only_session")
-        if not isinstance(args, dict) or not validate(args):
+        try:
+            valid = isinstance(args, dict) and validate(args)
+        except RecursionError:  # absurdly nested args (older Pythons): a refusal, not a dropped connection
+            valid = False
+        if not valid:
             return self._err(400, "bad_args")
         helper = self.srv.helper
         if helper is None:
@@ -725,7 +729,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._call_long(helper, req["op"], args, sid)
         try:
             resp = helper.call(req["op"], args, timeout=self.srv.cfg.call_timeout_s)
-        except ValueError:  # not representable as strict JSON (NaN / Infinity)
+        except (ValueError, RecursionError):  # not representable as strict JSON (NaN / Infinity), or nested beyond reason
             return self._err(400, "bad_args")
         except HelperUnavailable:
             return self._err(503, "helper_unavailable")
@@ -741,7 +745,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _call_long(self, helper: HelperLink, op: str, args: dict[str, Any], sid: str) -> None:
         try:
             rid = self.srv.submit_long(helper, op, args, sid)
-        except ValueError:
+        except (ValueError, RecursionError):
             return self._err(400, "bad_args")
         except HelperUnavailable:
             return self._err(503, "helper_unavailable")
