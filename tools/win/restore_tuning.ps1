@@ -1,16 +1,19 @@
 <#
-  restore_tuning.ps1 - after any Windows boot: bring the CPU back to the accepted tuning (profiles/CURRENT) and prove it by read-back.
+  restore_tuning.ps1 - after any Windows boot: bring the CPU back to YOUR accepted tuning and prove it by read-back.
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1                # operator: type CONFIRM once (or double-click tools\win\Restore-Tuning.cmd)
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1 -Orchestrated  # orchestrator session only, after the operator's go-ahead in chat
+    -From DIR     the accepted state: CURRENT, EXPECTED-words.txt, profiles\*.toml (default %LOCALAPPDATA%\arltuner\accepted). The app writes it on Linux
+                  (Profiles > Set as accepted, /etc/arltuner/accepted); copy that directory here. Nothing in this repo is one (D-036): absent = stop.
+    -Policy FILE  the policy for the guarded writes (default DIR\policy.toml; copy /etc/arltuner/policy.toml next to the accepted state, or name another).
   Steps: checks (admin, XtuService stopped, no OCCT/XTU) -> one CONFIRM -> sc start ThrottleStop -> [-Before: vf-dump] -> apply each CURRENT profile ->
-  vf-dump -> compare every V/F word with $Expected -> sc stop ThrottleStop. Stops at the first failure; nothing is retried. Revert = cold boot.
+  vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> sc stop ThrottleStop. Stops at the first failure; nothing is retried. Revert = cold boot.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
   Captures: captures\win\restore-<ts>-*.txt. Audit: %LOCALAPPDATA%\linuxmon\audit.jsonl.
   One confirmation per run (operator 2026-10-05, D-020): the operator types CONFIRM once; the per-command guard tokens are then answered by
   tools\lnx\orchestrator_confirm.py, as with -Orchestrated. All guard checks (identity, policy, read-back, word compare) are unchanged.
 #>
 # -Before: also dump the state before applying (diagnostic: warm vs cold boot; costs ~132 of the 600 ops/boot, so default off).
-param([switch]$Orchestrated, [switch]$Before)
+param([switch]$Orchestrated, [switch]$Before, [string]$From = (Join-Path $env:LOCALAPPDATA 'arltuner\accepted'), [string]$Policy = '')
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $repo
@@ -19,23 +22,8 @@ New-Item -ItemType Directory -Force -Path $lm, 'captures\win' | Out-Null
 $audit = Join-Path $lm 'audit.jsonl'
 $ts = Get-Date -Format 'yyyyMMddTHHmmss'
 
-# Accepted words: p-step7 + E split3 (2026-10-04, BIOS LLC 6; captures/win/apply-p-step7-20261004T180158.txt read-back) (string keys: an
-# [ordered] dictionary indexed with an int is positional) (P2 0 = OC word, then points 1..n). = profiles/EXPECTED-words.txt. Update together with profiles/CURRENT.
-$Expected = [ordered]@{
-    '0'  = '39 8 14 1E 30 F9A00035 FC600037 FCA00038 FA800039'
-    '1'  = '0 8 14 1E 30 F9A00035 FB600037 38 39'
-    '2'  = '0 8 14 1E 30 F9A00035 F5A00037 38 39'
-    '3'  = '0 8 14 1E 30 F9A00035 FC600037 FC600038 FC000039'
-    '4'  = '0 8 14 1E 30 F9A00035 FBC00037 38 39'
-    '5'  = '0 8 14 1E 30 F9A00035 F6A00037 38 39'
-    '6'  = '0 8 14 1E 30 F9A00035 F8400037 38 39'
-    '7'  = '0 8 14 1E 30 F9A00035 F4600037 38 39'
-    '8'  = '0 8 F 17 1E 28 FB80002E'
-    '12' = '0 8 F 17 1E 28 FCC0002E'
-    '16' = '0 8 F 17 1E 28 FCC0002E'
-    '20' = '0 8 F 17 1E 28 FCC0002E'
-}
-
+# The accepted words come from DIR\EXPECTED-words.txt, one line per core / E-cluster: "<cpu> <OC word P2=0> <point 1> ... <point n>" (hex, no 0x).
+# String keys: an [ordered] dictionary indexed with an int is positional.
 function Fail([string]$msg) { Write-Host "STOP: $msg" -ForegroundColor Red; exit 1 }
 
 # --- checks
@@ -46,12 +34,29 @@ if ($xtu -and $xtu.Status -ne 'Stopped') { Fail 'XtuService is running (Stop-Ser
 $busy = Get-Process OCCT, XtuUiLauncher, PerfTune, ThrottleStop -ErrorAction SilentlyContinue
 if ($busy) { Fail "close first: $(($busy.Name | Sort-Object -Unique) -join ', ')" }
 
-$policy = $null; $profiles = @()
-foreach ($l in Get-Content 'profiles\CURRENT') {
-    if ($l -match '^\s*policy\s*=\s*"?([^"#]+?)"?\s*$') { $policy = $Matches[1] }
-    elseif ($l -match '^\s*profile\s*=\s*"?([^"#]+?)"?\s*$') { $profiles += $Matches[1] }
+# --- the user's accepted state (D-036): absent = stop
+$wordsFile = Join-Path $From 'EXPECTED-words.txt'
+if (-not (Test-Path (Join-Path $From 'CURRENT')) -or -not (Test-Path $wordsFile)) {
+    Fail "no accepted state in $From. Save a profile as accepted in the app (Linux: Profiles > Set as accepted) and copy /etc/arltuner/accepted there, or pass -From DIR"
 }
-if (-not $policy -or $profiles.Count -eq 0) { Fail 'profiles/CURRENT has no policy/profile lines' }
+$policy = if ($Policy) { $Policy } else { Join-Path $From 'policy.toml' }
+if (-not (Test-Path $policy)) { Fail "policy $policy not found: copy /etc/arltuner/policy.toml next to the accepted state or pass -Policy FILE" }
+$profiles = @()
+foreach ($l in Get-Content (Join-Path $From 'CURRENT')) {   # a legacy 'policy =' line is ignored: the policy is -Policy / DIR\policy.toml
+    if ($l -match '^\s*profile\s*=\s*"?([^"#]+?)"?\s*$') {
+        $rel = $Matches[1]
+        if ($rel -notmatch '^profiles/[A-Za-z0-9._-]+\.toml$' -or $rel.Contains('..') -or -not (Test-Path (Join-Path $From ($rel -replace '/', '\')))) { Fail "CURRENT names an unusable profile '$rel'" }
+        $profiles += (Join-Path $From ($rel -replace '/', '\'))
+    }
+}
+if ($profiles.Count -eq 0) { Fail "$From\CURRENT lists no profile" }
+$Expected = [ordered]@{}
+foreach ($l in Get-Content $wordsFile) {
+    if ($l -match '^\s*(#|$)') { continue }
+    $parts = $l.Trim() -split '\s+'
+    $Expected[$parts[0]] = (($parts[1..($parts.Count - 1)] | ForEach-Object { [Convert]::ToUInt32($_, 16).ToString('X') }) -join ' ')
+}
+if ($Expected.Count -eq 0) { Fail "$wordsFile holds no words" }
 
 if (Get-Command py -ErrorAction SilentlyContinue) { $py = @('py', '-3') } else { $py = @('python') }
 $env:ARLTUNER_ALLOW_MAILBOX = '1'
@@ -59,7 +64,7 @@ $env:PYTHONUNBUFFERED = '1'
 
 # --- one confirmation for the whole run (operator mode); -Orchestrated = the orchestrator already has the operator's go-ahead in chat
 if (-not $Orchestrated) {
-    Write-Host "Restore the accepted tuning: $($profiles -join ' -> ')  (policy $policy)"
+    Write-Host "Restore the accepted tuning: $(($profiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' -> ')  (from $From, policy $policy)"
     Write-Host 'Writes V/F point offsets via the ThrottleStop driver; every write is read back; revert = cold boot.'
     if ((Read-Host 'Type CONFIRM to proceed') -cne 'CONFIRM') { Fail 'not confirmed - nothing was sent' }
 }
@@ -90,7 +95,7 @@ try {
     foreach ($prof in $profiles) {
         $i++
         Write-Host "=== 2/3 apply $prof ($i/$($profiles.Count))"
-        Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) @('apply', ($prof -replace '/', '\'))
+        Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) @('apply', $prof)
     }
     Write-Host "=== 3/3 read-back"
     $t0 = (Get-Date).ToUniversalTime()
