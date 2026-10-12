@@ -1,6 +1,6 @@
 """T-021 golden tests: ``apply_profile`` against ``SimConfig.measured()`` (the machine as MEASURED on Windows) through the REAL guard.
 
-Every sequence below is one XTU sent on this machine, ``[MEASURED win 2026-10-01]``, docs/research/win-xtu-live-trace.md: S-04 / S-05
+Every sequence below is one XTU sent on this machine, ``[MEASURED win 2026-10-01]``, docs/knowledge/windows-path.md: S-04 / S-05
 (CPU 0 -5 mV and back), S-04c (CPU 0 -15 mV), S-04d (CPU 1 -5 mV and back; baseline word 0x0), S-06 / S-07 (all 16 E-cores -5 mV and back).
 The simulator runs with ``reject_zero_fields=True``: a plan that wrote a 0x11 with a zero ratio / V target would fail here.
 """

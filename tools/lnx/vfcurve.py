@@ -3,7 +3,7 @@
 
     sudo python3 tools/lnx/vfcurve.py --cpus 8-11 --ratios 40,46,48 [--out FILE]
 
-How (measured method, docs/research/lnx-first-read.md "E cluster 1 V/F curve at stock"):
+How (measured method, docs/knowledge/platform-285k.md "E cluster 1 V/F curve at stock"):
   * caps the group's cpufreq ``scaling_max_freq`` so the cores run at the target ratio: first cap = ratio x 100 MHz; if the core settles
     BELOW the target (intel_pstate on E-cores at high ratios maps N x 100 MHz to N-1), retry with (ratio + 1) x 100 MHz (same search as
     ``arltuner vf-dump --measure``, T-027); the running ratio is CHECKED (MSR 0x198[15:8]) and only samples AT the target are kept;

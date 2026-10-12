@@ -1,9 +1,9 @@
 # RUNBOOK — applying the accepted profile on Windows 11 (`win`)
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 How the operator loads ThrottleStop's signed driver, re-applies the accepted tuning (`profiles/CURRENT`) through `arltuner --device-win`, then benchmarks.
-Rules behind it: `AGENTS.md`, `docs/SAFETY.md`. Driver facts: `docs/research/win-throttlestop-fivr.md` §1, `win-throttlestop-9.7.3.md`.
+Rules behind it: `AGENTS.md`, `docs/SAFETY.md`. Driver facts: `docs/knowledge/windows-path.md` §1, `win-throttlestop-9.7.3.md`.
 All paths relative to the repo (`%USERPROFILE%\AI\arrowlake-tuner`). Use an **elevated** PowerShell (Run as administrator). `py -3` below = `python` if you have no launcher.
 The driver is never stored in the repo: it is carved from your own `ThrottleStop.exe` (hash-verified) into `%ProgramData%\arltuner\ThrottleStop.sys`.
 **Admin-only directory (G-142, D-042):** the scripts run elevated, so everything they trust lives in `%ProgramData%\arltuner` (owner Administrators, access for Administrators and
@@ -81,7 +81,7 @@ If anything differs or a command errors, stop and report; do not retry blindly (
 
 ## 6. BIOS settings the tuning assumes (header of `profiles/tune-2026-10-02.toml`)
 PL1 = PL2 = 295 W · board VccIA offset -100 mV · ring OC 40x with -16 mV on its 39x/40x points · DDR5 7200 · TVB voltage optimisations off · E-cores 48x OC word.
-Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go to `docs/research/win-*.md`.
+Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go to `docs/knowledge/win-*.md`.
 
 ## 7. Tools (`tools/win/`)
 | Tool | What | Hardware access |

@@ -1,6 +1,6 @@
 # Decisions (append-only; one short entry each)
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, not editing.
 
@@ -26,7 +26,7 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   is a human T2 action.
 - **D-009 · 2026-09-30 · ~~M1 voltage semantics~~ — SUPERSEDED by D-016 (2026-10-01): its "undervolt-first / no overvolt / ratio at or below stock" limit is removed; its hardware facts (only the OC-ratio point takes an adaptive voltage, fused points take offsets only) still hold.** Original text (from the user): On Arrow Lake only the OC-ratio point takes an adaptive voltage; fused lower points accept offsets only. M1 therefore exposes per P-core / per E-cluster:
   ratio limit, adaptive OC-point voltage, offset (primary undervolt control). Static/override mode, Power-Gate mode and absolute voltages for fused points are out of scope; M1 is undervolt-first (no overvolt).
-  Per-point offsets are a stretch goal pending a measured probe. — Matches the hardware topology (`docs/research/arl-voltage-topology.md`) and XTU's own controls.
+  Per-point offsets are a stretch goal pending a measured probe. — Matches the hardware topology (`docs/knowledge/platform-285k.md`) and XTU's own controls.
 - **D-010 · 2026-09-30 · Relationship to the operator's monitoring tools.** The operator's read-only monitoring tools and this tuner are separate projects; the tuner borrows facts and decoders with attribution. Access to those repositories is
   **orchestrator-only, read-only**; workers never touch them (since D-041 workers use only this repository). Their read-only / no-Tier-4 rules are not inherited here. Open for the operator: whether the tuner later imports their read layer or consumes their captures.
 - **D-011 · 2026-09-30 · Mailbox discipline.** Mailbox transactions are single, human-attended, bracketed by health snapshots with a dwell; no sweeps. — 2026-08-26 incident (`docs/SAFETY.md`).

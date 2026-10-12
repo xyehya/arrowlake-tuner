@@ -14,7 +14,7 @@ simulated. The mailbox latch is per CPU; ``0x14``/``0x15`` (misc global config) 
 Modelled commands (everything else -> ``Rc.UnrecognizedCommand``): ``0x01`` capability (P1=3 -> ``OCNotSupported``, as XTU's log
 shows), ``0x02``, ``0x28`` (per CPU for domain 0), ``0x09 P1=0x11`` (P2=0: the per-CPU fused V/F point), ``0x14/0x15`` (bit 3 =
 PerCore Voltage Enable), ``0x10/0x11`` V/F word for domains 0 (per CPU), 1, 2, 7 (per domain), and -- added by T-021 to match what XTU
-sends on every per-core Apply (``docs/research/win-xtu-live-trace.md`` S-04) -- ``0x1C/0x1D`` (per-CPU favored word) and ``0x26/0x27``
+sends on every per-core Apply (``docs/knowledge/windows-path.md`` S-04) -- ``0x1C/0x1D`` (per-CPU favored word) and ``0x26/0x27``
 (per-CPU granular word). T-023 adds the plain registers ``0x1AD/0x1AE/0x650/0x651/0xCE/0x194`` (package-scoped by default, ``plain_msrs_per_cpu`` makes them per CPU; only
 ``0x1AD``/``0x650`` accept a write). ``SimConfig.fixed_reads`` answers further package-wide reads (``0x04``, ``0x05``, ``0x16``, ``0x18``,
 ``0x1A`` ...) with configured words.
@@ -41,12 +41,12 @@ _BUSY = 1 << 63
 _PER_CORE_VOLTAGE_ENABLE = 1 << 3  # registers.md 0x14/0x15 data bit 3
 _VF_DOMAINS = (int(Domain.CORE), int(Domain.GT), int(Domain.RING), int(Domain.NGU))
 _MAX_POINT = 15  # registers.md: P2 1..15 = V/F point (hidden on ARL-S)
-#: T-025 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset 0),
+#: T-025 ``[MEASURED lnx 2026-10-02]`` (docs/knowledge/platform-285k.md, E CPU 8): ``0x10 P2=6`` = ``0x0000002E`` (point 6 = 46x, V target 0, offset 0),
 #: ``0x10 P2=7`` -> rc ``0x11`` (the OC point is the ``P2 = 0`` word, not a point index). SkatterBencher ``[COMMUNITY]``: E has 6 fused points, P has 8.
 RC_NO_SUCH_POINT = 0x11  # not in ``Rc`` (``rc_name`` says ``UNKNOWN_0x11``)
 _REF_POINTS = measured_baseline.VF_POINT_RATIOS  # the simulated reference CPU's V/F point ratios (fixture data, msr/measured_baseline.py)
 POINT_COUNTS_ARL_S: dict[str, int] = {"E": len(_REF_POINTS["E"]), "P": len(_REF_POINTS["P"])}
-#: T-026 ``[MEASURED lnx 2026-10-02]`` (docs/research/lnx-first-read.md "Full point layout", "E cluster 1 V/F curve"): the ratio field of every V/F point
+#: T-026 ``[MEASURED lnx 2026-10-02]`` (docs/knowledge/platform-285k.md "Full point layout", "E cluster 1 V/F curve"): the ratio field of every V/F point
 #: and the BIOS per-point offset (raw, /1024 V). P (CPU 0, same table assumed on every P-core): 8,20,30,48,53,55,56,57x with -49.8 mV (raw -51) at 53x
 #: and 57x and -14.6 mV (raw -15) at 55x. E: 8,15,23,30,40,46x, offset 0. Used by ``SimConfig.measured()`` only (``SimConfig()`` keeps its old defaults).
 POINT_RATIOS_ARL_S: dict[tuple[str, int], int] = {
@@ -60,7 +60,7 @@ POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15,
 #: so the per-core ratio flagging has something to find; it is NOT a hardware fact. G-114: no longer used by ``measured()`` (F1: the tables are identical on all
 #: eight P-cores); a test that wants per-core flags builds ``cpu_point_ratios`` from this tuple itself.
 POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
-#: T-028 ``[MEASURED lnx 2026-10-02]`` (docs/research/skatterbencher-285k.md ring section, ring-community.md): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
+#: T-028 ``[MEASURED lnx 2026-10-02]`` (docs/knowledge/platform-285k.md ring section, ring-community.md): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
 #: points 8,14,20,28,34,37,38,39x (V target 0), ``P2 = 9`` -> rc ``0x11``; point 8 = ``0xF6600027`` = 39x with the BIOS offset -75.2 mV (raw -77).
 RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_REF_POINTS["ring"], start=1))
 RING_POINT_OFFSETS_ARL_S: dict[int, int] = {8: -77}
@@ -84,7 +84,7 @@ _MODELLED_READS = frozenset(
     )
 )
 
-#: T-023 plain (non-mailbox) registers of the turbo ratio tables. ``[MEASURED lnx 2026-10-01]`` (docs/research/lnx-first-read.md, T-023 spec
+#: T-023 plain (non-mailbox) registers of the turbo ratio tables. ``[MEASURED lnx 2026-10-01]`` (docs/knowledge/platform-285k.md, T-023 spec
 #: "Facts"): ``0x1AD`` P buckets 57,57,55 x6 (LSB = 1 active core), ``0x1AE`` its core counts 1..8, ``0x650`` E buckets 48 x8, ``0x651`` its core
 #: counts, ``0xCE`` PLATFORM_INFO (``[15:8]`` = 37 base ratio), ``0x194`` FLEX_RATIO. The same value was read on CPU 0 and CPU 20.
 PLAIN_MSR_DEFAULTS: dict[int, int] = {

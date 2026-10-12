@@ -1,9 +1,9 @@
 # RUNBOOK — hardware sittings on Fedora (`lnx`)
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 How the orchestrator (or the operator) runs arltuner against the real CPU, with the exact commands used on 2026-10-01/02. Rules behind it:
-`AGENTS.md`, `docs/SAFETY.md`, D-011/D-017/D-018. Results of every sitting go to `docs/research/lnx-first-read.md` (or a new `lnx-*.md`).
+`AGENTS.md`, `docs/SAFETY.md`, D-011/D-017/D-018. Results of every sitting go to `docs/knowledge/platform-285k.md` (or a new `lnx-*.md`).
 All paths are relative to `~/AI/arrowlake-tuner`. `A=--audit ~/.local/state/arltuner/audit.jsonl` (always pass it: under sudo the default would
 be root's home, and the per-boot cap and cross-process dwell are counted from this one log).
 

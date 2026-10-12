@@ -13,7 +13,7 @@ while it starts, and ``remove`` deletes the service and the copy. No component o
   py -3 tools\\win\\ts_driver.py status       # service state + can \\\\.\\ThrottleStop be opened
   py -3 tools\\win\\ts_driver.py remove       # elevated: sc stop + sc delete + delete the per-run copy (the restore scripts do this after every run)
   py -3 tools\\win\\ts_driver.py check-dir DIR   # exit 0 when DIR is admin-only (the restore scripts check the accepted state's directory)
-Evidence: docs/research/win-throttlestop-9.7.3.md (hashes, offset), win-throttlestop-fivr.md section 1 (service/device names).
+Evidence: docs/knowledge/windows-path.md (hashes, offset), win-throttlestop-fivr.md section 1 (service/device names).
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # Hardware safety protocol
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 Applies to every host. Failure modes to design against: system hang/crash, silent instability (data corruption),
 persistent settings that survive reboot, kernel taint, and hardware stress from over-voltage or over-current.
@@ -50,7 +50,7 @@ Volatility is an assumption until measured: the first write of any kind is treat
 - Every MSR **write** taints the kernel (`TAINT_CPU_OUT_OF_SPEC`), even with `allow_writes=on`; reads never taint and unimplemented
   MSRs return EIO. Expected for our writes — record it in the session log. If a tool tainted the kernel, look for its writes in `dmesg`.
 - Still no blind sweeps (noise, MMIO/PCI side effects): only allowlisted reads.
-- Source: `docs/research/lnx-interfaces.md` §5 (verify on the actual install before relying).
+- Source: `docs/knowledge/linux-path.md` §5 (verify on the actual install before relying).
 
 ## Mailbox-session discipline (lesson of the 2026-08-26 incident, from the operator's earlier monitoring tooling)
 _2026-10-11 (D-032): numeric limits (caps, dwell, steps, floor) are the operator's advanced-user policy; the one-at-a-time rule, health

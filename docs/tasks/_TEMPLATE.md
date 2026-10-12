@@ -19,7 +19,7 @@ One paragraph: what question this answers or what capability it adds, and why it
 Facts/tools/captures needed, with paths.
 
 ## Deliverables
-- Concrete files/notes, each with where it lands (e.g. section of `docs/research/registers.md`).
+- Concrete files/notes, each with where it lands (e.g. section of `docs/knowledge/registers.md`).
 
 ## Acceptance
 Checkable statements. Evidence tags required for hardware claims.

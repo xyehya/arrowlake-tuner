@@ -1,6 +1,6 @@
 # Registers, MSRs, mailbox commands — single source of truth
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository; the facts are kept with their evidence tags.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository; the facts are kept with their evidence tags.
 
 Status legend: `decomp` = read from Intel's own XTU code (worker-produced in T-001/T-002, orchestrator spot-checked; usable as a constant only after a MEASURED readback on this CPU) ·
 `doc` = primary public source · `lead` = COMMUNITY/UNVERIFIED (never a constant) · `seen` = observed on this machine · `measured` = read on this machine by the operator's own read-only monitoring tool (capture 2026-09-29) · `trace` = recorded from OCCT/HWiNFO mailbox traces on this machine (corroboration).

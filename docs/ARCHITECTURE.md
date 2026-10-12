@@ -1,6 +1,6 @@
 # ARCHITECTURE — contracts every module and worker must honour
 
-> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/research/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
+> Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
 Language: **Python ≥ 3.12, standard library only** (`dataclasses`, `enum`, `typing.Protocol`, `tomllib`, `unittest`, `argparse`). No third-party dependencies (privileged code stays auditable). The mailbox layer is small and isolated so it can be ported later. Decision D-012.
 Layout (src layout): `src/arltuner/<package>/`, tests in `tests/<package>/`, run all with `python tools/run_tests.py` (puts `src/` on the path, unittest discovery).
@@ -125,7 +125,7 @@ Golden vectors come from `registers.md` (listed in each task). Simulator-only; n
 
 ## Update — T-027 (`vf-dump --measure`: robust sampling and adaptive caps)
 - **Sampling:** 30 samples at 0.1 s per cap attempt (`SAMPLES`, `SAMPLE_INTERVAL_S`; `measure_group(samples=, interval_s=, min_valid=)`, no CLI flag yet). Only samples whose running ratio (`0x198[15:8]`) equals the target are kept; the VID range is over those. `ok` if at least `min_valid` (default 5) were kept, else `MISMATCH`. Text shows `[kept/total at target]` when some were dropped; JSON has `samples_kept` / `samples_total`.
-- **Cap search** (replaces the fixed P `ratio` / E `ratio + 1` rule, which was ratio-dependent for E, `docs/research/lnx-first-read.md`): try `ratio x 100 MHz`; if the running ratio settles below the target, retry `(ratio + 1) x 100 MHz`; above it, or still short after the retry, is `MISMATCH`. A cap above `cpuinfo_max_freq` (new `MeasureIO.read_max_khz`) is never offered. `cap_khz` in the result is the cap of the reported attempt; a `+1` cap is noted. Caps are still restored in the `finally`. Guard budget is unchanged (plain reads do not count against the attempt cap); a retry doubles the audited `0x198` reads for that ratio.
+- **Cap search** (replaces the fixed P `ratio` / E `ratio + 1` rule, which was ratio-dependent for E, `docs/knowledge/platform-285k.md`): try `ratio x 100 MHz`; if the running ratio settles below the target, retry `(ratio + 1) x 100 MHz`; above it, or still short after the retry, is `MISMATCH`. A cap above `cpuinfo_max_freq` (new `MeasureIO.read_max_khz`) is never offered. `cap_khz` in the result is the cap of the reported attempt; a `+1` cap is noted. Caps are still restored in the `finally`. Guard budget is unchanged (plain reads do not count against the attempt cap); a retry doubles the audited `0x198` reads for that ratio.
 
 ## Update — T-028
 

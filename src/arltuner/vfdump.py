@@ -4,7 +4,7 @@ READ-ONLY toward the CPU's tuning state: this module never sends a write command
 *read* is (a WRMSR to MSR 0x150, ``docs/SAFETY.md`` "OC mailbox rule"). Every mailbox request and every plain ``rdmsr`` goes through the
 ``WriteGuard`` handed in by ``arltuner.cli``; this module never touches a transport or a port.
 
-Facts (``docs/research/lnx-first-read.md`` "Full point layout", "E cluster 1 V/F curve", "Step 2"):
+Facts (``docs/knowledge/platform-285k.md`` "Full point layout", "E cluster 1 V/F curve", "Step 2"):
   * ``0x10 P1=0 P2=n`` is the V/F word of point ``n`` (layout: ``arltuner.mailbox.VfWord``); ``P2 = 0`` is the OC word (OC ratio, adaptive V target,
     whole-curve offset). ``[MEASURED lnx 2026-10-02]``: **P-cores have 8 points** (CPU 0: 8,20,30,48,53,55,56,57x, BIOS offsets -49.8 mV at 53x and 57x,
     -14.6 mV at 55x), **E-cores 6** (8,15,23,30,40,46x); the point after the last answers rc ``0x11``.

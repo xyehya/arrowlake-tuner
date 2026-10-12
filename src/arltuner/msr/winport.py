@@ -1,6 +1,6 @@
 """The Windows MSR port: ThrottleStop's signed kernel driver (``\\\\.\\ThrottleStop``), driven through ctypes.
 
-Interface (``docs/research/win-throttlestop-fivr.md`` section 1, ``[DECOMPILED driver]``): buffered IOCTL ``0x80006448`` RDMSR
+Interface (``docs/knowledge/windows-path.md`` section 1, ``[DECOMPILED driver]``): buffered IOCTL ``0x80006448`` RDMSR
 (in: u32 msr; out: u64) and ``0x8000644C`` WRMSR (in: ``{u32 msr, u32 lo, u32 hi}``; no output). There is **no CPU argument**: the
 driver executes on whatever logical processor the calling thread is on. So every access here
 
