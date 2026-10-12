@@ -231,7 +231,8 @@ class EffectiveOffsetFloor(MeasuredCase):
 
     def test_policy_bounds_are_resolved_per_core_kind(self) -> None:
         policy = dataclasses.replace(
-            default_m1_policy(), ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250}, offset_ceiling_mv=10, max_ratio_step=2
+            default_m1_policy(), ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250}, offset_ceiling_mv=10, max_ratio_step=2,
+            hw_ratio_max={"E": 120, "P": 120},  # the CPU's own limit (cmd 0x01, D-039)
         )
         e, p = (build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None) for cpu in (8, 0))
         self.assertEqual((e.ratio_max, e.v_target_max_raw), (50, VfWord.v_to_raw(1.25)))

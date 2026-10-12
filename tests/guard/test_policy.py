@@ -273,11 +273,14 @@ class AutoLimitsTests(unittest.TestCase):
 
     TOML = 'cpus = "auto"\ne_cpus = "auto"\n[ratio_max]\nP = "auto"\nE = "auto"\n[v_target_max_mv]\nP = "auto"\nE = "auto"\n'
 
-    def ctx(self, policy, cpu, vmax=None, favored=None, kind_words=None):
+    OC = 0x778  # cmd 0x01 P1=0 as the reference machine answers it: 120x, bits [10:8] set
+
+    def ctx(self, policy, cpu, vmax=None, favored=None, kind_words=None, oc=(OC,)):
         from arltuner.guard.policy import build_context
 
         return build_context(
-            policy, cpu, favored_word=favored, fused_word=None, vf_word_sent=None, max_voltage_word=vmax, favored_words_of_kind=kind_words
+            policy, cpu, favored_word=favored, fused_word=None, vf_word_sent=None, max_voltage_word=vmax, favored_words_of_kind=kind_words,
+            oc_cap_words_of_kind=oc,
         )
 
     def test_auto_needs_the_live_topology_never_a_default(self) -> None:
@@ -301,22 +304,23 @@ class AutoLimitsTests(unittest.TestCase):
 
         p = load_policy(self.TOML, arl_s_285k())
         self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 60)  # P: 0x1C[15:8] = [7:0] = 57, + 3 (D-038)
-        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 51)  # E: max(48, 46) + 3
+        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 49)  # E: fused byte [15:8] 46 + 3; [7:0] 48 follows the BIOS turbo setting and is not used
         self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 58)
-        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 60)  # the larger byte
+        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 58)  # the fused byte [15:8] (55), not the larger [7:0]
         self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 60)  # per kind: the highest word read
 
-    def test_fused_ratio_cap_adds_the_oc_headroom_and_clamps_to_the_sanity_bound(self) -> None:
-        """D-038: fused max of the kind + AUTO_OC_HEADROOM (3), clamped to SANITY_RATIO_MAX (P 62 / E 60); None when no 0x1C of the kind was read."""
-        from arltuner.guard.policy import AUTO_OC_HEADROOM, SANITY_RATIO_MAX, fused_ratio_cap
+    def test_fused_ratio_cap_adds_the_oc_headroom_and_clamps_to_the_cpu_limit(self) -> None:
+        """D-038: fused max of the kind + AUTO_OC_HEADROOM (3); D-039: clamped by the CPU's own 0x01 limit when given, by no constant; None when no 0x1C of the kind was read."""
+        from arltuner.guard.policy import AUTO_OC_HEADROOM, fused_ratio_cap
 
         self.assertEqual(AUTO_OC_HEADROOM, 3)
         self.assertEqual(fused_ratio_cap("P", [0x3939]), 60)  # P fused 57 -> 60
         self.assertEqual(fused_ratio_cap("E", [0x2E2E]), 49)  # E fused 46 -> 49
-        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 51)  # the highest word read; [7:0] 48 beats [15:8] 46
-        self.assertEqual(fused_ratio_cap("P", [0x3D3D]), SANITY_RATIO_MAX["P"])  # 61 + 3 = 64 -> clamped to 62
-        self.assertEqual(fused_ratio_cap("P", [0x3B3B]), 62)  # 59 + 3 = 62: exactly the bound
-        self.assertEqual(fused_ratio_cap("E", [0x3A3A]), SANITY_RATIO_MAX["E"])  # 58 + 3 = 61 -> clamped to 60
+        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 49)  # [7:0] 48 is the turbo setting, only the fused [15:8] 46 counts
+        self.assertEqual(fused_ratio_cap("E", [0x3030]), 51)  # a higher turbo byte alone changes nothing; a higher fused byte does
+        self.assertEqual(fused_ratio_cap("P", [0x3D3D]), 64)  # 61 + 3: no code constant clamps it any more
+        self.assertEqual(fused_ratio_cap("P", [0x3D3D], hw_max=62), 62)  # the CPU's own limit does
+        self.assertEqual(fused_ratio_cap("P", [0x3939], hw_max=120), 60)
         for words in ([], [None], [0], [None, 0]):
             self.assertIsNone(fused_ratio_cap("P", words))  # nothing read: no raise
 
@@ -327,13 +331,23 @@ class AutoLimitsTests(unittest.TestCase):
         self.assertIsNone(self.ctx(p, 0, None, None).ratio_max)
         self.assertIsNone(self.ctx(p, 0, None, 0).ratio_max)
 
-    def test_auto_ratio_is_clamped_to_the_sanity_bound(self) -> None:
-        from arltuner.guard.policy import SANITY_RATIO_MAX
+    def test_auto_ratio_is_clamped_by_the_cpu_limit_not_by_a_constant(self) -> None:
         from arltuner.topology import arl_s_285k
 
         p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, None, 0xFFFF).ratio_max, SANITY_RATIO_MAX["P"])
-        self.assertEqual(self.ctx(p, 8, None, 0xFFFF).ratio_max, SANITY_RATIO_MAX["E"])
+        self.assertEqual(self.ctx(p, 0, None, 0xFFFF, oc=[0x13E]).ratio_max, 62)  # 0x01 says 62x: 255 + 3 clamps to it
+        self.assertEqual(self.ctx(p, 8, None, 0xFFFF, oc=[0x134]).ratio_max, 52)
+        self.assertEqual(self.ctx(p, 0, None, 0x3939, oc=[0x13E]).ratio_max, 60)  # below the CPU limit: fused 57 + 3
+        self.assertIn("CPU limit 62x (cmd 0x01", self.ctx(p, 0, None, 0xFFFF, oc=[0x13E]).ratio_text)
+
+    def test_auto_ratio_without_the_cpu_limit_allows_no_raise(self) -> None:
+        from arltuner.topology import arl_s_285k
+
+        p = load_policy(self.TOML, arl_s_285k())
+        c = self.ctx(p, 0, None, 0x3939, oc=())
+        self.assertIsNone(c.ratio_max)
+        self.assertIn("no-raise value", c.ratio_text)
+        self.assertIn("cmd 0x01", c.ratio_text)
 
     def test_a_cpuinfo_max_freq_change_does_not_move_the_cap(self) -> None:
         from arltuner.topology import synthetic
@@ -347,18 +361,22 @@ class AutoLimitsTests(unittest.TestCase):
         from arltuner.topology import arl_s_285k
 
         p = load_policy('cpus = ["0-23"]\n[ratio_max]\nP = 57\nE = 49\n', arl_s_285k())
-        self.assertEqual((self.ctx(p, 0, None, 0x3737).ratio_max, self.ctx(p, 8, None, 0x2E30).ratio_max), (57, 49))
+        self.assertEqual((self.ctx(p, 0, None, 0x3737).ratio_max, self.ctx(p, 8, None, 0x2E30).ratio_max), (57, 49))  # the CPU allows 120x
+        self.assertEqual((self.ctx(p, 0, None, 0x3737, oc=()).ratio_max, self.ctx(p, 8, None, 0x2E30, oc=()).ratio_max), (None, None))  # 0x01 unread: no raise (D-039)
 
     def test_auto_ratio_applies_to_the_plain_turbo_write_context(self) -> None:
         from arltuner.guard.policy import build_msr_context
         from arltuner.topology import arl_s_285k
 
         p = load_policy(self.TOML, arl_s_285k())
-        e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939})
-        self.assertEqual(e.ratio_max, 51)  # only the E CPUs' words count for the E table (48 + 3)
-        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}).ratio_max, 60)
-        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}).ratio_max)
-        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None).ratio_max)
+        oc = {0: self.OC, 8: self.OC}
+        e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939}, oc_cap_words=oc)
+        self.assertEqual(e.ratio_max, 49)  # only the E CPUs' words count for the E table (fused 46 + 3)
+        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}, oc_cap_words=oc).ratio_max, 60)
+        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}, oc_cap_words=oc).ratio_max)
+        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, oc_cap_words=oc).ratio_max)
+        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={0: self.OC}).ratio_max)  # the E limit was not read: no raise
+        self.assertEqual(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={9: 0x134}).ratio_max, 49)  # any CPU of the kind answers for it
 
     def test_numeric_values_keep_working_and_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
         from arltuner.topology import synthetic
@@ -376,13 +394,13 @@ class AutoLimitsTests(unittest.TestCase):
         self.assertAlmostEqual(0x680 / 1024, 1.625)
         self.assertEqual(self.ctx(p, 8, 0x56D).v_target_max_raw, 0x56C)  # E: 1.3555 V
 
-    def test_v_target_auto_is_never_above_the_sanity_bound(self) -> None:
-        from arltuner.guard.policy import SANITY_V_TARGET_MAX_MV
+    def test_v_target_auto_follows_the_cpu_whatever_its_value(self) -> None:
+        """D-039: the code keeps no V target ceiling of its own; the CPU's 0x28 maximum minus one LSB is the whole limit."""
         from arltuner.topology import arl_s_285k
 
         p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, 0x7FF).v_target_max_raw, VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV["P"] / 1000))
-        self.assertEqual(self.ctx(p, 8, 0xFFF).v_target_max_raw, VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV["E"] / 1000))
+        self.assertEqual(self.ctx(p, 0, 0x7FF).v_target_max_raw, 0x7FE)  # 1.998 V: above the old P bound of 1.625 V
+        self.assertEqual(self.ctx(p, 8, 0xFFF).v_target_max_raw, 0xFFE)
 
     def test_v_target_auto_with_a_zero_or_unread_0x28_allows_no_raise(self) -> None:
         from arltuner.topology import arl_s_285k

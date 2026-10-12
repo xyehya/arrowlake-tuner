@@ -18,7 +18,7 @@ from unittest import mock
 from arltuner import cli
 from arltuner.guard import ENV_FLAG, WriteGuard, read_all
 from arltuner.mailbox import VfWord
-from arltuner.msr import SimConfig, SimMsrPort, SimRequest
+from arltuner.msr import SimConfig, SimMsrPort, SimRequest, measured_baseline
 from arltuner.topology import TopologyMismatch, arl_s_285k
 
 from arltuner.controls import XTU_SHAPE_CAVEAT
@@ -37,6 +37,13 @@ max_ratio_step = 8        # these tests are not about the D-016 step limits: rel
 max_v_step_mv = 200
 max_offset_step_mv = 200
 assumed_bios_offset_mv = { P = -50, E = 0 }   # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+
+[[allow]]
+name = "oc_capability_read"   # G-137: the plan reads the CPU's own ratio limit (0x01) when a ratio ceiling is set
+cmd = 0x01
+p1 = [0]
+p2 = [0]
+kind = "read"
 
 [[allow]]
 name = "misc_read"
@@ -564,6 +571,35 @@ class RaiseThroughTheCli(CliCase):
         self.assertIn("after a raise the ratio first, then the voltage", out)
         self.assertEqual(len(re.findall(r"cmd 0x11 p1 0 p2 0 data", out)), 8)  # the revert plan: two words per CPU of the cluster
         self.assertIn("this plan RAISES", out)
+
+    def test_apply_reads_the_cpu_limit_0x01_before_the_first_write_and_succeeds_within_it(self) -> None:
+        """G-137 (D-039): the ratio ceiling is the policy clamped by the CPU's own 0x01 limit, so the plan reads it (once per core kind, last of the reads)."""
+        path = self.write("e_up.toml", self.E_UP)
+        code, out, err = self.run_default_sim("apply", path, "--sim", "--policy", self.EXAMPLE, "--audit", self.audit, "--lock", self.lock, stdin=self.confirmed())
+        self.assertEqual((code, err), (0, ""), out)
+        cmds = [int(r["cmd"], 16) for r in (json.loads(line) for line in self.audit.read_text().splitlines()) if r.get("event") == "attempt" and "cmd" in r]
+        self.assertEqual(cmds.count(0x01), 1)  # one E kind, one read
+        self.assertEqual(cmds.index(0x01) + 1, cmds.index(0x11))  # the last of the reads, right before the first write
+        self.assertIn("read the CPU's own ratio limit (0x01) of E CPUs", out)
+
+    def test_the_plan_counts_the_0x01_read_in_the_operations_it_needs(self) -> None:
+        path = self.write("e_up.toml", self.E_UP)
+        code, out, err = self.run_default_sim("plan", path, "--sim", "--policy", self.EXAMPLE)
+        self.assertEqual((code, err), (0, ""), out)
+        ops = int(re.search(r"Operations required: (\d+) mailbox WRMSRs", out).group(1))
+        steps = [int(m) for m in re.findall(r"^\s*(\d+)\. cpu .* (?:cmd 0x|msr )", out, re.M)]
+        reads_and_writes = len([1 for line in out.splitlines() if re.match(r"\s*\d+\. cpu +\d+ cmd 0x", line)])
+        writes = len(re.findall(r"cmd 0x(?:11|1D|27) write", out))
+        self.assertEqual(ops, reads_and_writes + writes)  # every mailbox step (reads, now including 0x01, and writes) + one read-back per write
+        self.assertIn("cmd 0x01 read the CPU's own ratio limit", out)
+        self.assertTrue(steps)
+
+    def test_a_ratio_above_the_cpu_limit_is_refused_with_cmd_0x01_as_the_source(self) -> None:
+        path = self.write("e_up.toml", self.E_UP)
+        config = SimConfig.measured(fixed_reads={**measured_baseline.FIXED_READS, (0x01, 0, 0): 0x130}, reject_zero_fields=True)  # the CPU reports 48x
+        code, out, err = self.run_cli("plan", path, "--sim", "--policy", self.EXAMPLE, sim=SimMsrPort(config))
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("CPU limit 48x (cmd 0x01", out)
 
     def test_apply_refuses_a_big_step_and_prints_the_next_one(self) -> None:
         path = self.write("e_far.toml", self.E_FAR)

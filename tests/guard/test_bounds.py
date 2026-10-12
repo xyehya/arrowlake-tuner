@@ -14,7 +14,14 @@ import dataclasses
 import unittest
 
 from arltuner.guard import GuardRefused, Policy, PolicyError, Refusal, default_m1_policy, load_policy
-from arltuner.guard.policy import SANITY_OFFSET_CEILING_MV, SANITY_RATIO_MAX, SANITY_V_TARGET_MAX_MV, CheckContext, hw_v_max_raw
+from arltuner.guard.policy import (
+    ENCODING_OFFSET_CEILING_MV,
+    ENCODING_OFFSET_FLOOR_MV,
+    ENCODING_RATIO_MAX,
+    ENCODING_V_TARGET_MAX_MV,
+    CheckContext,
+    hw_v_max_raw,
+)
 from arltuner.mailbox import VfWord
 
 from .fakes import RecordingTransport
@@ -27,7 +34,9 @@ P_V = 0x538  # the fused V target of P1 (1336 raw, 1.3047 V)
 ALL = ("10", "1C", "09", "26", "28")
 
 #: a reviewed policy that allows a raise: E up to ratio 50 / 1.250 V, P up to ratio 58 / 1.500 V, offsets up to +25 mV (the shipped steps)
-RAISE = dict(ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250, "P": 1500}, offset_ceiling_mv=25)
+# hw_ratio_max: the CPU's own limit (cmd 0x01, D-039) as the reference machine reports it (0x778 = 120x); a ratio ceiling is the policy value clamped by it
+CPU_LIMIT = dict(hw_ratio_max={"P": 120, "E": 120})
+RAISE = dict(ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250, "P": 1500}, offset_ceiling_mv=25, **CPU_LIMIT)
 SHIPPED_STEPS = dict(max_ratio_step=1, max_v_step_mv=20, max_offset_step_mv=25)
 RELAXED_STEPS = dict(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200)
 
@@ -45,6 +54,7 @@ class BoundsCase(MeasuredCase):
 
     def open(self, core: dict, *, which=ALL, steps=None, **policy_changes):
         """A guard for ``core`` with the reads in ``which`` done. ``steps``: ``SHIPPED_STEPS`` / ``RELAXED_STEPS`` (default relaxed)."""
+        policy_changes = {**CPU_LIMIT, **policy_changes}
         self.policy = dataclasses.replace(self.policy, **(RELAXED_STEPS if steps is None else steps), **policy_changes)
         guard = self.session(core, which)
         return guard
@@ -121,7 +131,7 @@ class AboveTheCeilings(BoundsCase):
     def test_ratio_above_the_policy_ceiling_is_refused(self) -> None:
         guard = self.open(E8, **RAISE)
         self.accept(guard, E8, word(50, E_V))
-        exc = self.refuse(guard, E8, word(51, E_V), "ratio 51 above 50 (policy ratio_max")
+        exc = self.refuse(guard, E8, word(51, E_V), "ratio 51 above 50 (policy ratio_max E = 50")
         self.assertIn("ratio_max", exc.detail)
 
     def test_v_target_above_the_policy_ceiling_is_refused(self) -> None:
@@ -195,7 +205,7 @@ class HardwareMaximumVoltage(BoundsCase):
     def test_a_v_target_above_the_hardware_maximum_is_refused_even_if_the_policy_allows_it(self) -> None:
         low_vmax = dict(E8, vmax=0x500)  # hardware max 0x4FF = 1279 raw
         guard = self.open(low_vmax, **RAISE)  # policy ceiling 1.250 V = 1280 raw
-        self.refuse(guard, low_vmax, word(48, 1280), "hardware maximum")
+        self.refuse(guard, low_vmax, word(48, 1280), "CPU limit")
         self.accept(guard, low_vmax, word(48, 1279))
 
     def test_the_hardware_maximum_binds_at_exactly_raw_minus_one(self) -> None:
@@ -469,38 +479,44 @@ class PolicyBounds(unittest.TestCase):
         with self.assertRaises(TypeError):
             q.ratio_max["E"] = 60  # type: ignore[index]
 
-    def test_absolute_sanity_bounds_are_refused_at_load(self) -> None:
-        self.assertEqual((SANITY_V_TARGET_MAX_MV["E"], SANITY_V_TARGET_MAX_MV["P"]), (1355, 1625))
-        self.assertEqual((SANITY_RATIO_MAX["P"], SANITY_RATIO_MAX["E"]), (62, 60))
+    def test_field_encoding_bounds_are_refused_at_load(self) -> None:
+        """D-039: only what the word cannot carry is refused at load; every number the CPU might allow is accepted (the CPU's own limits apply per request)."""
+        self.assertEqual((ENCODING_RATIO_MAX, ENCODING_V_TARGET_MAX_MV), (255, 3999))
+        self.assertEqual((ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV), (-1000, 999))
         base = "cpus = [0]\n"
         cases = {
-            "E ratio above the sanity bound": (base + "[ratio_max]\nE = 61\n", "ratio_max"),
-            "P ratio above the sanity bound": (base + "[ratio_max]\nP = 63\n", "ratio_max"),
-            "E ceiling above 1.355 V": (base + "[v_target_max_mv]\nE = 1356\n", "v_target_max_mv"),
-            "P ceiling above 1.625 V": (base + "[v_target_max_mv]\nP = 1626\n", "v_target_max_mv"),
-            "offset ceiling above the sanity bound": (base + f"offset_ceiling_mv = {SANITY_OFFSET_CEILING_MV + 1}\n", "offset_ceiling_mv"),
+            "ratio above the 8-bit field": (base + f"[ratio_max]\nE = {ENCODING_RATIO_MAX + 1}\n", "ratio_max"),
+            "ceiling above the 12-bit S2.10 field": (base + f"[v_target_max_mv]\nP = {ENCODING_V_TARGET_MAX_MV + 1}\n", "v_target_max_mv"),
+            "offset ceiling above the 11-bit field": (base + f"offset_ceiling_mv = {ENCODING_OFFSET_CEILING_MV + 1}\n", "offset_ceiling_mv"),
+            "offset floor below the 11-bit field": (base + f"effective_offset_floor_mv = {ENCODING_OFFSET_FLOOR_MV - 1}\n", "effective_offset_floor_mv"),
             "negative offset ceiling": (base + "offset_ceiling_mv = -1\n", "offset_ceiling_mv"),
             "ratio zero": (base + "[ratio_max]\nE = 0\n", "ratio_max"),
             "voltage below 500 mV": (base + "[v_target_max_mv]\nE = 499\n", "v_target_max_mv"),
             "step zero": (base + "max_ratio_step = 0\n", "max_ratio_step"),
-            "ratio step too big": (base + "max_ratio_step = 9\n", "max_ratio_step"),
+            "ratio step too big": (base + f"max_ratio_step = {ENCODING_RATIO_MAX + 1}\n", "max_ratio_step"),
             "v step too small": (base + "max_v_step_mv = 1\n", "max_v_step_mv"),
-            "v step too big": (base + "max_v_step_mv = 201\n", "max_v_step_mv"),
+            "v step too big": (base + "max_v_step_mv = 1001\n", "max_v_step_mv"),
             "offset step too small": (base + "max_offset_step_mv = 1\n", "max_offset_step_mv"),
-            "offset step too big": (base + "max_offset_step_mv = 201\n", "max_offset_step_mv"),
+            "offset step too big": (base + "max_offset_step_mv = 1001\n", "max_offset_step_mv"),
         }
         for label, (text, fragment) in cases.items():
             with self.subTest(label):
                 with self.assertRaises(PolicyError) as cm:
                     load_policy(text)
                 self.assertIn(fragment, str(cm.exception))
+                self.assertIn("field encoding", str(cm.exception))  # the refusal says where the bound comes from
 
-    def test_the_sanity_maxima_themselves_are_accepted(self) -> None:
-        q = load_policy(
-            "cpus = [0]\noffset_ceiling_mv = 200\nmax_ratio_step = 8\nmax_v_step_mv = 200\nmax_offset_step_mv = 200\n"
-            "[ratio_max]\nE = 60\nP = 62\n[v_target_max_mv]\nE = 1355\nP = 1625\n"
-        )
-        self.assertEqual((q.ratio_max["E"], q.v_target_max_mv["P"]), (60, 1625))
+    def test_the_encoding_maxima_and_the_old_code_constants_are_accepted(self) -> None:
+        """The old code constants (ratio P 62 / E 60, V target P 1625 / E 1355 mV, offset ceiling 200 mV, steps 8 / 200 / 200) are plain policy values now, as are the encodings."""
+        for text in (
+            "cpus = [0]\noffset_ceiling_mv = 200\nmax_ratio_step = 8\nmax_v_step_mv = 200\nmax_offset_step_mv = 200\n[ratio_max]\nE = 60\nP = 62\n[v_target_max_mv]\nE = 1355\nP = 1625\n",
+            "cpus = [0]\noffset_ceiling_mv = 999\neffective_offset_floor_mv = -1000\nmax_ratio_step = 255\nmax_v_step_mv = 1000\nmax_offset_step_mv = 1000\n"
+            "[ratio_max]\nE = 255\nP = 90\n[v_target_max_mv]\nE = 3999\nP = 1700\n",
+        ):
+            with self.subTest(text=text):
+                q = load_policy(text)
+                self.assertIsNotNone(q.ratio_max["E"])
+                self.assertIsNotNone(q.v_target_max_mv["P"])
 
     def test_unknown_keys_and_bad_shapes_are_refused(self) -> None:
         cases = {
@@ -519,11 +535,12 @@ class PolicyBounds(unittest.TestCase):
 
     def test_direct_construction_is_validated_too(self) -> None:
         for kwargs in (
-            {"ratio_max": {"E": 61, "P": None}},
+            {"ratio_max": {"E": ENCODING_RATIO_MAX + 1, "P": None}},
             {"ratio_max": {"X": 5}},
-            {"v_target_max_mv": {"E": 1356}},
+            {"hw_ratio_max": {"E": 0}},
+            {"v_target_max_mv": {"E": ENCODING_V_TARGET_MAX_MV + 1}},
             {"v_target_max_mv": 1250},
-            {"offset_ceiling_mv": 201},
+            {"offset_ceiling_mv": ENCODING_OFFSET_CEILING_MV + 1},
             {"max_v_step_mv": True},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(PolicyError):

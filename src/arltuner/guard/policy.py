@@ -26,10 +26,10 @@ TOML schema (``load_policy``)::
     max_ratio_step = 1                    # |ratio - current| per 0x11 word
     max_v_step_mv = 20                    # |V target - current| per 0x11 word (mV)
     max_offset_step_mv = 25               # |offset - current| per 0x11 word (mV)
-    [ratio_max]                           # per core kind; absent kind = the current ratio (no raise)
-    E = 50
+    [ratio_max]                           # per core kind; absent kind = the current ratio (no raise); "auto" = fused 0x1C + 3
+    E = 50                                # effective ceiling = this, clamped by the CPU's own cmd 0x01 [7:0] (D-039); 0x01 unread = no raise
     [v_target_max_mv]                     # per core kind (mV); absent kind = the current/fused V target (no raise)
-    E = 1250
+    E = 1250                              # effective ceiling = this, clamped by the CPU's own cmd 0x28 maximum - 1 LSB (D-039)
 
     [[msr_allow]]                         # T-023: plain (non-mailbox) rdmsr/wrmsr; absent = every plain MSR access is denied
     name  = "turbo_e_write"               # unique
@@ -100,9 +100,10 @@ __all__ = [
     "DEFAULT_MAX_RATIO_STEP",
     "DEFAULT_MAX_V_STEP_MV",
     "DEFAULT_OFFSET_CEILING_MV",
-    "SANITY_OFFSET_CEILING_MV",
-    "SANITY_RATIO_MAX",
-    "SANITY_V_TARGET_MAX_MV",
+    "ENCODING_OFFSET_CEILING_MV",
+    "ENCODING_OFFSET_FLOOR_MV",
+    "ENCODING_RATIO_MAX",
+    "ENCODING_V_TARGET_MAX_MV",
     "AllowEntry",
     "CheckContext",
     "Policy",
@@ -111,7 +112,12 @@ __all__ = [
     "build_context",
     "default_m1_policy",
     "fused_top_ratio",
+    "hw_ratio_max",
+    "hw_v_max_mv",
     "hw_v_max_raw",
+    "ratio_limit",
+    "v_target_limit",
+    "v_target_limit_mv",
     "load_policy",
 ]
 
@@ -130,20 +136,21 @@ DEFAULT_MAX_V_STEP_MV = 20
 DEFAULT_MAX_OFFSET_STEP_MV = 25
 DEFAULT_OFFSET_CEILING_MV = 0
 
-#: Absolute sanity bounds a policy file can never exceed (``load_policy`` / ``Policy`` refuse more). Voltage: ``0x28`` per core minus one,
-#: XTU's rule (registers.md "Mailbox commands", ``[MEASURED win 2026-10-01]`` P ``0x681``, E ``0x56D`` per core): P 0x680 = 1664 raw =
-#: 1.625 V, E 0x56C = 1388 raw = 1.3555 V (S2.10), in whole mV. Ratio: 62 P / 60 E and the +200 mV offset ceiling (D-032; was +100) are the orchestrator's
-#: sanity bounds (``[UNVERIFIED]``: not hardware limits; the simulator's pcode cap is its own SIM-ONLY model).
-SANITY_V_TARGET_MAX_MV: Mapping[str, int] = MappingProxyType({"P": 1625, "E": 1355})
-SANITY_RATIO_MAX: Mapping[str, int] = MappingProxyType({"P": 62, "E": 60})
-#: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
-#: above the top fused point is reachable without a hand-written ``ratio_max``; still clamped to ``SANITY_RATIO_MAX``.
+#: D-039 (operator yes, 2026-10-12): **no number in this file is a ceiling a policy cannot pass.** The effective limit of a ratio is the policy value clamped by
+#: the CPU's own ``0x01 [7:0]`` fused max OC ratio, of a V target the policy value clamped by ``0x28 - 1 LSB``; both are read live in the session (an unread limit
+#: = no raise, fail closed). What remains here are the **field encodings** (the widest value the word can carry, registers.md "V/F data word") and the XTU range
+#: of the offset: a policy value outside them cannot be written into the word at all.
+ENCODING_RATIO_MAX = 255  # ratio field [7:0] of the 0x11 word
+ENCODING_V_TARGET_MAX_MV = 3999  # voltage field [19:8] is S2.10 over 12 bits: 0xFFF / 1024 V = 3.999 V (the real limit is 0x28, read live)
+ENCODING_OFFSET_CEILING_MV = 999  # offset field [31:21] is 11-bit signed; XTU allows -1000...+999 mV (registers.md V/F data word)
+ENCODING_OFFSET_FLOOR_MV = -1000
+#: D-038 (operator yes, 2026-10-12): the ``"auto"`` ratio ceiling is the 0x1C[15:8] fused max of the kind plus this many bins (P 57 -> 60, E 46 -> 49), so an OC ratio
+#: above the top fused point is reachable without a hand-written ``ratio_max``; clamped by the CPU's own ``0x01`` limit (D-039), never by a constant.
 AUTO_OC_HEADROOM = 3
-SANITY_OFFSET_CEILING_MV = 200  # D-032 (operator yes, 2026-10-11): was 100; the menus never go beyond +/-200 mV
-_V_TARGET_MIN_MV = 500  # the profile schema's lower sanity bound for an OC-point voltage
-_RATIO_STEP_RANGE = (1, 8)
-_V_STEP_MV_RANGE = (2, 200)  # >= 2 mV so that every step window holds at least one whole-mV value (1 mV = 1.024 raw)
-_OFFSET_STEP_MV_RANGE = (2, 200)
+_V_TARGET_MIN_MV = 500  # XTU's voltage override range starts at 0.5 V (registers.md "Limits XTU applies"); also the profile schema's lower bound
+_RATIO_STEP_RANGE = (1, ENCODING_RATIO_MAX)
+_V_STEP_MV_RANGE = (2, 1000)  # >= 2 mV so that every step window holds at least one whole-mV value (1 mV = 1.024 raw)
+_OFFSET_STEP_MV_RANGE = (2, 1000)
 
 #: The simulated reference CPU's E CPUs: the default of a Policy that was never bound to a topology (simulator and tests). Every hardware path binds the live
 #: topology (``Policy.with_topology`` / ``load_policy(..., topology=...)``, D-036).
@@ -237,6 +244,9 @@ class CheckContext:
     max_v_step_raw: int = _DEFAULT_MAX_V_STEP_RAW
     max_offset_step_raw: int = _DEFAULT_MAX_OFFSET_STEP_RAW
     top_fused_ratio: int | None = None  # G-120: the highest fused V/F point ratio of this CPU's kind; a P2 = 0 ratio at or below it has no OC point. None = not known
+    ratio_text: str = field(default="", compare=False)  # D-039: where ``ratio_max`` comes from (policy file / CPU limit cmd 0x01 / why it is the no-raise value), for refusal messages
+    v_text: str = field(default="", compare=False)  # the same for ``v_target_max_raw`` (policy file / CPU limit cmd 0x28)
+    policy_where: str = field(default="the policy", compare=False)  # the policy file the limits come from, for the offset window's message
 
     def unlimited_steps(self) -> CheckContext:
         """The same context with the step limits lifted: the planner uses it to tell "refused only because the step is too big" (a ramp
@@ -253,15 +263,95 @@ def fused_top_ratio(fused_word: int | None) -> int | None:
     return (fused_word & 0xFF) or None
 
 
-def fused_ratio_cap(kind: str, favored_words: Iterable[int | None]) -> int | None:
-    """The ``"auto"`` ratio ceiling of a core kind (D-038): the highest ``max(0x1C[7:0], 0x1C[15:8])`` over the ``0x1C`` words of that kind read in this session
-    (registers.md 0x1C: favored ratio and fused ratio) plus ``AUTO_OC_HEADROOM`` bins, clamped to the sanity bound. ``None`` (the no-raise value) when no ``0x1C`` of the
-    kind was read. Never a sysfs value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
+def hw_ratio_max(oc_cap_words: Iterable[int | None]) -> int | None:
+    """The CPU's own ratio limit of a core kind, live (D-039): ``[7:0]`` of the ``0x01 P1=0 P2=0`` words of that kind read in this session (registers.md 0x01: fused max
+    OC ratio; ``[8]`` = ratio overclocking ok). The lowest if several differ (fail closed). ``None`` when no word was read, a word reads 0, or ``[8]`` is clear: the limit
+    is unknown, so nothing may be raised. ``[UNVERIFIED]`` that an E CPU answers ``P1=0`` for the E domain (the decompile has no separate E domain, ``[DECOMPILED
+    win-xtu-decompile-controls.md]``); ``[MEASURED win 2026-10-01]`` P reads ``0x778`` = 120x."""
+    ratios = [w & 0xFF for w in oc_cap_words if w is not None and w & 0x100 and w & 0xFF]
+    return min(ratios) if ratios else None
+
+
+def hw_v_max_mv(max_voltage_word: int | None) -> int | None:
+    """The CPU's own V target limit in whole mV (D-039): ``0x28 [11:0] - 1 LSB`` (``hw_v_max_raw``), rounded down. ``None`` when the word was not read or its field is 0."""
+    if max_voltage_word is None or (max_voltage_word & 0xFFF) == 0:
+        return None
+    return hw_v_max_raw(max_voltage_word) * 1000 // 1024 or None  # a limit that rounds to 0 mV is no usable limit
+
+
+def fused_ratio_cap(kind: str, favored_words: Iterable[int | None], hw_max: int | None = None) -> int | None:
+    """The ``"auto"`` ratio ceiling of a core kind (D-038): the highest **fused** ratio ``0x1C[15:8]`` over the ``0x1C`` words of that kind read in this session plus
+    ``AUTO_OC_HEADROOM`` bins (P 57 -> 60, E 46 -> 49), clamped by ``hw_max`` (the CPU's own ``0x01`` limit, D-039) when given. ``[7:0]`` is deliberately not used: it is
+    the favored / current ratio, it follows the BIOS turbo setting and a ``0x1D`` write (E reads 48 while its fused ratio is 46), so a cap from it would ratchet
+    ``[MEASURED win 2026-10-01]`` (``measured_baseline.FAVORED_WORD``: P ``0x3939`` / ``0x3737`` = 57 / 55, E ``0x2E30`` = fused 46). ``None`` (the no-raise value)
+    when no ``0x1C`` of the kind was read. Never a sysfs value: ``cpuinfo_max_freq`` follows runtime OC writes, so a cap derived from it would rise with every raise."""
     best = 0
     for word in favored_words:
         if word:
-            best = max(best, word & 0xFF, (word >> 8) & 0xFF)
-    return min(best + AUTO_OC_HEADROOM, SANITY_RATIO_MAX[kind]) if best else None
+            best = max(best, (word >> 8) & 0xFF)
+    if not best:
+        return None
+    cap = best + AUTO_OC_HEADROOM
+    return cap if hw_max is None else min(cap, hw_max)
+
+
+def ratio_limit(policy: Policy, kind: str, favored_words: Iterable[int | None], oc_cap_words: Iterable[int | None] = ()) -> tuple[int | None, str]:
+    """``(effective ratio ceiling or None, source text)`` of a core kind (D-039). The ceiling is the policy value (a number, or ``"auto"`` = fused ``0x1C`` + 3)
+    clamped by the CPU's own ``0x01`` limit -- the ``oc_cap_words`` of this session and the live limit bound to the policy (``Policy.with_hw_limits``). ``None`` =
+    no raise: the policy sets none, or the CPU's limit was not read (fail closed). The text names where the number comes from; every refusal of a ratio quotes it."""
+    where = policy.where
+    oc_cap_words = list(oc_cap_words)
+    hw_values = [v for v in (hw_ratio_max(oc_cap_words), policy.hw_ratio_max[kind]) if v is not None]
+    hw = min(hw_values) if hw_values else None
+    unsupported = hw is None and any(w is not None for w in oc_cap_words)  # a 0x01 word was read, but it says no ratio overclocking (bit 8 clear) or max 0
+    unread = "the CPU reports ratio overclocking as not supported (cmd 0x01: bit 8 clear or max ratio 0)" if unsupported else "the CPU's own limit (cmd 0x01) was not read this session"
+    if kind in policy.ratio_auto:
+        label = f'policy ratio_max {kind} = "auto" ({where})'
+        base = fused_ratio_cap(kind, favored_words)
+        if base is None:
+            return None, f"no-raise value: {label} needs the fused ratio of cmd 0x1C, which was not read this session"
+        fused = base - AUTO_OC_HEADROOM
+        if hw is None:
+            return None, f"no-raise value: {label} = fused {fused} + {AUTO_OC_HEADROOM}, but {unread}"
+        if base > hw:
+            return hw, f"CPU limit {hw}x (cmd 0x01 [7:0] fused max OC ratio; {label} = fused {fused} + {AUTO_OC_HEADROOM} = {base} is above it)"
+        return base, f"{label} = fused {fused} + {AUTO_OC_HEADROOM} = {base}; your CPU allows up to {hw}x per cmd 0x01"
+    number = policy.ratio_max[kind]
+    if number is None:
+        return None, f"no-raise value: policy ratio_max {kind} is not set ({where})"
+    if hw is None:
+        return None, f"no-raise value: policy ratio_max {kind} = {number} ({where}), but {unread}"
+    if number > hw:
+        return hw, f"CPU limit {hw}x (cmd 0x01 [7:0] fused max OC ratio; policy ratio_max {kind} = {number} ({where}) is above it)"
+    return number, f"policy ratio_max {kind} = {number} ({where}; your CPU allows up to {hw}x per cmd 0x01)"
+
+
+def v_target_limit_mv(policy: Policy, kind: str, max_voltage_word: int | None) -> tuple[int | None, str]:
+    """``(effective V target ceiling in whole mV or None, source text)`` of a core kind (D-039): the policy value (a number, or ``"auto"``) clamped by the CPU's own
+    ``0x28`` maximum minus one LSB (the word of this session and/or the live limit bound to the policy). ``"auto"`` with ``0x28`` unread = no raise (``None``). A policy
+    number with ``0x28`` unread stays the number: ``vf_bounded`` then refuses any V target above the no-raise value (a raise needs the read)."""
+    where = policy.where
+    hw_values = [v for v in (hw_v_max_mv(max_voltage_word), policy.hw_v_target_max_mv[kind]) if v is not None]
+    hw_mv = min(hw_values) if hw_values else None
+    if kind in policy.v_target_auto:
+        label = f'policy v_target_max_mv {kind} = "auto" ({where})'
+        if hw_mv is None:
+            return None, f"no-raise value: {label} is the CPU's own limit (cmd 0x28), which was not read this session"
+        return hw_mv, f"{label} = CPU limit {hw_mv} mV (cmd 0x28 max - 1 LSB)"
+    number = policy.v_target_max_mv[kind]
+    if number is None:
+        return None, f"no-raise value: policy v_target_max_mv {kind} is not set ({where})"
+    if hw_mv is None:
+        return number, f"policy v_target_max_mv {kind} = {number} mV ({where}); the CPU's own limit (cmd 0x28) was not read this session"
+    if number > hw_mv:
+        return hw_mv, f"CPU limit {hw_mv} mV (cmd 0x28 max - 1 LSB; policy v_target_max_mv {kind} = {number} mV ({where}) is above it)"
+    return number, f"policy v_target_max_mv {kind} = {number} mV ({where}; your CPU allows up to {hw_mv} mV per cmd 0x28)"
+
+
+def v_target_limit(policy: Policy, kind: str, max_voltage_word: int | None) -> tuple[int | None, str]:
+    """``v_target_limit_mv`` with the ceiling as raw S2.10 (``None`` = no raise)."""
+    mv, text = v_target_limit_mv(policy, kind, max_voltage_word)
+    return (None if mv is None else VfWord.v_to_raw(mv / 1000)), text
 
 
 def build_context(
@@ -273,21 +363,14 @@ def build_context(
     vf_word_sent: int | None,
     max_voltage_word: int | None = None,
     favored_words_of_kind: Iterable[int | None] | None = None,
+    oc_cap_words_of_kind: Iterable[int | None] = (),
 ) -> CheckContext:
-    """The context for a request on ``cpu``: the policy's D-015 runtime floor and D-016 limits for its core kind plus the session facts."""
+    """The context for a request on ``cpu``: the policy's D-015 runtime floor and D-016 limits for its core kind plus the session facts. The ratio and V target
+    ceilings are the policy values clamped by the CPU's own limits (``oc_cap_words_of_kind``: the ``0x01`` words of the kind read in this session, D-039)."""
     kind = policy.core_kind(cpu)
-    v_max = policy.v_target_max_mv[kind]
-    v_max_raw = None if v_max is None else VfWord.v_to_raw(v_max / 1000)
-    ratio_cap = policy.ratio_max[kind]
-    if kind in policy.ratio_auto:  # "auto": the fused values the CPU reported in this session (all CPUs of the kind that were read; else this CPU's own word)
-        ratio_cap = fused_ratio_cap(kind, favored_words_of_kind if favored_words_of_kind is not None else [favored_word])
-    if kind in policy.v_target_auto:
-        # "auto": the CPU's own 0x28 maximum minus one LSB, never above the sanity bound of the kind. An unread 0x28, or a field of 0 (hw_v_max_raw would call it
-        # 2.0 V), leaves the no-raise value (None).
-        if max_voltage_word is not None and (max_voltage_word & 0xFFF) != 0:
-            v_max_raw = min(hw_v_max_raw(max_voltage_word), VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV[kind] / 1000))
-        else:
-            v_max_raw = None
+    favored = favored_words_of_kind if favored_words_of_kind is not None else [favored_word]  # all CPUs of the kind that were read; else this CPU's own word
+    ratio_cap, ratio_text = ratio_limit(policy, kind, favored, oc_cap_words_of_kind)
+    v_max_raw, v_text = v_target_limit(policy, kind, max_voltage_word)
     return CheckContext(
         top_fused_ratio=fused_top_ratio(fused_word),
         offset_floor_raw=policy.offset_floor_raw(cpu),
@@ -300,7 +383,10 @@ def build_context(
         offset_ceiling_raw=VfWord.mv_to_offset_raw(policy.offset_ceiling_mv),
         max_ratio_step=policy.max_ratio_step,
         max_v_step_raw=VfWord.v_to_raw(policy.max_v_step_mv / 1000),
-        max_offset_step_raw=VfWord.mv_to_offset_raw(policy.max_offset_step_mv),
+        max_offset_step_raw=(policy.max_offset_step_mv * 1024 + 512) // 1000,  # a step is a difference, not a field value: 1000 mV = 1024 raw (VfWord.mv_to_offset_raw rejects it)
+        ratio_text=ratio_text,
+        v_text=v_text,
+        policy_where=policy.where,
     )
 
 
@@ -317,20 +403,34 @@ class MsrCheckContext:
     ratio_max: int | None = None
     max_ratio_step: int = DEFAULT_MAX_RATIO_STEP
     base_ratio: int | None = None
+    ratio_text: str = field(default="", compare=False)  # D-039: where ``ratio_max`` comes from, for the refusal message
 
 
-def build_msr_context(policy: Policy, msr: int, *, platform_info: int | None, favored_words: Mapping[int, int | None] | None = None) -> MsrCheckContext:
+def build_msr_context(
+    policy: Policy,
+    msr: int,
+    *,
+    platform_info: int | None,
+    favored_words: Mapping[int, int | None] | None = None,
+    oc_cap_words: Mapping[int, int | None] | None = None,
+) -> MsrCheckContext:
     """The context for a plain write of ``msr``: kind from the MSR (unknown MSR -> ``kind None``, which the check refuses), the policy's
     ceiling and step for that kind, and ``0xCE[15:8]`` from ``platform_info`` (the ``0xCE`` word read this session, or ``None``)."""
     kind = MSR_TURBO_KIND.get(msr)
-    ratio_cap = None if kind is None else policy.ratio_max[kind]
-    if kind is not None and kind in policy.ratio_auto:  # "auto": the 0x1C words of this kind read in this session (cpu -> word), else no raise
-        ratio_cap = fused_ratio_cap(kind, [w for c, w in (favored_words or {}).items() if policy.core_kind(c) == kind])
+    ratio_cap, ratio_text = None, ""
+    if kind is not None:  # the 0x1C / 0x01 words of this kind read in this session (cpu -> word); the CPU's own limit clamps the policy value (D-039)
+        ratio_cap, ratio_text = ratio_limit(
+            policy,
+            kind,
+            [w for c, w in (favored_words or {}).items() if policy.core_kind(c) == kind],
+            [w for c, w in (oc_cap_words or {}).items() if policy.core_kind(c) == kind],
+        )
     return MsrCheckContext(
         kind=kind,
         ratio_max=ratio_cap,
         max_ratio_step=policy.max_ratio_step,
         base_ratio=None if platform_info is None else (platform_info >> 8) & 0xFF,
+        ratio_text=ratio_text,
     )
 
 
@@ -371,8 +471,8 @@ def _check_turbo_ratio_bounded(
     for k, byte in enumerate(new):
         cap = old[k] if ctx.ratio_max is None else ctx.ratio_max
         if byte > cap:
-            which = f"baseline byte (no-raise value, kind {ctx.kind})" if ctx.ratio_max is None else f"policy ratio_max[{ctx.kind}]"
-            return False, f"bucket {k}: ratio {byte} above {cap} ({which})"
+            which = ctx.ratio_text or (f"baseline byte (no-raise value, kind {ctx.kind})" if ctx.ratio_max is None else f"policy ratio_max[{ctx.kind}]")
+            return False, f"bucket {k}: ratio {byte} above {cap} ({which}{'; the cap is the baseline byte' if ctx.ratio_max is None else ''})"
     for k, (byte, was) in enumerate(zip(new, old)):
         if abs(byte - was) > ctx.max_ratio_step:
             return False, f"bucket {k}: step {byte - was:+d} from {was} exceeds the per-operation limit {ctx.max_ratio_step}"
@@ -448,26 +548,26 @@ def _check_vf_bounded(
     v_noraise = max(base.v_target_raw, fused_v or 0)
     ratio_cap = ratio_noraise if ctx.ratio_max is None else ctx.ratio_max
     if new.ratio > ratio_cap:
-        which = "no-raise value (current ratio, 0x1C[7:0])" if ctx.ratio_max is None else "policy ratio_max"
+        which = ctx.ratio_text or ("no-raise value (current ratio, 0x1C[7:0])" if ctx.ratio_max is None else "policy ratio_max")
         return False, f"ratio {new.ratio} above {ratio_cap} ({which}; baseline {base.ratio}, 0x1C[7:0] {favored_ratio})"
     v_cap = v_noraise if ctx.v_target_max_raw is None else ctx.v_target_max_raw
     if new.v_target_raw > v_cap:
-        which = "no-raise value (current / fused V target)" if ctx.v_target_max_raw is None else "policy v_target_max_mv"
+        which = ctx.v_text or ("no-raise value (current / fused V target)" if ctx.v_target_max_raw is None else "policy v_target_max_mv")
         return False, f"v_target_raw {new.v_target_raw:#x} above {v_cap:#x} ({which}; baseline {base.v_target_raw:#x}, fused {fused_v})"
     if ctx.max_voltage_word is None:
         if new.v_target_raw > v_noraise:
             return False, f"v_target_raw {new.v_target_raw:#x} raises the V target but 0x28 (the hardware maximum) was not read this session"
     elif new.v_target_raw > hw_v_max_raw(ctx.max_voltage_word):
         return False, (
-            f"v_target_raw {new.v_target_raw:#x} above the hardware maximum {hw_v_max_raw(ctx.max_voltage_word):#x} "
-            f"(0x28 word {ctx.max_voltage_word:#x}, XTU raw-1 rule)"
+            f"v_target_raw {new.v_target_raw:#x} above the CPU limit {hw_v_max_raw(ctx.max_voltage_word):#x} "
+            f"(cmd 0x28 word {ctx.max_voltage_word:#x}, XTU raw-1 rule)"
         )
     low = max(ctx.offset_floor_raw, params.get("offset_raw_min", -1024))
     high = min(ctx.offset_ceiling_raw, params.get("offset_raw_max", 1023))
     if not low <= new.offset_raw <= high:
         return False, (
             f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset, D-015; "
-            f"runtime ceiling {ctx.offset_ceiling_raw}; entry params {dict(params)})"
+            f"runtime ceiling {ctx.offset_ceiling_raw}; both are policy values, {ctx.policy_where}, within the field encoding -1024..1023; entry params {dict(params)})"
         )
     if base.ratio == 0 and ctx.top_fused_ratio is not None and 0 < new.ratio <= ctx.top_fused_ratio:
         # G-122: a cold word (ratio field 0) written at or below the top fused ratio has no OC point: its ratio field is not a ratio change. The reference is then
@@ -542,7 +642,7 @@ def _check_vf_point_offset_bounded(
     if not low <= new.offset_raw <= high:
         return False, (
             f"offset_raw {new.offset_raw} outside {low}..{high} (runtime floor {ctx.offset_floor_raw} after the assumed BIOS offset, D-015; "
-            f"runtime ceiling {ctx.offset_ceiling_raw}; entry params {dict(params)})"
+            f"runtime ceiling {ctx.offset_ceiling_raw}; both are policy values, {ctx.policy_where}, within the field encoding -1024..1023; entry params {dict(params)})"
         )
     if abs(new.offset_raw - base.offset_raw) > ctx.max_offset_step_raw:
         return False, (
@@ -657,12 +757,12 @@ def _int_frozenset(what: str, values: object, lo: int, hi: int) -> frozenset[int
     return frozenset(out)
 
 
-def _int_in(what: str, value: object, lo: int, hi: int) -> None:
+def _int_in(what: str, value: object, lo: int, hi: int, why: str = "") -> None:
     if not _is_int(value) or not lo <= value <= hi:  # type: ignore[operator]
-        raise PolicyError(f"{what} must be an int in {lo}..{hi}, got {value!r}")
+        raise PolicyError(f"{what} must be an int in {lo}..{hi}, got {value!r}" + (f" (field encoding: {why})" if why else ""))
 
 
-def _kind_ceilings(what: str, table: object, bounds: Mapping[str, tuple[int, int]]) -> Mapping[str, int | None]:
+def _kind_ceilings(what: str, table: object, bounds: Mapping[str, tuple[int, int]], why: str = "") -> Mapping[str, int | None]:
     """Normalise a per-core-kind ceiling table: keys within ``{"P", "E"}`` (a missing kind is ``None`` = the no-raise value), values ``None``
     or an int inside the kind's ``(lo, hi)`` sanity bounds."""
     if not isinstance(table, Mapping) or not set(table) <= set(bounds):
@@ -671,7 +771,7 @@ def _kind_ceilings(what: str, table: object, bounds: Mapping[str, tuple[int, int
     for kind, (lo, hi) in sorted(bounds.items()):
         value = table.get(kind)
         if value is not None:
-            _int_in(f"{what}[{kind!r}]", value, lo, hi)
+            _int_in(f"{what}[{kind!r}]", value, lo, hi, why)
             value = int(value)
         out[kind] = value
     return MappingProxyType(out)
@@ -808,8 +908,10 @@ class Policy:
 
     D-016 bounds of the ``0x11`` word (T-022; read by the ``vf_bounded`` check through ``build_context``): ``ratio_max`` / ``v_target_max_mv``
     map a core kind (``"P"`` / ``"E"``) to a ceiling or ``None``; **``None`` (the default) means the no-raise value**, so a policy that
-    sets nothing cannot overclock -- an overclock only ever comes from a number in a reviewed policy. A set value must stay within the
-    absolute sanity bounds (``SANITY_RATIO_MAX``, ``SANITY_V_TARGET_MAX_MV``). ``offset_ceiling_mv`` (default 0) is the highest *runtime*
+    sets nothing cannot overclock -- an overclock only ever comes from a number in a reviewed policy. D-039: a set value is bounded only by the
+    **field encodings** at load (``ENCODING_*``); the effective limit is the value clamped by the CPU's own (``0x01`` ratio, ``0x28`` V target, read live; unread
+    = no raise). ``hw_ratio_max`` / ``hw_v_target_max_mv`` carry those live CPU limits when the helper bound them (``with_hw_limits``); ``source`` names the
+    policy file (for messages). ``offset_ceiling_mv`` (default 0) is the highest *runtime*
     offset; ``max_ratio_step`` / ``max_v_step_mv`` / ``max_offset_step_mv`` limit one ``0x11`` word's change from the current state."""
 
     cpus: frozenset[int]
@@ -829,16 +931,40 @@ class Policy:
     max_v_step_mv: int = DEFAULT_MAX_V_STEP_MV
     max_offset_step_mv: int = DEFAULT_MAX_OFFSET_STEP_MV
     msr_allow: tuple[MsrAllowEntry, ...] = ()  # T-023: plain MSR allowlist; empty (the default) = every plain MSR access is denied
+    hw_ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own ratio limit per kind (0x01 [7:0]) read by the helper; None = unread
+    hw_v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own V target limit per kind (0x28 - 1 LSB), whole mV
+    source: str | None = field(default=None, compare=False)  # the policy file this policy was loaded from (named in every refusal that quotes a policy limit)
+
+    @property
+    def where(self) -> str:
+        """How refusals name the policy file."""
+        return self.source or "the policy"
+
+    def with_hw_limits(self, ratio_max_oc: Mapping[str, int | None] | None = None, v_target_max_mv: Mapping[str, int | None] | None = None) -> Policy:
+        """The same policy bound to the CPU's own limits read live (D-039): ``0x01 [7:0]`` per kind and ``0x28 - 1 LSB`` in mV per kind. Kinds not given keep their value."""
+        return replace(
+            self,
+            hw_ratio_max={**self.hw_ratio_max, **(ratio_max_oc or {})},
+            hw_v_target_max_mv={**self.hw_v_target_max_mv, **(v_target_max_mv or {})},
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cpus", _int_frozenset("cpus", self.cpus, 0, _CPU_MAX))
         object.__setattr__(
-            self, "ratio_max", _kind_ceilings("ratio_max", self.ratio_max, {k: (1, v) for k, v in SANITY_RATIO_MAX.items()})
+            self, "ratio_max", _kind_ceilings("ratio_max", self.ratio_max, {k: (1, ENCODING_RATIO_MAX) for k in (KIND_P, KIND_E)}, "ratio field [7:0]")
         )
         object.__setattr__(
             self,
             "v_target_max_mv",
-            _kind_ceilings("v_target_max_mv", self.v_target_max_mv, {k: (_V_TARGET_MIN_MV, v) for k, v in SANITY_V_TARGET_MAX_MV.items()}),
+            _kind_ceilings(
+                "v_target_max_mv", self.v_target_max_mv, {k: (_V_TARGET_MIN_MV, ENCODING_V_TARGET_MAX_MV) for k in (KIND_P, KIND_E)}, "voltage field [19:8], S2.10, 12 bits"
+            ),
+        )
+        object.__setattr__(self, "hw_ratio_max", _kind_ceilings("hw_ratio_max", self.hw_ratio_max, {k: (1, ENCODING_RATIO_MAX) for k in (KIND_P, KIND_E)}, "ratio field [7:0]"))
+        object.__setattr__(
+            self,
+            "hw_v_target_max_mv",
+            _kind_ceilings("hw_v_target_max_mv", self.hw_v_target_max_mv, {k: (1, ENCODING_V_TARGET_MAX_MV) for k in (KIND_P, KIND_E)}, "0x28 field [11:0]"),
         )
         auto = frozenset(self.v_target_auto)
         if not auto <= {KIND_P, KIND_E}:
@@ -848,10 +974,10 @@ class Policy:
         if not auto_r <= {KIND_P, KIND_E}:
             raise PolicyError(f"ratio_auto must be a subset of ['E', 'P'], got {sorted(auto_r)}")
         object.__setattr__(self, "ratio_auto", auto_r)
-        _int_in("offset_ceiling_mv", self.offset_ceiling_mv, 0, SANITY_OFFSET_CEILING_MV)
-        _int_in("max_ratio_step", self.max_ratio_step, *_RATIO_STEP_RANGE)
-        _int_in("max_v_step_mv", self.max_v_step_mv, *_V_STEP_MV_RANGE)
-        _int_in("max_offset_step_mv", self.max_offset_step_mv, *_OFFSET_STEP_MV_RANGE)
+        _int_in("offset_ceiling_mv", self.offset_ceiling_mv, 0, ENCODING_OFFSET_CEILING_MV, "offset field [31:21] is 11-bit signed: XTU range -1000..+999 mV")
+        _int_in("max_ratio_step", self.max_ratio_step, *_RATIO_STEP_RANGE, "ratio field [7:0]")
+        _int_in("max_v_step_mv", self.max_v_step_mv, *_V_STEP_MV_RANGE, "V target field and the 2 mV minimum window")
+        _int_in("max_offset_step_mv", self.max_offset_step_mv, *_OFFSET_STEP_MV_RANGE, "offset field range")
         bios = self.assumed_bios_offset_mv
         if not isinstance(bios, Mapping) or set(bios) != {"P", "E"}:
             raise PolicyError(f"assumed_bios_offset_mv must have exactly the keys 'P' and 'E', got {bios!r}")
@@ -860,7 +986,7 @@ class Policy:
                 raise PolicyError(f"assumed_bios_offset_mv[{kind!r}] must be an int in -1000..1000 mV, got {value!r}")
         object.__setattr__(self, "assumed_bios_offset_mv", MappingProxyType({k: int(v) for k, v in bios.items()}))
         if not _is_int(self.effective_offset_floor_mv) or not -1000 <= self.effective_offset_floor_mv <= 0:
-            raise PolicyError(f"effective_offset_floor_mv must be an int in -1000..0 mV, got {self.effective_offset_floor_mv!r}")
+            raise PolicyError(f"effective_offset_floor_mv must be an int in -1000..0 mV, got {self.effective_offset_floor_mv!r} (field encoding: XTU range -1000..+999 mV)")
         if isinstance(self.e_cpus, (str, bytes, Mapping)) or not isinstance(self.e_cpus, Iterable):
             raise PolicyError(f"e_cpus must be a collection of ints, got {type(self.e_cpus).__name__}")
         e_cpus = list(self.e_cpus)
@@ -1074,10 +1200,11 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
 
     ``topology`` (D-036): the live topology. ``cpus = "auto"`` / ``e_cpus = "auto"`` are derived from it and are a ``PolicyError`` without one (never a default); a
     policy without an ``e_cpus`` key takes the topology's E CPUs when one is given. ``ratio_max.<K> = "auto"`` and ``v_target_max_mv.<K> = "auto"`` need no topology
-    and are not numbers at load time: they are CPU data of the session, resolved per request (``build_context``). Ratio: the highest ``max(0x1C[7:0], 0x1C[15:8])`` of
-    that kind's CPUs read in the session; V target: the CPU's own ``0x28`` maximum minus one LSB; both clamped to the sanity bounds, and no raise when the word was
-    not read. Never a sysfs value (``cpuinfo_max_freq`` follows OC writes: a ceiling from it would ratchet). Numeric values keep working unchanged."""
+    and are not numbers at load time: they are CPU data of the session, resolved per request (``build_context``). Ratio: the highest fused byte ``0x1C[15:8]`` of
+    that kind's CPUs read in the session plus 3; V target: the CPU's own ``0x28`` maximum minus one LSB; both clamped by the CPU's own limit (ratio: ``0x01 [7:0]``,
+    D-039), and no raise when that word was not read. Numbers are bounded at load only by the field encodings (``ENCODING_*``); the CPU's limits apply per request. Never a sysfs value (``cpuinfo_max_freq`` follows OC writes: a ceiling from it would ratchet). Numeric values keep working unchanged."""
     text = _read_source(source)
+    named = str(source) if isinstance(source, os.PathLike) or (isinstance(source, str) and "\n" not in source and os.path.isfile(source)) else None
     try:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -1097,6 +1224,8 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
         kwargs: dict[str, Any] = {"cpus": frozenset(c.cpu for c in needs_topology("cpus").cores)}
     else:
         kwargs = {"cpus": frozenset(_parse_int_list("cpus", doc["cpus"]))}
+    if named is not None:
+        kwargs["source"] = named
     if topology is not None:
         kwargs["e_cpus"] = frozenset(topology.cpus_of_kind(KIND_E))
     if "max_operations_per_session" in doc:

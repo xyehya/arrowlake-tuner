@@ -2,13 +2,24 @@
 # install.sh seeds /etc/arltuner/policy.toml from this file ONLY when that file is absent (--reseed-config replaces an existing one). It names no
 # machine: every ceiling that depends on the CPU is "auto" and is read from the CPU in the session.
 #
-# What is OPEN (numbers, not mechanisms; the wording of the decision is D-032 in docs/DECISIONS.md):
-#   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200)
-#   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV
-#   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session (never above the code sanity bound of its kind)
-#   ratio        "auto" for P and E: the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the cores of that kind read in the session
-#                + 3 bins of OC headroom (D-038: P 57 -> 60, E 46 -> 49; clamped to the sanity bound P 62 / E 60), no raise when unread. Never derived from sysfs cpuinfo_max_freq: it follows OC writes and would ratchet. To allow more, put a number
-#                in /etc/arltuner/policy.toml (e.g. E = 49) -- the file is yours and install.sh never overwrites it.
+# EVERY NUMBER BELOW IS A DEFAULT YOU CAN EDIT (D-039). None is hardcoded in the program: the program refuses a value only when the CPU itself or the register
+# field cannot take it. Put your own numbers in /etc/arltuner/policy.toml (install.sh never overwrites it; --reseed-config restores this file). Every refusal
+# names where its limit comes from: "policy ratio_max P = 60 (/etc/arltuner/policy.toml; your CPU allows up to 120x per cmd 0x01)", "CPU limit ... (cmd 0x01)"
+# or "field encoding".
+#
+# The two kinds of hard ceiling (not editable here, because they are not ours):
+#   the CPU's own limits, read live in the session (tune.read; nothing read = nothing may be raised):
+#                ratio    cmd 0x01 [7:0] fused max OC ratio of the core kind (P read on a P CPU, E on an E CPU, P1 = 0)
+#                V target cmd 0x28 maximum minus one LSB
+#   the field encodings: ratio 1..255, V target 0.5..3.999 V (12-bit S2.10), offset -1000..+999 mV (11-bit signed, XTU range), step limits up to the same ranges
+#
+# Defaults in this file (edit freely, up to the hard ceilings above; D-032, D-036, D-038):
+#   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200); the encoding allows -1000 ... +999
+#   steps        per write: ratio 8, V target 200 mV, offset 200 mV (ratio up to 255, V and offset up to 1000 mV)
+#   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session; or a number in mV, clamped by that maximum
+#   ratio        "auto" for P and E: the fused ratio the CPU reports in 0x1C [15:8] (highest over the cores of that kind read in the session)
+#                + 3 bins of OC headroom (D-038: P 57 -> 60, E 46 -> 49; 0x1C [7:0] is not used: it follows the BIOS turbo setting, E reads 48), clamped by the CPU's cmd 0x01 limit, no raise when either is unread. Never derived from sysfs
+#                cpuinfo_max_freq: it follows OC writes and would ratchet. Or a number (e.g. E = 52), clamped by the CPU's cmd 0x01 limit.
 #   CPUs         "auto": the P and E CPUs of the live topology (P = devices/cpu_core, E = devices/cpu_atom)
 #   op caps      indicators only: 100000 per session and per boot; no dwell between operations
 # What is KEPT (safety mechanisms, not limits): one mailbox transaction at a time (2026-08-26 incident: sweeps, not budgets), the allowlist below
@@ -21,7 +32,7 @@ max_operations_per_session = 100000
 max_operations_per_boot = 100000
 min_dwell_s = 0.0
 
-max_ratio_step = 8          # code maxima (guard.policy _RATIO_STEP_RANGE / _V_STEP_MV_RANGE / _OFFSET_STEP_MV_RANGE)
+max_ratio_step = 8          # defaults; the encoding ranges are 1..255 / 2..1000 mV / 2..1000 mV (guard.policy _RATIO_STEP_RANGE / _V_STEP_MV_RANGE / _OFFSET_STEP_MV_RANGE)
 max_v_step_mv = 200
 max_offset_step_mv = 200
 offset_ceiling_mv = 200

@@ -474,6 +474,11 @@ class SimMsrPort(MsrPort):
         top = max((self._point_ratio(cpu, n) for n in range(1, count + 1)), default=0)
         return count + 1 if count < _MAX_POINT and self._stored_oc(cpu).ratio > top else None
 
+    def capability_word(self, cpu: int) -> int:
+        """What ``0x01 P1=0 P2=0`` answers on ``cpu`` (a peek for the CLI's simulator plan, not a mailbox request; 0 when it would answer a failure)."""
+        rc, data = self._execute(cpu, int(Cmd.OC_CAPABILITY_READ), 0, 0, 0)
+        return data if rc == int(Rc.Pass) else 0
+
     def favored_word(self, cpu: int) -> int:
         """The 0x1C word of ``cpu`` (``[7:0]`` favored ratio, ``[15:8]`` fused); a test-double peek, not a mailbox request."""
         return self._peek(self._favored, cpu)

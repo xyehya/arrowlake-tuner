@@ -323,7 +323,8 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
             "--policy",
             metavar="FILE",
             help="reviewed policy TOML (default: the built-in conservative M1 policy: no raise, step limits, D-015 offset floor); "
-            "ratio / voltage ceilings, the offset ceiling and step limits can only be raised in this file (D-016)",
+            "ratio / voltage ceilings, the offset window and step limits are this file's numbers (D-016, D-039): editable up to the CPU's own limits "
+            "(cmd 0x01 ratio, cmd 0x28 voltage, read from the CPU) and the field encodings",
         )
         p.add_argument("--audit", metavar="FILE", help="audit log (default: /var/lib/arltuner/audit.jsonl on an installed machine (D-030); else ~/.local/state/linuxmon/audit.jsonl, on Windows %%LOCALAPPDATA%%\\linuxmon\\audit.jsonl)")
         p.add_argument("--lock", metavar="FILE", help="lock file (default: /run/arltuner/mailbox.lock on an installed machine (D-030); else /run/lock/linuxmon-mailbox.lock, else the temp dir)")
@@ -778,7 +779,10 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
     point_words = {  # T-025: the V/F point words, as the simulator holds them (a peek, not a mailbox request)
         (pt.cpu, pt.point): sim.vf(pt.cpu, 0, pt.point).to_u32() for pt in resolve_point_targets(profile, topology)
     }
+    oc_cap_words: dict[int, int] = {}  # G-137: the 0x01 reads of the plan, as the simulator would answer them
     for step in read_steps(resolve_targets(profile, topology), policy, profile, topology):
+        if step.kind is StepKind.READ_OC_CAP:
+            oc_cap_words[step.cpu] = sim.capability_word(step.cpu)
         if step.kind is StepKind.READ_MSR and step.msr is not None:
             try:
                 msr_words[step.msr] = sim.plain_msr(step.cpu, step.msr)
@@ -793,6 +797,7 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
         policy=policy,
         msr_words=msr_words,
         point_words=point_words,
+        oc_cap_words=oc_cap_words,
     )
 
 

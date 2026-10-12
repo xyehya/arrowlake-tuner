@@ -51,7 +51,8 @@ def e_table(*buckets: int) -> int:
 
 def policy_plain(*, write_entries: bool = True, **changes: object) -> Policy:
     """The default policy (plain reads only) plus, optionally, write entries for both tables; high caps, no dwell."""
-    fields: dict[str, object] = dict(max_operations_per_session=20, max_operations_per_boot=50, min_dwell_s=0.0, max_ratio_step=8)
+    # hw_ratio_max: the CPU's own limit (cmd 0x01, D-039) as the reference machine reports it (0x778 = 120x); these tests are about the table checks
+    fields: dict[str, object] = dict(max_operations_per_session=20, max_operations_per_boot=50, min_dwell_s=0.0, max_ratio_step=8, hw_ratio_max={"P": 120, "E": 120})
     fields.update(changes)
     base = dataclasses.replace(default_m1_policy(), **fields)
     if not write_entries:
@@ -228,11 +229,12 @@ class TurboCheck(unittest.TestCase):
         self.assertIn("ratio_max", why)
 
     def test_the_p_table_uses_the_p_kind_whatever_the_cpu(self) -> None:
+        hw = {"P": 120, "E": 120}
         ctx = build_msr_context(
-            dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}), 0x1AD, platform_info=PLATFORM
+            dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}, hw_ratio_max=hw), 0x1AD, platform_info=PLATFORM
         )
         self.assertEqual((ctx.kind, ctx.ratio_max, ctx.base_ratio), ("P", 58, 37))
-        ctx = build_msr_context(dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}), 0x650, platform_info=None)
+        ctx = build_msr_context(dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}, hw_ratio_max=hw), 0x650, platform_info=None)
         self.assertEqual((ctx.kind, ctx.ratio_max, ctx.base_ratio), ("E", 49, None))
 
     def test_every_byte_must_be_non_zero(self) -> None:

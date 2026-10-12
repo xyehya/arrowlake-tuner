@@ -1,11 +1,11 @@
-"""D-032 / D-036: the shipped default policy file (the advanced-user limits, generic) loads with exactly the numbers the operator approved, and the code sanity ceilings allow them (no more)."""
+"""D-032 / D-036 / D-039: the shipped default policy file (the advanced-user limits, generic) loads with exactly the numbers the operator approved; the code keeps only encoding bounds."""
 from __future__ import annotations
 
 import unittest
 from pathlib import Path
 
 from arltuner.guard import PolicyError, load_policy
-from arltuner.guard.policy import SANITY_OFFSET_CEILING_MV, SANITY_V_TARGET_MAX_MV
+from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV
 from arltuner.mailbox import VfWord
 from arltuner.topology import arl_s_285k, synthetic
 
@@ -39,7 +39,7 @@ class AdvancedPolicy(unittest.TestCase):
         for cpu, vmax, kind in ((0, 0x681, "P"), (8, 0x56D, "E")):  # the 0x28 words of the reference CPU
             ctx = build_context(self.policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None, max_voltage_word=vmax)
             self.assertEqual(ctx.v_target_max_raw, vmax - 1)
-            self.assertEqual(ctx.v_target_max_raw, VfWord.v_to_raw(SANITY_V_TARGET_MAX_MV[kind] / 1000))
+            self.assertEqual(ctx.v_target_max_raw, VfWord.v_to_raw({"P": 1625, "E": 1355}[kind] / 1000))  # P 1.625 V, E 1.355 V: what these words say, not constants of the code
 
     def test_the_policy_is_not_tied_to_the_reference_cpu(self) -> None:
         small = load_policy(POLICY, synthetic(6, 8, favored_p=(0,), favored_ratio=55, p_ratio=53, e_ratio=44))
@@ -48,10 +48,11 @@ class AdvancedPolicy(unittest.TestCase):
         with self.assertRaises(PolicyError):
             load_policy(POLICY)  # "auto" never falls back to a default topology
 
-    def test_sanity_ceiling_is_200_and_not_more(self) -> None:
-        self.assertEqual(SANITY_OFFSET_CEILING_MV, 200)
+    def test_the_offset_bounds_are_the_field_encoding_not_the_policy_defaults(self) -> None:
+        self.assertEqual((ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV), (-1000, 999))
+        self.assertEqual(load_policy("cpus = [0]\noffset_ceiling_mv = 500\neffective_offset_floor_mv = -500\n").offset_ceiling_mv, 500)  # a policy may go past the shipped 200 mV
         with self.assertRaises(PolicyError):
-            load_policy("cpus = [0]\noffset_ceiling_mv = 201\n")
+            load_policy("cpus = [0]\noffset_ceiling_mv = 1000\n")
 
     def test_the_allowlist_still_denies_everything_not_listed(self) -> None:
         p = self.policy
