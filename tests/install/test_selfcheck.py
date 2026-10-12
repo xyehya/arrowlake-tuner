@@ -59,6 +59,16 @@ class Good(unittest.TestCase):
         tree = {k: v for k, v in GOOD.items() if k not in ("/etc/arltuner/helper.toml", "/var/lib/arltuner/audit.jsonl")}
         self.assertEqual(failures(tree), {})
 
+    def test_the_accepted_state_is_optional(self) -> None:
+        """D-036: a fresh install has no /etc/arltuner/accepted (it is the user's, written by the app)."""
+        tree = {k: v for k, v in GOOD.items() if not k.startswith("/etc/arltuner/accepted")}
+        self.assertEqual(failures(tree), {})
+        self.assertTrue([k for k in run(tree) if "accepted state" in k])
+
+    def test_an_accepted_directory_that_is_there_is_still_checked(self) -> None:
+        tree = {k: v for k, v in GOOD.items() if k != "/etc/arltuner/accepted/CURRENT"} | {"/etc/arltuner/accepted/EXPECTED-words.txt": (1000, FILE)}
+        self.assertTrue([k for k in failures(tree) if "accepted" in k])
+
 
 class Damage(unittest.TestCase):
     def only(self, tree, **kw) -> tuple[str, str]:

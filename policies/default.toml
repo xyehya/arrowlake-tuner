@@ -1,12 +1,14 @@
-# policies/advanced-2026-10-11.toml -- ADVANCED-USER POLICY (D-032, operator yes 2026-10-11; D-036: derived live). Seeded to /etc/arltuner/policy.toml by install.sh
-# (--reseed-config replaces an existing one). Derived from policies/session-2026-10-02-points.toml; same allow entries, bounds opened as below.
+# policies/default.toml -- the shipped ROOT POLICY (D-032 advanced limits, operator yes 2026-10-11; D-036: generic, derived live from the CPU).
+# install.sh seeds /etc/arltuner/policy.toml from this file ONLY when that file is absent (--reseed-config replaces an existing one). It names no
+# machine: every ceiling that depends on the CPU is "auto" and is read from the CPU in the session.
 #
 # What is OPEN (numbers, not mechanisms; the wording of the decision is D-032 in docs/DECISIONS.md):
 #   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200)
 #   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV
 #   V target     "auto": the CPU's own cmd 0x28 maximum minus one LSB, read in the session (never above the code sanity bound of its kind)
-#   ratio        P "auto": the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the P-cores read in the session, no raise when unread;
-#                E 49 (D-032 / D-017). Never derived from sysfs cpuinfo_max_freq: it follows OC writes and would ratchet.
+#   ratio        "auto" for P and E: the fused value the CPU reports in 0x1C (max of [7:0] and [15:8]) for the cores of that kind read in the session,
+#                no raise when unread. Never derived from sysfs cpuinfo_max_freq: it follows OC writes and would ratchet. To allow more, put a number
+#                in /etc/arltuner/policy.toml (e.g. E = 49) -- the file is yours and install.sh never overwrites it.
 #   CPUs         "auto": the P and E CPUs of the live topology (P = devices/cpu_core, E = devices/cpu_atom)
 #   op caps      indicators only: 100000 per session and per boot; no dwell between operations
 # What is KEPT (safety mechanisms, not limits): one mailbox transaction at a time (2026-08-26 incident: sweeps, not budgets), the allowlist below
@@ -28,13 +30,13 @@ assumed_bios_offset_mv = { P = 0, E = 0 }  # no BIOS offset is assumed: the effe
 
 [ratio_max]
 P = "auto"
-E = 49                # D-032 / D-017: 49, not "auto": 0x1C reports 48 on E and cpuinfo_max_freq follows OC writes (a ceiling from it would ratchet)
+E = "auto"
 
 [v_target_max_mv]
 P = "auto"
 E = "auto"
 
-# --- allowlist (a policy file replaces the whole policy, so it lists every request; the 2026-10-02 policy plus, G-114, plain reads of 0x1AE / 0x651) ---
+# --- allowlist (a policy file replaces the whole policy, so it lists every request) ---
 [[allow]]
 name = "oc_capability_read"
 cmd = 0x01
@@ -146,7 +148,7 @@ p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 kind = "read"
 
 [[allow]]
-name = "ring_point_write"   # 2026-10-02 (T-028): ring (P1 2) V/F point offsets, operator-authorized runtime ring tuning (CLI point-offset only)
+name = "ring_point_write"   # T-028: ring (P1 2) V/F point offsets, operator-authorized runtime ring tuning (CLI point-offset only)
 cmd = 0x11
 p1 = [2]
 p2 = [1, 2, 3, 4, 5, 6, 7, 8]

@@ -1,4 +1,4 @@
-"""D-032: the advanced-user policy file loads with exactly the numbers the operator approved, and the code sanity ceilings allow them (no more)."""
+"""D-032 / D-036: the shipped default policy file (the advanced-user limits, generic) loads with exactly the numbers the operator approved, and the code sanity ceilings allow them (no more)."""
 from __future__ import annotations
 
 import unittest
@@ -9,7 +9,7 @@ from arltuner.guard.policy import SANITY_OFFSET_CEILING_MV, SANITY_V_TARGET_MAX_
 from arltuner.mailbox import VfWord
 from arltuner.topology import arl_s_285k, synthetic
 
-POLICY = Path(__file__).resolve().parents[2] / "policies" / "advanced-2026-10-11.toml"
+POLICY = Path(__file__).resolve().parents[2] / "policies" / "default.toml"
 
 
 class AdvancedPolicy(unittest.TestCase):
@@ -22,7 +22,7 @@ class AdvancedPolicy(unittest.TestCase):
         self.assertEqual((p.offset_ceiling_mv, p.effective_offset_floor_mv), (200, -200))
         self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})
         self.assertEqual((p.max_ratio_step, p.max_v_step_mv, p.max_offset_step_mv), (8, 200, 200))
-        self.assertEqual((dict(p.ratio_max), p.ratio_auto), ({"P": None, "E": 49}, frozenset({"P"})))  # P "auto": the fused 0x1C values read in the session; E 49 (D-032/D-017: 0x1C gives 48 on E)
+        self.assertEqual((dict(p.ratio_max), p.ratio_auto), ({"P": None, "E": None}, frozenset({"P", "E"})))  # "auto": the fused 0x1C values read in the session, for both kinds (D-036)
         self.assertEqual(p.v_target_auto, frozenset({"P", "E"}))  # "auto": the CPU's own 0x28 maximum minus one LSB, judged by the guard
         self.assertEqual((p.max_operations_per_session, p.max_operations_per_boot, p.min_dwell_s), (100000, 100000, 0.0))
 

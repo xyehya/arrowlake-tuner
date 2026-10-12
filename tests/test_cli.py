@@ -511,14 +511,14 @@ class Measured(CliCase):
 
 
 class RaiseThroughTheCli(CliCase):
-    """D-016 / T-022: the reviewed policy file is the only thing that can raise anything. ``policies/example-oc-ramp.toml`` is the example
+    """D-016 / T-022: the reviewed policy file is the only thing that can raise anything. ``examples/reference-285k/policies/example-oc-ramp.toml`` is the example
     (E ratio 49 / 1.250 V, P ratio 58, shipped step limits; T-023 / D-017 lowered the E ceiling from 50 to 49); it is read only because a test names it. ``--sim`` without an injected simulator
     is the measured machine (``SimConfig.measured``) with the zero-field rule on."""
 
     def run_default_sim(self, *argv: object, **kwargs):
         return self.run_cli(*argv, sim_factory=None, **kwargs)
 
-    EXAMPLE = Path(__file__).resolve().parents[1] / "policies" / "example-oc-ramp.toml"
+    EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "reference-285k" / "policies" / "example-oc-ramp.toml"
     E_UP = profile_text('kind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1176')  # 48 -> 49 and +20 mV on cluster 0
     E_FAR = profile_text('kind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1200')  # more than one step (the V target: +44 mV)
 

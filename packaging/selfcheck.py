@@ -95,6 +95,17 @@ def selfcheck(
     def tree(label: str, p: Path) -> None:
         run(label, lambda: check_code_tree(p, lstat_fn=lstat_fn, listdir_fn=listdir_fn, root_uid=root_uid))
 
+    def tree_if_present(label: str, p: Path) -> None:
+        """D-036: the accepted state is the user's and a fresh install has none; when it is there it is checked like any trusted tree."""
+        try:
+            lstat_fn(str(p))
+        except FileNotFoundError:
+            results.append((label, None))
+            return
+        except OSError:
+            pass  # unreadable parent or the like: let the tree check report it
+        tree(label, p)
+
     def mode_check(label: str, p: Path, *, executable: bool = False, private: bool = False) -> None:
         def go() -> None:
             st = lstat_fn(str(p))
@@ -125,7 +136,7 @@ def selfcheck(
     path("tmpfiles.d file", TMPFILES_FILE)
     path("policy /etc/arltuner/policy.toml", ETC_DIR / "policy.toml")
     path("helper.toml (may be absent)", ETC_DIR / "helper.toml", must_exist=False)
-    tree("accepted state /etc/arltuner/accepted", ETC_DIR / "accepted")
+    tree_if_present("accepted state /etc/arltuner/accepted (optional: absent until the user saves one)", ETC_DIR / "accepted")
     path("state dir /var/lib/arltuner", STATE_DIR, want="dir")
     path("audit log (may be absent)", STATE_DIR / "audit.jsonl", must_exist=False)
 

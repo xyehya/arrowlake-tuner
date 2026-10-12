@@ -17,7 +17,7 @@ from arltuner.msr.sim import POINT_RATIOS_ARL_S
 from ._support import HelperCase, Harness, error_code
 
 REPO = Path(__file__).resolve().parents[2]
-ADVANCED = REPO / "policies" / "advanced-2026-10-11.toml"
+ADVANCED = REPO / "policies" / "default.toml"  # D-036: the shipped generic policy (E ratio "auto")
 ALL_P_53 = SimConfig.measured(per_point=True, reject_zero_fields=True, point_ratios=dict(POINT_RATIOS_ARL_S))  # every P-core has the favored cores' table
 
 
@@ -39,7 +39,8 @@ def row(target: str, *, curve: int | None = None, points: dict[str, int] | None 
 class TuneCase(HelperCase):
     def setUp(self) -> None:
         super().setUp()
-        shutil.copy(ADVANCED, self.policy)  # the real D-032 policy file: the limits under test are the shipped ones
+        shutil.copy(ADVANCED, self.policy)  # the shipped policy (D-032 limits, D-036 generic) ...
+        self.policy.write_text(self.policy.read_text().replace('[ratio_max]\nP = "auto"\nE = "auto"', '[ratio_max]\nP = "auto"\nE = 49'))  # ... with the operator's own edit: E ratio 49 (D-017)
 
     def boot(self, config: SimConfig | None = None, **overrides: Any) -> Harness:
         if config is not None:
@@ -603,11 +604,11 @@ class ResetRestoreTests(TuneCase):
     def test_the_repos_own_accepted_chain_plans_cleanly(self) -> None:
         acc = self.tmp / "accepted"
         (acc / "profiles").mkdir(parents=True)
-        shutil.copy(REPO / "profiles/CURRENT", acc / "CURRENT")
-        for line in (REPO / "profiles/CURRENT").read_text().splitlines():
+        shutil.copy(REPO / "examples/reference-285k/profiles/CURRENT", acc / "CURRENT")
+        for line in (REPO / "examples/reference-285k/profiles/CURRENT").read_text().splitlines():
             if line.startswith("profile"):
                 rel = line.split("=", 1)[1].strip()
-                shutil.copy(REPO / rel, acc / rel)
+                shutil.copy(REPO / "examples/reference-285k" / rel, acc / rel)
         h = self.boot(accepted_dir=acc)
         plan = self.plan(h, {"restore": "accepted"})
         self.assertEqual(set(plan["after"]), {*(f"P{i}" for i in range(8)), *(f"EC{i}" for i in range(4))})

@@ -16,7 +16,7 @@ FILE = stat.S_IFREG | 0o644
 SYMLINK = stat.S_IFLNK | 0o777
 
 # What install.sh copies out of a checkout (everything else is not needed to build the install).
-CHECKOUT_ITEMS = ("install.sh", "uninstall.sh", "src", "platforms", "packaging", "profiles", "policies", "web")
+CHECKOUT_ITEMS = ("install.sh", "uninstall.sh", "src", "platforms", "packaging", "policies", "web")
 
 
 def fake_lstat(tree: dict[str, tuple[int, int]]) -> Callable[[str], SimpleNamespace]:

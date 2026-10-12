@@ -322,7 +322,7 @@ class AcceptedMatchTests(HelperCase):
     def test_absent_is_null_with_a_note(self) -> None:
         result, note = accepted_match(self.helper(), sample_document())
         self.assertIsNone(result)
-        self.assertIn("absent", note or "")
+        self.assertIn("No accepted state yet", note or "")  # D-036: a fresh install has none
 
     def test_no_directory_configured_is_null(self) -> None:
         result, note = accepted_match(Helper(self.config()), sample_document())
@@ -389,7 +389,7 @@ class AcceptedMatchTests(HelperCase):
         self.file.unlink()
         gone, note = accepted_match(self.helper(enforce_trust=True, lstat_fn=fake_lstat(), euid_fn=os.geteuid), sample_document())
         self.assertIsNone(gone)
-        self.assertIn("absent", note or "")
+        self.assertIn("No accepted state yet", note or "")
 
     def test_an_implausible_word_count_makes_the_file_untrusted(self) -> None:
         self.write("1 " + " ".join(["F9A00035"] * 17) + "\n")  # 17 words > 16
@@ -443,7 +443,7 @@ class VfDumpAcceptedTests(HelperCase):
         first = h.call("d1", "vf.dump", {"cpus": "0,1"})
         self.assertTrue(first["ok"], first)
         self.assertIsNone(first["result"]["accepted_match"])  # nothing accepted yet
-        self.assertIn("absent", first["result"]["accepted_note"])
+        self.assertIn("No accepted state yet", first["result"]["accepted_note"])
         lines = []
         for unit in first["result"]["units"]:
             for c in unit["cpus"]:

@@ -65,7 +65,7 @@ OFFSET_LIMIT = 200
 CURVE_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}\Z")
 PROFILE_NAME = re.compile(r"[a-z0-9._-]{1,64}\Z")
 V3_OPS = frozenset({"mem.read", "vf.measure", "curves.list", "curves.get", "curves.update", "curves.delete", "tune.read", "tune.plan", "tune.apply",
-                    "profiles.list", "profiles.save", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list"})
+                    "profiles.list", "profiles.save", "profiles.accept", "profiles.get", "tune.last", "stress.start", "stress.stop", "stress.list"})
 
 
 class W(str):
@@ -271,6 +271,9 @@ class V3Ops:
         self.apply_stop_after: int | None = None   # stop the apply after this many units: complete False + stop (G-112)
         self.profiles: dict[str, dict] = {"accepted": {"name": "accepted", "source": "accepted", "created": "2026-10-06T21:14:02Z", "intent": None}}
         self.profiles_include_intent = False   # the real profiles.list never carries contents (G-123: profiles.get does)
+        self.no_accepted = False          # G-129 / D-036: a fresh install has no accepted state (no accepted profiles, no compare, Restore refused)
+        self.accept_refusal: tuple[str, str] | None = None   # (check, message): profiles.accept refuses like the helper (e.g. NOT_APPLIED)
+        self.accept_calls: list[dict] = []
         self.tuning_read = False          # tune.read happened this boot (decides a record's tuning_state)
         self.last_read_at: float | None = None        # G-123: when the stored read (tune.last) was made, epoch seconds
         self.last_applied_at: float | None = None     # G-123: set when an apply changed the words after that read
@@ -542,9 +545,11 @@ class V3Ops:
                                                      "point_label": f"OC (point {n})"})
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
+        if self.no_accepted:
+            match = None
         fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}
         out = {"simulator": True, "complete": True, "stopped": None, "units": units, "differences": [], "problems": [],
-               "ops_done": 112, "accepted_match": match, "tune": tune, "tables": copy.deepcopy(self.tables),
+               "ops_done": 112, "accepted_match": match, "accepted_note": "No accepted state yet: save a profile as accepted (Profiles)" if self.no_accepted else None, "tune": tune, "tables": copy.deepcopy(self.tables),
                "tables_note": self.tables_note, "fused": fused, "turbo": turbo_view(self.tables)}
         if self.read_at_enabled and self.last_read_at is not None:
             out["read_at"] = read_at_iso(self.last_read_at)
@@ -589,6 +594,8 @@ class V3Ops:
                     p["offset_mv"] = 0.0
                 written[u] = {0}
         elif "restore" in intent:
+            if self.no_accepted:
+                return self._err(rid, "REFUSED", "No accepted state yet: save a profile as accepted (Profiles). Nothing was sent.", check="NO_ACCEPTED_STATE")
             new = copy.deepcopy(self.accepted)
             written = {u: {0} | {p["point"] for p in new[u]["points"]} for u in UNITS if new[u] != self.tuning[u]}
         elif "profile" in intent:
@@ -860,11 +867,37 @@ class V3Ops:
     def _op_profiles_list(self, rid, args):
         rows = []
         for r in self.profiles.values():
+            if self.no_accepted and r["source"] == "accepted":
+                continue
             row = {"name": r["name"], "source": r["source"], "created": r["created"]}
             if self.profiles_include_intent and r.get("intent") is not None:
                 row["intent"] = r["intent"]
             rows.append(row)
-        self._reply(rid, True, result={"profiles": rows})
+        self._reply(rid, True, result={"profiles": rows, "accepted": any(r["source"] == "accepted" for r in rows)})
+
+    def _op_profiles_accept(self, rid, args):
+        """G-129: the user makes a saved profile (or the state of the last read) the accepted state; the fake keeps the current tuning as the accepted one."""
+        self.accept_calls.append(dict(args))
+        if self.accept_refusal is not None:
+            return self._err(rid, "REFUSED", self.accept_refusal[1], check=self.accept_refusal[0])
+        if not self.tuning_read:
+            return self._err(rid, "REFUSED", "no tune.read this boot: the accepted state is what the CPU holds, so read it first (Tune > Read). Nothing was changed.", check="NO_READ")
+        if args.get("from") == "read":
+            name = "read-20261012-120000"
+        else:
+            name = args.get("name")
+            rec = self.profiles.get(name) if isinstance(name, str) else None
+            if rec is None or rec["source"] != "saved":
+                return self._err(rid, "BAD_REQUEST", f"no saved profile named {name!r}", check="PROFILE_NOT_FOUND")
+        replaced = [r["name"] for r in self.profiles.values() if r["source"] == "accepted"] if not self.no_accepted else []
+        for n in [r["name"] for r in self.profiles.values() if r["source"] == "accepted"]:
+            del self.profiles[n]
+        self.accepted = copy.deepcopy(self.tuning)
+        self.no_accepted = False
+        self.accepted_chain = [(name, [])]
+        self.profiles[name if args.get("from") == "read" else "accepted:" + name] = {"name": name, "source": "accepted", "created": None, "intent": None}
+        self._reply(rid, True, result={"name": name, "source": "accepted", "from": "read" if args.get("from") == "read" else "saved", "accepted_at": "2026-10-12T12:00:00Z",
+                                       "replaced": replaced, "cpus": len(UNITS), "core_entries": 0, "points": 0, "turbo": False})
 
     # G-123: the accepted chain of the reference machine (profiles/CURRENT: e-p6-split3 -> p-boot-ramp -> p-step7), as profiles.get returns it
     def seed_accepted_chain(self) -> None:

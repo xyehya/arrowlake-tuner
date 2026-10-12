@@ -478,7 +478,7 @@ check = "turbo_ratio_bounded"
         self.assertEqual(code, 1, err)
 
     def test_the_commented_example_entries_of_the_example_policy_load_when_uncommented(self) -> None:
-        text = (Path(__file__).resolve().parents[2] / "policies" / "example-oc-ramp.toml").read_text(encoding="utf-8")
+        text = (Path(__file__).resolve().parents[2] / "examples" / "reference-285k" / "policies" / "example-oc-ramp.toml").read_text(encoding="utf-8")
         block = text.split("# Uncomment to allow", 1)[-1].split("# [[msr_allow]]", 1)
         self.assertEqual(len(block), 2)
         tail = "# [[msr_allow]]" + block[1].split("# (for the P table", 1)[0]

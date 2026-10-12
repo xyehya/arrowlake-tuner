@@ -86,6 +86,7 @@ from .ops import (
     _trust,
     _trust_refusal,
     _VirtualClock,
+    NO_ACCEPTED_NOTE,
     accepted_match,
     helper_topology,
     op_vf_dump,
@@ -750,7 +751,7 @@ def _persist_applied_words(helper: Helper) -> None:
 
 def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     """``{available: false}``, or ``{available: true, boot_id, at, applied_at, result}`` with ``result`` shaped like ``tune.read``'s. After an apply the
-    stored words (the verified read-backs) are overlaid, the decoded copy rebuilt and the accepted comparison redone."""
+    stored words (the verified read-backs) are overlaid and the decoded copy rebuilt; the accepted comparison is always redone against the accepted state as it is now."""
     _restore_last(helper)
     record = _boot_record(helper)
     if record is None:
@@ -772,8 +773,8 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                         p.update(_word_json(ws[p["point"]]))
         result["differences"] = []
         result["differences_stale"] = True
-        matched, note = accepted_match(helper, result, helper.fused_words)
-        result["accepted_match"], result["accepted_note"] = matched, note
+    matched, note = accepted_match(helper, result, helper.fused_words)  # G-129: always redone (a file read, no hardware): the accepted state can change after the read (profiles.accept)
+    result["accepted_match"], result["accepted_note"] = matched, note
     result["tune"] = _decode_document(result, topology, helper.fused_words)
     if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
         result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored
@@ -910,11 +911,13 @@ def _read_accepted_text(helper: Helper, relative: str, limit: int = _ACCEPTED_FI
         try:
             check_trusted_path(path, want="file", must_exist=True, lstat_fn=cfg.lstat_fn)
         except TrustError as exc:
+            if exc.reason == "does not exist" and exc.path in (str(path), str(directory)):
+                raise OpError(REFUSED, f"{NO_ACCEPTED_NOTE}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
             raise OpError(REFUSED, f"accepted state untrusted: {exc}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
     try:
         fd = open_checked(path, write=False, create=False, euid=cfg.euid_fn(), what="accepted state")
     except FileNotFoundError:
-        raise OpError(REFUSED, f"no accepted state ({path} is absent). Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
+        raise OpError(REFUSED, f"{NO_ACCEPTED_NOTE}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
     except TrustError as exc:
         raise OpError(REFUSED, f"accepted state untrusted: {exc}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
     try:
@@ -2010,12 +2013,12 @@ def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
             if m and _ACCEPTED_PATH_RE.fullmatch(m.group(1)) and m.group(1).endswith(".toml"):
                 out.append({"name": Path(m.group(1)).stem, "source": "accepted", "created": created})
     except OpError as exc:
-        note = exc.message
+        note = NO_ACCEPTED_NOTE if exc.message.startswith(NO_ACCEPTED_NOTE) else exc.message
     try:
         out.extend(_profile_store(helper).list())
     except ProfileStoreError as exc:
         note = (note + "; " if note else "") + exc.message
-    result: dict[str, Any] = {"profiles": out}
+    result: dict[str, Any] = {"profiles": out, "accepted": any(p["source"] == "accepted" for p in out)}  # G-129: false = "No accepted state yet"
     if note:
         result["note"] = note
     return result
@@ -2077,6 +2080,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
 # --------------------------------------------------------------------------------------------------------------
 def tune_ops() -> list[OpSpec]:
     from .ops import _validate_vf_dump
+    from .ops_accept import op_profiles_accept, validate_profiles_accept  # lazy: ops_accept imports this module
 
     return [
         # a mailbox read is a WRMSR (docs/SAFETY.md): write-gated on hardware, long (state machine begin/end), one at a time
@@ -2089,6 +2093,8 @@ def tune_ops() -> list[OpSpec]:
         OpSpec("profiles.list", op_profiles_list, _no_args, slow=True),
         OpSpec("profiles.save", op_profiles_save, _validate_profiles_save, slow=True),
         OpSpec("profiles.get", op_profiles_get, _validate_profiles_get, slow=True),
+        # G-129 (D-036): the user's accepted state, written by the root helper (a file write, no mailbox / MSR traffic; a read this boot is required)
+        OpSpec("profiles.accept", op_profiles_accept, validate_profiles_accept, slow=True),
         # G-123: the stored last read of this boot (a file read, no hardware); also restores the plan state after a helper restart
         OpSpec("tune.last", op_tune_last, _no_args, slow=True),
     ]
