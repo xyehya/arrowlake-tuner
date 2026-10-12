@@ -276,7 +276,7 @@ def hw_v_max_mv(max_voltage_word: int | None) -> int | None:
     """The CPU's own V target limit in whole mV (D-039): ``0x28 [11:0] - 1 LSB`` (``hw_v_max_raw``), rounded down. ``None`` when the word was not read or its field is 0."""
     if max_voltage_word is None or (max_voltage_word & 0xFFF) == 0:
         return None
-    return hw_v_max_raw(max_voltage_word) * 1000 // 1024
+    return hw_v_max_raw(max_voltage_word) * 1000 // 1024 or None  # a limit that rounds to 0 mV is no usable limit
 
 
 def fused_ratio_cap(kind: str, favored_words: Iterable[int | None], hw_max: int | None = None) -> int | None:
