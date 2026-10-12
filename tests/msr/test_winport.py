@@ -115,9 +115,20 @@ class Basics(unittest.TestCase):
     def test_failed_restore_does_not_mask_the_access_error(self) -> None:
         self.api.fail_restore = True
         self.api.fail_ioctl = OSError(errno.EIO, "boom")
-        with self.assertRaises(MsrError) as cm:
+        with self.assertLogs("arltuner.msr.winport", level="ERROR"), self.assertRaises(MsrError) as cm:
             self.port().rdmsr(0, 0x150)
         self.assertIn("boom", str(cm.exception))
+
+    def test_failed_restore_after_a_failed_access_is_logged_and_attached_not_swallowed(self) -> None:
+        """G-141: the restore failure used to vanish when the access had failed too; the thread could stay pinned with nobody told."""
+        self.api.fail_restore = True
+        self.api.fail_ioctl = OSError(errno.EIO, "boom")
+        with self.assertLogs("arltuner.msr.winport", level="ERROR") as logs:
+            with self.assertRaises(MsrError) as cm:
+                self.port().rdmsr(0, 0x150)
+        self.assertIn("boom", str(cm.exception))  # the access' own error is still the one raised
+        self.assertTrue(any("cannot restore the thread affinity" in note for note in cm.exception.__notes__), cm.exception.__notes__)
+        self.assertTrue(any("cannot restore the thread affinity" in line for line in logs.output), logs.output)
 
     def test_close_is_idempotent_and_reopens(self) -> None:
         p = self.port()

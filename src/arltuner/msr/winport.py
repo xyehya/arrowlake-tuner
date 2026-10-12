@@ -29,6 +29,7 @@ instantiated), so it imports on Linux, where the suite exercises everything agai
 from __future__ import annotations
 
 import errno
+import logging
 import re
 import struct
 import sys
@@ -41,6 +42,8 @@ from arltuner.profiles.fingerprint import CpuId, Fingerprint, FingerprintError
 from arltuner.topology.cpumap import Topology
 
 from .port import MsrError, MsrPort, check_cpu, check_msr, check_value
+
+_LOG = logging.getLogger(__name__)
 
 DEVICE_PATH = "\\\\.\\ThrottleStop"
 IOCTL_RDMSR = 0x80006448
@@ -469,19 +472,27 @@ class WinThrottleStopMsrPort(MsrPort):
                 original = self._api.set_thread_affinity(Affinity(0, 1 << lp))
             except OSError as exc:
                 raise MsrError(exc.errno or errno.EIO, f"{what}: cannot pin the thread to LP {lp}: {exc.strerror or exc}") from exc
-            done = False
             try:
                 self._expect_on(lp, what, "before")
                 result = op(handle)
                 self._expect_on(lp, what, "after")
-                done = True
-                return result
-            finally:
-                try:
-                    self._api.set_thread_affinity(original)
-                except OSError as exc:
-                    if done:  # never mask the access' own error; only a clean access reports the failed restore
-                        raise MsrError(exc.errno or errno.EIO, f"{what}: cannot restore the thread affinity: {exc.strerror or exc}") from exc
+            except BaseException as failure:
+                self._restore_affinity(original, what, failure)  # never masks the access' own error ...
+                raise
+            self._restore_affinity(original, what, None)  # ... but a clean access reports a failed restore
+            return result
+
+    def _restore_affinity(self, original: Affinity, what: str, failure: BaseException | None) -> None:
+        """Put the thread's affinity back. G-141: a restore that fails after a failed access used to vanish; the thread would stay pinned to one LP with nobody told. It is
+        now logged and attached to the access' own error as a note (``MsrError`` stays the error raised); after a clean access it is itself the ``MsrError``."""
+        try:
+            self._api.set_thread_affinity(original)
+        except OSError as exc:
+            text = f"{what}: cannot restore the thread affinity: {exc.strerror or exc} (this thread may stay pinned to its logical processor)"
+            if failure is None:
+                raise MsrError(exc.errno or errno.EIO, text) from exc
+            _LOG.error("%s", text)
+            failure.add_note(text)
 
     def _expect_on(self, lp: int, what: str, when: str) -> None:
         try:

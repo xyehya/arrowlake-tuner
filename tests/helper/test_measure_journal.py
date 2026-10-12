@@ -125,6 +125,31 @@ class RecoveryTests(MeasureCase):
         self.assertTrue(any("could NOT restore scaling_max_freq of cpu 1 " in line for line in self.logs), self.logs)
         self.assertEqual(self.read(1, MIN_ATTR), "800000")  # everything else was still restored
 
+    def test_a_measurement_restores_a_stale_journal_first_and_never_journals_a_dead_runs_caps(self) -> None:
+        """G-141: the journal used to be overwritten with the CURRENT (still capped) values as the "originals", so the run ended by restoring the caps of the dead run."""
+        self.die_mid_run()
+        self.cpufreq.fail = lambda cpu, attr, value: cpu == 1 and attr == CAP_ATTR  # the start-up recovery cannot finish: the journal is kept
+        h = self.start_measure()
+        h.call("p", "preflight")
+        self.assertTrue(self.journal.exists())
+        self.assertNotEqual(self.read(1, CAP_ATTR), str(self.model.max_khz(1)))
+        self.cpufreq.fail = None  # fixed by hand / works now
+        reply = h.call("m2", "vf.measure", {"units": ["P1"]}, timeout=30)
+        self.assertTrue(reply["ok"], reply)
+        self.assert_cpufreq_pristine()
+        self.assertFalse(self.journal.exists())
+
+    def test_a_measurement_refuses_when_the_stale_journal_cannot_be_restored(self) -> None:
+        self.die_mid_run()
+        self.cpufreq.fail = lambda cpu, attr, value: cpu == 1 and attr == CAP_ATTR
+        h = self.start_measure()
+        h.call("p", "preflight")
+        before = self.journal.read_text()
+        reply = h.call("m3", "vf.measure", {"units": ["P1"]}, timeout=30)
+        self.assertEqual((reply["ok"], reply["error"]["code"], reply["error"]["detail"]["check"]), (False, "REFUSED", "STALE_JOURNAL"))
+        self.assertEqual(self.journal.read_text(), before)  # the dead run's journal is untouched
+        self.assertEqual([w for w in self.cpufreq.writes[-1:] if w[0] == 1 and w[1] == CAP_ATTR], [])
+
     def test_recovery_rejects_foreign_content_in_the_journal(self) -> None:
         bad = {"version": 1, "entries": [{"cpu": 0, "attr": "scaling_governor", "value": "performance"}]}
         self.journal.write_text(json.dumps(bad))

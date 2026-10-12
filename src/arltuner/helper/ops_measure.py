@@ -825,6 +825,9 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "plan": plan_source, "complete": False, "kernel": w.kernel_fn(),
             "tuning_state": _tuning_state(helper, topo), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
         }
+        recover_journal(w, helper.cfg.log)  # G-141: a stale journal (a run that died) is applied first -- the values read below must be the user's, never a dead run's caps
+        if Path(w.journal_path).exists():
+            raise OpError(REFUSED, "a stale cpufreq journal could not be restored; fix cpufreq by hand (see the helper log) before a measurement", {"check": "STALE_JOURNAL"})
         entries = _write_journal(w, cpus, record["boot_id"], touched=TOUCHED)  # before the first change
         journaled = True
 
