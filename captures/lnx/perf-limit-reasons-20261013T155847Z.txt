@@ -1,0 +1,7 @@
+cpu0  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu1  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu2  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu4  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu7  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu8  0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']
+cpu16 0x64F=0x1dc21000 status=['Max-turbo-limit'] log=['Thermal', 'VR-thermal-alert', 'VR-TDC', 'Other', 'PL1', 'PL2', 'Max-turbo-limit']

@@ -49,6 +49,9 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   units, temps 30-78 C; e.g. P0 57x 1.3864, P2 55x 1.2837, EC0 48x 1.1226, EC1-3 48x 1.1125 V). Mailbox (read-only session policy =
   /etc policy + 0x18 / 0x24 read entries, operator OK): `0x18` = `0x1E`; `0x24` set1 per-bucket 0x46 (1C) / 0x146 (2-8C) = 70 C, -0/-1 bin;
   per-CCP 0x146 / 0x46; set2 (P1 16/17) all 0. Capture `captures/lnx/tvbvo-off-mailbox-*.txt`.
+  With that state the 70 C down-bin is NOT applied: 90 s all-core stress-ng at 79-82 C, P0/P1 held 5500 MHz, E 4800 (a TVB bin would be a
+  flat 5400); P2-P7 drifted to 5.30-5.43 GHz averages (not TVB; 0x64F status only "max turbo" at the sample, sticky log has thermal/VR-TDC/PL
+  bits from earlier, SDM decode unverified for ARL). Operator wants no P down-bin above 70 C: re-check after TVB-VO on (0x18 bit 2).
 - AFTER reboot with TVB-VO on: (1) re-read 0x18/0x24 (which bit moved) (2) Restore accepted, 12/12 (3) same vf.measure quick -> dVID per point
   (4) LIGHT: percore_stress.py all P (uncapped + 52..max) + one CPU per E cluster; bursty `stress-ng --cpu 24 --cpu-load 25 --verify` 10 min
   (5) MEDIUM: 12 threads ~60 % around the 70 C cutoff, 10 min (6) HEAVY: 24 threads --verify 10 min + stressapptest 5 min. Gate: verify
