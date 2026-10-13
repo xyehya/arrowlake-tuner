@@ -32,6 +32,8 @@ max_operations_per_session = 100000
 max_operations_per_boot = 100000
 min_dwell_s = 0.0
 
+# Step limits (below) also decide how a restore of the accepted profile runs (D-044): a change larger than a step is split into guarded rounds inside the one restore;
+# a lower step means more rounds and more operations, and a restore that cannot fit the operation caps is refused up front (STEP_LIMIT), never done partly.
 max_ratio_step = 8          # defaults; the encoding ranges are 1..255 / 2..1000 mV / 2..1000 mV (guard.policy _RATIO_STEP_RANGE / _V_STEP_MV_RANGE / _OFFSET_STEP_MV_RANGE)
 max_v_step_mv = 200
 max_offset_step_mv = 200

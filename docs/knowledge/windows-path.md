@@ -44,8 +44,8 @@ busy/completion handling: `registers.md`. ThrottleStop itself writes the mailbox
 - Scripts: `tools/win/restore_tuning.ps1` (`-Orchestrated`, `-Before` = extra pre-apply vf-dump, off by default) and `tools/win/Restore-Tuning.cmd`
   (self-elevating one-click launcher).
 - Steps: checks (admin, XtuService stopped, no other mailbox client) -> one "Type CONFIRM" (case-sensitive; anything else = nothing sent; D-020) ->
-  load the driver -> apply each profile in the accepted CURRENT list -> vf-dump -> compare every word with the accepted EXPECTED words -> remove the
-  driver. Stops at the first failure, never retries.
+  load the driver -> apply the one profile the accepted CURRENT names (D-044; a CURRENT that lists several is refused) -> vf-dump -> compare every word with the accepted EXPECTED words
+  (EQUIVALENT for a residual OC point, G-147) -> remove the driver. Stops at the first failure, never retries.
 - Works from a cold boot (all stock) and a warm reboot (part kept, `platform-arl-s.md` §7); the planner steps from what it reads.
 - Preflight (`tools/win/preflight.ps1`, read-only): admin, Memory integrity, blocklist, XtuService, other mailbox clients, Python, driver state.
 

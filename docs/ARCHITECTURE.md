@@ -302,6 +302,24 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
     at the newest audit record (apply after a helper restart is no longer `DWELL` "in the future"); `tune.plan` refuses `AUDIT_UNAVAILABLE` when the per-boot count cannot be read (it was taken as 0); a failed
     Windows affinity restore after a failed access is logged and attached as a note. Tests: `tests/helper/test_g141.py` and the module tests named in the commits.
 
+## Addendum G-147 — a residual OC point is neutralised; the favored ratio is never lowered as a side effect
+- **Why:** an OC word (`0x10`/`0x11`, `P2 = 0`) survives a warm reboot and its ratio cannot be written back to 0 at runtime; only a cold boot clears it
+  (`docs/knowledge/platform-arl-s.md`). A unit that holds an OC ratio above its top fused ratio while the accepted state has none keeps the V target the earlier
+  sitting left in it, so it runs a voltage the accepted tuning never tested.
+- **Rule (`controls/residual.py`, pure functions):** `neutralise(...)` rewrites such a unit with the ratio it already holds (never 0, never raised), the accepted offset
+  field, and an adaptive V target below the accepted top fused point voltage (`neutral_target`, `TARGET_MARGIN_MV`, never more than one step limit below the held
+  target). The hardware clamps an OC target below the top fused point up to it, so the unit runs the accepted voltage. A plan the guard refuses is dropped and the unit is
+  reported as it is. `scan_plan` adds two reads (`0x10`, `0x09 P1=0x11`) per unit that the accepted state gives no OC ratio.
+- **Compare:** `classify` / `compare_words` report a unit **EQUIVALENT** (`RESIDUAL_NOTE`: "residual OC point (cleared by a cold boot); voltages as accepted") when the
+  accepted word has no OC point, the live ratio is above the top fused ratio, the offset field equals the accepted one, the target is at most the effective top point and
+  every other point matches. Only a real difference is BAD. The same verdict feeds the helper's `accepted_match` (`equivalent: true`, `equivalents`), CLI `compare-accepted`
+  (exit 0 with EQUIVALENT units), `restore_tuning.sh` / `.ps1` and the Dashboard comparison. The restore result gains `residual` (units rewritten).
+- **Favored ratio:** a residual row sends no `0x1D` / `0x27`; the planner never sends a `0x1D` for a word whose ratio is at or below the top fused ratio and below the `0x1C[7:0]` read before. `0x1D` lowers the
+  unit's maximum (`cpuinfo_max_freq`) [MEASURED lnx 2026-10-13, see `docs/knowledge/platform-arl-s.md`].
+- **cpufreq cap follows:** after a complete apply that wrote a `0x1D`, `scaling_max_freq` of a CPU that sat at the old `cpuinfo_max_freq` follows the new one; a cap the user
+  lowered is never raised (`controls/cpufreq.py`, shared by the helper's `tune.apply` and the CLI `apply --device` on Linux).
+- **CLI:** `apply --neutralize-residual` (restore of the accepted state); G-148 makes it the behaviour of every complete profile.
+
 ## Addendum G-148 — complete, independent profiles; the accepted state is one profile restored in one shot (D-044)
 - **Schema (contract 6):** `[meta] complete = true` marks a **complete** profile: exactly one `[[core]]` per unit of the CPU (each P-core, each E cluster) with
   `fused_top_ratio` (the unit's top fused ratio, `0x09 P1=0x11 [7:0]`, where it was made) and an explicit `offset_mv`; `ratio` + `oc_voltage_mv` only for an OC

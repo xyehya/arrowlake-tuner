@@ -1,6 +1,6 @@
 # profiles/EXPECTED-words.txt - the V/F words profiles/CURRENT must leave on the chip (accepted p-step7 + E split3, 2026-10-04; G-148: the same words as profiles/accepted-2026-10-04.toml), one line per core / E-cluster:
-# <linux cpu> <OC word P2=0> <point 1> ... <point n>   (hex, no 0x). Read by tools/lnx/restore_tuning.sh. tools/win/restore_tuning.ps1 has the same
-# table inline ($Expected) - update BOTH together with profiles/CURRENT. Source: captures/win/apply-p-step7-20261004T180158.txt read-back (E: unchanged split3).
+# <linux cpu> <OC word P2=0> <point 1> ... <point n>   (hex, no 0x). Read by tools/lnx/restore_tuning.sh, tools/win/restore_tuning.ps1 and `arltuner compare-accepted`.
+# Written by the app with the profile (G-148, D-044), both from the same read-back words. Source of this sample: captures/win/apply-p-step7-20261004T180158.txt read-back (E: unchanged split3).
 0  39 8 14 1E 30 F9A00035 FC600037 FCA00038 FA800039
 1  0 8 14 1E 30 F9A00035 FB600037 38 39
 2  0 8 14 1E 30 F9A00035 F5A00037 38 39

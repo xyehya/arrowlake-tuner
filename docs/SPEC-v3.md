@@ -59,12 +59,13 @@ Per row, three controls (dropdowns, XTU-like, values snap to the hardware's 1/10
   "target above fused"); **Apply** button sends `tune.apply {plan_id, typed: "CONFIRM " + nonce}` ⇒ progress ⇒ read-back table (match /
   mismatch per word). "Revert = cold boot or reapply a profile" shown in the modal. Gates of SPEC §5 appear as badges ("not yet validated on
   this machine"), never locks (D-033).
-- **Reset to stock** (all offsets 0, ratios to the turbo defaults) and **Restore accepted** (profiles/CURRENT, the p-step7 path) are buttons that
-  go through the same plan → modal → apply flow.
+- **Reset to stock** (all offsets 0, ratios to the turbo defaults) and **Restore accepted** (the one profile `accepted/CURRENT` names; D-044) are buttons that
+  go through the same plan → modal → apply flow. Restore writes only the words that differ and splits a large change into guarded rounds (or refuses `STEP_LIMIT` up front).
 
 ## 5. Profiles
-List (installed accepted state + saved), save current Tune settings as a profile (name `^[a-z0-9._-]{1,64}$`, never overwrite), diff
-profile↔profile / profile↔last read, apply (plan flow), mark as accepted ⇒ proposal per SPEC §6.4 (unchanged).
+List (the one installed accepted profile + saved), save current Tune settings as a profile (name `^[a-z0-9._-]{1,64}$`, never overwrite; D-044: a saved profile is complete = this boot's
+read with the editor's rows, so a read comes first), diff profile↔profile / profile↔last read, apply (plan flow), mark as accepted ⇒ proposal per SPEC §6.4 (unchanged). Profiles saved
+before D-044 are listed as "partial (legacy)".
 
 ## 6. Limits (D-032)
 Policy, not code: offsets ±200 mV, V target ≤ 0x28 hardware max (P 1625 / E 1355 mV), ratio ≤ P 57 / E 49, per-write steps at the code maxima,

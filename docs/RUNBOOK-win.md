@@ -2,7 +2,7 @@
 
 > Carried over 2026-10-08 from the project's earlier research phase. Paths `docs/knowledge/*`, `docs/tasks/T-0xx` and `captures/*` cited here name notes of that phase, which are not part of this repository.
 
-How the operator loads ThrottleStop's signed driver, re-applies the accepted tuning (`profiles/CURRENT`) through `arltuner --device-win`, then benchmarks.
+How the operator loads ThrottleStop's signed driver, re-applies the accepted tuning (the one profile `accepted\CURRENT` names, D-044) through `arltuner --device-win`, then benchmarks.
 Rules behind it: `AGENTS.md`, `docs/SAFETY.md`. Driver facts: `docs/knowledge/windows-path.md` §1, `win-throttlestop-9.7.3.md`.
 All paths relative to the repo (`%USERPROFILE%\AI\arrowlake-tuner`). Use an **elevated** PowerShell (Run as administrator). `py -3` below = `python` if you have no launcher.
 The driver is never stored in the repo: it is carved from your own `ThrottleStop.exe` (hash-verified) into `%ProgramData%\arltuner\ThrottleStop.sys`.
@@ -64,11 +64,11 @@ Stop-Service XtuService
 powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1 -Check
 ```
 Type the `CONFIRM <token>` it prints (reads are WRMSRs to MSR 0x150 and are guarded too).
-2. **Apply** — one CONFIRM per profile in `profiles/CURRENT` (`e-p6-split3`, `p-step3` = `profiles/tune-2026-10-02.toml`); output is also saved to `captures\win\reapply-<name>-<ts>.txt`:
+2. **Apply** — one CONFIRM for the one accepted profile (D-044): the run reads the CPU and writes only the words that differ, in guarded rounds if a change is larger than the policy's step limit (it refuses with `STEP_LIMIT` before the first write if it cannot). A residual OC point (G-147) is rewritten to run the accepted voltage. A `CURRENT` that still lists several profiles is refused: on Linux run `sudo python3 -I tools/arltuner.py accepted-migrate` once, then copy `/etc/arltuner/accepted` here again. Output is also saved to `captures\win\reapply-<name>-<ts>.txt`:
 ```
 powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1
 ```
-3. **Check again** — the point offsets must equal the Linux readback `captures/lnx/vfdump-accepted-run18.txt` (same offsets, Linux CPU numbering):
+3. **Check again** — the point offsets must equal the accepted state's `EXPECTED-words.txt` (same offsets, Linux CPU numbering; `restore_tuning.ps1` does this compare for you):
 ```
 powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1 -Check > captures\win\vfdump-after-apply.txt
 ```
@@ -79,7 +79,7 @@ If anything differs or a command errors, stop and report; do not retry blindly (
 - **Revert:** reboot (offsets are volatile; stock returns). To drop the driver without rebooting: `py -3 tools\win\ts_driver.py remove` (stop + delete the service; does **not** undo applied offsets).
 - Per boot: `py -3 tools\win\ts_driver.py start`, `Stop-Service XtuService` (or `Set-Service XtuService -StartupType Manual` once), then step 4.2 and 4.3.
 
-## 6. BIOS settings the tuning assumes (header of `profiles/tune-2026-10-02.toml`)
+## 6. BIOS settings the reference machine's tuning assumed (one sample; your accepted state assumes your own BIOS settings)
 PL1 = PL2 = 295 W · board VccIA offset -100 mV · ring OC 40x with -16 mV on its 39x/40x points · DDR5 7200 · TVB voltage optimisations off · E-cores 48x OC word.
 Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go to `docs/knowledge/win-*.md`.
 
@@ -88,8 +88,8 @@ Accepted state: run 18, 15-min OCCT CPU SSE clean on Linux. Windows results go t
 |---|---|---|
 | `preflight.ps1` | admin, Memory integrity, blocklist, XtuService, other mailbox clients, Python, driver state | none |
 | `ts_driver.py init-dir/carve/start/status/remove/check-dir` | create the admin-only directory, carve the driver from your exe, manage the `ThrottleStop` kernel service (hash + ACL re-checked before every start) | loads/unloads a kernel driver (operator only) |
-| `reapply_current.ps1 [-Check]` | apply `profiles/CURRENT` via `--device-win`; `-Check` = read-only vf-dump | writes point offsets via the guard |
-| `restore_tuning.ps1 [-Orchestrated]` | after any boot: checks → driver start → vf-dump → apply `profiles/CURRENT` → vf-dump compared word-for-word with the accepted state → driver stop | writes point offsets via the guard |
+| `reapply_current.ps1 [-Check]` | apply the one accepted profile via `--device-win` (no word compare); `-Check` = read-only vf-dump | writes point offsets via the guard |
+| `restore_tuning.ps1 [-Orchestrated]` | after any boot: checks → driver start → vf-dump → apply the one accepted profile (only the words that differ, rounds within the step limits) → vf-dump compared word-for-word with `EXPECTED-words.txt` (EQUIVALENT for a residual OC point, G-147) → driver stop | writes point offsets via the guard |
 
 ## Safety nets built in (2026-10-02)
 - **Core map and identity check (G-138):** nothing about a particular chip is stored in the code or the scripts. The accepted state carries `fingerprint.json`

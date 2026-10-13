@@ -1190,7 +1190,7 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------------------------------
-# Accepted state (/etc/arltuner/accepted/CURRENT chain) and saved profiles
+# Accepted state (/etc/arltuner/accepted/CURRENT: one profile since D-044) and saved profiles
 # --------------------------------------------------------------------------------------------------------------
 def _read_accepted_text(helper: Helper, relative: str, limit: int = _ACCEPTED_FILE_MAX) -> str:
     cfg = helper.cfg

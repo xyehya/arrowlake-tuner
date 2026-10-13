@@ -92,7 +92,7 @@ Every control is shown; a control is **writable only after its gate is recorded*
 | Ring offset | `point-offset` P1 2 | 40× point needs policy P2 9 | read-only in v1 |
 
 ## 6. Screens
-1. **Dashboard:** live tiles + per-core table (§8); preflight; applied vs accepted ("matches accepted" / "differs: n" / "stock"); ops used / 600.
+1. **Dashboard:** live tiles + per-core table (§8); preflight; applied vs accepted ("matches accepted" / "equivalent: residual OC point (cleared by a cold boot); voltages as accepted" (G-147) / "differs: n" / "stock"); ops used / 600.
 2. **V/F editor:** rows P0–P7 and E-clusters 0–3, columns = V/F points. Cell: fused word, offset (mV), target V, measured VID. Editing **target V**
    requires a measured stock VID for that point (`vf-dump --measure`, costs ops and minutes) — disabled otherwise (R33). Out-of-policy cells red
    with the limit; gated controls grey with the gate.
@@ -104,7 +104,7 @@ Every control is shown; a control is **writable only after its gate is recorded*
    `/etc/arltuner/accepted/` (hash in the audit log) for autostart (R16).
    **D-044 (G-148):** a profile is a **complete, independent** tuning state (every unit's OC word fields, every fused point's offset, both turbo tables); saving
    = this boot's read with the editor's rows over it. The accepted state is **one** profile (`CURRENT` has one line; profile and EXPECTED words come from the
-   same read); restore = apply it in one run, writing only the words that differ. Profiles saved earlier are "partial (legacy)"; an older multi-profile
+   same read); restore = apply it in one run, writing only the words that differ. G-147: a residual OC point (an OC ratio the accepted state lacks; only a cold boot clears it) is rewritten so the unit runs the accepted voltage and is reported EQUIVALENT, not BAD; `0x1D` is never lowered as a side effect. Profiles saved earlier are "partial (legacy)"; an older multi-profile
    `CURRENT` is converted once by `arltuner accepted-migrate` (from its EXPECTED words, with a backup) and refused by the restore until then.
 5. **Stress:** §9. 6. **Log:** audit tail, health snapshots, MCE / hardware-error kernel lines since boot. 7. **Settings:** autostart; policy shown
    read-only with its path.
@@ -184,6 +184,6 @@ budget shared with the CLI via the audit log (OD-1 moves it to `/var/lib`: the C
 |---|---|---|---|
 | OD-1 | Root-owned install for helper, policy, audit, accepted state — also during development (CLI keeps running from the checkout with sudo; it moves its audit log and lock to the same `/var/lib` / `/run/lock` paths) | **yes (D-024)** | — |
 | OD-2 | Python ≥ 3.12 (excludes Ubuntu 22.04, Debian 12) or ≥ 3.11 | **yes (D-024)** | — |
-| OD-3 | Autostart applies only a profile with a recorded gate (today p-step7) | deferred to G6 | G6 |
+| OD-3 | Autostart applies only the one accepted profile and only with a recorded gate (the reference machine: `accepted-2026-10-04`, built from p-step7) | deferred to G6 | G6 |
 | OD-4 | Sign D-021 (unattended autostart, §10) | deferred to G6 | G6 |
 | OD-5 | GitHub remote: `xyehya/arrowlake-tuner` (https://github.com/xyehya/arrowlake-tuner); public after a privacy scrub (G-140)? | **yes (D-024)** | — |

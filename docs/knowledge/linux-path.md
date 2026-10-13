@@ -31,7 +31,7 @@ AER / PCI lines); `CLEAN` = gate. Wi-Fi roam lines are benign. Never clear stick
 
 ## 4. Restore after every boot
 Mailbox state is volatile (`platform-arl-s.md` §7): the accepted state is re-applied after every boot, with one CONFIRM (D-020a), planned from the live
-words (cold or warm boot both work) and compared word for word with the accepted state at the end. Never unattended (D-021 unsigned). Procedure:
+words (cold or warm boot both work; only the words that differ are written, in guarded rounds within the policy's step limits, D-044) and compared word for word with the accepted state at the end (a residual OC point that runs the accepted voltage is EQUIVALENT, G-147). Never unattended (D-021 unsigned). Procedure:
 `docs/guide/09-profiles-and-restore.md`.
 
 ## 5. Audit log
