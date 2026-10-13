@@ -44,6 +44,16 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   back as written, 353 ops, MCE 0. Re-read -> "Set the current state as accepted" -> `read-20261013-145635` (complete, 12 units, turbo tables
   e 48x8 / p 57,57,55x6); EXPECTED-words identical to the tested state. Fingerprint kept.
 
+## In flight (2026-10-13): BIOS "TVB Voltage Optimizations" test (one variable)
+- BEFORE (TVB-VO off, accepted tuning applied, this boot): VID baseline curve `20261013T154945Z-q9x7` ("tvbvo-off-baseline", quick, all 12
+  units, temps 30-78 C; e.g. P0 57x 1.3864, P2 55x 1.2837, EC0 48x 1.1226, EC1-3 48x 1.1125 V). Mailbox (read-only session policy =
+  /etc policy + 0x18 / 0x24 read entries, operator OK): `0x18` = `0x1E`; `0x24` set1 per-bucket 0x46 (1C) / 0x146 (2-8C) = 70 C, -0/-1 bin;
+  per-CCP 0x146 / 0x46; set2 (P1 16/17) all 0. Capture `captures/lnx/tvbvo-off-mailbox-*.txt`.
+- AFTER reboot with TVB-VO on: (1) re-read 0x18/0x24 (which bit moved) (2) Restore accepted, 12/12 (3) same vf.measure quick -> dVID per point
+  (4) LIGHT: percore_stress.py all P (uncapped + 52..max) + one CPU per E cluster; bursty `stress-ng --cpu 24 --cpu-load 25 --verify` 10 min
+  (5) MEDIUM: 12 threads ~60 % around the 70 C cutoff, 10 min (6) HEAVY: 24 threads --verify 10 min + stressapptest 5 min. Gate: verify
+  failures, dmesg MCE/hardware error/segfault. Then the operator runs the full suite.
+
 ## Operator to-do
 1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
