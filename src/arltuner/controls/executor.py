@@ -14,7 +14,7 @@ Dwell (``docs/tasks/T-013-guard.md``: the guard refuses, never sleeps): this exe
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 
 from arltuner.guard import Confirmation, GuardRefused, MsrResult, Policy, Refusal, WriteGuard
@@ -22,6 +22,7 @@ from arltuner.mailbox import VfWord, rc_name
 from arltuner.profiles import Profile
 from arltuner.topology import Topology
 
+from . import residual
 from .model import PERCORE_ENABLE_BIT, ApplyPlan, CoreReadings, PlanStep, PreflightError, StepKind
 from .planner import build_plan, plan_warnings, preflight, read_steps, resolve_point_targets
 from .report import ApplyReport, StepResult, StepStatus, StopKind, v_mv
@@ -209,6 +210,8 @@ def apply_profile(
     progress: Callable[[str], None] | None = None,
     plan_check: Callable[[ApplyPlan], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    neutralize_residual: bool = False,
+    accepted_before: Sequence[Profile] = (),
 ) -> ApplyReport:
     """Apply ``profile`` through ``guard`` and return what happened.
 
@@ -240,9 +243,23 @@ def apply_profile(
     write; whatever it raises propagates and nothing was written (the helper uses it to refuse a plan whose assumed words changed). ``cancelled()`` is
     looked at before every step (both phases); once true the run stops with ``StopKind.CANCELLED`` -- a step in flight always completes. Both default to
     ``None`` (the CLI's behaviour is unchanged).
+
+    G-147 (``neutralize_residual``, the restore of the accepted state): first, before any other request, ``0x10`` and ``0x09`` are read on one CPU of every unit the accepted
+    state (``accepted_before`` = the profiles of the accepted chain applied before this one, + ``profile``) sets no OC ratio for. A unit that holds an OC ratio above its top
+    fused ratio (a residual OC point: it cannot be cleared at runtime) gets a row that keeps that ratio, the accepted offset and a V target below the accepted top fused
+    point, so the hardware clamps it to the accepted voltage (``controls.residual``); no ``0x1D`` / ``0x27`` is sent for it. The scan reads are budgeted up front
+    (``preflight(extra_ops=...)``). If the plan with those rows is refused by the guard's predicates (a step limit, the policy's ratio ceiling) they are dropped and the
+    plan of ``profile`` alone runs, with a warning: a restore never fails because of the neutralisation.
     """
-    targets = preflight(profile, topology, policy)
+    scanned = residual.scan_cpus(profile, accepted_before, topology) if neutralize_residual else ()
+    scan = residual.scan_steps(scanned, topology, policy)
+    scanned = tuple(c for c in scanned if all(st.verdict.allowed for st in scan if st.cpu == c))  # a CPU the policy does not let us read is not scanned
+    scan = tuple(st for st in scan if st.cpu in scanned)
+    scan_ops = len(scan)
+    targets = preflight(profile, topology, policy, extra_ops=scan_ops)
     warnings = plan_warnings(targets, policy, resolve_point_targets(profile, topology))
+    original = profile
+    residual_cpus: frozenset[int] = frozenset()
     pacer = _Pacer(policy.min_dwell_s, clock, sleep)
     results: list[StepResult] = []
     misc_word: int | None = None
@@ -252,6 +269,25 @@ def apply_profile(
     oc_cap_words: dict[int, int] = {}  # G-137 (D-039): cpu -> the 0x01 word read in this run
 
     try:
+        if scan:
+            scan_words: dict[int, dict[StepKind, int]] = {}
+            for step in scan:
+                result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
+                results.append(result)
+                scan_words.setdefault(step.cpu, {})[step.kind] = word
+            found = residual.neutralise(
+                profile, accepted_before, topology, policy,
+                {c: w[StepKind.READ_VF] for c, w in scan_words.items()}, {c: w[StepKind.READ_FUSED] for c, w in scan_words.items()},
+            )
+            warnings = (*warnings, *found.notes)
+            if found.units:
+                try:
+                    targets = preflight(found.profile, topology, policy, extra_ops=scan_ops)
+                except PreflightError as exc:  # the extra rows do not fit (budget, ceilings): the plan of the profile alone runs
+                    warnings = (*warnings, f"residual OC point not neutralised: {exc}")
+                else:
+                    profile, residual_cpus = found.profile, found.cpus
+                    warnings = (*plan_warnings(targets, policy, resolve_point_targets(profile, topology)), *found.notes)
         for step in read_steps(targets, policy, profile, topology):
             result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
             results.append(result)
@@ -292,12 +328,28 @@ def apply_profile(
         point_words=point_words,
         favored_words=getattr(guard, "favored_words", lambda: None)(),
         oc_cap_words=oc_cap_words,
+        residual_cpus=residual_cpus,
     )
     try:
         plan.require_allowed()
     except PreflightError as exc:
-        exc.report = _report(profile, guard, results, plan, warnings, None, policy)
-        raise
+        if profile is original:
+            exc.report = _report(profile, guard, results, plan, warnings, None, policy)
+            raise
+        # G-147: the neutralisation rows are refused (e.g. a step limit); the plan of the profile alone is the restore
+        warnings = (*warnings, f"residual OC point not neutralised: the plan with those rows was refused ({exc}); applying the profile alone")
+        profile, residual_cpus = original, frozenset()
+        plan = build_plan(
+            profile, topology, baseline,
+            per_core_enabled=None if misc_word is None else bool(misc_word & PERCORE_ENABLE_BIT),
+            policy=policy, misc_word=misc_word, msr_words=msr_words, point_words=point_words,
+            favored_words=getattr(guard, "favored_words", lambda: None)(), oc_cap_words=oc_cap_words,
+        )
+        try:
+            plan.require_allowed()
+        except PreflightError as exc2:
+            exc2.report = _report(profile, guard, results, plan, warnings, None, policy)
+            raise
     if plan_check is not None:
         plan_check(plan)
 

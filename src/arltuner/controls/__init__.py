@@ -6,6 +6,7 @@ transport or a port. Import has no side effects.
 """
 from __future__ import annotations
 
+from . import residual
 from .executor import apply_profile
 from .model import (
     OFFSET_ONLY_WRITES,
@@ -94,6 +95,7 @@ __all__ = [
     "Verdict",
     "apply_profile",
     "build_plan",
+    "residual",
     "count_operations",
     "describe_word",
     "effective_offset_text",

@@ -136,6 +136,7 @@ class SimConfig:
     point_ratios: dict[tuple[str, int], int] = field(default_factory=lambda: {("E", 6): 46})  # (kind, point) -> the ratio field the point starts with
     cpu_point_ratios: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> ratio field; wins over ``point_ratios`` (per-core tables)
     drop_target_without_oc_point: bool = True  # G-120: a domain-0 P2 = 0 word whose ratio is <= the top fused ratio has no OC point: the V target is dropped whatever the offset (G-124; needs point_counts) [MEASURED lnx 2026-10-11/12]
+    sticky_oc_ratio: bool = False  # G-147: an OC ratio cannot be written back to 0 at runtime (the word stays as it was, rc InvalidParam); only a cold boot (a new port) clears it [MEASURED lnx 2026-10-11/13]
     oc_adds_point: bool = False  # T-026: an OC ratio (P2 = 0 word) above the top fused ratio of the core creates ONE extra point (``[COMMUNITY]``, SkatterBencher)
     point_offsets: dict[tuple[str, int], int] = field(default_factory=dict)  # T-026: (kind, point) -> the offset field (raw) the point starts with (default 0)
     cpu_point_offsets: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> offset raw; wins over ``point_offsets`` (a BIOS that differs per core)
@@ -225,6 +226,7 @@ class SimConfig:
             # G-117: cold-boot stock has runtime point offsets 0 (as on the machine today); the old BIOS-like offsets are opt-in:
             # ``SimConfig.measured(point_offsets=dict(POINT_OFFSETS_ARL_S))``.
             "point_offsets": {},
+            "sticky_oc_ratio": True,  # G-147 [MEASURED lnx 2026-10-11/13]: the CPU refuses a zero OC ratio at runtime
             "oc_adds_point": True,  # G-120 [MEASURED lnx 2026-10-11]: OC ratio 48 on E added P2 = 7; at stock P2 = top+1 answers rc 0x11
             "ring_point_ratios": dict(RING_POINT_RATIOS_ARL_S),  # T-028
             "ring_point_offsets": dict(RING_POINT_OFFSETS_ARL_S),
@@ -454,6 +456,19 @@ class SimMsrPort(MsrPort):
 
     def _stored_oc(self, cpu: int) -> VfWord:
         return self._vf.get(self._vf_key(Domain.CORE, cpu, 0), _ZERO_VF)
+
+    def oc_point_voltage_raw(self, cpu: int) -> int:
+        """G-147: the voltage (raw S2.10) the OC point of ``cpu`` runs at -- ``0`` when the stored OC ratio is at or below the top fused ratio (no OC point, the top point's
+        voltage applies). An OC target below the top fused point is clamped up to it, so this is ``max(target, fused top V + the top point's offset)``
+        ``[MEASURED lnx 2026-10-11/13]``: target 1.100 V with the top point at 1.1125 V ran at 1.1125 V. A test-double peek, not a mailbox request."""
+        oc = self._stored_oc(cpu)
+        top = self._top_fused_ratio(cpu)
+        if top is None or oc.ratio <= top:
+            return 0
+        count = self._fused_count(cpu)
+        top_point = next((n for n in range(count, 0, -1) if self._point_ratio(cpu, n) == top), None)
+        offset = 0 if top_point is None else self.vf(cpu, Domain.CORE, top_point).offset_raw
+        return max(oc.v_target_raw, ((self._peek(self._fused, cpu) >> 8) & 0xFFF) + offset)
 
     def _fused_count(self, cpu: int) -> int:
         counts = self.config.point_counts
@@ -754,6 +769,8 @@ class SimMsrPort(MsrPort):
         if p1 == Domain.CORE and cfg.per_core_requires_enable and not self.per_core_enabled:
             return int(Rc.OCLocked), 0
         word = VfWord.from_u32(data)
+        if cfg.sticky_oc_ratio and p1 == Domain.CORE and p2 == 0 and word.ratio == 0 and self._stored_oc(cpu).ratio != 0:
+            return int(Rc.InvalidParam), 0  # G-147: an OC ratio cannot be written back to 0; the stored word stays
         top = (self._top_fused_ratio(cpu) or max(_REF_POINTS[self._kind(cpu)])) if p1 == Domain.CORE else None
         zero_target = word.v_target_raw == 0 and not (top is not None and 0 < word.ratio <= top)  # G-120: no OC point (ratio <= top fused) = ratio | offset << 21, target 0 is the shape the planner writes
         if cfg.reject_zero_fields and p1 == Domain.CORE and p2 == 0 and (word.ratio == 0 or zero_target):  # T-025: a point word has V target 0 (OCCT, measured)
