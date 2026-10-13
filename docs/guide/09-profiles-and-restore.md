@@ -23,8 +23,8 @@ illustration in `examples/reference-285k/`, and the app never reads that directo
 | Card | What it does |
 |---|---|
 | **Accepted state** | shows the one accepted profile, its kind and a summary. Button **Set the current state as accepted** records what the CPU holds now (the last read) as the accepted state; nothing is written to the CPU. Button **Record CPU fingerprint for Windows** adds `fingerprint.json` to an existing accepted state (section 4). An accepted state from an older version that is still a list of several profiles is shown with the command that converts it (section 3, "An older accepted state") |
-| **Profiles** | the list of profiles with a badge **complete** or **partial (legacy)** and a short summary. Per profile: **Load into Tune** (fills the Tune editor; a complete profile fills every unit; nothing is sent), **Review and apply** (plan flow), **Set as accepted** |
-| **Save the current Tune settings** | saves a complete profile: this boot's read of every unit with the unapplied choices from Tune over it (no changes = the read as it is). It needs a read this boot (`NO_READ`, "read first"). Name: lowercase letters, digits, `.`, `_`, `-`, 1 to 64 characters. A saved profile is never overwritten (an existing name is refused: `EXISTS`) |
+| **Profiles** | the list of profiles with a badge **complete** or **partial (legacy)** and a short summary. Per profile: **Load into Tune** (fills the Tune editor; a complete profile fills every unit; nothing is sent), **Review and apply** (plan flow; a complete profile is applied like the accepted state: only the words that differ, in rounds if a step limit needs them), **Set as accepted** |
+| **Save the current Tune settings** | saves a complete profile: this boot's read of every unit with the unapplied choices from Tune over it (no changes = the read as it is). It needs a read this boot (`NO_READ`, "read first") and refuses `STALE_READ` when a write came after that read (read again first); a value a profile file cannot hold exactly is refused `NOT_REPRESENTABLE`. Name: lowercase letters, digits, `.`, `_`, `-`, 1 to 64 characters. A saved profile is never overwritten (an existing name is refused: `EXISTS`) |
 | **Compare two profiles** | a diff table of what the two profiles hold; with a partial (legacy) profile, "–" marks a value it does not set |
 
 ### Making a state accepted
@@ -68,7 +68,7 @@ complete = true        # the whole tuning state (the app writes this)
 [[core]]               # the OC word of a unit; ONE per P-core and per E-cluster
 kind = "P"             # "P" | "E"
 index = 4              # XTU numbering: P 0..7, E 0..15 (an E entry is its whole cluster)
-fused_top_ratio = 57   # the unit's top fused ratio where the profile was made: on another CPU the profile is refused
+fused_top_ratio = 57   # the unit's top fused ratio where the profile was made: on another CPU the profile is refused (PROFILE_TOPOLOGY)
 ratio = 60             # optional: an OC point (a ratio above the top fused ratio) with its adaptive voltage;
 oc_voltage_mv = 1400   #   absent = no OC point
 offset_mv = -30        # whole-curve offset, always stated (0 included)
@@ -91,17 +91,63 @@ rarely edit one by hand. A file without `complete = true` is a partial profile: 
 **In the GUI.** Start the GUI ([03](03-first-run.md)), open **Tune**, press **Restore accepted** (the button is disabled until an accepted state exists),
 then **Review changes**, check the before/after and the operation count, and **Apply**. It is **one run**: the apply reads every word of the accepted profile
 first and writes only the words that differ, so it works from a cold boot (all stock) and from a warm reboot (a mix) alike. An OC ratio left over from a warm
-reboot that the accepted state does not have (it cannot be removed at runtime) is rewritten so the unit runs the accepted voltages and reported as **equivalent**.
+reboot that the accepted state does not have (it cannot be removed at runtime) is rewritten so the unit runs the accepted voltages and reported as **equivalent**
+([below](#a-left-over-oc-point-equivalent)).
 
 If a word is further from the accepted value than your policy's per-write step limit (`max_offset_step_mv`, `max_v_step_mv`, `max_ratio_step`), the apply splits
-the change into **rounds** within the same run: read, write every word one step closer, read again, until the accepted values are reached. How many rounds
-are needed, and whether they fit the policy's operation caps, is decided before the first write; if they do not fit, nothing is sent and the plan is refused
-`STEP_LIMIT`, naming the unit and the field that needs the most rounds. A hand-made "ramp" profile is never needed. Afterwards the Dashboard's "applied" chip
-and the comparison with the accepted state tell you whether every word matches.
+the change into **rounds** within the same run: read, write every word one step closer, read again, until the accepted values are reached. No intermediate profile
+and no second sitting is needed. How many rounds are needed, and whether they fit the policy's operation caps and the tool's own bound of 16 rounds (a design bound,
+not a hardware one), is decided before the first write. If they do not fit, nothing is sent and the plan is refused `STEP_LIMIT`, naming the unit and the field that
+needs the most rounds; raise the step limits or the operation caps in `/etc/arltuner/policy.toml`, or bring the CPU closer first ([11 §3](11-troubleshooting-faq.md)).
+Afterwards the Dashboard's "applied" chip and the comparison with the accepted state tell you whether every word matches.
 
-Operation count: the apply reserves the worst case (every word read, every word written and read back). For the reference layout (8 P-cores x 8 points,
-4 E-clusters x 4 CPUs x 6 points) that is about 650 operations per round; a cold-boot restore of the reference state spends about 350 (only the tuned points
-differ) [simulator, G-148]. The default policy allows 100000 per session; a stricter policy refuses up front (`SESSION_LIMIT`).
+Operation count: the plan reserves the worst case (every word read, every word written and read back, plus two reads per unit that has no OC point in the accepted
+state, to look for a left-over OC point). For the reference layout (8 P-cores, 4 E-clusters of 4 CPUs) the simulator reserves 651 operations per round
+[simulator test, `tests/helper/test_complete_profiles.py`]. Only the words that differ are written, so a restore of a state the CPU already holds sends reads only: a
+live one-shot restore on the reference machine was 281 reads and 0 writes [MEASURED lnx 2026-10-13, docs/STATE.md]. The default policy allows 100000 operations per
+session; a stricter policy refuses up front (`SESSION_LIMIT`).
+
+### A left-over OC point: "equivalent"
+You may meet this after OC write tests or after a warm reboot. Setting an OC ratio on a unit (a P-core or an E-cluster) adds an OC point above its top fused point.
+The CPU does not accept an OC ratio of 0 at runtime, so that ratio, and the adaptive voltage next to it, stay in the unit until a **cold boot** [MEASURED lnx 2026-10-11,
+platform-arl-s.md §3]. The accepted state has no OC point there, so the unit keeps an OC point that the accepted tuning does not describe.
+
+Why it matters (example values from one chip, the reference 285K): after OC tests an E-cluster held 48x with an adaptive target of 1.137 V. Its 48x therefore ran at the
+stock voltage of its top point, while the accepted tuning has -25 mV on that point (1.1125 V) [MEASURED lnx 2026-10-13, examples/reference-285k/notes/tuning-history.md §5].
+The words on the other points matched; only the OC word differed.
+
+What Restore accepted does about it, for every unit whose accepted state has no OC point but whose live word holds an OC ratio above the top fused ratio:
+
+| Part of the OC word | Written |
+|---|---|
+| ratio | the one the unit already holds (it cannot be removed; it is never raised and never 0) |
+| whole-curve offset | the accepted one |
+| adaptive target | 25 mV **below the accepted top-point voltage** (the unit's fused voltage plus the accepted offset of its top point; the fused voltage itself if that offset is positive), never above the fused voltage, and at most one step limit below what the unit holds now |
+
+A target below the top fused point is clamped up to that point by the hardware [MEASURED lnx 2026-10-11, 2026-10-13], so the unit runs the accepted voltages. Example
+from one chip: a target of 1.100 V read back as `0x00046630`, and 48x measured 1.1125 V, the accepted value [MEASURED lnx 2026-10-13, tuning-history.md §5].
+If the ratio the unit holds is above your policy's `ratio_max`, or no such target is reachable in one step of your policy, the unit is left alone (or moved as far as one step
+allows), the plan notes say why, and the result is a real difference.
+
+The result is reported as **EQUIVALENT** with the text `residual OC point (cleared by a cold boot); voltages as accepted`, not as a failure. EQUIVALENT counts as success:
+the restore scripts exit 0, and the Dashboard comparison says "Matches the accepted state ..." and adds "cpu N is equivalent: ...". The script ends:
+```
+  cpu12 EQUIVALENT <the live words>
+         residual OC point (cleared by a cold boot); voltages as accepted
+         accepted <the accepted words>
+RESTORED: all 12 cores/clusters match the accepted state (1 equivalent: residual OC point (cleared by a cold boot); voltages as accepted).
+```
+(The numbers and words are illustrative.) A cold boot clears the left-over point; then the next restore reports plain `OK`. Only a real difference (a different
+point word, an offset that is not the accepted one, a target above the accepted top point) is `BAD` and ends with `STOP: N core(s)/cluster(s) differ`.
+
+Two related rules (G-147):
+
+- **The favored ratio is never lowered as a side effect.** The tool does not send a favored-ratio word (`0x1D`) that merely restates a ratio below the unit's current
+  favored maximum (`0x1C` bits 7:0): on the reference chip `0x1D` = 46 took an E-cluster from 48x / 4.9 GHz to 46x / 4.7 GHz [MEASURED lnx 2026-10-13]. A deliberate
+  lowering below the ratio in force still sends it, and an OC raise sends the new ratio.
+- **The cpufreq cap follows a favored-ratio change.** After an apply that wrote a `0x1D` (the GUI, `arltuner apply --device` and so the Linux restore script), the
+  `scaling_max_freq` of the unit's CPUs follows the new `cpuinfo_max_freq` if it sat at the old maximum. A cap you set below the old maximum is never raised; a cap above a
+  lowered maximum is lowered. This is Linux only: Windows has no cpufreq step.
 
 **From a terminal.** The restore script restores the accepted state and proves it word for word:
 ```
@@ -128,9 +174,8 @@ and a bad one with `STOP: N core(s)/cluster(s) differ`. It refuses to start when
 Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, in isolated mode (`python3 -I`), as the command-line path (D-031), and sets
 `ARLTUNER_ALLOW_MAILBOX=1` itself for the guarded commands.
 
-`bash tools/lnx/reapply_current.sh` is kept as a name only: it runs `restore_tuning.sh` with the same options.
-
-Operation counts depend on how much differs; the planner budgets the whole plan (all its rounds) before sending the first request.
+The planner budgets the whole plan (all its rounds) before sending the first request. `tools/lnx/reapply_current.sh` is only another name for `restore_tuning.sh`
+([10 §5](10-cli-reference.md)).
 
 ### An older accepted state (a list of profiles)
 Before profiles were complete (D-044), `CURRENT` could list several profiles applied in order. **Restore accepted**, both restore scripts and the Windows scripts

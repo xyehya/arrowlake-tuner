@@ -56,7 +56,7 @@ The header has the app name, a mode tag, the tabs, the refresh slider and two co
 | **Curves** | measure, store and compare V/F curves | [05](05-measuring-curves.md) |
 | **Tune** | read the ratios and voltages the CPU holds, change them, review, apply | [06](06-undervolting.md), [07](07-overclocking.md) |
 | **Stress** | CPU or memory stress screens | [08](08-stability-testing.md) |
-| **Profiles** | save, compare, accept and re-apply tunings | [09](09-profiles-and-restore.md) |
+| **Profiles** | save complete profiles, compare them, set one as the accepted state and restore it | [09](09-profiles-and-restore.md) |
 | **System** | helper state, operations this boot, **Tuning limits** (your policy next to what your CPU reports; [12 §4](12-safety-and-internals.md)), preflight | below |
 | **Audit** | the audit log of mailbox operations, with a filter (**All** / **Writes & refusals**) and the request named in words | [12](12-safety-and-internals.md) |
 
