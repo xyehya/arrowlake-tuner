@@ -45,7 +45,7 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   e 48x8 / p 57,57,55x6); EXPECTED-words identical to the tested state. Fingerprint kept.
 
 ## Operator to-do
-2. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
+1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
 ## Next / open
 - Windows restore path entirely untested on Windows (scripts, ACL checks, identity read, `vf-dump --json`); driver blocklist: `windows-path.md` [MEASURED] says it loaded with the blocklist on, `preflight.ps1` flags it FIX — decide after the first Windows run.
