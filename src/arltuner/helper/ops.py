@@ -21,6 +21,7 @@ from arltuner import vfdump
 from arltuner.controls import predict
 from arltuner.controls.residual import RESIDUAL_NOTE
 from arltuner.controls.residual import classify as classify_residual
+from arltuner.controls.residual import neutral_equivalent
 from arltuner.guard import (
     ENV_FLAG,
     AuditLog,
@@ -480,29 +481,8 @@ def _hex(word: int | None) -> str | None:
 
 
 def _equivalent_oc_words(fused_word: int | None, expected: int | None, actual: int | None) -> bool:
-    """G-120/G-124: an OC word (P2 = 0) of a core with **no OC point** is *neutral* when it carries offset 0, adaptive mode, a ratio at or below the
-    top fused ratio and a V target of 0 or the fused ``0x09`` voltage ``[MEASURED lnx 2026-10-11/12]``. Equivalent: two neutral words of the same
-    ratio (cold ``0x39`` vs XTU shape ``0x5B439``), or an accepted cold word 0 vs a neutral live word at the top fused ratio with no target
-    (E after an offset-0 whole-curve write: ``0x2E``). A live 0 against a non-zero accepted word is not. ``fused_word`` is this core's live ``0x09 P1=0x11
-    P2=0`` word from this session's read (D-036: never a stored table); without it nothing is judged equivalent."""
-    if expected is None or actual is None or expected == actual:
-        return False
-    if fused_word is None:
-        return False
-    fused_raw, top_ratio = (fused_word >> 8) & 0xFFF, fused_word & 0xFF
-
-    def neutral(word: int) -> bool:
-        w = VfWord.from_u32(word)
-        return not w.static and w.offset_raw == 0 and 0 < w.ratio <= top_ratio and w.v_target_raw in (0, fused_raw)
-
-    if fused_raw == 0 or top_ratio == 0:
-        return False
-    if expected == 0:  # cold accepted word 0 (E clusters, P1-P7): the live word may be the top fused ratio with offset 0 and no target
-        w = VfWord.from_u32(actual)
-        return neutral(actual) and w.ratio == top_ratio  # G-147: a target of 0 or the fused voltage (XTU shape, e.g. 0x48C2E on an E cluster) is the same word without an OC point
-    if actual == 0:
-        return False
-    return neutral(expected) and neutral(actual) and VfWord.from_u32(expected).ratio == VfWord.from_u32(actual).ratio
+    """G-120/G-124/G-147: two OC words that are the same state (see ``controls.residual.neutral_equivalent``)."""
+    return neutral_equivalent(fused_word, expected, actual)
 
 
 def accepted_match(

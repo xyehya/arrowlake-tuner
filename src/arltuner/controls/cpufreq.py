@@ -13,7 +13,10 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-__all__ = ["CAP_ATTR", "MAX_ATTR", "POLL", "CpufreqView", "follow_cap", "lift", "snapshot"]
+from .model import StepKind
+from .report import StepStatus
+
+__all__ = ["CAP_ATTR", "MAX_ATTR", "POLL", "CpufreqView", "follow_cap", "lift", "oc_ratio_cpus", "snapshot"]
 
 CAP_ATTR = "scaling_max_freq"
 MAX_ATTR = "cpuinfo_max_freq"
@@ -25,6 +28,14 @@ class CpufreqView(Protocol):
     def read(self, cpu: int, attr: str) -> str | None: ...
 
     def write(self, cpu: int, attr: str, value: str) -> None: ...
+
+
+def oc_ratio_cpus(report: Any) -> tuple[list[int], list[int]]:
+    """``(favored, vf)``: the CPUs whose 0x1D (OC ratio) an apply wrote successfully, and the others whose OC word (0x11) it wrote (the ratio is in its low byte
+    too, so HWP highest might follow it): the first are expected to move, the second are only checked."""
+    favored = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_FAVORED and r.status is StepStatus.OK}
+    vf = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_VF and r.status is StepStatus.OK} - favored
+    return sorted(favored), sorted(vf)
 
 
 def _khz(value: str | None) -> int | None:

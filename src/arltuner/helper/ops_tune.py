@@ -2168,12 +2168,7 @@ def _cpufreq_before(helper: Helper, cpus: Sequence[int]) -> dict[int, tuple[int 
     return {} if w is None else cpufreq_rules.snapshot(w.cpufreq, cpus)
 
 
-def _oc_ratio_cpus(report: Any) -> tuple[list[int], list[int]]:
-    """``(favored, vf)``: the CPUs whose 0x1D (OC ratio) an apply wrote successfully, and the others whose OC word (0x11) it wrote (the ratio is in its low byte
-    too, so HWP highest might follow it): the first are expected to move, the second are only checked."""
-    favored = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_FAVORED and r.status is StepStatus.OK}
-    vf = {r.step.cpu for r in report.steps if r.step.kind is StepKind.WRITE_VF and r.status is StepStatus.OK} - favored
-    return sorted(favored), sorted(vf)
+_oc_ratio_cpus = cpufreq_rules.oc_ratio_cpus  # G-147: one implementation for the helper and the CLI
 
 
 def _lift_cpufreq(
