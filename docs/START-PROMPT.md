@@ -16,7 +16,9 @@ all coding and test runs, read-only Sonnet reviewers for security-relevant work,
 
 ## 2. After a boot (operator asks "restore tuning")
 - **Linux:** `bash tools/lnx/restore_tuning.sh` (operator types CONFIRM once) or, after a go-ahead in chat, `--orchestrated`. Expect
-  "RESTORED: all cores/clusters match the accepted state." Any BAD line or refusal ⇒ stop and report; never retry blindly.
+  "RESTORED: all cores/clusters match the accepted state" (an EQUIVALENT line, "residual OC point (cleared by a cold boot); voltages as accepted", is a success). The accepted
+  state is ONE complete profile; the run writes only the words that differ (D-044). Any BAD line or refusal (`STEP_LIMIT`, `ACCEPTED_CHAIN` = run `accepted-migrate` first) ⇒ stop
+  and report; never retry blindly.
 - **Windows:** elevated `powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1` (`-Orchestrated` after a go-ahead). The ThrottleStop
   driver is carved from the operator's own exe (`docs/knowledge/windows-path.md`); XTU service stopped; driver stopped after applying.
 

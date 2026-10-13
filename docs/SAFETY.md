@@ -86,6 +86,17 @@ A per-core apply is **2 + 7n operations** (`0x14`; per CPU `0x10, 0x1C, 0x09, 0x
 
 T-022 numbers (the plan budget counts read-backs): **one P core = 13 mailbox WRMSRs; an E-cluster raise = 53**; the default per-boot cap of 12 covers not even one P core, so every real session needs a reviewed policy with higher `max_operations_per_session` / `max_operations_per_boot`. Raises go in small verified steps (ratio +1, V +20 mV per step by default), one human-attended session per step, with a stability check between steps.
 
+## Restore of the accepted state (G-147, G-148, D-044)
+The accepted state is one complete profile. A restore reads the CPU and writes only the words that differ; every write still goes through the guard with the policy's limits
+and a read-back. Nothing is widened:
+- **Step limits:** a change larger than the policy's per-write step is split into guarded rounds inside the one restore (each round is planned and read back from the live
+  words). Before the first write the planner checks that the rounds fit the session cap and the boot budget; if not, or beyond `MAX_RAMP_ROUNDS`, it refuses with `STEP_LIMIT`
+  and sends nothing. A partial silent restore does not exist.
+- **Residual OC point:** an OC ratio the accepted state lacks cannot be cleared at runtime (only a cold boot does). The restore rewrites it with the ratio it already holds (never 0,
+  never raised) and a lower V target, so the unit runs the accepted voltage; the result is EQUIVALENT, not a failure. `0x1D` is never sent with a ratio below the `0x1C[7:0]` read before.
+- **Older chains:** a `CURRENT` with several `profile =` lines is refused (`ACCEPTED_CHAIN`); nothing is replayed. `arltuner accepted-migrate` (root, no hardware) builds the one
+  profile from `EXPECTED-words.txt`, never from a read (a read may hold the neutralised residual words), and keeps a backup `accepted.bak-<UTC>/`.
+
 ## Helper access (D-043, 2026-10-12)
 The root helper is a socket service (`/run/arltuner/helper.sock`); there is no password prompt. The gate is the kernel-reported peer uid
 (`SO_PEERCRED`) checked against `[access]` in `/etc/arltuner/helper.toml` on every connection (root only if listed by name; fail closed).

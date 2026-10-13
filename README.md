@@ -11,7 +11,7 @@ XTU alternative · stress test · stressapptest · stress-ng.
   storage, **tuning** (Per V/F point Offsets / Whole Curve Offset, OC point + adaptive voltage, OC ratios, turbo tables) with plan → review → apply →
   read-back, stress/validation screens, profiles. Verified on hardware 2026-10-11/12 (`docs/knowledge/tuning-results.md`). Start with
   the **user guide, `docs/guide/README.md`**.
-- **CLI + restore scripts** (Linux and Windows; the Windows restore finds your cores from a fingerprint recorded on Linux and is not yet tested on real Windows in its current form). Offline suite: `python3 tools/run_tests.py` (≈ 2250 tests, simulator only).
+- **CLI + restore scripts** (Linux and Windows; the Windows restore finds your cores from a fingerprint recorded on Linux and is not yet tested on real Windows in its current form). Offline suite: `python3 tools/run_tests.py` (≈ 2900 tests, simulator only).
 - **No tuning ships with the repo (D-036).** A fresh install has no accepted state: you create it in the app (Tune, then Profiles > Set as accepted).
   One chip's results are kept as an illustration only in `examples/reference-285k/` — never apply them to another CPU.
 
@@ -96,14 +96,16 @@ python3 tools/arltuner-gui.py --open    # no password: connects to the root help
 1. **Curves → Measure (Quick)** right after a cold boot, name it "stock", **mark as baseline** (predictions on the Tune page use it).
 2. **Tune → Read ratios & voltages**, change one thing (e.g. one core's top point −20 mV) → **Review → Apply** → read-back must match.
 3. **Stress** the changed cores (5–15 min), then your own long gate (e.g. OCCT/Linpack 60 min) before trusting it.
-4. **Profiles → Save**, then **Set as accepted** — this is what "Restore accepted" brings back after a reboot.
+4. **Profiles → Save** (a saved profile is the whole tuning state: your last read plus your edits, so read first), then **Set as accepted** — the accepted state is that one profile, and it is what "Restore accepted" brings back after a reboot.
 Details per tab and the background facts: the user guide, `docs/guide/README.md`.
 
 ## 5. After every reboot
 A **cold boot clears every runtime change** (a warm reboot may keep some). To get your accepted tuning back, either:
 - GUI: start it (section 4) → **Tune → Restore accepted** → Review → Apply; or
 - terminal: `bash tools/lnx/restore_tuning.sh` → type `CONFIRM` once → ends with "RESTORED: all cores/clusters match"
-  (`--check` = compare only, no writes).
+  (`--check` = compare only, no writes). Restore applies the one accepted profile in one run and writes only the words that differ. A leftover OC point that a warm reboot kept and only a cold
+  boot clears is rewritten to run your accepted voltage and shown as EQUIVALENT (a success).
+- If you accepted a state with an older version (several profiles in `/etc/arltuner/accepted/CURRENT`), restore refuses until you run `sudo python3 -I tools/arltuner.py accepted-migrate` once (`--dry-run` first; it keeps a backup).
 Nothing is applied automatically at boot (by design, for now).
 
 ## 6. Update / reinstall / remove
@@ -133,7 +135,7 @@ page and System → Tuning limits show each limit next to what your CPU allows. 
 ```
 python3 tools/run_tests.py                       # offline suite (simulator only)
 python3 tools/arltuner.py topology               # 24-core map
-python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --sim --policy policies/default.toml   # a plan against the simulator
+python3 tools/arltuner.py plan examples/reference-285k/profiles/accepted-2026-10-04.toml --sim --policy policies/default.toml   # a plan against the simulator
 ```
 
 ## Layout

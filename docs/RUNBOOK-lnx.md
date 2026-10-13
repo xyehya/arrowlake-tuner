@@ -16,8 +16,8 @@ be root's home, and the per-boot cap and cross-process dwell are counted from th
 ## 1. Tools (`tools/lnx/`)
 | Tool | What | Hardware access |
 |---|---|---|
-| `restore_tuning.sh [--orchestrated] [--check]` | **after every boot:** apply `profiles/CURRENT` + verify every word against `profiles/EXPECTED-words.txt` (Linux twin of `tools/win/restore_tuning.ps1`) | writes point offsets via the guard |
-| `reapply_current.sh [--check]` | re-apply the tuning state listed in `profiles/CURRENT` after a boot (one CONFIRM per profile); `--check` dumps the point words read-only | writes point offsets via the guard |
+| `restore_tuning.sh [--orchestrated] [--check] [--from DIR] [--policy FILE]` | **after every boot:** apply the ONE profile `accepted/CURRENT` names in a single guarded run (only the words that differ; guarded rounds within the policy's step limits, or a `STEP_LIMIT` refusal before the first write), then verify every word against `accepted/EXPECTED-words.txt`. A residual OC point (cleared only by a cold boot) is rewritten to run the accepted voltage and reported EQUIVALENT (G-147). A `CURRENT` that still lists several profiles is refused: run `accepted-migrate` once (D-044). Linux twin of `tools/win/restore_tuning.ps1` | writes point offsets via the guard |
+| `reapply_current.sh [--check]` | alias of `restore_tuning.sh` (same arguments); kept for the old name | writes point offsets via the guard |
 | `preflight.sh` | state record before a first sitting | none |
 | `health_snapshot.sh LABEL [--since FILE]` | before/after: taint, PCI, modules, new kernel lines (expected msr notices hidden) | none |
 | `read_plain_msrs.py [--cpus] [--msrs]` | plain rdmsr of 0x1AD/0x1AE/0x650/0x651/0xCE/0x194/0x198 with decodes; refuses anything else | read-only, no taint |
@@ -55,6 +55,7 @@ bash tools/lnx/health_snapshot.sh after-X --since captures/lnx/health-before-X.t
 - E V/F curve per cluster: 6 fused points + OC point; point 5 = 40×, point 6 = 46× on every cluster; `P2 = 7` → rc `0x11`; the OC point (48×
   stock) is the `P2 = 0` word and, at stock (V target 0), tracks point 6 → a point-6 offset moves 46–48×. Monotonicity V(n) ≥ V(n−1): measure the
   margin with `vfcurve.py` before lowering a point (stock margin V6 − V5 ≈ 170–190 mV).
+- Accepted state on disk (`/etc/arltuner/accepted/`): `CURRENT` (one `profile =` line), that complete profile, `EXPECTED-words.txt`, `fingerprint.json`. An older multi-line `CURRENT` is converted with `sudo python3 -I tools/arltuner.py accepted-migrate --dry-run` (look), then without `--dry-run` (backup `accepted.bak-<UTC>/`; built from `EXPECTED-words.txt`, never from a read).
 - Warm reboot keeps E `0x11` words, restores `0x1D`, `0x650`, P words. Cold boot restores everything. Point offsets across reboots: not measured.
 - `0x650` is runtime-writable and package-scoped; raising E above 48× needs `0x11` + `0x1D` + `0x650`.
 

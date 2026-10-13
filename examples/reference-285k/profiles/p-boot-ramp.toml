@@ -1,3 +1,4 @@
+# HISTORICAL (D-044): no longer needed. A restore now splits a large change into guarded rounds by itself; the accepted state is the one complete profile accepted-2026-10-04.toml.
 # profiles/p-boot-ramp.toml -- fresh-boot ramp for p-step3: the same points with every offset clamped to >= -50 mV, so that from a boot (all
 # offsets 0) each write stays within the policy's per-operation step (max_offset_step_mv = 55). profiles/CURRENT applies it BEFORE p-step3
 # (largest step then: CPU 7 55x -50 -> -97 = 47 mV). On a state where p-step3 is already applied it briefly raises the deep points to -50
