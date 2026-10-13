@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 from arltuner import vfdump
 from arltuner.controls import predict
+from arltuner.controls.residual import RESIDUAL_NOTE
+from arltuner.controls.residual import classify as classify_residual
 from arltuner.guard import (
     ENV_FLAG,
     AuditLog,
@@ -497,7 +499,7 @@ def _equivalent_oc_words(fused_word: int | None, expected: int | None, actual: i
         return False
     if expected == 0:  # cold accepted word 0 (E clusters, P1-P7): the live word may be the top fused ratio with offset 0 and no target
         w = VfWord.from_u32(actual)
-        return neutral(actual) and w.ratio == top_ratio and w.v_target_raw == 0
+        return neutral(actual) and w.ratio == top_ratio  # G-147: a target of 0 or the fused voltage (XTU shape, e.g. 0x48C2E on an E cluster) is the same word without an OC point
     if actual == 0:
         return False
     return neutral(expected) and neutral(actual) and VfWord.from_u32(expected).ratio == VfWord.from_u32(actual).ratio
@@ -528,6 +530,14 @@ def accepted_match(
                 diffs = []
                 equivalents = []
                 differing = 0
+                residual = classify_residual(fused.get(cpu["cpu"]), want, got)
+                if residual is not None:  # G-147: only a residual OC point (cleared by a cold boot) differs, and it runs the accepted voltages
+                    note = RESIDUAL_NOTE
+                    equivalents = [{"point": 0, "expected": _hex(want[0]), "actual": _hex(got[0]), "residual": True, "note": note}]
+                    if residual["extra_point"] is not None:  # the point the OC ratio created
+                        equivalents.append({"point": residual["extra_point"], "expected": None, "actual": _hex(got[residual["extra_point"]]), "residual": True, "note": note})
+                    out.append({"cpu": cpu["cpu"], "match": True, "diffs": [], "equivalent": True, "equivalents": equivalents})
+                    continue
                 for point in range(max(len(want), len(got))):
                     expected = want[point] if point < len(want) else None
                     actual = got[point] if point < len(got) else None

@@ -112,6 +112,7 @@ class ApplyReport:
     warnings: tuple[str, ...] = ()
     tripped: bool = False
     assumed_bios_offset_mv: Mapping[str, int] = field(default_factory=dict)  # the policy's D-015 values, for the effective offsets
+    residual: tuple[str, ...] = ()  # G-147: one line per unit whose residual OC point this run rewrote (``residual.ResidualUnit.describe``)
 
     @property
     def zero_baseline_cpus(self) -> tuple[int, ...]:
@@ -126,7 +127,7 @@ class ApplyReport:
             top = fused_top_ratio(fused.get(step.cpu))
             return word.v_target_raw == 0 and top is not None and word.ratio > top
 
-        return tuple(r.step.cpu for r in self.steps if r.step.kind is StepKind.READ_VF and r.after is not None and unreachable(r.step, r.after))
+        return tuple(r.step.cpu for r in self.steps if r.step.kind is StepKind.READ_VF and r.step.number > 0 and r.after is not None and unreachable(r.step, r.after))  # number < 0: the restore scan, no step of the plan
 
     @property
     def ok(self) -> bool:

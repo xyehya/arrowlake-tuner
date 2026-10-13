@@ -25,7 +25,7 @@ Pure functions and data, no I/O.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from arltuner.guard import Policy, Request
 from arltuner.guard.policy import fused_top_ratio
@@ -47,6 +47,7 @@ __all__ = [
     "neutral_target",
     "neutralise",
     "scan_cpus",
+    "scan_plan",
     "scan_steps",
 ]
 
@@ -156,6 +157,15 @@ def scan_steps(cpus: Sequence[int], topology: Topology, policy: Policy, first_nu
             steps.append(PlanStep(number, kind, cpu, cmd, p1, 0, 0, req.purpose, label, verdict=predict(policy, req, None), core_kind=core.kind))
             number += 1
     return tuple(steps)
+
+
+def scan_plan(profile: Profile, accepted_before: Sequence[Profile], topology: Topology, policy: Policy) -> tuple[PlanStep, ...]:
+    """The scan reads that will be sent: ``scan_steps`` of ``scan_cpus``, minus the CPUs whose reads the policy does not allow (those units are not scanned)."""
+    cpus = scan_cpus(profile, accepted_before, topology)
+    steps = scan_steps(cpus, topology, policy)
+    skipped = {st.cpu for st in steps if not st.verdict.allowed}
+    # numbered -1, -2, ...: they are no steps of the plan, and a report keyed by step number (``tune.apply`` rows) must not mistake them for one
+    return tuple(replace(st, number=-i) for i, st in enumerate((st for st in steps if st.cpu not in skipped), start=1))
 
 
 # --------------------------------------------------------------------------------------------------------------

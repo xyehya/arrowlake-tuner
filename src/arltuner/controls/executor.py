@@ -182,6 +182,7 @@ def _report(
     warnings: tuple[str, ...],
     stop: _Stop | None,
     policy: Policy,
+    residual_lines: tuple[str, ...] = (),
 ) -> ApplyReport:
     if stop is not None:
         results = [*results, stop.result]
@@ -195,6 +196,7 @@ def _report(
         warnings=warnings,
         tripped=guard.tripped,
         assumed_bios_offset_mv=policy.assumed_bios_offset_mv,
+        residual=residual_lines,
     )
 
 
@@ -212,6 +214,7 @@ def apply_profile(
     cancelled: Callable[[], bool] | None = None,
     neutralize_residual: bool = False,
     accepted_before: Sequence[Profile] = (),
+    boot_ops_used: int = 0,
 ) -> ApplyReport:
     """Apply ``profile`` through ``guard`` and return what happened.
 
@@ -248,18 +251,16 @@ def apply_profile(
     state (``accepted_before`` = the profiles of the accepted chain applied before this one, + ``profile``) sets no OC ratio for. A unit that holds an OC ratio above its top
     fused ratio (a residual OC point: it cannot be cleared at runtime) gets a row that keeps that ratio, the accepted offset and a V target below the accepted top fused
     point, so the hardware clamps it to the accepted voltage (``controls.residual``); no ``0x1D`` / ``0x27`` is sent for it. The scan reads are budgeted up front
-    (``preflight(extra_ops=...)``). If the plan with those rows is refused by the guard's predicates (a step limit, the policy's ratio ceiling) they are dropped and the
+    (``preflight(extra_ops=...)``, against ``boot_ops_used`` = the operations this boot has used so far). If the plan with those rows is refused by the guard's predicates (a step limit, the policy's ratio ceiling) they are dropped and the
     plan of ``profile`` alone runs, with a warning: a restore never fails because of the neutralisation.
     """
-    scanned = residual.scan_cpus(profile, accepted_before, topology) if neutralize_residual else ()
-    scan = residual.scan_steps(scanned, topology, policy)
-    scanned = tuple(c for c in scanned if all(st.verdict.allowed for st in scan if st.cpu == c))  # a CPU the policy does not let us read is not scanned
-    scan = tuple(st for st in scan if st.cpu in scanned)
+    scan = residual.scan_plan(profile, accepted_before, topology, policy) if neutralize_residual else ()
     scan_ops = len(scan)
-    targets = preflight(profile, topology, policy, extra_ops=scan_ops)
+    targets = preflight(profile, topology, policy, boot_ops_used=boot_ops_used, extra_ops=scan_ops)
     warnings = plan_warnings(targets, policy, resolve_point_targets(profile, topology))
     original = profile
     residual_cpus: frozenset[int] = frozenset()
+    residual_lines: tuple[str, ...] = ()
     pacer = _Pacer(policy.min_dwell_s, clock, sleep)
     results: list[StepResult] = []
     misc_word: int | None = None
@@ -282,11 +283,12 @@ def apply_profile(
             warnings = (*warnings, *found.notes)
             if found.units:
                 try:
-                    targets = preflight(found.profile, topology, policy, extra_ops=scan_ops)
+                    targets = preflight(found.profile, topology, policy, boot_ops_used=boot_ops_used, extra_ops=scan_ops)
                 except PreflightError as exc:  # the extra rows do not fit (budget, ceilings): the plan of the profile alone runs
                     warnings = (*warnings, f"residual OC point not neutralised: {exc}")
                 else:
                     profile, residual_cpus = found.profile, found.cpus
+                    residual_lines = tuple(u.describe() for u in found.units)
                     warnings = (*plan_warnings(targets, policy, resolve_point_targets(profile, topology)), *found.notes)
         for step in read_steps(targets, policy, profile, topology):
             result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
@@ -303,7 +305,7 @@ def apply_profile(
             else:
                 words.setdefault(step.cpu, {})[step.kind] = word
     except _Stop as stop:
-        return _report(profile, guard, results, None, warnings, stop, policy)
+        return _report(profile, guard, results, None, warnings, stop, policy, residual_lines)
 
     mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14
     assert misc_word is not None or not mailbox
@@ -334,11 +336,11 @@ def apply_profile(
         plan.require_allowed()
     except PreflightError as exc:
         if profile is original:
-            exc.report = _report(profile, guard, results, plan, warnings, None, policy)
+            exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
             raise
         # G-147: the neutralisation rows are refused (e.g. a step limit); the plan of the profile alone is the restore
         warnings = (*warnings, f"residual OC point not neutralised: the plan with those rows was refused ({exc}); applying the profile alone")
-        profile, residual_cpus = original, frozenset()
+        profile, residual_cpus, residual_lines = original, frozenset(), ()
         plan = build_plan(
             profile, topology, baseline,
             per_core_enabled=None if misc_word is None else bool(misc_word & PERCORE_ENABLE_BIT),
@@ -348,7 +350,7 @@ def apply_profile(
         try:
             plan.require_allowed()
         except PreflightError as exc2:
-            exc2.report = _report(profile, guard, results, plan, warnings, None, policy)
+            exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
             raise
     if plan_check is not None:
         plan_check(plan)
@@ -360,5 +362,5 @@ def apply_profile(
             result, _ = _run_step(guard, confirm, step, pacer, progress, cancelled)
             results.append(result)
     except _Stop as stop:
-        return _report(profile, guard, results, plan, warnings, stop, policy)
-    return _report(profile, guard, results, plan, warnings, None, policy)
+        return _report(profile, guard, results, plan, warnings, stop, policy, residual_lines)
+    return _report(profile, guard, results, plan, warnings, None, policy, residual_lines)

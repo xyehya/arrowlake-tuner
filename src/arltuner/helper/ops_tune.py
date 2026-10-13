@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any
 
 from arltuner import vfdump, vfmodel
 from arltuner.controls import (
+    READS_PER_CPU,
     REVERT_NOTE,
+    SPLIT_EXTRA_WRITES,
+    VMAX_EXTRA_READS,
+    WRITES_PER_CPU,
     ApplyPlan,
     NeedsBootBudget,
     NeedsHigherLimit,
@@ -63,6 +67,8 @@ from arltuner.guard import (
     load_policy,
     read_state,
 )
+from arltuner.controls import cpufreq as cpufreq_rules
+from arltuner.controls import residual
 from arltuner.controls.planner import POINT_CAVEAT, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
@@ -164,6 +170,7 @@ class StoredPlan:
     expected_ops: int
     used: bool = False
     mismatches: int = 0
+    restore: bool = False  # G-147: the restore of the accepted state: the apply scans for a residual OC point and neutralises it
 
 
 class PlanStore:
@@ -1921,6 +1928,33 @@ def _words_assumed(last: Mapping[int, Sequence[int]] | None, topology: Topology,
     return any(not any(c in (last or {}) for c in unit_cpus(topology, unit)) for unit in cpus_by_unit)
 
 
+def _residual_found(helper: Helper, profile: Profile, topology: Topology, policy: Policy) -> residual.Neutralisation | None:
+    """G-147: the residual OC points that this boot's last read shows against ``profile`` (the merged accepted chain), or ``None`` without a read / fused words. The apply
+    re-reads every word: this is a preview and the size of the budget it reserves, not the decision."""
+    last = _last_words(helper)
+    fused = helper.fused_words or {}
+    vf = {c: w[0] for c, w in (last or {}).items() if w}
+    if not vf or not fused:
+        return None
+    return residual.neutralise(profile, (), topology, policy, vf, fused)
+
+
+def _residual_ops(found: residual.Neutralisation | None) -> int:
+    """Worst-case extra operations of the rows ``found`` adds (as ``count_operations`` counts a target that sets a ratio and a voltage)."""
+    per_cpu = READS_PER_CPU + VMAX_EXTRA_READS + 2 * (WRITES_PER_CPU + SPLIT_EXTRA_WRITES)  # the planner's own worst case for a row with a ratio and a voltage (preflight counts 0x1D / 0x27 too)
+    return 0 if found is None else per_cpu * sum(len(u.cpus) for u in found.units)
+
+
+def _residual_preview(found: residual.Neutralisation | None) -> list[str]:
+    notes = [
+        "restore also looks for a residual OC point (an OC ratio the accepted state does not have; it cannot be cleared at runtime): the apply reads two words per unit "
+        "that has no accepted OC ratio and rewrites such a unit with a V target below its top fused point, so it runs the accepted voltages"
+    ]
+    if found is None:
+        notes.append("no read of this boot to look at: a residual OC point is rewritten only if the session budget has room for it, so read ratios & voltages first (Tune > Read)")
+    return [*notes, *(f"{n} (from the last read)" for n in (found.notes if found is not None else ()))]
+
+
 def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     intent = args["intent"]
     topology = _topology(helper)
@@ -1932,8 +1966,10 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if used is None:  # G-141: an unreadable audit log is not "0 operations used": the apply could not count them either, so the plan is refused here like the apply would be
         raise OpError(REFUSED, "the audit log cannot be read, so the per-boot operation count is unknown and no plan can be checked against it. Nothing was sent.", {"check": "AUDIT_UNAVAILABLE"})
     ops_left = None if budget is None else max(budget - used, 0)
+    restore = "restore" in intent
+    scan_ops = len(residual.scan_plan(profile, (), topology, policy)) if restore else 0  # G-147: the residual-OC-point scan reads of a restore
     try:
-        targets = preflight(profile, topology, policy, boot_ops_used=used)
+        targets = preflight(profile, topology, policy, boot_ops_used=used, extra_ops=scan_ops)
     except PreflightError as exc:
         raise _preflight_error(exc) from None
     except (PlanError, ProfileError) as exc:
@@ -1941,11 +1977,15 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
     ops_needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
+    found_residual = _residual_found(helper, profile, topology, policy) if restore else None
+    ops_needed += scan_ops + _residual_ops(found_residual)  # G-147: the scan, and the rows the last read says it will add
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
     steps, writes, reads = _predicted_steps(profile, topology)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
+    if restore:
+        warnings.extend(_residual_preview(found_residual))
     if any(t.ratio is not None or t.oc_voltage_mv is not None for t in targets):
         warnings.append(_RAISE_NOTE)
     for unit, items in after.items():
@@ -1961,7 +2001,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         sort_keys=True,
     )
     plan_id = hashlib.sha256(canon.encode()).hexdigest()
-    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed))
+    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore))
     result = {
         "plan_id": plan_id,
         "nonce": nonce,
@@ -2119,27 +2159,13 @@ def _merge_applied_words(helper: Helper, report: Any) -> None:
 # --------------------------------------------------------------------------------------------------------------
 #: ``cpuinfo_max_freq`` follows HWP highest a moment after the 0x1D: re-read all unmoved CPUs this many rounds, this far apart (hardware only).
 #: ``[UNVERIFIED]``: nobody has measured the kernel's lag; check on the next write sitting by reading ``cpuinfo_max_freq`` right after a 0x1D.
-CPUINFO_POLL = (4, 0.25)
-
-
-def _khz(value: str | None) -> int | None:
-    return int(value) if value is not None and re.fullmatch(r"[0-9]{1,10}", value) else None
+CPUINFO_POLL = cpufreq_rules.POLL
 
 
 def _cpufreq_before(helper: Helper, cpus: Sequence[int]) -> dict[int, tuple[int | None, int | None]]:
     """``{cpu: (cpuinfo_max_freq, scaling_max_freq)}`` in kHz, read before the first write of an apply. Nothing without the measurement wiring."""
-    from .ops_measure import CAP_ATTR, MAX_ATTR
-
     w = getattr(helper, "measure_wiring", None)
-    out: dict[int, tuple[int | None, int | None]] = {}
-    if w is None:
-        return out
-    for cpu in cpus:
-        try:
-            out[cpu] = (_khz(w.cpufreq.read(cpu, MAX_ATTR)), _khz(w.cpufreq.read(cpu, CAP_ATTR)))
-        except OSError:
-            out[cpu] = (None, None)
-    return out
+    return {} if w is None else cpufreq_rules.snapshot(w.cpufreq, cpus)
 
 
 def _oc_ratio_cpus(report: Any) -> tuple[list[int], list[int]]:
@@ -2154,55 +2180,16 @@ def _lift_cpufreq(
     helper: Helper, ctx: OpContext, before: Mapping[int, tuple[int | None, int | None]], favored: Sequence[int], checked: Sequence[int], warnings: list[str],
 ) -> list[dict[str, Any]]:
     """G-126: after an apply that changed an OC ratio, ``cpuinfo_max_freq`` follows HWP highest but ``scaling_max_freq`` keeps the old value, so the new ratio is never
-    used (``[MEASURED lnx 2026-10-12]``). For each CPU whose OC ratio changed (``favored``; ``checked`` = OC word written without a 0x1D: listed only if its max moved):
-    a cap that sat AT the old cpuinfo max (no user cap) follows the new max (up or down); a cap the user set below the old max is never touched; a cap above a lowered
-    max is lowered to it. Writes go through the measurement wiring's cpufreq IO to ``scaling_max_freq`` only, never while a measure/stress journal exists (those own
-    the caps). Never raises: the hardware is already changed, the result must reach the page. Returns ``[{cpu, before_khz, after_khz}]``."""
-    from .ops_measure import CAP_ATTR, MAX_ATTR
-
+    used (``[MEASURED lnx 2026-10-12]``). The rule is ``controls.cpufreq`` (shared with the CLI's apply, G-147): a cap that sat AT the old cpuinfo max follows the new
+    max; a cap the user set below the old max is never touched; a cap above a lowered max is lowered to it. Writes go through the measurement wiring's cpufreq IO to
+    ``scaling_max_freq`` only, never while a measure/stress journal exists (those own the caps). Never raises. Returns ``[{cpu, before_khz, after_khz}]``."""
     w = getattr(helper, "measure_wiring", None)
-    cpus = sorted({*favored, *checked})
-    if w is None or not cpus:
+    if w is None or not sorted({*favored, *checked}):
         return []
-    owned = Path(w.journal_path).exists()
-    if owned:
-        warnings.append("a measure/stress cpufreq journal exists, so scaling_max_freq was not touched; fix cpufreq by hand (see the helper log) and check the frequency cap")
-    now: dict[int, int | None] = {}
-    rounds, interval = (1, 0.0) if helper.cfg.simulator else CPUINFO_POLL
-    pending = list(cpus)
-    for n in range(rounds):  # one shared wait: the kernel lags the 0x1D by a moment; only the CPUs a 0x1D was written to are waited for
-        still = []
-        for cpu in pending:
-            try:
-                now[cpu] = _khz(w.cpufreq.read(cpu, MAX_ATTR))
-            except OSError:
-                now[cpu] = None
-            if cpu in favored and now[cpu] == before.get(cpu, (None, None))[0]:
-                still.append(cpu)
-        pending = still
-        if not pending or n == rounds - 1:
-            break
-        ctx.cancel.wait(interval)
-    rows: list[dict[str, Any]] = []
-    for cpu in cpus:
-        old_max, old_cap = before.get(cpu, (None, None))
-        new_max = now.get(cpu)
-        moved = new_max is not None and old_max is not None and new_max != old_max
-        if cpu not in favored and not moved:
-            continue
-        try:
-            cap = _khz(w.cpufreq.read(cpu, CAP_ATTR))
-            if old_cap is None:
-                old_cap = cap
-            after = cap
-            if not owned and moved and cap is not None and new_max is not None and old_max is not None and cap != new_max and (cap == old_max or (new_max < old_max and cap > new_max)):
-                w.cpufreq.write(cpu, CAP_ATTR, str(new_max))
-                after = _khz(w.cpufreq.read(cpu, CAP_ATTR))  # read back: the kernel may clamp
-            rows.append({"cpu": cpu, "before_khz": old_cap, "after_khz": after})
-        except (OSError, ValueError) as exc:
-            warnings.append(f"scaling_max_freq of cpu {cpu} could not be adjusted: {type(exc).__name__}: {exc}")
-            rows.append({"cpu": cpu, "before_khz": old_cap, "after_khz": old_cap})
-    return rows
+    return cpufreq_rules.lift(
+        w.cpufreq, before, favored, checked, warnings,
+        owned=Path(w.journal_path).exists(), poll=(1, 0.0) if helper.cfg.simulator else CPUINFO_POLL, wait=ctx.cancel.wait,
+    )
 
 
 def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -2211,17 +2198,21 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     topology = _topology(helper)
     policy = _load_policy(helper)
     profile = plan.profile
+    scan_ops = len(residual.scan_plan(profile, (), topology, policy)) if plan.restore else 0  # G-147
     try:
-        targets = preflight(profile, topology, policy)  # nothing sent: the numbers against the policy as it is NOW
+        targets = preflight(profile, topology, policy, extra_ops=scan_ops)  # nothing sent: the numbers against the policy as it is NOW
     except PreflightError as exc:
         raise _preflight_error(exc) from None
     except (PlanError, ProfileError) as exc:
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile))
+    needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) + scan_ops
+    if plan.restore:  # the guard's session cap is exactly `needed`: reserve the rows the last read says the scan will add (an unforeseen one is dropped by the executor, with a warning)
+        needed = min(needed + _residual_ops(_residual_found(helper, profile, topology, policy)), policy.max_operations_per_session)
     progress_steps = 0
-    freq_before = _cpufreq_before(helper, sorted({t.cpu for t in targets}))  # G-126: the old cpuinfo / cap, before any write
+    freq_cpus = sorted({t.cpu for t in targets} | ({c.cpu for c in topology.cores} if plan.restore else set()))  # a restore may rewrite a unit the profile has no row for
+    freq_before = _cpufreq_before(helper, freq_cpus)  # G-126: the old cpuinfo / cap, before any write
 
     def progress(line: str) -> None:
         nonlocal progress_steps
@@ -2242,6 +2233,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
                 progress=progress,
                 plan_check=_stale_check(plan, topology),
                 cancelled=ctx.cancel.is_set,
+                neutralize_residual=plan.restore,
+                boot_ops_used=session.used or 0,
             )
         except PreflightError as exc:
             raise _preflight_error(exc) from None
@@ -2274,6 +2267,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         "warnings": [*report.warnings, *cpufreq_warnings],
         "cpufreq": cpufreq,  # G-126: [{cpu, before_khz, after_khz}] of scaling_max_freq for the CPUs whose OC ratio changed
         "revert_plan": len(report.revert_plan),
+        "residual": list(report.residual),  # G-147: the units whose residual OC point this restore rewrote (additive)
     }
     if report.ok:
         return result
