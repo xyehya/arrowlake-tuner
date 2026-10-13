@@ -137,6 +137,19 @@ class WarmBoot(CompleteCase):
         self.assertTrue(ec1["match"] and ec1["equivalent"], ec1)
         self.assertTrue(all(c["match"] for c in after["accepted_match"]), after["accepted_match"])
 
+    def test_a_residual_oc_point_and_a_small_step_limit_in_one_apply(self) -> None:
+        self.policy_steps(max_offset_step_mv=25)
+        initial = dict(COLD.initial_vf)
+        initial.update({c: VfWord.from_u32(EC1_WORD) for c in EC1})
+        h = self.boot(dataclasses.replace(COLD, initial_vf=initial), accepted_dir=self.accepted())
+        self.read(h)
+        plan, result = self.restore(h)
+        self.assertGreater(plan["rounds"], 1)
+        self.assertTrue(result["residual"], result)
+        after = self.read(h)
+        self.assertTrue(all(c["match"] for c in after["accepted_match"]), after["accepted_match"])
+        self.assertEqual(self.sim.vf(12).ratio, 48)
+
 
 class SaveAndAccept(CompleteCase):
     def test_save_is_the_read_with_the_edits_over_it(self) -> None:

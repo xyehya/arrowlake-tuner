@@ -319,18 +319,7 @@ def apply_profile(
 
     plan = plan_of(profile, readings, residual_cpus)
     rounds = 1
-    if auto_ramp and plan.next_profile_text is not None:
-        rounds, worst = ramp_rounds(profile, topology, readings.baseline, readings.point_words, policy, only_changed=only_changed)
-        rounds = max(rounds, 2)  # the plan needs a step: at least one ramp round before the plan itself
-        tables = len(_turbo_tables(profile))
-        per_round = count_operations(targets, None, tables, len(resolve_point_targets(profile, topology)), oc_cap_reads_of(policy, targets, profile))
-        try:
-            check_rounds(rounds, worst, per_round, scan_ops, policy, boot_ops_used)
-        except PreflightError as exc:
-            exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
-            raise
-        warnings = (*warnings, f"the change is larger than the per-operation step limits ({worst}): it is applied in up to {rounds} guarded rounds in this run (G-148)")
-    else:
+    if not (auto_ramp and plan.next_profile_text is not None):
         try:
             plan.require_allowed()
         except PreflightError as exc:
@@ -341,11 +330,23 @@ def apply_profile(
             warnings = (*warnings, f"residual OC point not neutralised: the plan with those rows was refused ({exc}); applying the profile alone")
             profile, residual_cpus, residual_lines = original, frozenset(), ()
             plan = plan_of(profile, readings, residual_cpus)
-            try:
-                plan.require_allowed()
-            except PreflightError as exc2:
-                exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
-                raise
+            if not (auto_ramp and plan.next_profile_text is not None):
+                try:
+                    plan.require_allowed()
+                except PreflightError as exc2:
+                    exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+                    raise
+    if auto_ramp and plan.next_profile_text is not None:  # G-148: rounds within the step limits, judged here, before the first write
+        rounds, worst = ramp_rounds(profile, topology, readings.baseline, readings.point_words, policy, only_changed=only_changed)
+        rounds = max(rounds, 2)  # the plan needs a step: at least one ramp round before the plan itself
+        tables = len(_turbo_tables(profile))
+        per_round = count_operations(targets, None, tables, len(resolve_point_targets(profile, topology)), oc_cap_reads_of(policy, targets, profile))
+        try:
+            check_rounds(rounds, worst, per_round, scan_ops, policy, boot_ops_used)
+        except PreflightError as exc:
+            exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+            raise
+        warnings = (*warnings, f"the change is larger than the per-operation step limits ({worst}): it is applied in up to {rounds} guarded rounds in this run (G-148)")
     checked = False
     neg = min([0, *(r.step.number for r in results)])
     for round_no in range(1, rounds + 1):
