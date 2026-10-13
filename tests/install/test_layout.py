@@ -233,6 +233,20 @@ class Idempotence(InstallCase):
             self.assertEqual({p: p.stat().st_mtime_ns for p in sorted(self.path("/etc/arltuner/accepted").rglob("*"))}, mtimes, args)
             self.assertIn("accepted/: kept", r.stdout)
 
+    def test_an_older_accepted_chain_gets_a_one_line_hint_and_is_kept(self) -> None:
+        """G-148 (D-044): install.sh only points at accepted-migrate; it never changes the user's accepted state."""
+        self.ok_install()
+        before = self.seed_accepted()
+        self.assertNotIn("accepted-migrate", self.ok_install().stdout)  # one profile: nothing to say
+        current = self.path("/etc/arltuner/accepted/CURRENT")
+        current.write_text("profile = profiles/mine.toml\nprofile = profiles/other.toml\n")
+        chain = self.accepted_bytes()
+        r = self.ok_install()
+        self.assertEqual([line for line in r.stdout.splitlines() if "accepted-migrate" in line],
+                         ["accepted/: an older chain of profiles - run once as root: python3 -I tools/arltuner.py accepted-migrate --dry-run, then without --dry-run (keeps a backup)"])
+        self.assertEqual(self.accepted_bytes(), chain)
+        self.assertNotEqual(chain, before)
+
     def test_the_policy_is_seeded_only_when_absent(self) -> None:
         self.assertIn("policy.toml: installed", self.ok_install().stdout)
         self.path("/etc/arltuner/policy.toml").unlink()

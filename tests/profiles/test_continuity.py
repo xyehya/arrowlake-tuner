@@ -54,10 +54,10 @@ class Contents(unittest.TestCase):
         self.assertEqual([r["target"] for r in got["rows"]], ["EC0", "EC1", "EC2", "EC3"])
 
     def test_summary(self) -> None:
-        self.assertEqual(summarize({"rows": [], "turbo": None}), {"units": 0, "points": 0, "deepest_offset_mv": None, "oc_ratios": 0, "v_targets": 0, "turbo": False})
+        self.assertEqual(summarize({"rows": [], "turbo": None}), {"units": 0, "points": 0, "deepest_offset_mv": None, "oc_ratios": 0, "v_targets": 0, "turbo": False, "complete": False})
         s = summarize({"rows": [{"target": "P0", "offset": {"kind": "points", "mv": {"53": -50, "55": -91}}, "v_target_v": 1.27, "ratio": 58},
                                 {"target": "P1", "offset": {"kind": "curve", "mv": -5}, "v_target_v": None, "ratio": None}], "turbo": {"E": [1] * 8}})
-        self.assertEqual(s, {"units": 2, "points": 2, "deepest_offset_mv": -91, "oc_ratios": 1, "v_targets": 1, "turbo": True})
+        self.assertEqual(s, {"units": 2, "points": 2, "deepest_offset_mv": -91, "oc_ratios": 1, "v_targets": 1, "turbo": True, "complete": False})
 
 
 class LastRead(unittest.TestCase):

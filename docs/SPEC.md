@@ -102,12 +102,17 @@ Every control is shown; a control is **writable only after its gate is recorded*
    never inferred from the app's own screens (R15). Acceptance in the GUI produces a **proposal** (new CURRENT, EXPECTED words, and the matching
    `$Expected` block for `restore_tuning.ps1`) that the operator commits with git; only after a typed CONFIRM is it installed to
    `/etc/arltuner/accepted/` (hash in the audit log) for autostart (R16).
+   **D-044 (G-148):** a profile is a **complete, independent** tuning state (every unit's OC word fields, every fused point's offset, both turbo tables); saving
+   = this boot's read with the editor's rows over it. The accepted state is **one** profile (`CURRENT` has one line; profile and EXPECTED words come from the
+   same read); restore = apply it in one run, writing only the words that differ. Profiles saved earlier are "partial (legacy)"; an older multi-profile
+   `CURRENT` is converted once by `arltuner accepted-migrate` (from its EXPECTED words, with a backup) and refused by the restore until then.
 5. **Stress:** §9. 6. **Log:** audit tail, health snapshots, MCE / hardware-error kernel lines since boot. 7. **Settings:** autostart; policy shown
    read-only with its path.
 
 ## 7. Safety rules carried into the app
 - No policy editing or raising in the GUI (ceilings, 55 mV/write, −100 mV floor, op caps); the operator edits `/etc/arltuner/policy.toml` by hand.
-- All writes through the guard; fresh-boot deep targets go through the ramp (as `p-boot-ramp`); refusals shown, never worked around.
+- All writes through the guard; a restore (or a complete profile) whose change exceeds the per-write step limits is split into guarded rounds inside the one
+  apply, decided before the first write (D-044; no hand-made ramp profile); refusals shown, never worked around.
 - Before apply: list processes holding `/dev/cpu/*/msr` open (root scan of `/proc/*/fd`) and warn by name for OCCT / other tuners (OCCT's Linux GUI
   writes MSR 0x150 at launch, SAFETY.md); the operator ticks the SAFETY.md pre-flight checklist (R30).
 - Revert of everything = cold boot; shown next to every Apply.
@@ -140,7 +145,7 @@ source, privilege, package, platform-specific?). The operator's separate monitor
 Modes: **off** (default) · **with CONFIRM** (user autostart entry opens the GUI on the plan diff; the user must be in the helper allowlist) · **unattended** (system unit
 at boot, root). Unattended:
 - applies only `/etc/arltuner/accepted/CURRENT` (root-owned, installed by a confirmed acceptance, §6.4) and only a profile with a recorded gate;
-  health bracket before/after; boot-ramp path; ends with the word-for-word compare;
+  health bracket before/after; one apply that splits into rounds within the step limits (D-044); ends with the word-for-word compare;
 - **crash-loop guard:** a marker in `/var/lib/arltuner/` is set when autostart starts and cleared by a timer unit after N minutes of healthy uptime;
   a leftover marker, an MCE / hardware-error line in the previous boot's kernel log, or a **non-persistent journal** (cannot check ⇒ skip) disables
   autostart until the operator re-enables it in the GUI;

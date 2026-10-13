@@ -52,45 +52,37 @@ class Static(unittest.TestCase):
         self.assertLess(text.index("fingerprint.json in"), text.index("Ts-Driver start"))
 
 
-class ResidualOcPoint(unittest.TestCase):
-    """G-147: both restore scripts neutralise a residual OC point with the LAST profile (the earlier ones say which OC ratios are accepted) and judge the read-back with
-    ``compare-accepted``, where an EQUIVALENT unit is a success. Text-level: the scripts cannot run without sudo / a driver."""
+class OneProfile(unittest.TestCase):
+    """G-147 / G-148 (D-044): both restore scripts apply THE one accepted profile with --neutralize-residual (no chain, no --accepted-before) and judge the read-back
+    with ``compare-accepted``, where an EQUIVALENT unit is a success. Text-level: the scripts cannot run without sudo / a driver. The Windows scripts get static
+    checks only (no PowerShell here)."""
 
-    def test_the_linux_script_marks_only_the_last_profile_and_uses_the_shared_verdict(self) -> None:
+    def test_the_linux_script_applies_one_profile_and_uses_the_shared_verdict(self) -> None:
         text = (REPO / "tools/lnx/restore_tuning.sh").read_text()
-        self.assertIn('if [ "$((i + 1))" = "$n" ]; then', text)
-        self.assertIn("extra=(--neutralize-residual)", text)
-        self.assertIn('--accepted-before "$from/${profiles[$j]}"', text)
+        self.assertIn('lm "apply-$(basename "$prof" .toml)" apply "$from/$prof" --neutralize-residual', text)
+        self.assertNotIn("--accepted-before", text)
+        self.assertNotIn('for i in "${!profiles[@]}"', text)
         self.assertIn("compare-accepted --readback", text)
         self.assertIn('--fingerprint "$from/fingerprint.json"', text)
         self.assertNotIn("sys.exit(1 if bad else 0)", text)  # the inline compare is gone: one verdict for both scripts
 
-    def test_the_windows_script_does_the_same(self) -> None:
+    def test_the_windows_scripts_do_the_same(self) -> None:
         text = (REPO / "tools/win/restore_tuning.ps1").read_text()
-        self.assertIn("if ($i -eq $profiles.Count)", text)
-        self.assertIn("$applyArgs += '--neutralize-residual'", text)
-        self.assertIn("'--accepted-before', $profiles[$j]", text)
+        self.assertIn("@('apply', $prof, '--neutralize-residual')", text)
         self.assertIn("'compare-accepted'", text)
         self.assertIn("'--fingerprint' $fingerprint", text)
         self.assertNotIn("ConvertFrom-Json", text)  # the compare is the CLI's, on THIS run's read-back file
+        for rel in ("tools/win/restore_tuning.ps1", "tools/win/reapply_current.ps1"):
+            text = (REPO / rel).read_text()
+            self.assertNotIn("--accepted-before", text, rel)
+            self.assertNotIn("foreach ($prof in $profiles)", text, rel)
+            self.assertIn("if ($profiles.Count -gt 1)", text, rel)
+            self.assertIn("accepted-migrate", text, rel)
+            self.assertLess(text.index("if ($profiles.Count -gt 1)"), text.index("ARLTUNER_ALLOW_MAILBOX"), rel)  # refused before anything is armed
 
-    def test_the_apply_loop_of_the_linux_script_builds_the_right_arguments(self) -> None:
-        """Run just the loop's argument logic in bash with a stub ``lm``: three profiles -> the third carries the flag and the two before it."""
-        script = (
-            'profiles=(profiles/a.toml profiles/b.toml profiles/c.toml); from=/acc; n=${#profiles[@]}\n'
-            'lm() { echo "$*"; }\n'
-            'for i in "${!profiles[@]}"; do prof="${profiles[$i]}"; extra=()\n'
-            '  if [ "$((i + 1))" = "$n" ]; then extra=(--neutralize-residual); for ((j = 0; j < i; j++)); do extra+=(--accepted-before "$from/${profiles[$j]}"); done; fi\n'
-            '  lm "apply-x" apply "$from/$prof" "${extra[@]}"; done\n'
-        )
-        r = subprocess.run(["bash", "-c", "set -euo pipefail\n" + script], capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.stdout.splitlines(), [
-            "apply-x apply /acc/profiles/a.toml", "apply-x apply /acc/profiles/b.toml",
-            "apply-x apply /acc/profiles/c.toml --neutralize-residual --accepted-before /acc/profiles/a.toml --accepted-before /acc/profiles/b.toml",
-        ])
-        loop = (REPO / "tools/lnx/restore_tuning.sh").read_text()
-        for needle in ('for i in "${!profiles[@]}"; do', 'prof="${profiles[$i]}"; extra=()', 'for ((j = 0; j < i; j++)); do extra+=(--accepted-before "$from/${profiles[$j]}"); done'):
-            self.assertIn(needle, loop)  # the logic exercised above is the script's own
+    def test_reapply_current_is_the_restore(self) -> None:
+        text = (REPO / "tools/lnx/reapply_current.sh").read_text()
+        self.assertIn('exec bash "$(cd "$(dirname "$0")" && pwd)/restore_tuning.sh" "$@"', text)
 
 
 class Stops(unittest.TestCase):
@@ -145,6 +137,15 @@ class Stops(unittest.TestCase):
         self.assertIn(f"Policy:   {self.policy}", r.stdout)
         self.assertIn(f"{acc}/profiles/mine.toml", r.stdout)
         self.assertIn("not confirmed - nothing was sent", r.stdout)
+
+    def test_an_older_chain_is_refused_with_the_migrate_command(self) -> None:  # G-148 (D-044): a chain is never replayed
+        acc = self.state("profile = profiles/mine.toml\nprofile = profiles/mine.toml\n")
+        for rel in SCRIPTS:
+            r = run(rel, "--from", str(acc), "--policy", str(self.policy), stdin="CONFIRM\n")
+            self.assertEqual(r.returncode, 2, (rel, r.stdout, r.stderr))
+            self.assertIn("lists 2 profiles", r.stdout)
+            self.assertIn("accepted-migrate --dir", r.stdout)
+            self.assertNotIn("Type CONFIRM", r.stdout)  # refused before the confirmation: nothing armed
 
     def test_unknown_arguments_are_refused(self) -> None:
         for rel in SCRIPTS:

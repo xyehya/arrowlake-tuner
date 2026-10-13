@@ -4686,10 +4686,11 @@
   }
 
   // ---- Profiles ---------------------------------------------------------------------------------------------------------------------------------
-  // profiles.list names them; profiles.get (G-123) says what each holds: {contents: {rows: [{target: unit, offset, v_target_v, ratio}], turbo}, summary}, and for an
-  // accepted step also {position, of, chain, cumulative} = the state after applying the chain up to that step (what "Load into Tune" loads).
+  // profiles.list names them; profiles.get (G-123) says what each holds: {contents: {rows: [{target: unit, offset, v_target_v, ratio}], turbo}, summary, complete}.
+  // G-148 (D-044): a profile stands for itself. A complete profile is the whole tuning state (every unit, every fused point, both turbo tables); a profile saved
+  // before G-148 is "partial (legacy)" (its rows change what the CPU holds). The accepted state is ONE profile; an older chain only shows the accepted-migrate hint.
   const PROFILE_RE = /^[a-z0-9._-]{1,64}$/;
-  const PR = { list: [], loaded: false, note: "", info: {}, open: new Set(), basis: "applied", seq: 0, accepted: null };
+  const PR = { list: [], loaded: false, note: "", info: {}, open: new Set(), seq: 0, accepted: null };
   V.pr = PR;
 
   async function loadProfiles() {
@@ -4722,11 +4723,18 @@
 
   const infoOf = (name) => (PR.info[name] && !PR.info[name].error ? PR.info[name] : null);
   const rowsOf = (c) => (isObj(c) && Array.isArray(c.rows) ? c.rows.filter(isObj) : []);
-  // the state a profile stands for when the Compare basis is "as applied": an accepted step is the chain up to and including it
-  function stateOf(name, basis) {
+  // what a profile holds (G-148: its own contents; there is no chain to accumulate)
+  function stateOf(name) {
     const i = infoOf(name);
-    if (!i) return null;
-    return basis === "applied" && isObj(i.cumulative) ? i.cumulative : i.contents;
+    return i ? i.contents : null;
+  }
+  // G-148: "complete" (the whole state) or "partial (legacy)" (saved before G-148: a delta); from the list row, else from profiles.get
+  function kindPill(p) {
+    const info = infoOf(p.name);
+    const complete = typeof p.complete === "boolean" ? p.complete : info && typeof info.complete === "boolean" ? info.complete : null;
+    if (complete === null) return null;
+    return complete ? Object.assign(pill("complete", "s-ok"), { title: "The whole tuning state: every unit, every fused point, the turbo tables when they were read. Applying it writes only what differs from the CPU." })
+      : Object.assign(pill("partial (legacy)", "s-unknown"), { title: "Saved before profiles became complete: it holds only the rows that were changed, applied over what the CPU holds." });
   }
 
   function offsetText(o) {
@@ -4755,21 +4763,26 @@
     return bits.join(" · ");
   }
 
-  function renderChain() {
+  function renderAcceptedCard() {
     const acc = PR.list.filter((p) => p.source === "accepted");
-    $("pr-chain-card").hidden = !PR.loaded;
+    $("pr-accepted-card").hidden = !PR.loaded;
     if (!acc.length) {
-      setText("pr-chain-note", NO_ACCEPTED_TEXT + ".");
-      fill($("pr-chain"), []);
+      setText("pr-accepted-note", NO_ACCEPTED_TEXT + ".");
+      fill($("pr-accepted"), []);
       return;
     }
-    setText("pr-chain-note", "Restore accepted applies these in this order. Each step builds on the one before.");
-    fill($("pr-chain"), acc.map((p, i) => {
-      const li = el("li", "pr-step" + (i === acc.length - 1 ? " tip" : ""));
-      const info = infoOf(p.name);
-      li.append(el("span", "pr-step-no", String(i + 1)), el("span", "pr-step-name", p.name), el("span", "pr-step-sum muted", info ? summaryText(info.summary) : "reading..."));
-      return li;
-    }));
+    if (acc.length > 1 || acc.some((p) => p.chain === true)) {   // an accepted state from before G-148: a chain, refused by Restore until it is migrated
+      setText("pr-accepted-note", "An older chain of " + acc.length + " profiles. Restore accepted refuses it until it is one profile: run 'sudo python3 -I tools/arltuner.py accepted-migrate' once.");
+      fill($("pr-accepted"), acc.map((p) => el("span", "pr-accepted-name", p.name)));
+      return;
+    }
+    const p = acc[0], info = infoOf(p.name);
+    setText("pr-accepted-note", "Restore accepted applies this profile in one run, writing only what differs from the CPU.");
+    const bits = [el("span", "pr-accepted-name", p.name)];
+    const k = kindPill(p);
+    if (k) bits.push(k);
+    bits.push(el("span", "pr-accepted-sum muted", info ? summaryText(info.summary) : "reading..."));
+    fill($("pr-accepted"), bits);
   }
 
   function detailTable(name) {
@@ -4795,21 +4808,21 @@
     box.append(sc);
     const tu = info.contents.turbo;
     if (isObj(tu)) for (const k of ["P", "E"]) if (Array.isArray(tu[k])) box.append(el("p", "muted", k + " turbo table: " + tu[k].map((x) => x + "×").join(" ")));
-    if (isNum(info.position) && info.position > 1) box.append(el("p", "muted", "Only this step's own entries are shown. After steps 1 to " + info.position + " the chain holds: " + summaryText(info.cumulative_summary) + "."));
+    else if (info.complete === true) box.append(el("p", "muted", "No turbo tables: they are not part of this profile and are left as they are."));
     return box;
   }
 
   function renderProfiles() {
     $("pr-empty").hidden = PR.list.length > 0;
     if (!PR.list.length && PR.loaded) setText("pr-empty", "No profiles yet. Change something in Tune and save it here." + (PR.note ? " Helper note: " + PR.note : ""));
-    renderChain();
-    const accepted = PR.list.filter((p) => p.source === "accepted");
+    renderAcceptedCard();
     fill($("pr-list"), PR.list.map((p) => {
       const li = el("li", "pr-item");
       const info = infoOf(p.name);
       const main = el("div", "pr-main");
-      const where = p.source === "accepted" ? "accepted, step " + (accepted.indexOf(p) + 1) + " of " + accepted.length : "saved";
-      main.append(el("span", "pr-name", p.name), pill(where, p.source === "accepted" ? "s-ok" : "s-neutral"));
+      main.append(el("span", "pr-name", p.name), pill(p.source === "accepted" ? "accepted" : "saved", p.source === "accepted" ? "s-ok" : "s-neutral"));
+      const k = kindPill(p);
+      if (k) main.append(k);
       if (p.source !== "accepted") main.append(el("span", "muted", fmtDate(p.created)));
       main.append(el("span", "pr-sum muted", info ? summaryText(info.summary) : PR.info[p.name] ? "contents unavailable" : "reading..."));
       const act = el("div", "row-tight");
@@ -4821,7 +4834,7 @@
       const load = el("button", "pr-load", "Load into Tune");
       load.type = "button";
       load.disabled = !info;
-      load.title = "Fills the Tune editor with " + (p.source === "accepted" ? "the state after this step of the accepted chain" : "this profile") + ". Nothing is written until you press Review changes and then Apply.";
+      load.title = "Fills the Tune editor with this profile (a complete one fills every unit). Nothing is written until you press Review changes and then Apply.";
       load.addEventListener("click", () => loadIntoTune(p.name));
       const rev = el("button", "pr-act", "Review and apply");
       rev.type = "button";
@@ -4847,7 +4860,6 @@
     opts($("pr-a"), a);
     opts($("pr-b"), b);
     if (!b && PR.list.length > 1) $("pr-b").value = PR.list[1].name;
-    $("pr-basis").hidden = accepted.length === 0;
     renderProfileDiff();
     updateSaveState();
     updateGate();
@@ -4906,7 +4918,7 @@
     const pa = PR.list.find((p) => p.name === $("pr-a").value), pb = PR.list.find((p) => p.name === $("pr-b").value);
     if (PR.list.length < 2) { note.textContent = "Needs two profiles."; return; }
     if (!pa || !pb || pa.name === pb.name) { note.textContent = "Pick two different profiles."; return; }
-    const ca = stateOf(pa.name, PR.basis), cb = stateOf(pb.name, PR.basis);
+    const ca = stateOf(pa.name), cb = stateOf(pb.name);
     if (!ca || !cb) {
       const bad = !ca ? pa.name : pb.name;
       note.textContent = PR.info[bad] && PR.info[bad].error ? "Contents of \"" + bad + "\" unavailable: " + PR.info[bad].error : "Reading the contents of \"" + bad + "\"...";
@@ -4922,14 +4934,15 @@
       return tr;
     }));
     tbl.hidden = rows.length === 0;
-    const basisNote = PR.list.some((p) => p.source === "accepted") ? (PR.basis === "applied" ? " Accepted profiles are compared as applied: the chain up to and including that step." : " Accepted profiles are compared by their own file only.") : "";
-    note.textContent = (rows.length ? rows.length + " differences between \"" + pa.name + "\" and \"" + pb.name + "\"; the change is second minus first." : "These two profiles set the same values.") + basisNote;
+    const partial = [pa, pb].filter((p) => { const i = infoOf(p.name); return i && i.complete === false; }).map((p) => p.name);
+    const partialNote = partial.length ? " \"" + partial.join("\" and \"") + "\" " + (partial.length === 1 ? "is" : "are") + " partial (legacy): – marks a value " + (partial.length === 1 ? "it does" : "they do") + " not set." : "";
+    note.textContent = (rows.length ? rows.length + " differences between \"" + pa.name + "\" and \"" + pb.name + "\"; the change is second minus first." : "These two profiles set the same values.") + partialNote;
   }
 
   // ---- Load into Tune: fill the editor (nothing is written until Review changes, then Apply) -------------------------------------------
   async function loadIntoTune(name) {
     const info = infoOf(name);
-    const c = info ? (isObj(info.cumulative) ? info.cumulative : info.contents) : null;
+    const c = info ? info.contents : null;   // G-148: a profile is its own state; a complete one names every unit
     if (!c) return;
     if (!T.words) { setText("pr-load-status", "Read the ratios and voltages first (Tune): the editor shows each change against what the CPU holds now."); return; }
     if (unitsChanged().length || turboKinds().length) {
@@ -4977,16 +4990,18 @@
     if (!v) note.textContent = "Lowercase letters, digits, dot, underscore, hyphen. Up to 64.";
     else if (!PROFILE_RE.test(v)) note.textContent = "Not allowed: use a-z, 0-9, dot, underscore, hyphen (1 to 64).";
     else if (exists) note.textContent = "A profile with this name exists. Names are never reused; pick another.";
-    else note.textContent = unitsChanged().length ? "Will save " + unitsChanged().length + (unitsChanged().length === 1 ? " changed unit." : " changed units.") : "Nothing to save: change something in Tune first.";
-    $("btn-pr-save").disabled = !PROFILE_RE.test(v) || exists || unitsChanged().length === 0;
+    else if (!T.words) note.textContent = "Read the ratios and voltages first (Tune): a profile is the complete state of the last read with your changes over it.";
+    else note.textContent = "Will save every unit as the last read holds it" + (unitsChanged().length ? ", with " + unitsChanged().length + (unitsChanged().length === 1 ? " changed unit" : " changed units") + " from Tune over it." : " (no changes from Tune).");
+    $("btn-pr-save").disabled = !PROFILE_RE.test(v) || exists || !T.words;
   }
 
   async function saveProfile() {
     const name = $("pr-name").value;
-    if (!PROFILE_RE.test(name) || unitsChanged().length === 0) return;
-    const { status, body } = await api("profiles.save", { name: name, intent: buildIntent() });
+    if (!PROFILE_RE.test(name) || !T.words) return;
+    const intent = unitsChanged().length ? buildIntent() : { scope: "unit", rows: [] };   // G-148: no edits = the read as it is
+    const { status, body } = await api("profiles.save", { name: name, intent: intent });
     if (status === 200 && body.ok) {
-      setText("pr-status", "Saved \"" + name + "\".");
+      setText("pr-status", "Saved \"" + name + "\" (complete: every unit of the last read" + (unitsChanged().length ? " with your changes" : "") + ").");
       $("pr-name").value = "";
       await loadProfiles();
     } else {
@@ -5002,7 +5017,7 @@
     const what = name === null ? "The state of the last read" : "\"" + name + "\"";
     const replaces = names.length ? "It replaces the current accepted state (" + names.join(", ") + ")." : "There is no accepted state yet, so nothing is replaced.";
     const ok = await confirmDialog("Set as accepted?", what + " becomes the accepted state. Restore accepted re-applies it after a boot and the dashboard compares the CPU with it. " + replaces +
-      " It has to be what the CPU holds now. Nothing is written to the CPU.", "Set as accepted");
+      " It has to be what the CPU holds now: the complete state of the last read is recorded (every unit and fused point). Nothing is written to the CPU.", "Set as accepted");
     if (!ok) return;
     const { status, body } = await api("profiles.accept", name === null ? { from: "read" } : { name: name });
     if (status === 200 && body.ok && isObj(body.result)) {
@@ -5047,8 +5062,6 @@
     $("btn-pr-save").addEventListener("click", saveProfile);
     $("pr-a").addEventListener("change", renderProfileDiff);
     $("pr-b").addEventListener("change", renderProfileDiff);
-    segmented($("pr-basis"), [{ value: "applied", label: "As applied", title: "An accepted profile counts as the state after its step of the chain" }, { value: "own", label: "This file only", title: "Only the entries in the profile's own file" }], PR.basis,
-      (b) => { PR.basis = b; renderProfileDiff(); });
   }
 
   // ---- tab entry hooks -----------------------------------------------------------------------------------------------------------------------------

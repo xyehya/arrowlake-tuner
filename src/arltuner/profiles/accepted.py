@@ -1,12 +1,13 @@
 """The user's accepted state, written by the root helper (G-129, D-036, ``profiles.accept``): ``/etc/arltuner/accepted/``.
 
-Layout (the same the restore scripts and the helper's ``accepted_match`` / ``_accepted_chain`` read)::
+Layout (the same the restore scripts and the helper's ``accepted_match`` / ``_accepted_profile`` read)::
 
-    accepted/CURRENT                  ``profile = profiles/<name>.toml``  (one line per profile, applied in order)
+    accepted/CURRENT                  ``profile = profiles/<name>.toml``  (G-148, D-044: exactly one line -- the accepted state is one complete profile; an older
+                                      chain of several lines is refused by the restore until ``arltuner accepted-migrate`` turns it into one)
     accepted/EXPECTED-words.txt       ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x), one line per core / E-cluster
     accepted/fingerprint.json         G-138: per Linux CPU its kind / cluster / fused 0x09 word + the CPU's family / model / brand, for the Windows restore
                                       (:mod:`arltuner.profiles.fingerprint`); absent in a state accepted before G-138
-    accepted/profiles/<name>.toml     the profile
+    accepted/profiles/<name>.toml     the profile (complete, ``[meta] complete = true``: derived from the same words as EXPECTED-words.txt)
 
 The directory is **replaced as a whole**, atomically from a reader's point of view: the new tree is built next to it (``.accepted.new.<pid>``, files
 created ``O_CREAT | O_EXCL | O_NOFOLLOW`` 0644, directories 0755, ``fsync``), the old one moves aside (``accepted.old.<pid>``), the new one moves in, the old
@@ -26,7 +27,7 @@ from .fingerprint import FINGERPRINT_FILE
 
 __all__ = ["AcceptedError", "AcceptedStore", "SAFE_PROFILE_NAME"]
 
-#: A name an accepted profile can carry: what ``profiles.get`` / ``profiles.list`` handle (a-z 0-9 . _ -, 1..64) and ``_accepted_chain`` accepts (no ``..``).
+#: A name an accepted profile can carry: what ``profiles.get`` / ``profiles.list`` handle (a-z 0-9 . _ -, 1..64) and ``_accepted_profile`` accepts (no ``..``).
 SAFE_PROFILE_NAME = re.compile(r"[a-z0-9_][a-z0-9._-]{0,63}\Z")
 _LOCK = threading.Lock()
 

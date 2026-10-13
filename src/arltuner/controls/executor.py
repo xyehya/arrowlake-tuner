@@ -5,6 +5,11 @@ Every mailbox request, reads included, is sent with ``WriteGuard.execute`` (``do
 completion code, unverified read-back, transport exception or tripped guard: no retry, no auto-revert (SAFETY.md "Nothing in the
 app is allowed to loop-retry a failing write"). The revert plan is reported, never executed.
 
+G-148 (D-044, decision 5): with ``auto_ramp`` (a complete profile, the restore of the accepted state) a change larger than the policy's per-operation step
+limits is split into **rounds** inside the one run, reusing the D-016 ramp (``ApplyPlan.next_profile_text``): read, write the next allowed step of every word,
+read again (the guard measures each step from the word read in the session), ... until the plan of the profile itself is allowed. How many rounds the words
+read need (``planner.ramp_rounds``) and what they cost is judged **before the first write** (``NeedsRounds``: nothing is sent), never half-way.
+
 T-023: a profile's ``[turbo]`` tables add plain-MSR steps (``MsrRequest`` through the same guard): ``rdmsr`` of ``0xCE`` and the tables first (no dwell:
 they are not WRMSRs), then the plain ``wrmsr`` of a table that only lowers buckets before the per-core words, one that raises a bucket after them.
 
@@ -14,17 +19,17 @@ Dwell (``docs/tasks/T-013-guard.md``: the guard refuses, never sleeps): this exe
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 
 from arltuner.guard import Confirmation, GuardRefused, MsrResult, Policy, Refusal, WriteGuard
 from arltuner.mailbox import VfWord, rc_name
-from arltuner.profiles import Profile
+from arltuner.profiles import Profile, ProfileError, load_profile
 from arltuner.topology import Topology
 
 from . import residual
-from .model import PERCORE_ENABLE_BIT, ApplyPlan, CoreReadings, PlanStep, PreflightError, StepKind
-from .planner import build_plan, plan_warnings, preflight, read_steps, resolve_point_targets
+from .model import PERCORE_ENABLE_BIT, ApplyPlan, CoreReadings, PlanError, PlanStep, PreflightError, StepKind
+from .planner import _turbo_tables, build_plan, check_rounds, count_operations, oc_cap_reads_of, plan_warnings, preflight, ramp_rounds, read_steps, resolve_point_targets
 from .report import ApplyReport, StepResult, StepStatus, StopKind, v_mv
 
 __all__ = ["apply_profile"]
@@ -200,6 +205,17 @@ def _report(
     )
 
 
+def _demote(results: list[StepResult], first: int) -> int:
+    """G-148: the results of an earlier round get negative step numbers (below ``first``), so a report keyed by step number (``tune.apply`` rows, ``zero_baseline_cpus``)
+    only ever matches the steps of the last plan. Returns the next free negative number."""
+    n = first
+    for i, r in enumerate(results):
+        if r.step.number > 0:
+            n -= 1
+            results[i] = replace(r, step=replace(r.step, number=n))
+    return n
+
+
 def apply_profile(
     profile: Profile,
     *,
@@ -213,8 +229,8 @@ def apply_profile(
     plan_check: Callable[[ApplyPlan], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
     neutralize_residual: bool = False,
-    accepted_before: Sequence[Profile] = (),
     boot_ops_used: int = 0,
+    auto_ramp: bool = False,
 ) -> ApplyReport:
     """Apply ``profile`` through ``guard`` and return what happened.
 
@@ -229,8 +245,8 @@ def apply_profile(
        target CPU (and ``0x28``, the hardware maximum voltage, where the profile sets an OC-point voltage).
     3. **Plan from the actual reads**, then pre-flight again with the real words: the guard's own predicates
        (``guard.CHECKS``, same session facts) decide every write; a step too big for the policy's per-operation limits raises
-       ``NeedsRamp`` (the next allowed step as a profile), any other predicted refusal ``PlanRefused`` (both with the partial report
-       attached as ``.report``) and **no write is sent**.
+       ``NeedsRamp`` (the next allowed step as a profile) -- or, with ``auto_ramp``, plans the rounds (module docstring; ``NeedsRounds`` when they do not fit) --,
+       any other predicted refusal ``PlanRefused`` (both with the partial report attached as ``.report``) and **no write is sent**.
     4. **Writes in order:** ``0x15`` (``old|0x8``) if PerCore Voltage Enable is clear, then (T-023) a ``[turbo]`` table that only lowers buckets (plain
        ``wrmsr``, read back on two CPUs), then per target CPU ``0x11`` (XTU-shaped word; two
        words when ratio and V target move the same way: voltage first when rising, frequency first when falling), ``0x1D`` (= its ratio)
@@ -247,14 +263,17 @@ def apply_profile(
     looked at before every step (both phases); once true the run stops with ``StopKind.CANCELLED`` -- a step in flight always completes. Both default to
     ``None`` (the CLI's behaviour is unchanged).
 
-    G-147 (``neutralize_residual``, the restore of the accepted state): first, before any other request, ``0x10`` and ``0x09`` are read on one CPU of every unit the accepted
-    state (``accepted_before`` = the profiles of the accepted chain applied before this one, + ``profile``) sets no OC ratio for. A unit that holds an OC ratio above its top
-    fused ratio (a residual OC point: it cannot be cleared at runtime) gets a row that keeps that ratio, the accepted offset and a V target below the accepted top fused
-    point, so the hardware clamps it to the accepted voltage (``controls.residual``); no ``0x1D`` / ``0x27`` is sent for it. The scan reads are budgeted up front
-    (``preflight(extra_ops=...)``, against ``boot_ops_used`` = the operations this boot has used so far). If the plan with those rows is refused by the guard's predicates (a step limit, the policy's ratio ceiling) they are dropped and the
-    plan of ``profile`` alone runs, with a warning: a restore never fails because of the neutralisation.
+    G-147 (``neutralize_residual``, the restore of the accepted state): first, before any other request, ``0x10`` and ``0x09`` are read on one CPU of every unit ``profile``
+    (the one accepted profile, D-044) sets no OC ratio for. A unit that holds an OC ratio above its top fused ratio (a residual OC point: it cannot be cleared at runtime)
+    gets a row that keeps that ratio, the accepted offset and a V target below the accepted top fused point, so the hardware clamps it to the accepted voltage
+    (``controls.residual``); no ``0x1D`` / ``0x27`` is sent for it. The scan reads are budgeted up front (``preflight(extra_ops=...)``, against ``boot_ops_used`` = the
+    operations this boot has used so far). If the plan with those rows is refused by the guard's predicates (a step limit, the policy's ratio ceiling) they are dropped and
+    the plan of ``profile`` alone runs, with a warning: a restore never fails because of the neutralisation.
+
+    G-148: a ``profile.complete`` profile writes only the words that differ from the words read (``build_plan(only_changed=True)``).
     """
-    scan = residual.scan_plan(profile, accepted_before, topology, policy) if neutralize_residual else ()
+    only_changed = profile.complete
+    scan = residual.scan_plan(profile, topology, policy) if neutralize_residual else ()
     scan_ops = len(scan)
     targets = preflight(profile, topology, policy, boot_ops_used=boot_ops_used, extra_ops=scan_ops)
     warnings = plan_warnings(targets, policy, resolve_point_targets(profile, topology))
@@ -263,11 +282,6 @@ def apply_profile(
     residual_lines: tuple[str, ...] = ()
     pacer = _Pacer(policy.min_dwell_s, clock, sleep)
     results: list[StepResult] = []
-    misc_word: int | None = None
-    words: dict[int, dict[StepKind, int]] = {}
-    point_words: dict[tuple[int, int], int] = {}  # T-025: (cpu, point) -> the 0x10 P2=point word
-    msr_words: dict[int, int] = {}
-    oc_cap_words: dict[int, int] = {}  # G-137 (D-039): cpu -> the 0x01 word read in this run
 
     try:
         if scan:
@@ -277,7 +291,7 @@ def apply_profile(
                 results.append(result)
                 scan_words.setdefault(step.cpu, {})[step.kind] = word
             found = residual.neutralise(
-                profile, accepted_before, topology, policy,
+                profile, topology, policy,
                 {c: w[StepKind.READ_VF] for c, w in scan_words.items()}, {c: w[StepKind.READ_FUSED] for c, w in scan_words.items()},
             )
             warnings = (*warnings, *found.notes)
@@ -290,77 +304,154 @@ def apply_profile(
                     profile, residual_cpus = found.profile, found.cpus
                     residual_lines = tuple(u.describe() for u in found.units)
                     warnings = (*plan_warnings(targets, policy, resolve_point_targets(profile, topology)), *found.notes)
-        for step in read_steps(targets, policy, profile, topology):
-            result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
-            results.append(result)
-            if step.kind is StepKind.READ_MSR:
-                assert step.msr is not None
-                msr_words[step.msr] = word
-            elif step.kind is StepKind.READ_PERCORE_ENABLE:
-                misc_word = word
-            elif step.kind is StepKind.READ_VF_POINT:
-                point_words[(step.cpu, step.p2)] = word
-            elif step.kind is StepKind.READ_OC_CAP:  # G-137: the CPU's own ratio limit of a core kind, not a per-target reading
-                oc_cap_words[step.cpu] = word
-            else:
-                words.setdefault(step.cpu, {})[step.kind] = word
+        readings = _read_all(guard, confirm, targets, policy, profile, topology, pacer, progress, cancelled, results)
     except _Stop as stop:
         return _report(profile, guard, results, None, warnings, stop, policy, residual_lines)
 
-    mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14
-    assert misc_word is not None or not mailbox
-    baseline = {
-        cpu: CoreReadings(
-            vf=VfWord.from_u32(w[StepKind.READ_VF]),
-            favored=w[StepKind.READ_FAVORED],
-            fused=w[StepKind.READ_FUSED],
-            granular=w[StepKind.READ_GRANULAR],
-            vmax=w.get(StepKind.READ_VMAX),
+    def plan_of(prof: Profile, rd: _Readings, residual_rows: frozenset[int]) -> ApplyPlan:
+        return build_plan(
+            prof, topology, rd.baseline,
+            per_core_enabled=None if rd.misc_word is None else bool(rd.misc_word & PERCORE_ENABLE_BIT),
+            policy=policy, misc_word=rd.misc_word, msr_words=rd.msr_words, point_words=rd.point_words,
+            favored_words=getattr(guard, "favored_words", lambda: None)(), oc_cap_words=rd.oc_cap_words,
+            residual_cpus=residual_rows, only_changed=only_changed,
         )
-        for cpu, w in words.items()
-    }
-    plan = build_plan(
-        profile,
-        topology,
-        baseline,
-        per_core_enabled=None if misc_word is None else bool(misc_word & PERCORE_ENABLE_BIT),
-        policy=policy,
-        misc_word=misc_word,
-        msr_words=msr_words,
-        point_words=point_words,
-        favored_words=getattr(guard, "favored_words", lambda: None)(),
-        oc_cap_words=oc_cap_words,
-        residual_cpus=residual_cpus,
-    )
-    try:
-        plan.require_allowed()
-    except PreflightError as exc:
-        if profile is original:
-            exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
-            raise
-        # G-147: the neutralisation rows are refused (e.g. a step limit); the plan of the profile alone is the restore
-        warnings = (*warnings, f"residual OC point not neutralised: the plan with those rows was refused ({exc}); applying the profile alone")
-        profile, residual_cpus, residual_lines = original, frozenset(), ()
-        plan = build_plan(
-            profile, topology, baseline,
-            per_core_enabled=None if misc_word is None else bool(misc_word & PERCORE_ENABLE_BIT),
-            policy=policy, misc_word=misc_word, msr_words=msr_words, point_words=point_words,
-            favored_words=getattr(guard, "favored_words", lambda: None)(), oc_cap_words=oc_cap_words,
-        )
+
+    plan = plan_of(profile, readings, residual_cpus)
+    rounds = 1
+    if not (auto_ramp and plan.next_profile_text is not None):
         try:
             plan.require_allowed()
-        except PreflightError as exc2:
-            exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+        except PreflightError as exc:
+            if profile is original:
+                exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+                raise
+            # G-147: the neutralisation rows are refused (e.g. a step limit); the plan of the profile alone is the restore
+            warnings = (*warnings, f"residual OC point not neutralised: the plan with those rows was refused ({exc}); applying the profile alone")
+            profile, residual_cpus, residual_lines = original, frozenset(), ()
+            plan = plan_of(profile, readings, residual_cpus)
+            if not (auto_ramp and plan.next_profile_text is not None):
+                try:
+                    plan.require_allowed()
+                except PreflightError as exc2:
+                    exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+                    raise
+    if auto_ramp and plan.next_profile_text is not None:  # G-148: rounds within the step limits, judged here, before the first write
+        rounds, worst = ramp_rounds(profile, topology, readings.baseline, readings.point_words, policy, only_changed=only_changed)
+        rounds = max(rounds, 2)  # the plan needs a step: at least one ramp round before the plan itself
+        tables = len(_turbo_tables(profile))
+        per_round = count_operations(targets, None, tables, len(resolve_point_targets(profile, topology)), oc_cap_reads_of(policy, targets, profile))
+        try:
+            check_rounds(rounds, worst, per_round, scan_ops, policy, boot_ops_used)
+        except PreflightError as exc:
+            exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
             raise
-    if plan_check is not None:
-        plan_check(plan)
+        warnings = (*warnings, f"the change is larger than the per-operation step limits ({worst}): it is applied in up to {rounds} guarded rounds in this run (G-148)")
+    checked = False
+    neg = min([0, *(r.step.number for r in results)])
+    for round_no in range(1, rounds + 1):
+        if plan.next_profile_text is None or round_no == rounds:
+            try:
+                plan.require_allowed()
+            except PreflightError as exc:
+                if round_no == 1:
+                    exc.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+                    raise
+                # cannot happen when ramp_rounds counted right; the earlier rounds did write: report it as a stop, never silently
+                reason = f"round {round_no} of {rounds}: the profile's own plan is still not allowed after the ramp rounds ({exc}); the CPU holds an intermediate state"
+                bad = next((s for s in plan.steps if not s.verdict.allowed), plan.steps[-1] if plan.steps else None)
+                stop = _Stop(StepResult(bad, StepStatus.REFUSED, detail=f"{bad.verdict.reason if bad else 'REFUSED'}: {reason}"), StopKind.REFUSED, reason) if bad else None
+                return _report(profile, guard, results, plan, warnings, stop, policy, residual_lines)
+            step_plan = plan
+        else:
+            try:
+                stage = load_profile(plan.next_profile_text)
+            except ProfileError as exc:
+                raise PlanError(f"the next ramp step is not a valid profile: {exc}") from exc
+            step_plan = plan_of(stage, readings, residual_cpus)
+            try:
+                step_plan.require_allowed()
+            except PreflightError as exc:
+                if round_no == 1:
+                    exc.report = _report(profile, guard, results, step_plan, warnings, None, policy, residual_lines)
+                    raise
+                reason = f"round {round_no} of {rounds}: the ramp step is not allowed ({exc}); the CPU holds an intermediate state"
+                stop = _Stop(StepResult(step_plan.steps[-1], StepStatus.REFUSED, detail=f"REFUSED: {reason}"), StopKind.REFUSED, reason)
+                return _report(profile, guard, results, step_plan, warnings, stop, policy, residual_lines)
+        if not checked:
+            checked = True
+            if plan_check is not None:
+                plan_check(step_plan)
+        try:
+            if progress is not None and rounds > 1:
+                progress(f"round {round_no} of {rounds}: {'the profile' if step_plan is plan else 'the next allowed step'}")
+            for step in step_plan.steps:
+                if not step.kind.is_write:
+                    continue
+                result, _ = _run_step(guard, confirm, step, pacer, progress, cancelled)
+                results.append(result)
+            if step_plan is plan:
+                return _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+            neg = _demote(results, neg)
+            readings = _read_all(guard, confirm, targets, policy, profile, topology, pacer, progress, cancelled, results)
+        except _Stop as stop:
+            return _report(profile, guard, results, step_plan, warnings, stop, policy, residual_lines)
+        plan = plan_of(profile, readings, residual_cpus)
+    return _report(profile, guard, results, plan, warnings, None, policy, residual_lines)  # not reached: the last round is the plan itself
 
-    try:
-        for step in plan.steps:
-            if not step.kind.is_write:
-                continue
-            result, _ = _run_step(guard, confirm, step, pacer, progress, cancelled)
-            results.append(result)
-    except _Stop as stop:
-        return _report(profile, guard, results, plan, warnings, stop, policy, residual_lines)
-    return _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
+
+class _Readings:
+    """The words of one read pass (the executor's reads, in the plan's read order)."""
+
+    def __init__(self) -> None:
+        self.misc_word: int | None = None
+        self.words: dict[int, dict[StepKind, int]] = {}
+        self.point_words: dict[tuple[int, int], int] = {}  # T-025: (cpu, point) -> the 0x10 P2=point word
+        self.msr_words: dict[int, int] = {}
+        self.oc_cap_words: dict[int, int] = {}  # G-137 (D-039): cpu -> the 0x01 word read in this run
+
+    @property
+    def baseline(self) -> dict[int, CoreReadings]:
+        return {
+            cpu: CoreReadings(
+                vf=VfWord.from_u32(w[StepKind.READ_VF]),
+                favored=w[StepKind.READ_FAVORED],
+                fused=w[StepKind.READ_FUSED],
+                granular=w[StepKind.READ_GRANULAR],
+                vmax=w.get(StepKind.READ_VMAX),
+            )
+            for cpu, w in self.words.items()
+        }
+
+
+def _read_all(
+    guard: WriteGuard,
+    confirm: Confirmation,
+    targets: tuple,  # type: ignore[type-arg]
+    policy: Policy,
+    profile: Profile,
+    topology: Topology,
+    pacer: _Pacer,
+    progress: Callable[[str], None] | None,
+    cancelled: Callable[[], bool] | None,
+    results: list[StepResult],
+) -> _Readings:
+    """Every read step of ``profile``'s plan through the guard (raises ``_Stop``); each successful read is the session baseline the guard measures the next write from."""
+    rd = _Readings()
+    for step in read_steps(targets, policy, profile, topology):
+        result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
+        results.append(result)
+        if step.kind is StepKind.READ_MSR:
+            assert step.msr is not None
+            rd.msr_words[step.msr] = word
+        elif step.kind is StepKind.READ_PERCORE_ENABLE:
+            rd.misc_word = word
+        elif step.kind is StepKind.READ_VF_POINT:
+            rd.point_words[(step.cpu, step.p2)] = word
+        elif step.kind is StepKind.READ_OC_CAP:  # G-137: the CPU's own ratio limit of a core kind, not a per-target reading
+            rd.oc_cap_words[step.cpu] = word
+        else:
+            rd.words.setdefault(step.cpu, {})[step.kind] = word
+    mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14
+    assert rd.misc_word is not None or not mailbox
+    return rd

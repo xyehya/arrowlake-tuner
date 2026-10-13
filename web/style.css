@@ -612,22 +612,11 @@ th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color:
 .pr-diff-table td.mono { white-space: nowrap; }
 .pr-diff .card-head { flex-wrap: wrap; gap: 8px 16px; }
 
-/* G-123: the accepted chain as a path: the order is the information (Restore accepted applies the steps in this order), so the steps are numbered and joined */
-.pr-chain-card { grid-column: 1 / -1; }
-.pr-chain { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; row-gap: 12px; }
-.pr-step { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "no name" "no sum"; column-gap: 12px; align-items: center;
-  min-width: 210px; margin-right: 38px; padding: 10px 16px 10px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-s); }
-.pr-step:not(:last-child)::after { content: ""; position: absolute; left: 100%; top: 50%; width: 38px; border-top: 2px solid var(--signal); }
-.pr-step:not(:last-child)::before { content: ""; position: absolute; left: calc(100% + 29px); top: calc(50% - 4px); z-index: 1; border-left: 8px solid var(--signal); border-top: 5px solid transparent; border-bottom: 5px solid transparent; margin-top: -1px; }
-.pr-step.tip { border-color: color-mix(in srgb, var(--ok-fg) 60%, var(--line)); }
-.pr-step-no { grid-area: no; font-size: 26px; font-weight: 300; line-height: 1; color: var(--text-2); }
-.pr-step.tip .pr-step-no { color: var(--ok-fg); }
-.pr-step-name { grid-area: name; font-family: var(--mono); font-size: 14px; font-weight: 600; }
-.pr-step-sum { grid-area: sum; font-size: 12.5px; }
-@media (max-width: 860px) {
-  .pr-step { margin-right: 0; width: 100%; }
-  .pr-step:not(:last-child)::before, .pr-step:not(:last-child)::after { display: none; }
-}
+/* G-148 (D-044): the accepted state is one complete profile: its name, its kind and what it holds, on one line */
+.pr-accepted-card { grid-column: 1 / -1; }
+.pr-accepted { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 8px 0 4px; }
+.pr-accepted-name { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+.pr-accepted-sum { font-size: 12.5px; }
 
 /* ======================= Dialogs ======================= */
 dialog.dlg {
@@ -863,4 +852,4 @@ dialog.dlg::backdrop { background: rgba(5, 8, 22, 0.74); backdrop-filter: blur(4
 }
 .tn-prov { margin: 4px 0 8px; font-size: 13px; }
 .tn-prov:empty { display: none; }
-.pr-chain-card > .row-tight { margin-top: 14px; }
+.pr-accepted-card > .row-tight { margin-top: 14px; }

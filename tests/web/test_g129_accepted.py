@@ -58,7 +58,7 @@ class TestBrowser(unittest.TestCase):
         srv, fake, stop = h.start(seed=False)
         fake.profiles["mine"] = dict(SAVED)
         if chain:
-            fake.seed_accepted_chain()
+            fake.seed_accepted_reference()  # G-148: one complete accepted profile
         if prepare is not None:
             prepare(fake)
         self.addCleanup(fake.close)
@@ -96,9 +96,9 @@ class TestBrowser(unittest.TestCase):
             self.assertTrue(page.locator("#btn-tn-restore").is_disabled())
             self.assertIn("No accepted state yet", page.locator("#btn-tn-restore").get_attribute("title"))
             page.click("#tab-profiles")
-            page.wait_for_selector("#pr-chain-card:not([hidden])")
-            self.assertIn("No accepted state yet", page.inner_text("#pr-chain-note"))
-            self.assertEqual(page.locator("#pr-chain .pr-step").count(), 0)
+            page.wait_for_selector("#pr-accepted-card:not([hidden])")
+            self.assertIn("No accepted state yet", page.inner_text("#pr-accepted-note"))
+            self.assertEqual(page.locator("#pr-accepted .pr-accepted-name").count(), 0)
             self.assertEqual(page.locator("#pr-list li").count(), 1)   # only the saved profile
             self.assertEqual([r["op"] for r in fake.requests if r["op"] in ("tune.plan", "tune.apply", "profiles.accept")], [])
 
@@ -127,7 +127,7 @@ class TestBrowser(unittest.TestCase):
             page.click("#btn-confirm-yes")
             self.until(lambda: "Accepted" in page.inner_text("#pr-status"))
             self.assertEqual(fake.accept_calls, [{"name": "mine"}])
-            self.until(lambda: page.locator("#pr-chain .pr-step").count() == 1)
+            self.until(lambda: page.locator("#pr-accepted .pr-accepted-name").count() == 1)
             page.click("#tab-tune")
             self.until(lambda: "Matches the accepted state" in page.inner_text("#acc-summary"))
             self.until(lambda: not page.locator("#btn-tn-restore").is_disabled())
@@ -140,13 +140,13 @@ class TestBrowser(unittest.TestCase):
             page.locator("#pr-list li", has_text="mine").locator("button.pr-accept").click()
             page.wait_for_selector("#dlg-confirm[open]")
             text = page.inner_text("#dlg-confirm")
-            for name in ("e-p6-split3", "p-boot-ramp", "p-step7"):
-                self.assertIn(name, text)
+            self.assertIn("It replaces the current accepted state (accepted-2026-10-04)", text)
+            self.assertIn("the complete state of the last read is recorded", text)
             page.click("#btn-confirm-no")
             page.wait_for_selector("#dlg-confirm", state="hidden")
             self.assertEqual(fake.accept_calls, [])
-            self.assertEqual(page.locator("#pr-chain .pr-step").count(), 3)
-            self.assertEqual(page.locator("#pr-list li", has_text="p-step7").locator("button.pr-accept").count(), 0)   # an accepted step has no such button
+            self.assertEqual(page.locator("#pr-accepted .pr-accepted-name").all_inner_texts(), ["accepted-2026-10-04"])
+            self.assertEqual(page.locator("#pr-list li", has_text="accepted-2026-10-04").locator("button.pr-accept").count(), 0)   # the accepted profile has no such button
 
     def test_the_current_state_can_be_accepted(self):
         with self.session(prepare=lambda f: setattr(f, "no_accepted", True)) as (page, fake):
@@ -159,6 +159,28 @@ class TestBrowser(unittest.TestCase):
             page.click("#btn-confirm-yes")
             self.until(lambda: fake.accept_calls == [{"from": "read"}])
             self.until(lambda: "Accepted" in page.inner_text("#pr-status"))
+
+    # ---- G-148: one accepted profile, complete / partial badges, an older chain only shows the migrate hint ----
+    def test_the_accepted_card_shows_one_profile_and_the_list_its_kind(self):
+        with self.session(chain=True) as (page, fake):
+            page.click("#tab-profiles")
+            page.wait_for_selector("#pr-accepted .pr-accepted-name")
+            card = page.inner_text("#pr-accepted-card")
+            self.assertIn("accepted-2026-10-04", card)
+            self.assertIn("complete", card)
+            self.assertIn("in one run, writing only what differs", card)
+            self.assertNotIn("step", page.inner_text("#pr-list"))   # no chain positions any more
+            self.until(lambda: "partial (legacy)" in page.locator("#pr-list li", has_text="mine").inner_text())
+            self.assertIn("complete", page.locator("#pr-list li", has_text="accepted-2026-10-04").inner_text())
+            self.assertEqual(page.locator("#pr-basis").count(), 0)   # no "As applied / This file only" toggle
+
+    def test_an_older_chain_is_named_with_the_migrate_command(self):
+        with self.session(prepare=lambda f: f.seed_legacy_chain()) as (page, fake):
+            page.click("#tab-profiles")
+            page.wait_for_selector("#pr-accepted .pr-accepted-name >> nth=2")
+            note = page.inner_text("#pr-accepted-note")
+            self.assertIn("older chain of 3 profiles", note)
+            self.assertIn("accepted-migrate", note)
 
     # ---- 3. refusals ----
     def test_a_refusal_is_shown_in_words(self):

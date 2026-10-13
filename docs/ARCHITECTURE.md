@@ -190,8 +190,8 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   Out-of-policy ⇒ `REFUSED detail.check="POLICY_RANGE"` naming the field and the limit.
 - **`tune.apply {plan_id, typed}`** (long; write-gated) — contract 8 apply rules ⇒ `{steps: [...], readback: [{unit, point, expected, actual,
   match}], ops_used}`.
-- **`profiles.list {}`** ⇒ `{profiles: [{name, source: "accepted"|"saved", created}]}`; **`profiles.save {name, intent}`** (never overwrite ⇒
-  `REFUSED detail.check="EXISTS"`); stored `/var/lib/arltuner/profiles/` (root, same rules).
+- **`profiles.list {}`** ⇒ `{profiles: [{name, source: "accepted"|"saved", created, complete}]}`; **`profiles.save {name, intent}`** (never overwrite ⇒
+  `REFUSED detail.check="EXISTS"`); stored `/var/lib/arltuner/profiles/` (root, same rules). G-148 (D-044): see the addendum "G-148" below.
 - **Addendum (SPEC-v3 §9, 2026-10-11):** `tune.read` result gains `fused: {cpu: {word, ratio, v}}` (cmd `0x09 P1=0x11 P2=0`, one per P-core +
   one per E-cluster, guarded reads) and `turbo: {P: {ratios: [8], counts: [8]}, E: {...}, favored: {cpu: ratio}}` (plain rdmsr 0x1AD/0x1AE/
   0x650/0x651 + 0x1C read). `tune.plan` result gains per unit/point `effective_v` (baseline measured VID + offset, after the F4 clamp) +
@@ -262,12 +262,12 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   - **`profiles.get {name}`** ⇒ `{name, source: "accepted"|"saved", created, contents: {rows: [{target: unit, offset: {kind: "curve", mv}|{kind: "points", mv: {ratio: mv}}|null,
     v_target_v: float|null, ratio: int|null}], turbo: {P?: [8], E?: [8]}|null}, summary: {units, points, deepest_offset_mv, oc_ratios, v_targets, turbo}}`; rows are per unit
     (P0..P7, EC0..EC3) in that order, saved P/E group rows spread over their units; an accepted file's numbered `[[point]]` entries become ratios (platform point ratios;
-    a unit with a `[[core]]` offset and points ⇒ `points` over every fused ratio, the curve value under the point entries). An accepted chain member also carries `position`, `of`,
-    `chain` (names in `CURRENT` order), `cumulative` (the same shape after applying the chain up to and including it: what Load into Tune loads) and `cumulative_summary`.
+    a unit with a `[[core]]` offset and points ⇒ `points` over every fused ratio, the curve value under the point entries). G-148: a profile stands for itself (no chain
+    fields); `complete` says whether it is a complete profile (addendum "G-148").
     Unknown name ⇒ `BAD_REQUEST detail.check = "PROFILE_NOT_FOUND"` (store errors `PROFILE_UNTRUSTED` / `PROFILE_IO`); accepted files are trust-checked as for `tune.plan`.
     `profiles.list` is unchanged (no contents). Server `OPS`: both ops, `tune.last` with no args, `profiles.get` `{name}` (`^[a-z0-9._-]{1,64}$`).
-  - **Page:** `tune.last` on load (only when Tune has no words: a reconnect never wipes an editor) fills Tune and the applied chip with no mailbox op; Profiles shows the accepted chain,
-    a per-profile summary, a compare table (as applied / this file only) and **Load into Tune** (fills the editor; nothing is sent until Review changes then Apply); System and
+  - **Page:** `tune.last` on load (only when Tune has no words: a reconnect never wipes an editor) fills Tune and the applied chip with no mailbox op; Profiles shows the accepted profile,
+    a per-profile summary, a compare table and **Load into Tune** (fills the editor; nothing is sent until Review changes then Apply); System and
     Dashboard show "Mailbox ops this boot: N" with a session sparkline and the per-boot cap as a note (D-032); the read estimate is "≈ 124–136" (112 V/F reads + 12 fused-point
     reads; `_read_extras` also sends 8 favored-ratio mailbox reads, so a read costs about 132); the default curve is the newest baseline, else the newest complete all-units curve.
   - `install.sh` creates `/var/lib/arltuner/state` 0700.
@@ -301,6 +301,40 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
   - **Small:** audit log created / tightened to 0600 (helper ops, `AuditLog`); a stale measure journal is recovered first and refuses `STALE_JOURNAL` if it cannot be restored (as stress does); `--sim` clocks start
     at the newest audit record (apply after a helper restart is no longer `DWELL` "in the future"); `tune.plan` refuses `AUDIT_UNAVAILABLE` when the per-boot count cannot be read (it was taken as 0); a failed
     Windows affinity restore after a failed access is logged and attached as a note. Tests: `tests/helper/test_g141.py` and the module tests named in the commits.
+
+## Addendum G-148 — complete, independent profiles; the accepted state is one profile restored in one shot (D-044)
+- **Schema (contract 6):** `[meta] complete = true` marks a **complete** profile: exactly one `[[core]]` per unit of the CPU (each P-core, each E cluster) with
+  `fused_top_ratio` (the unit's top fused ratio, `0x09 P1=0x11 [7:0]`, where it was made) and an explicit `offset_mv`; `ratio` + `oc_voltage_mv` only for an OC
+  point (absent = none); a `[[point]]` for every fused point of every unit (1..n, `expect_ratio` on each, rising, the last at `fused_top_ratio`); `[turbo]` both
+  tables or neither (neither = not part of the profile, left alone). Topology-free rules in `Profile.__post_init__`, "every unit once" in
+  `Profile.check_complete(topology)`. Partial profiles (no `complete`) are unchanged. `profiles/complete.py`: `complete_from_words(topology, name, words, tops, tables)`
+  (words = `[OC word, point 1..n]` per CPU; whole millivolts or `BuildError NOT_REPRESENTABLE`) and `overlay(base, edits, topology)`.
+- **Planner / executor (contracts 3-4):** `build_plan(..., only_changed=True)` (every complete profile) writes only words that differ from the words read: a point whose
+  word equals the goal, and a core in the same state (`_same_state`: the goal word is the word read, or no OC ratio / voltage asked, the core has no OC point and its
+  offset is the goal's — a cold `0` stays `0`) are skipped; without a mailbox write no `0x15`. A target whose `fused_top_ratio` differs from the live `0x09` is refused
+  `CHECK_FAILED` (another CPU). `apply_profile(..., auto_ramp=True)` (restore, complete profiles): when the plan needs a step beyond the policy's per-write limits it runs
+  **rounds** — the D-016 next-step profile is planned and written, every word is read again (the guard measures each step from the word read in the session),
+  the profile is planned again — until the profile's own plan is allowed. `planner.ramp_rounds` (ceil(|delta| / step), a whole-mV step counted one raw unit short)
+  and `check_rounds` decide, after the first reads and **before the first write**, whether `rounds x worst-case ops (+ the residual scan)` fit the session cap, the
+  boot budget and `MAX_RAMP_ROUNDS` (16); otherwise `NeedsRounds` (`STEP_LIMIT`), nothing sent. Results of earlier rounds carry negative step numbers.
+  The G-147 residual rule works on the one accepted profile (`residual.neutralise(profile, topology, policy, vf, fused)`; no `accepted_before`).
+- **Accepted state:** `CURRENT` names one profile. `profiles.accept` records `complete_from_words` of this boot's last read (+ its turbo tables when both were read)
+  and the same words as `EXPECTED-words.txt`, for `{from: "read"}` and for a saved profile (complete or legacy) after the `NOT_APPLIED` check; result gains `complete`.
+  `tune.plan {restore}` applies it (`_accepted_profile`); a `CURRENT` with several lines is refused `REFUSED detail.check = "ACCEPTED_CHAIN"` naming
+  `accepted-migrate`; a complete profile whose units do not match the live topology / `0x09` is refused `PROFILE_TOPOLOGY`. `tune.plan` of a restore or a complete
+  profile reserves `scan + rounds x (ops + residual rows)` with the rounds the last read says (`_rounds_from_last`; 1 without a read, the apply re-judges); its result
+  gains `complete` and `rounds`; the preview lists only the words the last read says differ.
+- **Saved profiles:** `profiles.save {name, intent}` stores `{name, created, profile: <TOML text>}`: `overlay(complete_from_words(last read), rows of intent)`;
+  rows that change nothing (or none) save the read as it is. Refusals: `NO_READ` ("read first"), `STALE_READ`, `NOT_REPRESENTABLE`, `EXISTS`. A legacy
+  `{name, created, intent}` record still loads ("partial (legacy)": its rows over the live words). `profiles.list` rows gain `complete` (and `chain: true` for the
+  members of an older chain, with a `note`); `profiles.get` gains `complete` and drops `position` / `of` / `chain` / `cumulative`.
+- **Migration:** `profiles/migrate.py` + CLI `accepted-migrate [--dir DIR] [--dry-run] [--sim]` (root, no hardware): the chain's profiles are merged
+  (`_merge_profiles`, kept only here as the reference) and compared with the complete profile built from `EXPECTED-words.txt` (never a read) with the top fused
+  ratios of `fingerprint.json` (else the last point of each line); the chain's turbo tables when it has both, else none. The old directory is copied to
+  `accepted.bak-<UTC>/`, then `AcceptedStore.replace` swaps in `CURRENT` (one line) + the profile, `EXPECTED-words.txt` and `fingerprint.json` byte for byte.
+- **Scripts / page:** `restore_tuning.sh` / `.ps1` apply the one profile with `--neutralize-residual` and refuse a chain naming the migrate command;
+  `reapply_current.sh` runs `restore_tuning.sh`; `install.sh` prints a one-line hint for a chain. The Profiles page shows the one accepted profile and badges
+  "complete" / "partial (legacy)"; no chain, positions or "as applied" toggle.
 
 ## Addendum G-144 — the helper as a socket service (D-043; supersedes the pkexec/polkit parts of Contract 8's transport)
 Transport: the protocol of Contract 8 is unchanged (JSON lines, 64 KiB cap, ids, events); only the pipe is now a connection. **Root argv:** `--device` or

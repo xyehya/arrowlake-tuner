@@ -8,6 +8,11 @@ against the root policy (``REFUSED POLICY_RANGE``) and the controls pre-flight, 
 own guarded session (the guard demands a baseline read per session anyway), refuses with ``PLAN_STALE`` before any write when a word differs from what
 the plan assumed, then writes and reads every write back. No new mailbox logic lives here: the guard stays the only path to the mailbox and
 ``controls`` builds every request.
+
+G-148 (D-044): profiles are complete and independent. ``profiles.save`` stores this boot's read with the editor's rows laid over it (a complete profile);
+the accepted state is exactly one profile (``accepted/CURRENT`` has one ``profile =`` line; an older chain is refused with a pointer to ``accepted-migrate``);
+Restore accepted, and the apply of any complete profile, writes only the words that differ from what the CPU holds, keeps the G-147 residual rule, and
+splits a change larger than the policy's step limits into guarded rounds within the one apply (``controls.executor``), judged before the first write.
 """
 from __future__ import annotations
 
@@ -37,6 +42,7 @@ from arltuner.controls import (
     NeedsBootBudget,
     NeedsHigherLimit,
     NeedsRamp,
+    NeedsRounds,
     PlanError,
     PlanRefused,
     PreflightError,
@@ -44,12 +50,15 @@ from arltuner.controls import (
     StepStatus,
     StopKind,
     apply_profile,
+    check_rounds,
     count_operations,
     pack_turbo,
     plan_warnings,
     preflight,
+    ramp_rounds,
     resolve_point_targets,
     resolve_targets,
+    CoreReadings,
 )
 from arltuner.guard import (
     ENV_FLAG,
@@ -69,14 +78,16 @@ from arltuner.guard import (
 )
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
-from arltuner.controls.planner import POINT_CAVEAT, kept_word, oc_cap_reads_of
+from arltuner.controls.planner import POINT_CAVEAT, _same_state, _goal_word, current_word, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
-from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
+from arltuner.profiles import BuildError, CoreSetting, PointSetting, Profile, ProfileError, TurboTables, complete_from_words, load_profile, overlay
 from arltuner.profiles.contents import intent_contents, profile_contents, summarize
+from arltuner.profiles.migrate import current_profile_lines
+from arltuner.profiles.serialize import dump_profile
 from arltuner.profiles.lastread import LastReadError, LastReadStore
 from arltuner.profiles.store import NAME_RE, ProfileStore, ProfileStoreError
 from arltuner.topology import Topology, TopologyError, UnknownCore
@@ -170,7 +181,8 @@ class StoredPlan:
     expected_ops: int
     used: bool = False
     mismatches: int = 0
-    restore: bool = False  # G-147: the restore of the accepted state: the apply scans for a residual OC point and neutralises it
+    restore: bool = False  # G-147: the restore of the accepted state (G-148: or any complete profile): the apply scans for a residual OC point and neutralises it
+    rounds: int = 1  # G-148: guarded rounds the last read says the apply needs within the step limits (the budget reserves them; the apply re-judges from its own reads)
 
 
 class PlanStore:
@@ -1212,49 +1224,72 @@ def _read_accepted_text(helper: Helper, relative: str, limit: int = _ACCEPTED_FI
         raise OpError(REFUSED, f"accepted state invalid: {path} is not UTF-8. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
 
 
-def _accepted_chain(helper: Helper) -> list[tuple[str, Profile]]:
-    """``[(name, profile)]`` in apply order: the ``profile =`` lines of ``accepted/CURRENT`` (the name is the file stem)."""
+#: G-148 (D-044): what to do with an accepted state that is still a chain (several ``profile =`` lines, applied in order before D-044).
+CHAIN_HINT = (
+    "run 'sudo python3 -I tools/arltuner.py accepted-migrate' once: it builds one complete profile from EXPECTED-words.txt (never from a read) and keeps a backup"
+)
+
+
+def _accepted_paths(helper: Helper) -> list[str]:
+    """The ``profile =`` paths of ``accepted/CURRENT`` (validated; ``NO_ACCEPTED_STATE`` when there is none or a path is unacceptable). D-044: one is the accepted
+    state; several are an older chain that only ``accepted-migrate`` reads."""
     text = _read_accepted_text(helper, "CURRENT")
-    out: list[tuple[str, Profile]] = []
-    for line in text.splitlines():
-        m = re.fullmatch(r"\s*profile\s*=\s*(\S+)\s*", line)
-        if not m:
-            continue
-        rel = m.group(1)
+    out: list[str] = []
+    for rel in current_profile_lines(text):
         if not _ACCEPTED_PATH_RE.fullmatch(rel) or ".." in rel or not rel.endswith(".toml"):
             raise OpError(REFUSED, f"accepted CURRENT names an unacceptable profile path {rel!r}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"})
-        try:
-            out.append((Path(rel).stem, load_profile(_read_accepted_text(helper, rel))))
-        except ProfileError as exc:
-            raise OpError(REFUSED, f"accepted profile {rel} is invalid: {exc}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
+        out.append(rel)
     if not out:
         raise OpError(REFUSED, "accepted CURRENT lists no profile. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"})
     return out
 
 
-def _merge_profiles(name: str, chain: Sequence[Profile]) -> Profile:
-    """The final state of applying ``chain`` in order: a later core entry overrides the fields it sets, a later point entry replaces the earlier one,
-    a later turbo table replaces the earlier one."""
-    cores: dict[tuple[str, int], dict[str, int | None]] = {}
-    points: dict[tuple[str, int, int], PointSetting] = {}
-    turbo: dict[str, tuple[int, ...] | None] = {"e": None, "p": None}
-    for prof in chain:
-        for c in prof.entries:
-            cur = cores.setdefault((c.kind, c.index), {"ratio": None, "oc_voltage_mv": None, "offset_mv": None})
-            for key in ("ratio", "oc_voltage_mv", "offset_mv"):
-                value = getattr(c, key)
-                if value is not None:
-                    cur[key] = value
-        for p in prof.points:
-            points[(p.kind, p.index, p.point)] = p
-        if prof.turbo is not None:
-            for key in ("e", "p"):
-                value = getattr(prof.turbo, key)
-                if value is not None:
-                    turbo[key] = tuple(value)
-    entries = tuple(CoreSetting(kind, index, **vals) for (kind, index), vals in cores.items())  # type: ignore[arg-type]
-    tables = TurboTables(e=turbo["e"], p=turbo["p"]) if (turbo["e"] or turbo["p"]) else None
-    return Profile(name, entries, tables, tuple(points.values()))
+def _accepted_profile(helper: Helper) -> tuple[str, Profile]:
+    """``(name, profile)`` of the one accepted profile (the name is the file stem). An older chain is refused (``ACCEPTED_CHAIN``): D-044 never replays a chain."""
+    paths = _accepted_paths(helper)
+    if len(paths) > 1:
+        names = ", ".join(Path(p).stem for p in paths)
+        raise OpError(
+            REFUSED,
+            f"the accepted state is an older chain of {len(paths)} profiles ({names}); the accepted state is now one complete profile (D-044): {CHAIN_HINT}. Nothing was sent.",
+            {"check": "ACCEPTED_CHAIN"},
+        )
+    rel = paths[0]
+    try:
+        return Path(rel).stem, load_profile(_read_accepted_text(helper, rel))
+    except ProfileError as exc:
+        raise OpError(REFUSED, f"accepted profile {rel} is invalid: {exc}. Nothing was sent.", {"check": "NO_ACCEPTED_STATE"}) from None
+
+
+def _accepted_names(helper: Helper) -> list[str]:
+    """The names ``CURRENT`` lists (one, or the members of an older chain); empty when there is no accepted state."""
+    try:
+        return [Path(p).stem for p in _accepted_paths(helper)]
+    except OpError:
+        return []
+
+
+def _check_complete(helper: Helper, profile: Profile, topology: Topology) -> None:
+    """G-148: a complete profile is refused on another CPU (``PROFILE_TOPOLOGY``): every unit of the live topology must be in it, and each unit's recorded top fused ratio
+    must be the one this boot's read found (``0x09``; units not read are judged by the planner from the apply's own read)."""
+    if not profile.complete:
+        return
+    try:
+        profile.check_complete(topology)
+    except ProfileError as exc:
+        raise OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PROFILE_TOPOLOGY"}) from None
+    fused = getattr(helper, "fused_words", None) or {}
+    for e in profile.entries:
+        cpu = topology.resolve(e.kind, e.index).cpu
+        unit = topology.unit_of_cpu(cpu)
+        word = next((fused[c] for c in topology.unit_cpus(unit) if c in fused), None)
+        top = fused_top_ratio(word)
+        if top is not None and e.fused_top_ratio is not None and top != e.fused_top_ratio:
+            raise OpError(
+                REFUSED,
+                f"{unit} reads top fused ratio {top} (0x09) but the complete profile was made where it was {e.fused_top_ratio}: it belongs to another CPU. Nothing was sent.",
+                {"check": "PROFILE_TOPOLOGY"},
+            )
 
 
 def _profile_store(helper: Helper) -> ProfileStore:
@@ -1500,25 +1535,41 @@ def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topol
     if "reset" in intent:
         return _reset_profile(helper, topology)
     if "restore" in intent:
-        chain = _accepted_chain(helper)
-        merged = _merge_profiles("accepted", [p for _, p in chain])
-        return _profile_resolved(helper, merged, topology, [f"restore merges the accepted chain in order: {', '.join(n for n, _ in chain)}"])
+        name, prof = _accepted_profile(helper)
+        _check_complete(helper, prof, topology)
+        how = "complete: only the words that differ from what the CPU holds are written" if prof.complete else "partial (accepted before G-148): its own entries only"
+        return _profile_resolved(helper, prof, topology, [f"restore applies the accepted profile {name} ({how})"])
     name = intent["profile"]
     try:
-        chain = _accepted_chain(helper)
+        acc_name, acc = _accepted_profile(helper)
     except OpError:
-        chain = []
-    for stem, prof in chain:
-        if stem == name:
-            return _profile_resolved(helper, prof, topology, [f"accepted profile {name}"])
+        acc_name, acc = None, None
+    if acc is not None and acc_name == name:
+        _check_complete(helper, acc, topology)
+        return _profile_resolved(helper, acc, topology, [f"accepted profile {name}"])
     try:
         record = _profile_store(helper).load(name)
     except ProfileStoreError as exc:
         raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
+    prof = _saved_profile(record)
+    if prof is not None:
+        _check_complete(helper, prof, topology)
+        return _profile_resolved(helper, prof, topology, [f"saved profile {name} (complete: only the words that differ from what the CPU holds are written)"])
     saved = canonical_intent(record["intent"], rows_only=True)
     resolved = _rows_to_profile(helper, saved, policy, topology, name)
-    resolved.warnings.insert(0, f"saved profile {name}")
+    resolved.warnings.insert(0, f"saved profile {name} (partial, saved before G-148: its rows are applied over what the CPU holds)")
     return resolved
+
+
+def _saved_profile(record: Mapping[str, Any]) -> Profile | None:
+    """The complete profile of a saved record (G-148), or ``None`` for a legacy ``{intent}`` record; ``REFUSED PROFILE_INVALID`` when the stored text does not load."""
+    text = record.get("profile")
+    if not isinstance(text, str):
+        return None
+    try:
+        return load_profile(text if "\n" in text else text + "\n")
+    except ProfileError as exc:
+        raise OpError(REFUSED, f"saved profile {record.get('name')!r} is invalid: {exc}. Nothing was sent.", {"check": "PROFILE_INVALID"}) from None
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1841,12 +1892,72 @@ def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[Curv
     }
 
 
-def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[str, Any]], int, int]:
+def _last_baseline(helper: Helper, profile: Profile, topology: Topology) -> tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None:
+    """G-148: the planner's inputs as this boot's last read gives them (an E cluster read on one CPU stands for all four; ``0x26`` / ``0x28`` are not kept: 0 / unknown),
+    for the round estimate and the preview of a complete profile. ``None`` without a read."""
+    last = _last_words(helper)
+    if not last:
+        return None
+    fused = getattr(helper, "fused_words", None) or {}
+    st = _state(helper)
+    with st.lock:
+        favored = dict(st.favored_words or {})
+    baseline: dict[int, CoreReadings] = {}
+    point_words: dict[tuple[int, int], int] = {}
+    cpus = {t.cpu for t in (resolve_targets(profile, topology) if profile.entries else ())} | {p.cpu for p in resolve_point_targets(profile, topology)}
+    for cpu in cpus:
+        unit = unit_of_cpu(topology, cpu)
+        ref = _unit_reference(last, (cpu, *unit_cpus(topology, unit)))
+        if ref is None:
+            continue
+        ref_cpu, words = ref
+        fused_word = fused.get(cpu, fused.get(ref_cpu))
+        if fused_word is None:
+            continue
+        baseline[cpu] = CoreReadings(vf=VfWord.from_u32(words[0]), favored=favored.get(cpu, favored.get(ref_cpu, 0)), fused=fused_word, granular=0, vmax=None)
+        for n, w in enumerate(words[1:], start=1):
+            point_words[(cpu, n)] = w
+    return baseline, point_words
+
+
+def _rounds_from_last(helper: Helper, profile: Profile, topology: Topology, policy: Policy) -> tuple[int, str | None]:
+    """G-148 (decision 5): the guarded rounds the last read says a restore / complete apply needs within the step limits (1 without a read: the apply judges from its own)."""
+    known = _last_baseline(helper, profile, topology)
+    if known is None:
+        return 1, None
+    return ramp_rounds(profile, topology, known[0], known[1], policy, only_changed=profile.complete)
+
+
+def _predicted_steps(
+    profile: Profile, topology: Topology, known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None = None
+) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
-    words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``."""
+    words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``. G-148: for a complete
+    profile with ``known`` (the last read, ``_last_baseline``) a word the CPU already holds is not listed (the apply writes only what differs)."""
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
-    steps: list[dict[str, Any]] = [{"kind": StepKind.WRITE_PERCORE_ENABLE.value, "conditional": True}] if (targets or pts) else []  # G-117: none for a table-only plan
+    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)  # every word is read, also the unchanged ones
+    if profile.complete and known is not None:
+        baseline, words = known
+
+        def unchanged_point(p: Any) -> bool:
+            w = words.get((p.cpu, p.point))
+            return w is not None and VfWord.from_u32(w).offset_raw == VfWord.mv_to_offset_raw(p.offset_mv) and (p.expect_ratio is None or VfWord.from_u32(w).ratio == p.expect_ratio)
+
+        def unchanged_core(t: Any) -> bool:
+            rd = baseline.get(t.cpu)
+            if rd is None or (t.fused_top_ratio is not None and fused_top_ratio(rd.fused) != t.fused_top_ratio):
+                return False
+            top = fused_top_ratio(rd.fused)
+            try:
+                goal = _goal_word(t, current_word(rd, t.ratio is not None or t.oc_voltage_mv is not None), top)
+            except PlanError:
+                return False
+            return _same_state(t, rd, goal, top)
+
+        pts = tuple(p for p in pts if not unchanged_point(p))
+        targets = tuple(t for t in targets if not unchanged_core(t))
+    steps: list[dict[str, Any]] = [{"kind": StepKind.WRITE_PERCORE_ENABLE.value, "conditional": True}] if (targets or pts) else []  # G-117 / G-148: none without a mailbox write
     for p in pts:
         steps.append({"kind": StepKind.WRITE_VF_POINT.value, "unit": unit_of_cpu(topology, p.cpu), "cpu": p.cpu, "point": p.point, "offset_mv": p.offset_mv})
     for t in targets:
@@ -1859,7 +1970,6 @@ def _predicted_steps(profile: Profile, topology: Topology) -> tuple[list[dict[st
         for key in ("e", "p"):
             if getattr(profile.turbo, key) is not None:
                 steps.append({"kind": StepKind.WRITE_MSR.value, "table": key})
-    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)
     total = len(steps)
     listed = [{"n": i, **s} for i, s in enumerate(steps[:_MAX_STEPS_LISTED], start=1)]
     return listed, total, reads
@@ -1883,7 +1993,7 @@ def _preflight_error(exc: PreflightError) -> OpError:
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "SESSION_LIMIT"})
     if isinstance(exc, NeedsBootBudget):
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "BOOT_LIMIT"})
-    if isinstance(exc, NeedsRamp):
+    if isinstance(exc, (NeedsRamp, NeedsRounds)):
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "STEP_LIMIT"})
     if isinstance(exc, PlanRefused):
         first = exc.refusals[0]
@@ -1929,14 +2039,14 @@ def _words_assumed(last: Mapping[int, Sequence[int]] | None, topology: Topology,
 
 
 def _residual_found(helper: Helper, profile: Profile, topology: Topology, policy: Policy) -> residual.Neutralisation | None:
-    """G-147: the residual OC points that this boot's last read shows against ``profile`` (the merged accepted chain), or ``None`` without a read / fused words. The apply
+    """G-147: the residual OC points that this boot's last read shows against ``profile`` (the accepted profile, D-044), or ``None`` without a read / fused words. The apply
     re-reads every word: this is a preview and the size of the budget it reserves, not the decision."""
     last = _last_words(helper)
     fused = helper.fused_words or {}
     vf = {c: w[0] for c, w in (last or {}).items() if w}
     if not vf or not fused:
         return None
-    return residual.neutralise(profile, (), topology, policy, vf, fused)
+    return residual.neutralise(profile, topology, policy, vf, fused)
 
 
 def _residual_ops(found: residual.Neutralisation | None) -> int:
@@ -1966,8 +2076,8 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if used is None:  # G-141: an unreadable audit log is not "0 operations used": the apply could not count them either, so the plan is refused here like the apply would be
         raise OpError(REFUSED, "the audit log cannot be read, so the per-boot operation count is unknown and no plan can be checked against it. Nothing was sent.", {"check": "AUDIT_UNAVAILABLE"})
     ops_left = None if budget is None else max(budget - used, 0)
-    restore = "restore" in intent
-    scan_ops = len(residual.scan_plan(profile, (), topology, policy)) if restore else 0  # G-147: the residual-OC-point scan reads of a restore
+    restore = "restore" in intent or profile.complete  # G-148: a complete profile is applied like the accepted state (residual rule, rounds, only what differs)
+    scan_ops = len(residual.scan_plan(profile, topology, policy)) if restore else 0  # G-147: the residual-OC-point scan reads of a restore
     try:
         targets = preflight(profile, topology, policy, boot_ops_used=used, extra_ops=scan_ops)
     except PreflightError as exc:
@@ -1978,14 +2088,20 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
     ops_needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
     found_residual = _residual_found(helper, profile, topology, policy) if restore else None
-    ops_needed += scan_ops + _residual_ops(found_residual)  # G-147: the scan, and the rows the last read says it will add
+    rounds, worst = _rounds_from_last(helper, profile, topology, policy) if restore else (1, None)
+    try:  # G-148 (decision 5): the rounds the step limits need, reserved up front; refused here (STEP_LIMIT) when they do not fit, never half-way
+        ops_needed = check_rounds(rounds, worst, ops_needed + _residual_ops(found_residual), scan_ops, policy, used)
+    except PreflightError as exc:
+        raise _preflight_error(exc) from None
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
-    steps, writes, reads = _predicted_steps(profile, topology)
+    steps, writes, reads = _predicted_steps(profile, topology, _last_baseline(helper, profile, topology) if profile.complete else None)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
     if restore:
         warnings.extend(_residual_preview(found_residual))
+    if rounds > 1:
+        warnings.append(f"the change is larger than the policy's per-operation step limits ({worst}): the apply splits it into up to {rounds} guarded rounds in this one run (G-148)")
     if any(t.ratio is not None or t.oc_voltage_mv is not None for t in targets):
         warnings.append(_RAISE_NOTE)
     for unit, items in after.items():
@@ -2001,7 +2117,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         sort_keys=True,
     )
     plan_id = hashlib.sha256(canon.encode()).hexdigest()
-    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore))
+    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore, rounds=rounds))
     result = {
         "plan_id": plan_id,
         "nonce": nonce,
@@ -2019,6 +2135,8 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "vccia": prediction["vccia"],  # contract 9 addendum (F6): {predicted_v, set_by: {unit, ratio}} + label / contributors / before_v / light_load, null without a baseline
         "warnings": warning_objects(warnings),  # [{code, text}]: CLAMPED E40_OFFSET E_TARGET_WHEA POSITIVE_OFFSET NO_BASELINE TURBO_RAISE, everything else NOTE
         "words_assumed": _words_assumed(last, topology, targets, points),  # G-125: true only when a written unit has no word from this boot's read (tune.last)
+        "complete": profile.complete,  # G-148 (additive): a complete profile: only the words that differ are written
+        "rounds": rounds,  # G-148 (additive): guarded rounds the step limits need (1 = one write per word)
     }
     while len(json.dumps(result, separators=(",", ":"))) > MAX_LINE - _RESPONSE_SLACK and result["steps"]:
         del result["steps"][len(result["steps"]) // 2 :]
@@ -2032,6 +2150,7 @@ def _profile_canon(profile: Profile) -> dict[str, Any]:
         "core": [dataclasses.asdict(c) for c in profile.entries],
         "point": [dataclasses.asdict(p) for p in profile.points],
         "turbo": None if profile.turbo is None else dataclasses.asdict(profile.turbo),
+        "complete": profile.complete,
     }
 
 
@@ -2193,7 +2312,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     topology = _topology(helper)
     policy = _load_policy(helper)
     profile = plan.profile
-    scan_ops = len(residual.scan_plan(profile, (), topology, policy)) if plan.restore else 0  # G-147
+    scan_ops = len(residual.scan_plan(profile, topology, policy)) if plan.restore else 0  # G-147
     try:
         targets = preflight(profile, topology, policy, extra_ops=scan_ops)  # nothing sent: the numbers against the policy as it is NOW
     except PreflightError as exc:
@@ -2202,9 +2321,11 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) + scan_ops
+    per_round = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile))
+    needed = per_round + scan_ops
     if plan.restore:  # the guard's session cap is exactly `needed`: reserve the rows the last read says the scan will add (an unforeseen one is dropped by the executor, with a warning)
-        needed = min(needed + _residual_ops(_residual_found(helper, profile, topology, policy)), policy.max_operations_per_session)
+        # G-148: and the rounds the plan reserved (the executor re-judges them from its own reads before the first write: STEP_LIMIT when they do not fit)
+        needed = min(scan_ops + max(plan.rounds, 1) * (per_round + _residual_ops(_residual_found(helper, profile, topology, policy))), policy.max_operations_per_session)
     progress_steps = 0
     freq_cpus = sorted({t.cpu for t in targets} | ({c.cpu for c in topology.cores} if plan.restore else set()))  # a restore may rewrite a unit the profile has no row for
     freq_before = _cpufreq_before(helper, freq_cpus)  # G-126: the old cpuinfo / cap, before any write
@@ -2230,6 +2351,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
                 cancelled=ctx.cancel.is_set,
                 neutralize_residual=plan.restore,
                 boot_ops_used=session.used or 0,
+                auto_ramp=plan.restore,
             )
         except PreflightError as exc:
             raise _preflight_error(exc) from None
@@ -2284,22 +2406,33 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
 # profiles.list / profiles.save
 # --------------------------------------------------------------------------------------------------------------
 def _validate_profiles_save(args: dict[str, Any]) -> dict[str, Any]:
+    """``{name, intent}``; G-148: ``intent`` is the Tune editor's rows laid over this boot's read (rows that change nothing, or none, save the read as it is)."""
     _only(args, {"name", "intent"})
     name = args.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise _bad("'name' must be 1..64 characters of a-z 0-9 . _ -")
-    return {"name": name, "intent": canonical_intent(args.get("intent"), rows_only=True)}
+    try:
+        intent: dict[str, Any] | None = canonical_intent(args.get("intent"), rows_only=True)
+    except OpError as exc:
+        if (exc.detail or {}).get("check") != "NOTHING_TO_DO":
+            raise
+        intent = None
+    return {"name": name, "intent": intent}
 
 
 def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """``{profiles: [{name, source, created, complete}], accepted, note?}``. G-148: ``complete`` false = "partial (legacy)"; an accepted state that is still a chain lists
+    its members with a note pointing at ``accepted-migrate`` (Restore accepted refuses it)."""
     out: list[dict[str, Any]] = []
     note: str | None = None
     try:
-        text = _read_accepted_text(helper, "CURRENT")
-        for line in text.splitlines():
-            m = re.fullmatch(r"\s*profile\s*=\s*(\S+)\s*", line)
-            if m and _ACCEPTED_PATH_RE.fullmatch(m.group(1)) and m.group(1).endswith(".toml"):
-                out.append({"name": Path(m.group(1)).stem, "source": "accepted", "created": None})  # an accepted profile has no creation time of its own
+        paths = _accepted_paths(helper)
+        if len(paths) > 1:
+            note = f"the accepted state is an older chain of {len(paths)} profiles; Restore accepted refuses it until it is one profile: {CHAIN_HINT}"
+            out.extend({"name": Path(p).stem, "source": "accepted", "created": None, "complete": False, "chain": True} for p in paths)
+        else:
+            name, prof = _accepted_profile(helper)
+            out.append({"name": name, "source": "accepted", "created": None, "complete": prof.complete})  # an accepted profile has no creation time of its own
     except OpError as exc:
         note = NO_ACCEPTED_NOTE if exc.message.startswith(NO_ACCEPTED_NOTE) else exc.message
     try:
@@ -2313,18 +2446,46 @@ def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
 
 
 def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """G-148 (D-044): save a **complete** profile: this boot's last read of every unit (OC word fields, every fused point's offset, both turbo tables when read) with the
+    editor's rows laid over it (``profiles.complete.overlay``). Refused without a read of this boot (``NO_READ``, "read first"), when a write came after it
+    (``STALE_READ``), or when a word cannot be recorded exactly (``NOT_REPRESENTABLE``). The rows pass the same policy range checks as a plan. No hardware."""
     name = args["name"]
-    try:
-        accepted = {n for n, _ in _accepted_chain(helper)}
-    except OpError:
-        accepted = set()
-    if name in accepted:
+    if name in _accepted_names(helper):
         raise OpError(REFUSED, f"{name!r} is the name of an accepted profile; profiles are never overwritten", {"check": "EXISTS"})
+    topology = _topology(helper)
+    last = _last_words(helper)
+    if not last:
+        raise OpError(REFUSED, "no tune.read this boot: a saved profile is the complete state of the CPU (this boot's read with your edits over it), so read first (Tune > Read). "
+                      "Nothing was saved.", {"check": "NO_READ"})
+    why = stale_since_read(helper)
+    if why is not None:
+        raise OpError(REFUSED, f"the words of the last read may no longer be what the CPU holds: {why}. Read again first (Tune > Read), then save. Nothing was saved.", {"check": "STALE_READ"})
+    fused = getattr(helper, "fused_words", None) or {}
+    st = _state(helper)
+    with st.lock:
+        tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
     try:
-        record = _profile_store(helper).save(name, args["intent"])
+        base = complete_from_words(topology, name, last, {c: fused_top_ratio(w) for c, w in fused.items()}, tables)
+    except BuildError as exc:
+        raise OpError(REFUSED, f"{exc.message} Nothing was saved.", {"check": exc.code}) from None
+    profile = base
+    if args["intent"] is not None:
+        policy = _load_policy(helper)
+        edits = _rows_to_profile(helper, args["intent"], policy, topology, name).profile
+        try:
+            profile = overlay(base, edits, topology, name)
+        except ProfileError as exc:
+            raise OpError(BAD_REQUEST, f"the edits do not fit the read: {exc}. Nothing was saved.") from None
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(helper.cfg.wall_clock()))
+    header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
+    try:
+        record = _profile_store(helper).save(name, profile=dump_profile(profile, header))
+    except ProfileError as exc:
+        raise OpError(BAD_REQUEST, f"the profile cannot be written: {exc}") from None
     except ProfileStoreError as exc:
         raise OpError(REFUSED if exc.code in ("EXISTS", "UNTRUSTED") else BAD_REQUEST if exc.code in ("BAD_NAME", "TOO_BIG") else INTERNAL, exc.message, {"check": exc.code}) from None
-    return {"name": record["name"], "source": "saved", "created": record["created"]}
+    return {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
+            "turbo": profile.turbo is not None}
 
 
 def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:
@@ -2336,8 +2497,8 @@ def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    """Contract 9 (G-123): ``{name, source, created, contents: {rows, turbo}, summary}``; an accepted member also ``position`` / ``of`` / ``chain`` and
-    ``cumulative`` (the state after applying the chain up to and including it: what loading it into Tune means)."""
+    """Contract 9 (G-123): ``{name, source, created, complete, contents: {rows, turbo, complete}, summary}``. G-148: no chain any more -- a profile stands for
+    itself; ``complete`` false = a partial profile saved before G-148 (its rows are what it changes)."""
     name = args["name"]
     topology = _topology(helper)
 
@@ -2345,22 +2506,32 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
         return profile_contents(profile, topology, lambda cpu: unit_of_cpu(topology, cpu), _unit_point_ratios(helper, topology))
 
     try:
-        chain = _accepted_chain(helper)
+        acc_name, acc = _accepted_profile(helper)
     except OpError:
-        chain = []
-    for i, (stem, prof) in enumerate(chain):
-        if stem == name:
-            own = contents_of(prof)
-            cumulative = contents_of(_merge_profiles(name, [p for _, p in chain[: i + 1]]))
-            return {"name": name, "source": "accepted", "created": None, "position": i + 1, "of": len(chain), "chain": [n for n, _ in chain],
-                    "contents": own, "cumulative": cumulative, "summary": summarize(own), "cumulative_summary": summarize(cumulative)}
+        acc_name, acc = None, None
+    if acc is not None and acc_name == name:
+        own = contents_of(acc)
+        return {"name": name, "source": "accepted", "created": None, "complete": acc.complete, "contents": own, "summary": summarize(own)}
+    if acc is None:  # an older chain: its members stand for their own file only (Restore accepted refuses the chain until accepted-migrate)
+        try:
+            for rel in _accepted_paths(helper):
+                if Path(rel).stem == name:
+                    member = load_profile(_read_accepted_text(helper, rel))
+                    own = contents_of(member)
+                    return {"name": name, "source": "accepted", "created": None, "complete": member.complete, "chain": True, "contents": own, "summary": summarize(own)}
+        except (OpError, ProfileError):
+            pass
     try:
         record = _profile_store(helper).load(name)
     except ProfileStoreError as exc:
         raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
-    own = intent_contents(canonical_intent(record["intent"], rows_only=True), topology.unit_ids())
     created = record.get("created")
-    return {"name": name, "source": "saved", "created": created if isinstance(created, str) else None, "contents": own, "summary": summarize(own)}
+    prof = _saved_profile(record)
+    if prof is not None:
+        own = contents_of(prof)
+    else:
+        own = intent_contents(canonical_intent(record["intent"], rows_only=True), topology.unit_ids())
+    return {"name": name, "source": "saved", "created": created if isinstance(created, str) else None, "complete": prof is not None, "contents": own, "summary": summarize(own)}
 
 
 # --------------------------------------------------------------------------------------------------------------

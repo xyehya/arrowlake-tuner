@@ -81,6 +81,7 @@ from .model import (
     CoreReadings,
     NeedsBootBudget,
     NeedsHigherLimit,
+    NeedsRounds,
     PlanError,
     PlanRefused,
     PlanStep,
@@ -102,6 +103,9 @@ __all__ = [
     "pack_turbo",
     "plan_warnings",
     "predict",
+    "ramp_rounds",
+    "check_rounds",
+    "MAX_RAMP_ROUNDS",
     "predict_msr",
     "preflight",
     "read_steps",
@@ -193,6 +197,7 @@ def resolve_targets(profile: Profile, topology: Topology) -> tuple[Target, ...]:
                     ratio=setting.ratio,
                     oc_voltage_mv=setting.oc_voltage_mv,
                     offset_mv=setting.offset_mv,
+                    fused_top_ratio=setting.fused_top_ratio,
                 )
             )
     if not targets and not profile.points and profile.turbo is None:  # G-117: a [turbo]-only plan has no mailbox target
@@ -679,6 +684,106 @@ def _next_profile_text(
     return "\n".join(lines) + "\n"
 
 
+def _same_state(target: Target, readings: CoreReadings, goal: VfWord, top: int | None) -> bool:
+    """G-148: the core already holds what ``target`` asks for, so a plan that writes only what differs (``only_changed``) sends nothing for it: the goal word is the
+    word read (and, when the target sets an OC ratio, ``0x1C[7:0]`` is that ratio already), or -- the target sets no OC ratio and no OC voltage -- the core has no OC
+    point (ratio field 0, or at most the top fused ratio: G-120/G-124, the hardware keeps no target there) and its offset is the goal's. A cold word ``0`` is
+    therefore left as ``0`` (not rewritten as the XTU fill ``0x39`` / ``0x2E``), exactly what the accepted words record after a cold boot."""
+    live = readings.vf
+    if goal.to_u32() == live.to_u32() and (target.ratio is None or (readings.favored & 0xFF) == goal.ratio):
+        return True
+    if target.ratio is not None or target.oc_voltage_mv is not None or live.static:
+        return False
+    no_oc_point = live.ratio == 0 or (top is not None and live.ratio <= top)
+    return no_oc_point and live.offset_raw == goal.offset_raw
+
+
+#: G-148 (decision 5): a one-shot apply splits into at most this many guarded rounds; more is refused up front (``NeedsRounds``). A design bound, not a hardware one.
+MAX_RAMP_ROUNDS = 16
+
+
+def _rounds_for(delta: int, limit: int, exact: bool) -> int:
+    """Rounds to move a field by ``delta`` raw units with a per-operation limit of ``limit``. ``exact`` (the ratio): every step is the full limit. Otherwise (a whole-mV
+    profile value, 1 mV = 1.024 raw) a ramp step can fall one raw unit short of the limit (``_mv_toward``), so ``limit - 1`` is the conservative step."""
+    if delta == 0:
+        return 0
+    step = limit if exact else max(limit - 1, 1)
+    return -(-abs(delta) // step)
+
+
+def ramp_rounds(
+    profile: Profile,
+    topology: Topology,
+    baseline: Mapping[int, CoreReadings],
+    point_words: Mapping[tuple[int, int], int],
+    policy: Policy,
+    *,
+    only_changed: bool = False,
+) -> tuple[int, str | None]:
+    """G-148 (D-044, decision 5): how many guarded rounds (read, write every word at most one step limit closer, read back) bring the CPU from ``baseline`` /
+    ``point_words`` to ``profile``, and which unit / field needs the most (``None`` when one round does it). The step limits are measured as the guard measures them
+    (``_check_vf_bounded`` / ``_check_vf_point_offset_bounded``: from the word read in the session, a zero ratio / V target filled from ``0x1C`` / ``0x09``). A CPU or point
+    without a reading counts as one round (the executor reads before it decides). Pure."""
+    ctx_ratio = policy.max_ratio_step
+    v_limit = VfWord.v_to_raw(policy.max_v_step_mv / 1000)
+    off_limit = (policy.max_offset_step_mv * 1024 + 512) // 1000  # as guard.policy.build_context
+    rounds, worst = 1, None
+
+    def note(n: int, text: str) -> None:
+        nonlocal rounds, worst
+        if n > rounds:
+            rounds, worst = n, text
+
+    for t in resolve_targets(profile, topology) if profile.entries else ():
+        readings = baseline.get(t.cpu)
+        if readings is None:
+            continue
+        top = fused_top_ratio(readings.fused)
+        sets_oc = t.ratio is not None or t.oc_voltage_mv is not None
+        current = current_word(readings, sets_oc)
+        try:
+            goal = _goal_word(t, current, top)
+        except PlanError:
+            continue
+        if only_changed and _same_state(t, readings, goal, top):
+            continue
+        base = readings.vf
+        ratio_now = base.ratio or (readings.favored & 0xFF)
+        if base.ratio == 0 and top is not None and 0 < goal.ratio <= top:
+            ratio_now = min(ratio_now, top)
+        if ratio_now:
+            note(_rounds_for(goal.ratio - ratio_now, ctx_ratio, True), f"{t.label} ratio {ratio_now} -> {goal.ratio}, step limit {ctx_ratio}")
+        if goal.v_target_raw:
+            v_now = base.v_target_raw or ((readings.fused >> 8) & 0xFFF)
+            if v_now:
+                note(_rounds_for(goal.v_target_raw - v_now, v_limit, False), f"{t.label} V target {v_now / 1024:.4f} -> {goal.v_target_raw / 1024:.4f} V, step limit {policy.max_v_step_mv} mV")
+        note(_rounds_for(goal.offset_raw - base.offset_raw, off_limit, False), f"{t.label} offset {base.offset_mv:+.1f} -> {goal.offset_mv:+.1f} mV, step limit {policy.max_offset_step_mv} mV")
+    for pt in resolve_point_targets(profile, topology):
+        word = point_words.get((pt.cpu, pt.point))
+        if word is None:
+            continue
+        base_w = VfWord.from_u32(word)
+        try:
+            goal_raw = VfWord.mv_to_offset_raw(pt.offset_mv)
+        except ValueError:
+            continue
+        note(_rounds_for(goal_raw - base_w.offset_raw, off_limit, False), f"{pt.label} point {pt.point} offset {base_w.offset_mv:+.1f} -> {pt.offset_mv:+d} mV, step limit {policy.max_offset_step_mv} mV")
+    return rounds, worst
+
+
+def check_rounds(rounds: int, worst: str | None, per_round: int, extra_ops: int, policy: Policy, boot_ops_used: int = 0) -> int:
+    """The operations ``rounds`` rounds of ``per_round`` (worst case) plus ``extra_ops`` cost; ``NeedsRounds`` when they pass the session cap, this boot's remaining
+    budget or :data:`MAX_RAMP_ROUNDS`. One round is always allowed here (the single-plan checks judge it)."""
+    total = extra_ops + rounds * per_round
+    if rounds <= 1:
+        return total
+    left = max(policy.max_operations_per_boot - boot_ops_used, 0)
+    allowed, where = (policy.max_operations_per_session, "per session") if policy.max_operations_per_session <= left else (left, "left in this boot's budget")
+    if rounds > MAX_RAMP_ROUNDS or total > allowed:
+        raise NeedsRounds(rounds, worst or "a step limit", total, allowed, MAX_RAMP_ROUNDS, f"{where}, {policy.where}")
+    return total
+
+
 def _is_step_only(policy: Policy, req: Request, baseline: int, ctx: CheckContext) -> bool:
     """True when ``req`` is refused by the step limits alone: it would be allowed with the step limits lifted."""
     return predict(policy, req, baseline, ctx.unlimited_steps()).allowed
@@ -697,6 +802,7 @@ def build_plan(
     favored_words: Mapping[int, int] | None = None,
     oc_cap_words: Mapping[int, int] | None = None,
     residual_cpus: Collection[int] = (),
+    only_changed: bool = False,
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
 
@@ -714,6 +820,10 @@ def build_plan(
     ``residual_cpus`` (G-147): the CPUs whose row is a residual-OC-point neutralisation (``controls.residual``): the word keeps the ratio the CPU already holds, so no
     ``0x1D`` / ``0x27`` is sent for them. G-147 also: a ``0x1D`` is never sent for a word whose ratio is at or below the top fused ratio and below the ``0x1C[7:0]`` read
     before (it would lower the CPU's maximum, ``[MEASURED lnx 2026-10-13]``: ``0x1D`` = 46 took an E cluster from 48x / 4.9 GHz to 46x / 4.7 GHz).
+
+    ``only_changed`` (G-148, D-044: a complete profile, the restore): a word the CPU already holds is not written (a point whose word read equals the goal; a core in the
+    same state, ``_same_state``), and without any mailbox write the ``0x15`` step is dropped too. A target whose ``fused_top_ratio`` (a complete profile's record of the
+    unit) differs from the top fused ratio of the ``0x09`` word read is refused (``CHECK_FAILED``): the profile was made on another CPU.
 
     ``baseline`` maps every target CPU to its ``CoreReadings`` (0x10, 0x1C, 0x09, 0x26 and, for a profile with an OC-point voltage, 0x28).
     ``per_core_enabled``: ``True`` -> no 0x15 step, ``False`` -> a 0x15 step, ``None`` -> unknown: a conditional 0x15 step is included (worst
@@ -847,6 +957,8 @@ def build_plan(
         req = Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, new.to_u32(), purpose)
         verdict = predict(policy, req, word, ctx)
         mismatch = pt.expect_ratio is not None and base.ratio != pt.expect_ratio
+        if only_changed and not mismatch and new.to_u32() == word:
+            continue  # G-148: the point already holds this offset
         if mismatch and verdict.reason in (OK_VERDICT.reason, Refusal.CHECK_FAILED.value):
             verdict = Verdict(
                 False,
@@ -871,6 +983,23 @@ def build_plan(
         current = current_word(readings, t.ratio is not None or t.oc_voltage_mv is not None)
         currents[t.cpu] = current
         goal = _goal_word(t, current, top)
+        if t.fused_top_ratio is not None and top != t.fused_top_ratio:
+            purpose = f"apply: write V/F word (0x11) of {t.label}: {t.describe()}"
+            number += 1
+            steps.append(
+                PlanStep(
+                    number, StepKind.WRITE_VF, t.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, 0, goal.to_u32(), purpose, t.label, before=readings.vf, after=goal, core_kind=t.kind,
+                    verdict=Verdict(
+                        False,
+                        Refusal.CHECK_FAILED.value,
+                        f"fused_top_ratio (planner): {t.label} reads top fused ratio {top} (0x09 word {readings.fused:#x}), the complete profile was made where it was "
+                        f"{t.fused_top_ratio}: another CPU; nothing is sent",
+                    ),
+                )
+            )
+            continue
+        if only_changed and _same_state(t, readings, goal, top):
+            continue  # G-148: the core already holds this state
         if t.oc_voltage_mv is not None and goal.v_target_raw == 0:
             oc_notes.append(
                 f"{t.label}: OC-point voltage {t.oc_voltage_mv} mV is not written: ratio {goal.ratio} is at or below the top fused ratio {top}, so there is "
@@ -961,6 +1090,9 @@ def build_plan(
             )
         )
     append_turbo(raising)
+    if only_changed and not any(s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) for s in steps):
+        # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; the step-limit set is empty without a mailbox write)
+        steps = [replace(s, number=i) for i, s in enumerate((s for s in steps if s.kind is not StepKind.WRITE_PERCORE_ENABLE), start=1)]
     warnings = list(plan_warnings(targets, policy, point_targets))
     warnings.extend(turbo_notes)
     warnings.extend(oc_notes)

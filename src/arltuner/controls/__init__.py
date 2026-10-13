@@ -22,6 +22,7 @@ from .model import (
     NeedsBootBudget,
     NeedsHigherLimit,
     NeedsRamp,
+    NeedsRounds,
     PlanError,
     PlanRefused,
     PlanStep,
@@ -33,10 +34,12 @@ from .model import (
     Verdict,
 )
 from .planner import (
+    MAX_RAMP_ROUNDS,
     PLATFORM_INFO_MSR,
     RAISE_CAVEAT,
     TURBO_MSR,
     build_plan,
+    check_rounds,
     count_operations,
     fill_ratio,
     pack_turbo,
@@ -44,6 +47,7 @@ from .planner import (
     predict,
     predict_msr,
     preflight,
+    ramp_rounds,
     read_steps,
     resolve_point_targets,
     resolve_targets,
@@ -64,6 +68,7 @@ from .report import (
 )
 
 __all__ = [
+    "MAX_RAMP_ROUNDS",
     "PLATFORM_INFO_MSR",
     "RAISE_CAVEAT",
     "TURBO_MSR",
@@ -81,6 +86,7 @@ __all__ = [
     "NeedsBootBudget",
     "NeedsHigherLimit",
     "NeedsRamp",
+    "NeedsRounds",
     "PlanError",
     "PlanRefused",
     "PlanStep",
@@ -95,6 +101,7 @@ __all__ = [
     "Verdict",
     "apply_profile",
     "build_plan",
+    "check_rounds",
     "residual",
     "count_operations",
     "describe_word",
@@ -108,6 +115,7 @@ __all__ = [
     "predict",
     "predict_msr",
     "preflight",
+    "ramp_rounds",
     "read_steps",
     "resolve_point_targets",
     "resolve_targets",

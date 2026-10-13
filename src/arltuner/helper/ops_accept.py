@@ -8,9 +8,12 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
 * **Accepted = what the CPU holds now.** ``EXPECTED-words.txt`` is the V/F words of this boot's last read (the verified read-backs after an apply), so a
   saved profile must already be applied: when its resolved words differ from the read the op refuses (``NOT_APPLIED``, "apply it first"). A profile that
   was never applied cannot be recorded as the state the chip was verified to hold.
-* The accepted profile file is the resolved profile (ratio / OC voltage / whole-curve offset per core, per-point offsets with ``expect_ratio``, turbo
-  tables). ``{from: "read"}`` derives it from the words; a word that millivolts cannot represent exactly (the profile format has whole millivolts) is
-  refused (``NOT_REPRESENTABLE``) rather than rounded, because the restore would then write a different word than the one recorded.
+* G-148 (D-044): the accepted profile and ``EXPECTED-words.txt`` come from **one source**: the words of this boot's last read (the verified read-backs after
+  an apply) and the turbo tables of that read. The profile is the **complete** profile of those words (:func:`arltuner.profiles.complete_from_words`: every
+  unit's OC word fields, every fused point's offset, both tables when read), whichever way it is accepted -- ``{from: "read"}``, a saved complete profile,
+  or a saved partial (legacy) one: the partial file is never recorded, only the state it was verified to have left. ``CURRENT`` names that one profile.
+  A word that millivolts cannot represent exactly (the profile format has whole millivolts) is refused (``NOT_REPRESENTABLE``) rather than rounded, because
+  the restore would then write a different word than the one recorded.
 * Needs a read this boot (``NO_READ``); the policy still judges a saved profile (its range check runs as for a plan); writes nothing to the hardware.
 * The op appends one audit record before the swap (and refuses if it cannot): ``event result``, ``op profiles.accept``, the name, what was replaced.
 
@@ -35,8 +38,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from arltuner.guard import AuditLog
 from arltuner.guard.policy import fused_top_ratio
-from arltuner.mailbox import VfWord
-from arltuner.profiles import CoreSetting, PointSetting, Profile, ProfileError, TurboTables
+from arltuner.profiles import BuildError, Profile, ProfileError, complete_from_words
 from arltuner.profiles.accepted import SAFE_PROFILE_NAME, AcceptedError, AcceptedStore
 from arltuner.profiles.fingerprint import CpuId, FingerprintError, build_fingerprint, cpu_id_from_cpuinfo
 from arltuner.profiles.serialize import dump_profile
@@ -94,54 +96,16 @@ def _held_difference(profile: Profile, topology: Topology, last: Mapping[int, Se
     return None
 
 
-def _whole_mv(raw_mv: float, back: int, what: str) -> int:
-    mv = round(raw_mv)
-    if VfWord.mv_to_offset_raw(mv) != back:
-        raise _refused(f"{what} ({back} raw) is not a whole number of millivolts, so a profile file cannot record it exactly.", "NOT_REPRESENTABLE")
-    return mv
-
-
 def _profile_from_words(
     topology: Topology, name: str, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None, tables: Mapping[str, Sequence[int]] | None = None
 ) -> Profile:
-    """The profile that puts back the words of ``last`` and, when the read had them, the turbo tables ``tables`` (``{"e": 8 buckets, "p": 8 buckets}``; see the module docstring)."""
-    entries: list[CoreSetting] = []
-    points: list[PointSetting] = []
-    for unit in topology.unit_ids():
-        ref = T._unit_reference(last, T.unit_cpus(topology, unit))
-        if ref is None:
-            raise _refused(f"the last read does not cover {unit}; read the whole system again (Tune > Read).", "NO_READ")
-        cpu, words = ref
-        core = topology.by_cpu(cpu)
-        top = fused_top_ratio((fused or {}).get(cpu))
-        oc = VfWord.from_u32(words[0])
-        if oc.static:
-            raise _refused(f"{unit} is in static (override) voltage mode; only adaptive words are recorded.", "NOT_REPRESENTABLE")
-        values: dict[str, int] = {}
-        if oc.v_target_raw:
-            if top is None:
-                raise _refused(f"{unit} has a V target on its OC word but its top fused ratio was not read, so an OC point cannot be told from the neutral word.", "NO_READ")
-            if oc.ratio > top:  # an OC point: ratio and adaptive target are the setting; at or below the top fused ratio the word is neutral
-                mv = round(oc.v_target_v * 1000)
-                if VfWord.v_to_raw(mv / 1000) != oc.v_target_raw:
-                    raise _refused(f"{unit}'s OC V target ({oc.v_target_raw} raw) is not a whole number of millivolts.", "NOT_REPRESENTABLE")
-                values["ratio"], values["oc_voltage_mv"] = oc.ratio, mv
-        if oc.offset_raw:
-            values["offset_mv"] = _whole_mv(oc.offset_mv, oc.offset_raw, f"{unit} OC word offset")
-        if values:
-            entries.append(CoreSetting(core.kind, core.index, **values))
-        for n, word in enumerate(words[1:], start=1):
-            w = VfWord.from_u32(word)
-            if w.ratio == 0 or (top is not None and w.ratio > top):
-                continue  # an empty word, or the OC point (ratio above the top fused one): not a fused point
-            points.append(PointSetting(core.kind, core.index, n, _whole_mv(w.offset_mv, w.offset_raw, f"{unit} point {n} offset"), w.ratio))
-    turbo = None
-    if tables and all(isinstance(tables.get(k), (list, tuple)) and len(tables[k]) == 8 for k in ("e", "p")):
-        turbo = TurboTables(e=tuple(tables["e"]), p=tuple(tables["p"]))  # G-141: what the read found is what is accepted; a restore then writes no table that differs
+    """G-148: the complete profile of the words of ``last`` (cpu -> words) with the top fused ratio of each unit from ``fused`` (cpu -> live ``0x09`` word) and, when the
+    read had both, the turbo tables ``tables`` (``{"e": 8 buckets, "p": 8 buckets}``)."""
+    tops = {cpu: fused_top_ratio(word) for cpu, word in (fused or {}).items()}
     try:
-        return Profile(name, tuple(entries), turbo, tuple(points))
-    except ProfileError as exc:
-        raise _refused(f"the last read holds nothing to record ({exc}).", "NOTHING_TO_ACCEPT") from None
+        return complete_from_words(topology, name, last, tops, tables)
+    except BuildError as exc:
+        raise _refused(exc.message, exc.code) from None
 
 
 def _expected_text(last: Mapping[int, Sequence[int]], header: str) -> str:
@@ -211,10 +175,6 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cfg.wall_clock()))
     if "from" in args:
         name = "read-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime(cfg.wall_clock()))
-        st = T._state(helper)
-        with st.lock:
-            tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
-        profile = _profile_from_words(topology, name, last, fused, tables)
         source = "the state of the last read"
     else:
         name = args["name"]
@@ -222,16 +182,21 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
             record = T._profile_store(helper).load(name)
         except ProfileStoreError as exc:
             raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
-        policy = T._load_policy(helper)
-        profile = T._rows_to_profile(helper, T.canonical_intent(record["intent"], rows_only=True), policy, topology, name).profile
-        difference = _held_difference(profile, topology, last, fused, T._state(helper).turbo)
+        saved = T._saved_profile(record)
+        if saved is None:  # a partial (legacy) profile: its rows resolved against the read
+            policy = T._load_policy(helper)
+            saved = T._rows_to_profile(helper, T.canonical_intent(record["intent"], rows_only=True), policy, topology, name).profile
+            source = f"saved profile {name} (partial, legacy: the state it left on the CPU is recorded, not the file)"
+        else:
+            source = f"saved profile {name}"
+        difference = _held_difference(saved, topology, last, fused, T._state(helper).turbo)
         if difference is not None:
             raise _refused(f"{name!r} is not what the CPU holds now ({difference}). Apply it first (Profiles > Review and apply), then set it as accepted.", "NOT_APPLIED")
-        source = f"saved profile {name}"
-    try:
-        replaced = [n for n, _ in T._accepted_chain(helper)]
-    except OpError:
-        replaced = []
+    st = T._state(helper)
+    with st.lock:
+        tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
+    profile = _profile_from_words(topology, name, last, fused, tables)  # D-044 decision 2: the profile and EXPECTED-words.txt are the same words
+    replaced = T._accepted_names(helper)
     header = f"Accepted {stamp} from {source}. Written by arltuner (profiles.accept); replace it the same way, never by hand."
     try:
         profile_toml = dump_profile(profile, header)
@@ -254,7 +219,7 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
     except AcceptedError as exc:
         raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code}) from None
     return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced, "cpus": len(last),
-            "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None,
+            "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None, "complete": profile.complete,
             "fingerprint": fingerprint_note}
 
 
@@ -287,7 +252,7 @@ def _fingerprint(helper: Helper) -> dict[str, Any]:
         except TrustError as exc:
             raise _refused(f"the accepted state's location is untrusted: {exc}.", "NO_ACCEPTED_STATE") from None
     try:
-        chain = [n for n, _ in T._accepted_chain(helper)]  # the same trusted read as everything else: no CURRENT / no profile = no accepted state
+        chain = [Path(p).stem for p in T._accepted_paths(helper)]  # the same trusted read as everything else: no CURRENT / no profile = no accepted state
     except OpError as exc:
         raise _refused(f"there is no accepted state to record a fingerprint for ({exc.message.removesuffix(' Nothing was sent.')}); accept a profile first (Profiles > Set as accepted).", "NO_ACCEPTED_STATE") from None
     topology = T._topology(helper)

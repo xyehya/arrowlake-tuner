@@ -119,6 +119,26 @@ class NeedsRamp(PreflightError):
         self.next_profile_text = next_profile_text
 
 
+class NeedsRounds(PreflightError):
+    """G-148 (D-044, decision 5): a one-shot apply of a complete profile / the accepted state needs ``rounds`` guarded rounds (each: read, then write every word moved
+    by at most one step limit, read back) because a word is further from its goal than the policy's per-operation step limit -- and the rounds do not fit
+    (``ops_needed`` mailbox operations against ``ops_allowed``, or more than ``max_rounds``). ``worst`` names the unit and field that needs the most rounds.
+    Raised before the first write: never a partial restore. Raise the step limit or the operation caps in the policy, or apply in separate sittings."""
+
+    def __init__(self, rounds: int, worst: str, ops_needed: int, ops_allowed: int, max_rounds: int, where: str) -> None:
+        why = (
+            f"more than {max_rounds} rounds" if rounds > max_rounds else f"{ops_needed} mailbox operations (reads, writes, read-backs) but {ops_allowed} are allowed ({where})"
+        )
+        super().__init__(
+            f"the change needs {rounds} guarded rounds within the per-operation step limits ({worst}), which is {why}; nothing was sent. "
+            "Raise max_offset_step_mv / max_v_step_mv / max_ratio_step or the operation caps in the policy (/etc/arltuner/policy.toml), or bring the CPU closer first"
+        )
+        self.rounds = rounds
+        self.worst = worst
+        self.ops_needed = ops_needed
+        self.ops_allowed = ops_allowed
+
+
 class NeedsBootBudget(PreflightError):
     """The plan needs more mailbox operations than remain in this boot's budget (``policy.max_operations_per_boot`` minus the
     operations the audit log already records for this boot, from every process).
@@ -266,6 +286,7 @@ class Target:
     ratio: int | None
     oc_voltage_mv: int | None
     offset_mv: int | None
+    fused_top_ratio: int | None = None  # G-148: a complete profile's record of the unit's top fused ratio; the plan refuses the write when 0x09 reads another one
 
     def describe(self) -> str:
         parts = []

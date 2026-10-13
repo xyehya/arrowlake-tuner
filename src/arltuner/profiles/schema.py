@@ -38,6 +38,25 @@ Per-V/F-point offsets (T-025; optional, distinct from the whole-curve ``offset_m
 A profile may hold only ``[[point]]`` entries: it needs at least one ``[[core]]`` or ``[[point]]`` (``[turbo]`` alone is still empty).
 Monotonicity V(n) >= V(n-1) across points is enforced by the hardware, not by arltuner (the voltages of fused points are not readable).
 
+Complete profiles (G-148, D-044)::
+
+    [meta]
+    name = "my-tuning"
+    platform = "arl-s"
+    complete = true        # the whole tuning state of the CPU, not a delta
+
+    [[core]]               # exactly one per unit of the CPU (each P-core, each E cluster: the cluster's first E-core)
+    kind = "E"
+    index = 0
+    fused_top_ratio = 46   # the unit's top fused ratio (0x09 P1=0x11 [7:0]) where the profile was made: names the CPU (refused on another one)
+    offset_mv = 0          # the OC word's whole-curve offset, explicit even when 0; ratio / oc_voltage_mv absent = no OC point
+
+    [[point]]              # every fused point of the unit, 1..n with expect_ratio, the last one at fused_top_ratio; offset_mv explicit (0 included)
+
+A complete profile carries both turbo tables or neither (``[turbo]`` absent = the tables are not part of this profile and are left alone). Applying one
+writes only the words that differ from what the CPU holds (``controls.planner``). Whether every unit of the CPU is present is judged where the profile
+meets a topology (:meth:`Profile.check_complete`); the rest is checked here.
+
 E-cluster rule: the hardware regulator is per cluster of four E-cores (docs/knowledge/platform-arl-s.md section 2;
 whether a per-E-core write is cluster-wide is ``[UNVERIFIED]``), so two entries in the same cluster must carry
 identical ``ratio/oc_voltage_mv/offset_mv`` and ``Profile.expand`` reports every E entry as cluster-wide.
@@ -86,8 +105,9 @@ EXPECT_RATIO_RANGE = RATIO_RANGE
 
 _TOP_KEYS = ("meta", "core", "point", "turbo")
 _TURBO_KEYS = ("e", "p")
-_META_KEYS = ("name", "platform")
-_CORE_KEYS = ("kind", "index", "ratio", "oc_voltage_mv", "offset_mv")
+_META_KEYS = ("name", "platform", "complete")
+_META_REQUIRED = ("name", "platform")
+_CORE_KEYS = ("kind", "index", "ratio", "oc_voltage_mv", "offset_mv", "fused_top_ratio")
 _SETTING_KEYS = ("ratio", "oc_voltage_mv", "offset_mv")
 _POINT_KEYS = ("kind", "index", "point", "offset_mv", "expect_ratio")
 
@@ -108,9 +128,12 @@ class CoreSetting:
     ratio: int | None = None
     oc_voltage_mv: int | None = None
     offset_mv: int | None = None
+    fused_top_ratio: int | None = None  # G-148: the unit's top fused ratio where a complete profile was made (``None`` in a partial profile)
 
     def __post_init__(self) -> None:
         _check_setting("CoreSetting", self.kind, self.index, self.ratio, self.oc_voltage_mv, self.offset_mv)
+        if self.fused_top_ratio is not None:
+            _check_int("CoreSetting", "fused_top_ratio", self.fused_top_ratio, *RATIO_RANGE, f" ({RATIO_SOURCE})")
 
 
 @dataclass(frozen=True)
@@ -175,6 +198,7 @@ class CpuSetting:
     ratio: int | None
     oc_voltage_mv: int | None
     offset_mv: int | None
+    fused_top_ratio: int | None = None
 
 
 @dataclass(frozen=True)
@@ -195,22 +219,45 @@ class PointCpuSetting:
 @dataclass(frozen=True)
 class Profile:
     """A validated profile: a name, ``CoreSetting`` entries, (T-025) ``PointSetting`` entries -- at least one of the two -- and (T-023) optional
-    turbo ratio tables."""
+    turbo ratio tables. ``complete`` (G-148, D-044): the profile is the whole tuning state of the CPU (module docstring), not a delta."""
 
     name: str
     entries: tuple[CoreSetting, ...]
     turbo: TurboTables | None = None
     points: tuple[PointSetting, ...] = ()
+    complete: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ProfileError("meta.name: must be a non-empty string")
+        if not isinstance(self.complete, bool):
+            raise ProfileError(f"meta.complete: expected true or false, got {self.complete!r}")
         object.__setattr__(self, "entries", tuple(self.entries))
         object.__setattr__(self, "points", tuple(self.points))
         _check_entries(self.entries, "entries", self.points, turbo_only_ok=self.turbo is not None)
         _check_points(self.points, "points")
         if self.turbo is not None and not isinstance(self.turbo, TurboTables):
             raise ProfileError(f"turbo: expected a TurboTables, got {type(self.turbo).__name__}")
+        if self.complete:
+            _check_complete_shape(self)
+
+    def check_complete(self, topology: Topology) -> None:
+        """G-148: a complete profile names every unit of ``topology`` exactly once (one ``[[core]]`` per P-core and per E cluster) and nothing else; ``ProfileError``
+        otherwise (a profile made on another CPU layout). The per-unit fused top ratio is judged against the live ``0x09`` word by the planner. No-op for a partial profile."""
+        if not self.complete:
+            return
+        units: dict[str, int] = {}
+        for i, e in enumerate(self.entries):
+            try:
+                unit = topology.unit_of_cpu(topology.resolve(e.kind, e.index).cpu)
+            except UnknownCore as exc:
+                raise ProfileError(f"complete profile: entries[{i}] {e.kind}-Core {e.index} is not in this CPU's topology ({exc}); it was made on another CPU") from None
+            if unit in units:
+                raise ProfileError(f"complete profile: unit {unit} appears twice (entries[{units[unit]}] and entries[{i}]); a complete profile has one [[core]] per unit")
+            units[unit] = i
+        missing = [u for u in topology.unit_ids() if u not in units]
+        if missing:
+            raise ProfileError(f"complete profile: no [[core]] for {', '.join(missing)}; it was made on another CPU layout (a complete profile names every unit)")
 
     def check_clusters(self, topology: Topology) -> None:
         """The cluster rule (E entries of one cluster of ``topology`` are identical); ``ProfileError`` otherwise. Done where a profile meets a topology."""
@@ -257,6 +304,7 @@ class Profile:
                     ratio=e.ratio,
                     oc_voltage_mv=e.oc_voltage_mv,
                     offset_mv=e.offset_mv,
+                    fused_top_ratio=e.fused_top_ratio,
                 )
             )
         return tuple(out)
@@ -292,8 +340,8 @@ def _check_setting(
         )
 
 
-def _values(e: CoreSetting) -> tuple[int | None, int | None, int | None]:
-    return (e.ratio, e.oc_voltage_mv, e.offset_mv)
+def _values(e: CoreSetting) -> tuple[int | None, int | None, int | None, int | None]:
+    return (e.ratio, e.oc_voltage_mv, e.offset_mv, e.fused_top_ratio)
 
 
 def _describe(e: CoreSetting) -> str:
@@ -335,6 +383,40 @@ def _check_clusters(entries: tuple[CoreSetting, ...], label: str, topology: Topo
                 f"{label}[{i}] E-Core {e.index} ({_describe(e)}); E-cores of one cluster share a regulator, "
                 "so their entries must be identical"
             )
+
+
+def _check_complete_shape(profile: Profile) -> None:
+    """G-148: the topology-free rules of a complete profile: every ``[[core]]`` has ``fused_top_ratio`` and an explicit ``offset_mv``; the ``[[point]]`` entries of a unit
+    are its points 1..n (no gap), each with ``expect_ratio``, ratios rising, the last one at the unit's ``fused_top_ratio`` (so every fused point is present); every point
+    belongs to a ``[[core]]`` of the profile; the turbo tables are both present or both absent."""
+    cores = {(e.kind, e.index): e for e in profile.entries}
+    if not cores:
+        raise ProfileError("complete profile: no [[core]] entries (a complete profile has one per unit)")
+    by_core: dict[tuple[str, int], list[PointSetting]] = {}
+    for p in profile.points:
+        if (p.kind, p.index) not in cores:
+            raise ProfileError(f"complete profile: [[point]] {p.kind}-Core {p.index} point {p.point} has no [[core]] entry of its own (one per unit)")
+        by_core.setdefault((p.kind, p.index), []).append(p)
+    for (kind, index), e in cores.items():
+        where = f"complete profile: {kind}-Core {index}"
+        if e.fused_top_ratio is None:
+            raise ProfileError(f"{where}: fused_top_ratio is missing (a complete profile names the top fused ratio of every unit)")
+        if e.offset_mv is None:
+            raise ProfileError(f"{where}: offset_mv is missing (a complete profile states every offset, 0 included)")
+        pts = sorted(by_core.get((kind, index), []), key=lambda p: p.point)
+        if not pts:
+            raise ProfileError(f"{where}: no [[point]] entries (a complete profile lists every fused point)")
+        if [p.point for p in pts] != list(range(1, len(pts) + 1)):
+            raise ProfileError(f"{where}: points {[p.point for p in pts]} are not 1..{len(pts)} (a complete profile lists every fused point)")
+        ratios = [p.expect_ratio for p in pts]
+        if any(r is None for r in ratios):
+            raise ProfileError(f"{where}: every point of a complete profile needs expect_ratio")
+        if any(b <= a for a, b in zip(ratios, ratios[1:])):  # type: ignore[operator]
+            raise ProfileError(f"{where}: point ratios {ratios} do not rise")
+        if ratios[-1] != e.fused_top_ratio:
+            raise ProfileError(f"{where}: the last point is at ratio {ratios[-1]}, not at the top fused ratio {e.fused_top_ratio} (a fused point is missing)")
+    if profile.turbo is not None and (profile.turbo.e is None) != (profile.turbo.p is None):
+        raise ProfileError("complete profile: [turbo] has one table; a complete profile carries both (e and p) or neither")
 
 
 def _check_points(points: tuple[PointSetting, ...], label: str) -> None:
@@ -389,7 +471,10 @@ def _parse_core(i: int, table: object) -> CoreSetting:
     kind, index = table["kind"], table["index"]
     ratio, oc, off = (table.get(k) for k in _SETTING_KEYS)
     _check_setting(where, kind, index, ratio, oc, off)
-    return CoreSetting(kind, index, ratio, oc, off)  # type: ignore[arg-type]
+    top = table.get("fused_top_ratio")
+    if top is not None:
+        _check_int(where, "fused_top_ratio", top, *RATIO_RANGE, f" ({RATIO_SOURCE})")
+    return CoreSetting(kind, index, ratio, oc, off, top)  # type: ignore[arg-type]
 
 
 def _parse_point(i: int, table: object) -> PointSetting:
@@ -430,7 +515,7 @@ def _parse(text: str, topology: Topology | None = None) -> Profile:
     if not isinstance(meta, dict):
         raise ProfileError(f"meta: expected a table, got {type(meta).__name__}")
     _reject_unknown("meta", meta, _META_KEYS)
-    for key in _META_KEYS:
+    for key in _META_REQUIRED:
         if key not in meta:
             raise ProfileError(f"meta: missing required key {key!r}")
     name = meta["name"]
@@ -452,11 +537,15 @@ def _parse(text: str, topology: Topology | None = None) -> Profile:
     entries = tuple(_parse_core(i, table) for i, table in enumerate(cores))
     points = tuple(_parse_point(i, table) for i, table in enumerate(raw_points or []))
     turbo = _parse_turbo(doc.get("turbo"))
+    complete = meta.get("complete", False)
+    if not isinstance(complete, bool):
+        raise ProfileError(f"meta.complete: expected true or false, got {complete!r}")
     _check_entries(entries, "core", points, turbo_only_ok=turbo is not None)
     _check_points(points, "point")
-    profile = Profile(name=name, entries=entries, turbo=turbo, points=points)
+    profile = Profile(name=name, entries=entries, turbo=turbo, points=points, complete=complete)
     if topology is not None:
         profile.check_clusters(topology)
+        profile.check_complete(topology)
     return profile
 
 

@@ -575,45 +575,48 @@ class ResetRestoreTests(TuneCase):
         self.assertEqual(error_code(r), "REFUSED")
         self.assertEqual(r["error"]["detail"]["check"], "NO_READ")
 
-    def test_restore_accepted_merges_the_chain_and_applies(self) -> None:
-        acc = self.accepted_dir("e-mini", "p-mini")
-        (acc / "profiles/e-mini.toml").write_text(
-            '[meta]\nname = "e-mini"\nplatform = "arl-s-285k"\n[[point]]\nkind = "E"\nindex = 0\npoint = 6\noffset_mv = -35\nexpect_ratio = 46\n'
-        )
-        (acc / "profiles/p-mini.toml").write_text(
-            '[meta]\nname = "p-mini"\nplatform = "arl-s-285k"\n[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -50\nexpect_ratio = 53\n'
+    def test_restore_accepted_applies_the_one_profile(self) -> None:
+        acc = self.accepted_dir("mini")
+        (acc / "profiles/mini.toml").write_text(  # a partial profile accepted before G-148: still restorable, as a delta
+            '[meta]\nname = "mini"\nplatform = "arl-s-285k"\n[[point]]\nkind = "E"\nindex = 0\npoint = 6\noffset_mv = -35\nexpect_ratio = 46\n'
+            '[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -50\nexpect_ratio = 53\n'
             '[[point]]\nkind = "P"\nindex = 0\npoint = 6\noffset_mv = -28\nexpect_ratio = 55\n'
         )
         h = self.boot(accepted_dir=acc)
         plan = self.plan(h, {"restore": "accepted"})  # no tune.read needed: the points carry expect_ratio
         self.assertTrue(any("no tune.read" in w for w in texts(plan)))
+        self.assertTrue(any("accepted profile mini" in w for w in texts(plan)), texts(plan))
         self.assertEqual(sorted(plan["units"]), ["EC0", "P0"])
         self.apply_ok(h, plan)
         self.assertEqual(self.word(0, 6).offset_raw, VfWord.mv_to_offset_raw(-28))
         self.assertEqual({self.word(c, 6).offset_raw for c in range(8, 12)}, {VfWord.mv_to_offset_raw(-35)})
 
-    def test_restore_accepted_later_profile_overrides_the_earlier_one(self) -> None:
+    def test_an_older_chain_is_refused_with_the_migrate_hint(self) -> None:  # G-148 (D-044): a chain is never replayed
         acc = self.accepted_dir("first", "second")
         head = '[meta]\nname = "n"\nplatform = "arl-s-285k"\n'
         (acc / "profiles/first.toml").write_text(head + '[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -10\nexpect_ratio = 53\n')
         (acc / "profiles/second.toml").write_text(head + '[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -50\nexpect_ratio = 53\n')
         h = self.boot(accepted_dir=acc)
-        plan = self.plan(h, {"restore": "accepted"})
-        self.assertAlmostEqual(plan["after"]["P0"]["5"]["offset_mv"], VfWord.mv_to_offset_raw(-50) * 1000 / 1024, places=2)
+        r = h.call("r", "tune.plan", {"intent": {"restore": "accepted"}})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "ACCEPTED_CHAIN"))
+        self.assertIn("accepted-migrate", r["error"]["message"])
+        self.assertIn("first, second", r["error"]["message"])
+        self.assertEqual(self.sim.requests, [])
 
-    def test_the_repos_own_accepted_chain_plans_cleanly(self) -> None:
+    def test_the_repos_own_accepted_example_plans_cleanly(self) -> None:
         acc = self.tmp / "accepted"
         (acc / "profiles").mkdir(parents=True)
         shutil.copy(REPO / "examples/reference-285k/profiles/CURRENT", acc / "CURRENT")
-        for line in (REPO / "examples/reference-285k/profiles/CURRENT").read_text().splitlines():
-            if line.startswith("profile"):
-                rel = line.split("=", 1)[1].strip()
-                shutil.copy(REPO / "examples/reference-285k" / rel, acc / rel)
+        lines = [line for line in (REPO / "examples/reference-285k/profiles/CURRENT").read_text().splitlines() if line.startswith("profile")]
+        self.assertEqual(len(lines), 1)  # G-148: one complete profile, no chain
+        rel = lines[0].split("=", 1)[1].strip()
+        shutil.copy(REPO / "examples/reference-285k" / rel, acc / rel)
         h = self.boot(accepted_dir=acc)
+        self.read(h)
         plan = self.plan(h, {"restore": "accepted"})
+        self.assertTrue(plan["complete"])
         self.assertEqual(set(plan["after"]), {*(f"P{i}" for i in range(8)), *(f"EC{i}" for i in range(4))})
         self.assertEqual(plan["after"]["P0"]["5"]["offset_mv"], round(VfWord.mv_to_offset_raw(-50) * 1000 / 1024, 3))  # p-step7: 53x -50 on all P
-        self.assertTrue(any("e-p6-split3, p-boot-ramp, p-step7" in w for w in texts(plan)))
 
     def test_restore_without_accepted_state_is_a_named_refusal(self) -> None:
         h = self.boot()
@@ -631,7 +634,8 @@ class ProfilesTests(TuneCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["result"]["source"], "saved")
         listed = h.call("l", "profiles.list", {})["result"]["profiles"]
-        self.assertIn({"name": "my-p3", "source": "saved", "created": r["result"]["created"]}, listed)
+        self.assertEqual(r["result"]["complete"], True)  # G-148: the read of every unit with the edit over it
+        self.assertIn({"name": "my-p3", "source": "saved", "created": r["result"]["created"], "complete": True}, listed)
         plan = self.plan(h, {"profile": "my-p3"})
         self.assertTrue(any("saved profile my-p3" in w for w in texts(plan)))
         self.apply_ok(h, plan)
@@ -639,6 +643,7 @@ class ProfilesTests(TuneCase):
 
     def test_never_overwritten(self) -> None:
         h = self.boot()
+        self.read(h)  # G-148: a saved profile is complete, so saving needs this boot's read
         intent = rows(row("P3", curve=-10))
         self.assertTrue(h.call("s1", "profiles.save", {"name": "a", "intent": intent})["ok"])
         r = h.call("s2", "profiles.save", {"name": "a", "intent": rows(row("P3", curve=-20))})
