@@ -102,6 +102,15 @@ class TestBrowser(unittest.TestCase):
             self.assertEqual(page.locator("#pr-list li").count(), 1)   # only the saved profile
             self.assertEqual([r["op"] for r in fake.requests if r["op"] in ("tune.plan", "tune.apply", "profiles.accept")], [])
 
+    # ---- G-147: a residual OC point is equivalent, not a difference ----
+    def test_a_residual_oc_point_is_equivalent_and_the_comparison_says_why(self):
+        with self.session(prepare=lambda f: setattr(f, "residual_equivalent", ("EC1",)), chain=True) as (page, fake):
+            self.read(page)
+            text = page.inner_text("#acc-summary")
+            self.assertIn("Matches the accepted state on all 12 compared cores.", text)
+            self.assertIn("equivalent: residual OC point (cleared by a cold boot); voltages as accepted", text)
+            self.assertNotIn("Differs", text)
+
     # ---- 2. Set as accepted ----
     def test_set_as_accepted_confirms_then_calls_the_helper_and_restore_comes_alive(self):
         with self.session(prepare=lambda f: setattr(f, "no_accepted", True)) as (page, fake):

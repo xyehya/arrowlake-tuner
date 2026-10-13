@@ -551,3 +551,58 @@ class NeutralOcWordTests(unittest.TestCase):
         self.assertFalse(eq(12, 0x0, 0x48C30))      # an OC point at 48x (above the fused 46x)
         self.assertFalse(eq(0, 0x39, 0xFEC00039))   # offset on P0
         self.assertFalse(equivalent(None, 0x39, 0x5B439))  # the core's 0x09 word was not read: nothing is judged equivalent
+        self.assertTrue(eq(16, 0x0, 0x48C2E))       # G-147: ratio 46 = top with the fused voltage as target (XTU shape, a stale target of a warm reboot): no OC point, same word as 0
+        self.assertFalse(eq(16, 0x0, 0x48D2E))      # a target above the fused voltage is not neutral
+
+
+class ResidualOcPointCompareTests(HelperCase):
+    """G-147: a residual OC point (cleared by a cold boot only) that runs the accepted voltages is EQUIVALENT; a real difference stays one."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.accepted = self.tmp / "accepted"
+        self.accepted.mkdir()
+        self.file = self.accepted / ACCEPTED_FILE
+
+    def helper(self, **overrides: Any) -> Helper:
+        cfg = self.config(**overrides)
+        cfg.accepted_dir = self.accepted  # type: ignore[attr-defined]
+        return Helper(cfg)
+
+    def write(self, text: str, mode: int = 0o644) -> None:
+        self.file.write_text(text, encoding="utf-8", newline="\n")
+        os.chmod(self.file, mode)
+
+    POINTS = (0x8, 0xF, 0x17, 0x1E, 0x28, 0xFE60002E)  # 46x point at -25 mV (raw -26)
+    WANT = "12 0 8 F 17 1E 28 FE60002E\n"
+
+    def doc(self, oc: int, *points: int) -> dict[str, Any]:
+        return {"units": [{"cpus": [{"cpu": 12, "oc": {"word": f"{oc:#010x}"}, "points": [{"word": f"{p:#010x}"} for p in points], "end": "x"}]}]}
+
+    def match(self, oc: int, *points: int) -> dict[str, Any]:
+        self.write(self.WANT)
+        result, note = accepted_match(self.helper(), self.doc(oc, *points), {12: 0x48C2E})
+        self.assertIsNone(note)
+        assert result is not None
+        return result[0]
+
+    def test_neutralised_ec1_is_equivalent_with_the_note_and_the_extra_point(self) -> None:
+        entry = self.match(0x46630, *self.POINTS, 0x30)
+        self.assertEqual((entry["match"], entry["diffs"], entry["equivalent"]), (True, [], True))
+        self.assertEqual([e["point"] for e in entry["equivalents"]], [0, 7])
+        self.assertTrue(all(e["residual"] and e["note"] == "residual OC point (cleared by a cold boot); voltages as accepted" for e in entry["equivalents"]))
+
+    def test_the_unneutralised_residual_with_the_high_target_is_still_a_difference(self) -> None:
+        entry = self.match(0x48C30, *self.POINTS, 0x30)  # target 1.137 V > the accepted 1.1112 V point
+        self.assertFalse(entry["match"])
+        self.assertNotIn("equivalent", entry)
+
+    def test_ec2_oc_word_with_the_fused_target_at_the_top_ratio_is_equivalent_to_word_0(self) -> None:
+        entry = self.match(0x48C2E, *self.POINTS)
+        self.assertEqual((entry["match"], entry["equivalent"]), (True, True))
+        self.assertNotIn("residual", entry["equivalents"][0])  # the older kind: no OC point at all
+
+    def test_a_different_offset_or_point_is_not_equivalent(self) -> None:
+        for label, oc, points in (("offset", 0xFEC46630, self.POINTS), ("point 6 lost its offset", 0x46630, (*self.POINTS[:-1], 0x2E))):
+            with self.subTest(label):
+                self.assertFalse(self.match(oc, *points, 0x30)["match"])

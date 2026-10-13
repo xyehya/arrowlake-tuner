@@ -167,7 +167,7 @@ class ZeroFieldKnob(Rig):
         self.assertFalse(SimConfig().reject_zero_fields)
         self.assertFalse(SimConfig.measured().reject_zero_fields)
         self.assertEqual(self.tx(1, WR_VF, 0, 0, 0xFF000038).rc, Rc.Pass)  # V target 0, offset -5
-        self.assertEqual(self.tx(1, WR_VF, 0, 0, 0xFF053800).rc, Rc.Pass)  # ratio 0
+        self.assertEqual(self.tx(2, WR_VF, 0, 0, 0xFF053800).rc, Rc.Pass)  # ratio 0 (on a CPU that holds no OC ratio yet: G-147, a held OC ratio cannot be written back to 0)
 
     def test_on_it_rejects_ratio_zero_and_v_target_zero_in_domain_0_only(self) -> None:
         self.use(reject_zero_fields=True)
@@ -351,6 +351,47 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual(port.favored_word(8), 46 << 8 | 48)
         self.assertEqual(port.granular_word(4), 3)
         self.assertEqual(dataclasses.replace(SimConfig(), granular_default=5).granular_default, 5)
+
+
+class ResidualOcPointModel(Rig):
+    """G-147 [MEASURED lnx 2026-10-11/13]: an OC ratio cannot be written back to 0; a target below the top fused point is clamped up; a 0x1D moves cpuinfo_max_freq."""
+
+    def test_a_held_oc_ratio_cannot_be_written_back_to_zero_but_a_new_port_is_a_cold_boot(self) -> None:
+        self.assertEqual(self.tx(12, WR_VF, 0, 0, 0x00048C30).rc, Rc.Pass)  # EC1: 48x (> the fused 46) + 1.137 V
+        for word in (0x0, 0x00048C00, 0xFF000000):
+            with self.subTest(word=hex(word)):
+                self.assertEqual(self.tx(12, WR_VF, 0, 0, word).rc, Rc.InvalidParam)
+                self.assertEqual(self.tx(12, RD_VF).data, 0x00048C30)  # the word stays
+        self.assertEqual(self.tx(12, WR_VF, 0, 0, 0x00046630).rc, Rc.Pass)  # a non-zero ratio can always be rewritten
+        self.use()  # a cold boot
+        self.assertEqual(self.tx(12, RD_VF).data, 0)
+
+    def test_the_knob_is_off_in_the_plain_simulator(self) -> None:
+        self.assertFalse(SimConfig().sticky_oc_ratio)
+        self.assertTrue(SimConfig.measured().sticky_oc_ratio)
+        port = SimMsrPort(SimConfig(per_core_requires_enable=False))
+        mailbox = MailboxTransport(port, sleep=self.fc.sleep, clock=self.fc.clock, timeout_s=1.0)
+        self.assertEqual(mailbox.transact(1, WR_VF, 0, 0, 0xFF000038).rc, Rc.Pass)
+        self.assertEqual(mailbox.transact(1, WR_VF, 0, 0, 0xFF053800).rc, Rc.Pass)
+
+    def test_an_oc_target_below_the_top_point_runs_at_the_top_point(self) -> None:
+        self.use(per_point=True, cpu_point_offsets={(12, 6): VfWord.mv_to_offset_raw(-25)})
+        self.assertEqual(self.port.oc_point_voltage_raw(12), 0)  # no OC point yet
+        self.tx(12, WR_VF, 0, 0, 0x00046630)  # 48x, 1.100 V: below the top point (1.137 V - 25 mV = 1.1125 V)
+        self.assertEqual(self.port.oc_point_voltage_raw(12), 0x48C + VfWord.mv_to_offset_raw(-25))
+        self.tx(12, WR_VF, 0, 0, 0x00049730)  # 1.147 V: above it, the target is the voltage
+        self.assertEqual(self.port.oc_point_voltage_raw(12), 0x497)
+        self.tx(12, WR_VF, 0, 0, 0x2E)  # back to the top fused ratio: no OC point
+        self.assertEqual(self.port.oc_point_voltage_raw(12), 0)
+
+    def test_a_0x1d_below_the_favored_ratio_lowers_cpuinfo_max_freq(self) -> None:
+        seen: list[tuple[int, int]] = []
+        self.port.on_favored_write = lambda cpu, khz: seen.append((cpu, khz))
+        self.assertEqual(self.port.cpuinfo_max_khz(16), 4_900_000)  # E: 48x reads 4.9 GHz
+        self.assertEqual(self.tx(16, WR_FAV, 0, 0, 46).rc, Rc.Pass)
+        self.assertEqual((self.port.cpuinfo_max_khz(16), seen), (4_700_000, [(16, 4_700_000)]))
+        self.assertEqual(self.tx(16, WR_FAV, 0, 0, 48).rc, Rc.Pass)
+        self.assertEqual(self.port.cpuinfo_max_khz(16), 4_900_000)
 
 
 if __name__ == "__main__":

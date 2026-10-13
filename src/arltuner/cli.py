@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any, NoReturn, TextIO
 
 from arltuner import vfdump
+from arltuner.controls import cpufreq as cpufreq_rules
+from arltuner.controls import residual
 from arltuner.controls import (
     ApplyPlan,
     ApplyReport,
@@ -320,7 +322,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
         out=out,
         err=err,
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{topology,plan,apply,read-vf,read,vf-dump,point-offset}")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{topology,plan,apply,read-vf,read,vf-dump,point-offset,compare-accepted}")
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
@@ -363,6 +365,19 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
     mode.add_argument("--sim", action="store_true", help="run against the software simulator")
     mode.add_argument("--device", action="store_true", help="run against /dev/cpu/N/msr (hardware; a mailbox read is a WRMSR)")
     mode.add_argument("--device-win", action="store_true", help=WIN_HELP)
+    p_apply.add_argument(
+        "--neutralize-residual",
+        action="store_true",
+        help="restore of the accepted state (G-147): first read the OC word of every unit the accepted state gives no OC ratio and rewrite a residual OC point (an OC ratio "
+        "above the top fused ratio that only a cold boot clears) with a V target below the accepted top fused point, so it runs the accepted voltages; costs 2 reads per unit",
+    )
+    p_apply.add_argument(
+        "--accepted-before",
+        metavar="PROFILE.toml",
+        action="append",
+        default=[],
+        help="with --neutralize-residual: a profile of the accepted chain applied before this one (repeatable); its OC ratios count as accepted",
+    )
     common(p_apply)
 
     p_read = sub.add_parser("read-vf", out=out, err=err, help="ONE guarded cmd 0x10 read on one CPU (the T-007 instrument)")
@@ -418,6 +433,16 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
     mode.add_argument("--device", action="store_true", help="/dev/cpu/N/msr (hardware; a mailbox read is a WRMSR)")
     mode.add_argument("--device-win", action="store_true", help=WIN_HELP)
     common(p_dump)
+
+    p_cmp = sub.add_parser(
+        "compare-accepted",
+        out=out,
+        err=err,
+        help="read-only, no hardware: compare a vf-dump --json read-back with EXPECTED-words.txt (the restore scripts' verdict; a residual OC point that runs the accepted voltages is EQUIVALENT)",
+    )
+    p_cmp.add_argument("--readback", metavar="FILE", required=True, help="JSON written by 'vf-dump --json'")
+    p_cmp.add_argument("--expected", metavar="FILE", required=True, help="the accepted state's EXPECTED-words.txt")
+    p_cmp.add_argument("--fingerprint", dest="fingerprint_file", metavar="FILE", help="the accepted state's fingerprint.json (its fused 0x09 words decide what is a residual OC point; without it only identical words match)")
     return parser
 
 
@@ -866,8 +891,13 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
         _identity_policy_check(ctx, policy)
         plan_policy = dataclasses.replace(policy, max_operations_per_session=policy.max_operations_per_session - _identity_ops(ctx))
         extra_ops = _identity_ops(ctx)
+    accepted_before = [_load_profile_or_exit(ctx, path) for path in args.accepted_before]
+    if accepted_before and not args.neutralize_residual:
+        ctx.fail(EXIT_USAGE, "--accepted-before only applies with --neutralize-residual")
+    scan = residual.scan_plan(profile, accepted_before, topology, plan_policy) if args.neutralize_residual else ()
+    boot_used = _boot_ops_used(ctx, args.audit) + extra_ops
     try:
-        preflight(profile, topology, plan_policy, boot_ops_used=_boot_ops_used(ctx, args.audit) + extra_ops)
+        preflight(profile, topology, plan_policy, boot_ops_used=boot_used, extra_ops=len(scan))
     except PreflightError as exc:
         ctx.refuse(f"{exc}")
     except (ProfileError, PlanError) as exc:
@@ -878,6 +908,8 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
         if device:
             targets = resolve_targets(profile, topology)
             ctx.say(format_preview(profile.name, targets, policy, profile.turbo, resolve_point_targets(profile, topology)))
+            if scan:
+                ctx.say(f"restore: {len(scan)} extra reads first look for a residual OC point in the {len(scan) // residual.SCAN_READS_PER_UNIT} units the accepted state gives no OC ratio.")
         else:
             sim = ctx.sim_factory()
             plan = _sim_plan(ctx, sim, profile, topology, policy)
@@ -899,6 +931,8 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
         confirm = Confirmation(typed, _operator(ctx, args.operator))
         if ctx.win:
             _identity_check(ctx, guard, confirm, sleep, policy.min_dwell_s, audit.path, port)
+        caps = _cpufreq_view(ctx, device)  # G-147: scaling_max_freq follows a cpuinfo_max_freq that a 0x1D moved (Linux hardware only)
+        caps_before = cpufreq_rules.snapshot(caps, [c.cpu for c in topology.cores]) if caps is not None else {}
         try:
             report = apply_profile(
                 profile,
@@ -909,6 +943,9 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
                 sleep=sleep,
                 clock=clock,
                 progress=ctx.say,
+                neutralize_residual=bool(args.neutralize_residual),
+                accepted_before=accepted_before,
+                boot_ops_used=boot_used,
             )
         except PreflightError as exc:
             partial = exc.report
@@ -923,10 +960,120 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
             revert = guard.revert_plan()
             ctx.warn("\n".join(format_revert_plan(revert) if revert else ["No write had been executed, so there is nothing to revert."]))
             raise _Done(EXIT_HARDWARE) from None
+        if caps is not None:
+            _follow_caps(ctx, caps, caps_before, report, sleep)
     finally:
         _close(port)
     ctx.say(report.format_report())
     return _exit_code_of(report)
+
+
+class _CapView:
+    """``controls.cpufreq.CpufreqView`` over the CLI's cpufreq I/O (``vfdump.MeasureIO``: ``scaling_max_freq`` and ``cpuinfo_max_freq`` of a CPU, in kHz)."""
+
+    def __init__(self, io: vfdump.MeasureIO) -> None:
+        self._io = io
+
+    def read(self, cpu: int, attr: str) -> str | None:
+        if attr == cpufreq_rules.CAP_ATTR:
+            return str(self._io.read_cap(cpu))
+        if attr == cpufreq_rules.MAX_ATTR:
+            return str(self._io.read_max_khz(cpu))
+        return None
+
+    def write(self, cpu: int, attr: str, value: str) -> None:
+        if attr != cpufreq_rules.CAP_ATTR:
+            raise ValueError(f"only {cpufreq_rules.CAP_ATTR} is written, not {attr}")
+        self._io.write_cap(cpu, int(value))
+
+
+def _cpufreq_view(ctx: _Ctx, device: bool) -> _CapView | None:
+    """The cpufreq view of an ``apply --device`` on Linux; ``None`` for a simulator, Windows, or a test run that injected a port but no cpufreq I/O (a test never touches the
+    real sysfs)."""
+    if not device or ctx.win:
+        return None
+    if ctx.measure_io_factory is not None:
+        return _CapView(ctx.measure_io_factory())
+    return _CapView(_default_measure_io()) if ctx.device_port_factory is _default_device_port else None
+
+
+def _follow_caps(ctx: _Ctx, caps: _CapView, before: Mapping[int, tuple[int | None, int | None]], report: Any, sleep: Callable[[float], object]) -> None:
+    """G-126 / G-147 (``controls.cpufreq``, shared with the helper's ``tune.apply``): after a COMPLETE apply that wrote a 0x1D, ``scaling_max_freq`` of a CPU that sat at the
+    old ``cpuinfo_max_freq`` follows the new one; a cap the user lowered below the old maximum is never raised. A partial apply leaves the caps as they are."""
+    favored, vf_only = cpufreq_rules.oc_ratio_cpus(report)
+    if not favored and not vf_only:
+        return
+    if not report.ok:
+        if favored:
+            ctx.warn("the apply did not complete, so scaling_max_freq was not adjusted to the OC ratios that did land.")
+        return
+    warnings: list[str] = []
+    rows = cpufreq_rules.lift(caps, before, favored, vf_only, warnings, poll=cpufreq_rules.POLL, wait=sleep)
+    for row in rows:
+        if row["before_khz"] != row["after_khz"]:
+            ctx.say(f"cpufreq: cpu {row['cpu']} scaling_max_freq {row['before_khz']} -> {row['after_khz']} kHz (follows cpuinfo_max_freq)")
+    for text in warnings:
+        ctx.warn(f"warning: {text}")
+
+
+def _read_expected(path: Path) -> dict[int, list[int]]:
+    out: dict[int, list[int]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cpu, *words = line.split()
+        out[int(cpu)] = [int(w, 16) for w in words]
+    return out
+
+
+def _cmd_compare_accepted(ctx: _Ctx, args: argparse.Namespace) -> int:
+    """G-147: the verdict of the restore scripts, in one place (Linux ``restore_tuning.sh`` and Windows ``restore_tuning.ps1``). Reads two files (and a third optional one),
+    sends nothing. Exit 0 when no unit is BAD (an EQUIVALENT unit is a success), 2 otherwise, 1 on unreadable input."""
+    try:
+        doc = json.loads(Path(args.readback).read_text(encoding="utf-8"))
+        expected = _read_expected(Path(args.expected))
+        got: dict[int, list[int]] = {}
+        for unit in doc["units"]:
+            cpu = unit["cpus"][0]
+            got[int(cpu["cpu"])] = [int(w, 16) for w in [cpu["oc"]["word"]] + [p["word"] for p in cpu["points"]]]
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        ctx.fail(EXIT_USAGE, f"cannot read the inputs: {type(exc).__name__}: {exc}")
+    if not expected:
+        ctx.fail(EXIT_USAGE, f"{args.expected} holds no words")
+    fused: Mapping[int, int] = {}
+    if args.fingerprint_file:
+        try:
+            fp = load_fingerprint(Path(args.fingerprint_file))
+            fused = {c.cpu: c.word for c in fp.cpus if c.word is not None}
+        except (FingerprintError, OSError) as exc:
+            ctx.warn(f"note: {args.fingerprint_file} unusable ({exc}); only identical words match.")
+    bad = equivalent = 0
+    for cpu, want in expected.items():
+        have = got.get(cpu)
+        if have is None:
+            bad += 1
+            ctx.say(f"  cpu{cpu:<3}BAD <missing>")
+            ctx.say(f"         want {' '.join(f'{w:X}' for w in want)}")
+            continue
+        verdict, note = residual.compare_words(fused.get(cpu), want, have)
+        text = " ".join(f"{w:X}" for w in have)
+        if verdict == "ok":
+            ctx.say(f"  cpu{cpu:<3}OK  {text}")
+        elif verdict == "equivalent":
+            equivalent += 1
+            ctx.say(f"  cpu{cpu:<3}EQUIVALENT {text}")
+            ctx.say(f"         {note}")
+            ctx.say(f"         accepted {' '.join(f'{w:X}' for w in want)}")
+        else:
+            bad += 1
+            ctx.say(f"  cpu{cpu:<3}BAD {text}")
+            ctx.say(f"         want {' '.join(f'{w:X}' for w in want)}")
+    if bad:
+        ctx.say(f"STOP: {bad} core(s)/cluster(s) differ - report; cold boot = stock")
+        return EXIT_REFUSED
+    extra = f" ({equivalent} equivalent: {residual.RESIDUAL_NOTE})" if equivalent else ""
+    ctx.say(f"RESTORED: all {len(expected)} cores/clusters match the accepted state{extra}.")
+    return EXIT_OK
 
 
 def _cmd_read_vf(ctx: _Ctx, args: argparse.Namespace) -> int:
@@ -1318,6 +1465,7 @@ _COMMANDS: dict[str, Callable[[_Ctx, argparse.Namespace], int]] = {
     "read": _cmd_read,
     "vf-dump": _cmd_vf_dump,
     "point-offset": _cmd_point_offset,
+    "compare-accepted": _cmd_compare_accepted,
 }
 
 

@@ -579,6 +579,10 @@ class V3Ops:
                                                      "point_label": f"OC (point {n})"})
         match = [{"cpu": UNIT_CPUS[u][0], "match": self.tuning[u] == self.accepted[u],
                   "diffs": [] if self.tuning[u] == self.accepted[u] else [{"point": 1, "expected": "0x0", "actual": "0x1"}]} for u in UNITS]
+        for entry, u in zip(match, UNITS):  # G-147: units that hold a residual OC point which runs the accepted voltages are equivalent (the real helper's accepted_match shape)
+            if u in getattr(self, "residual_equivalent", ()):
+                entry.update(match=True, diffs=[], equivalent=True, equivalents=[
+                    {"point": 0, "expected": "0x00000000", "actual": "0x00046630", "residual": True, "note": "residual OC point (cleared by a cold boot); voltages as accepted"}])
         if self.no_accepted:
             match = None
         fused = {str(UNIT_CPUS[u][0]): fused_of(u) for u in UNITS}

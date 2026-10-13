@@ -3740,8 +3740,16 @@
     if (m === null) { sum.textContent = noAcceptedYet(w) ? NO_ACCEPTED_TEXT + "." : "There is nothing to compare with" + (w.acceptedNote ? ": " + w.acceptedNote : ".") + (w.acceptedNote && !/[.]$/.test(w.acceptedNote) ? "." : ""); return; }
     if (!Array.isArray(m)) { sum.textContent = "The accepted-state comparison has an unexpected shape."; return; }
     const bad = m.filter((x) => !isObj(x) || x.match !== true);
+    // G-147: a residual OC point (an OC ratio the accepted state lacks; only a cold boot clears it) that runs the accepted voltages is equivalent, not a difference.
+    const resid = m.filter((x) => isObj(x) && x.match === true && Array.isArray(x.equivalents) && x.equivalents.some((e) => isObj(e) && e.residual === true));
+    let residNote = "";
+    if (resid.length > 0) {
+      const first = resid[0].equivalents.find((e) => isObj(e) && e.residual === true);
+      const text = isObj(first) && typeof first.note === "string" ? first.note : "residual OC point (cleared by a cold boot); voltages as accepted";
+      residNote = " " + (resid.length === 1 ? "cpu " + resid[0].cpu + " is" : "cpu " + resid.map((x) => x.cpu).join(", ") + " are") + " equivalent: " + text + ".";
+    }
     sum.textContent = (bad.length === 0 ? "Matches the accepted state on all " + m.length + " compared cores." : "Differs from the accepted state on " + bad.length + " of " + m.length + " cores: cpu " +
-      bad.map((x) => (isObj(x) ? x.cpu : "?")).join(", ") + ".") + (w.complete ? "" : " The read was incomplete, so cores that were not read are missing.");
+      bad.map((x) => (isObj(x) ? x.cpu : "?")).join(", ") + ".") + residNote + (w.complete ? "" : " The read was incomplete, so cores that were not read are missing.");
   }
 
   // ---- gate and buttons ------------------------------------------------------------------------------------------------------------------------

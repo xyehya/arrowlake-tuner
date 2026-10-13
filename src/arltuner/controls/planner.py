@@ -59,7 +59,7 @@ predicted refusal is exactly what the guard would answer (the guard stays author
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from arltuner.guard import CHECKS, MSR_CHECKS, AllowEntry, MsrAllowEntry, MsrRequest, Policy, Refusal, Request
@@ -696,6 +696,7 @@ def build_plan(
     point_words: Mapping[tuple[int, int], int] | None = None,
     favored_words: Mapping[int, int] | None = None,
     oc_cap_words: Mapping[int, int] | None = None,
+    residual_cpus: Collection[int] = (),
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
 
@@ -709,6 +710,10 @@ def build_plan(
     an ``"auto"`` ``ratio_max`` is derived from them and from the baseline rows' words, nothing else.
 
     ``point_words`` (T-025): the ``0x10 P2=point`` word read for every ``[[point]]`` target, keyed ``(cpu, point)`` (else ``PlanError``).
+
+    ``residual_cpus`` (G-147): the CPUs whose row is a residual-OC-point neutralisation (``controls.residual``): the word keeps the ratio the CPU already holds, so no
+    ``0x1D`` / ``0x27`` is sent for them. G-147 also: a ``0x1D`` is never sent for a word whose ratio is at or below the top fused ratio and below the ``0x1C[7:0]`` read
+    before (it would lower the CPU's maximum, ``[MEASURED lnx 2026-10-13]``: ``0x1D`` = 46 took an E cluster from 48x / 4.9 GHz to 46x / 4.7 GHz).
 
     ``baseline`` maps every target CPU to its ``CoreReadings`` (0x10, 0x1C, 0x09, 0x26 and, for a profile with an OC-point voltage, 0x28).
     ``per_core_enabled``: ``True`` -> no 0x15 step, ``False`` -> a 0x15 step, ``None`` -> unknown: a conditional 0x15 step is included (worst
@@ -906,6 +911,18 @@ def build_plan(
             sent = word.to_u32()
         if t.ratio is None:
             continue  # G-122: an offset / V-target-only write sends no 0x1D (favored ratio) and no 0x27 (granular): its ratio field is the current one, not a ratio the user set -- 0x1D = 46 would likely cap E turbo at 46
+        favored_now = readings.favored & 0xFF
+        if t.cpu in residual_cpus:
+            continue  # G-147: a neutralised residual OC point rewrites the ratio the CPU already holds: nothing to restate in 0x1D / 0x27
+        if top is not None and not has_oc_point(top, goal.ratio) and current.ratio <= goal.ratio < favored_now:
+            # G-147: 0x1D is the CPU's maximum ratio, not a copy of the OC word. With no OC point (ratio <= the top fused ratio) a word whose ratio is the one in force (or above it)
+            # but still below the 0x1C[7:0] read before restates a fill, and sending it would LOWER the maximum (cpuinfo_max_freq 4.9 -> 4.7 GHz) [MEASURED lnx 2026-10-13: EC2 0x1D = 46
+            # with 0x1C[7:0] = 48]. The guard needs 0x1D == the 0x11 ratio, so the pair is not sent. A deliberate lowering below the ratio in force still sends its 0x1D.
+            oc_notes.append(
+                f"{t.label}: no 0x1D / 0x27 sent: ratio {goal.ratio} is at or below the top fused ratio {top}, not below the ratio in force ({current.ratio}), and below the favored "
+                f"ratio {favored_now} (0x1C[7:0]); a 0x1D would lower the CPU's maximum ratio"
+            )
+            continue
         ctx = build_context(policy, t.cpu, vf_word_sent=goal.to_u32(), **facts)
         purpose = f"apply: write favored-core word (0x1D) of {t.label} = ratio {goal.ratio} of the 0x11 word"
         req = Request(t.cpu, int(Cmd.FAVORED_CORE_WRITE), 0, 0, goal.ratio, purpose)
@@ -1014,19 +1031,23 @@ def _offset_problem(policy: Policy, cpu: int, offset_mv: int) -> str | None:
     return None
 
 
-def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_used: int = 0) -> tuple[Target, ...]:
+def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_used: int = 0, extra_ops: int = 0) -> tuple[Target, ...]:
     """Checks that need no hardware read, run before the first request of ``apply``: the worst-case WRMSR count (reads, writes and the
     guard's read-backs) against ``policy.max_operations_per_session`` (``NeedsHigherLimit``) and against what is left of this boot's budget
     ``policy.max_operations_per_boot - boot_ops_used`` (``NeedsBootBudget``; ``boot_ops_used`` = operations the audit log already records
     for this boot), CPU set / allowlist for every read and for the 0x11 / 0x1D / 0x27 writes, and every profile value against the
-    policy's explicit ceilings and the offset window (``PlanRefused``). Returns the targets. Sends nothing."""
+    policy's explicit ceilings and the offset window (``PlanRefused``). Returns the targets. Sends nothing.
+
+    ``extra_ops`` (G-147): further mailbox operations the run spends before this plan (the restore's residual-OC-point scan reads); added to the worst-case count."""
     if isinstance(boot_ops_used, bool) or not isinstance(boot_ops_used, int) or boot_ops_used < 0:
         raise ValueError(f"boot_ops_used must be a non-negative int, got {boot_ops_used!r}")
     targets = resolve_targets(profile, topology)
     point_targets = resolve_point_targets(profile, topology)
     tables = _turbo_tables(profile)
     n_oc = len(oc_cap_kinds(policy, targets, [MSR_TURBO_KIND[msr] for msr, _ in tables]))
-    required = count_operations(targets, None, len(tables), len(point_targets), n_oc)
+    if isinstance(extra_ops, bool) or not isinstance(extra_ops, int) or extra_ops < 0:
+        raise ValueError(f"extra_ops must be a non-negative int, got {extra_ops!r}")
+    required = count_operations(targets, None, len(tables), len(point_targets), n_oc) + extra_ops
     if required > policy.max_operations_per_session:
         raise NeedsHigherLimit(required, policy.max_operations_per_session)
     remaining = max(policy.max_operations_per_boot - boot_ops_used, 0)

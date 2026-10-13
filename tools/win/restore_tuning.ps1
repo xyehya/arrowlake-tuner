@@ -9,6 +9,9 @@
   read-back file the verdict is computed from - must sit in a directory only Administrators/SYSTEM can write (%ProgramData%\arltuner, locked down by
   'py -3 tools\win\ts_driver.py init-dir'). The script refuses a -From / -Policy directory that is not (ts_driver.py check-dir) and verifies the driver's SHA-256 and
   directory again right before 'sc start'. RESTORED is decided from the vf-dump read-back of THIS run (a JSON file in that directory), never from the audit file.
+  G-147: the last profile is applied with --neutralize-residual (a residual OC point the accepted state does not have, which only a cold boot clears, is rewritten with a V target below the
+  accepted top fused point so the unit runs the accepted voltage) and the verdict is 'arltuner compare-accepted': EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as
+  accepted") counts as success, only a real difference is BAD. There is no cpufreq on Windows: scaling_max_freq is a Linux-side step (restore_tuning.sh).
   DIR\fingerprint.json (written by 'Set as accepted' on Linux) tells this machine which cores are which: the Linux CPU -> Windows logical-processor map is derived at
   run time from Windows' own data and settled by guarded reads of the fused V/F point of every P-core. A state accepted before that existed has none: stop, re-accept on Linux.
   Steps: checks (admin, XtuService stopped, no OCCT/XTU, admin-only directories) -> one CONFIRM -> ts_driver.py start (service created for this run) -> [-Before: vf-dump] ->
@@ -114,7 +117,14 @@ try {
     foreach ($prof in $profiles) {
         $i++
         Write-Host "=== 2/3 apply $prof ($i/$($profiles.Count))"
-        Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) @('apply', $prof)
+        $applyArgs = @('apply', $prof)
+        if ($i -eq $profiles.Count) {
+            # G-147: the LAST profile also looks for a residual OC point (an OC ratio the accepted state does not have; only a cold boot clears it) and rewrites it with a V target
+            # below the accepted top fused point, so the unit runs the accepted voltage; the earlier profiles of the chain say which OC ratios ARE accepted.
+            $applyArgs += '--neutralize-residual'
+            for ($j = 0; $j -lt $i - 1; $j++) { $applyArgs += @('--accepted-before', $profiles[$j]) }
+        }
+        Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) $applyArgs
     }
     Write-Host "=== 3/3 read-back"
     # The verdict comes from THIS run's live read-back: vf-dump writes its own JSON (words as read from the CPU) into the admin-only directory - not from the
@@ -123,23 +133,14 @@ try {
     Remove-Item -LiteralPath $readback -ErrorAction SilentlyContinue
     Run-Lm 'after' @('vf-dump', '--json', $readback)
     if (-not (Test-Path -LiteralPath $readback)) { Fail "vf-dump wrote no read-back file ($readback)" }
-    $rb = Get-Content -LiteralPath $readback -Raw | ConvertFrom-Json
-    $last = @{}   # cpu -> "OC-word point-1 ... point-n", as on the Linux twin
-    foreach ($u in $rb.units) {
-        $cpu = $u.cpus[0]
-        $words = @($cpu.oc.word) + @($cpu.points | ForEach-Object { $_.word })
-        $last["$($cpu.cpu)"] = (($words | ForEach-Object { [Convert]::ToUInt32($_, 16).ToString('X') }) -join ' ')
-    }
-    $bad = 0
-    foreach ($c in $Expected.Keys) {
-        $got = if ($last.ContainsKey("$c")) { $last["$c"] } else { '<missing>' }
-        $ok = $got -eq $Expected["$c"]
-        if (-not $ok) { $bad++ }
-        Write-Host ("  cpu{0,-2} {1} {2}" -f $c, $(if ($ok) { 'OK ' } else { 'BAD' }), $got)
-        if (-not $ok) { Write-Host "         want $($Expected["$c"])" }
-    }
-    if ($bad) { Fail "$bad core(s)/cluster(s) differ from the accepted state - report; cold boot = stock" }
-    Write-Host "RESTORED: all $($Expected.Count) cores/clusters match the accepted state." -ForegroundColor Green
+    # G-147: the verdict is the CLI's compare-accepted (shared with restore_tuning.sh): identical words are OK; a residual OC point that runs the accepted voltages, or an OC word that
+    # is the same state, is EQUIVALENT and counts as success; anything else is BAD. It reads THIS run's read-back file (admin-only directory), EXPECTED-words.txt and the fused words
+    # of fingerprint.json (its stdout lines are the per-core list, "RESTORED: ..." or "STOP: ...").
+    $cmp = & $py[0] @($py[1..9] | Where-Object { $_ }) 'tools\arltuner.py' 'compare-accepted' '--readback' $readback '--expected' $wordsFile '--fingerprint' $fingerprint
+    $cmpRc = $LASTEXITCODE
+    $cmp | ForEach-Object { Write-Host "$_" }
+    if ($cmpRc -ne 0) { Fail 'the read-back differs from the accepted state (or the compare could not run) - report; cold boot = stock' }
+    Write-Host "restore verified against $wordsFile ($($Expected.Count) cores/clusters)." -ForegroundColor Green
 }
 finally {
     Ts-Driver remove | Out-Null   # stop + delete the per-run service
