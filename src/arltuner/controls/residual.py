@@ -13,7 +13,7 @@ it is.
 **The target rule** (``neutral_target``): ``T = min(fused V, fused V + accepted offset of the top fused point) - 25 mV``, but never lower than one step limit below the
 V target the CPU holds (a bigger step is refused by the guard) and never above the fused V. The top fused voltage is the live ``0x09`` ``[19:8]`` (raw S2.10; offset
 and target share the 1/1024 V unit). Why not "fused - 100 mV" in every case: with an accepted top-point offset deeper than -100 mV that target would sit *above* the
-accepted point and the unit would run above the tested voltage; and a 100 mV step is refused by the default 20 mV step limit. Because the hardware clamps, the exact value
+accepted point and the unit would run above the tested voltage; and a 100 mV step is refused by a policy whose V step limit is below 100 mV (the shipped default is 200 mV, policies/default.toml). Because the hardware clamps, the exact value
 does not matter as long as it is below the effective top point.
 
 **The compare rule** (``classify``): a unit is EQUIVALENT (``RESIDUAL_NOTE``) when the accepted word has no OC point, the live word has an OC ratio above the top fused
