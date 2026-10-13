@@ -93,7 +93,7 @@ and a read-back. Nothing is widened:
   words). Before the first write the planner checks that the rounds fit the session cap and the boot budget; if not, or beyond `MAX_RAMP_ROUNDS`, it refuses with `STEP_LIMIT`
   and sends nothing. A partial silent restore does not exist.
 - **Residual OC point:** an OC ratio the accepted state lacks cannot be cleared at runtime (only a cold boot does). The restore rewrites it with the ratio it already holds (never 0,
-  never raised) and a lower V target, so the unit runs the accepted voltage; the result is EQUIVALENT, not a failure. `0x1D` is never sent with a ratio below the `0x1C[7:0]` read before.
+  never raised) and a lower V target, so the unit runs the accepted voltage; the result is EQUIVALENT, not a failure. `0x1D` is never lowered as a side effect: a word at or below the top fused ratio that is not a deliberate lowering below the ratio in force sends no `0x1D` when its ratio is below the `0x1C[7:0]` read before (`controls/planner.py`).
 - **Older chains:** a `CURRENT` with several `profile =` lines is refused (`ACCEPTED_CHAIN`); nothing is replayed. `arltuner accepted-migrate` (root, no hardware) builds the one
   profile from `EXPECTED-words.txt`, never from a read (a read may hold the neutralised residual words), and keeps a backup `accepted.bak-<UTC>/`.
 
