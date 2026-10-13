@@ -40,10 +40,11 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   48x voltage, EC0 1.1226 / EC1-3 1.1125 V). **G-147**: restore does this itself and reports EQUIVALENT; no 0x1D decrease; cpufreq cap follows.
 - **G-148 (D-044)**: profiles are complete and independent; accepted = ONE profile restored in one shot (step splitting inside the apply).
   Live: chain migrated with `accepted-migrate` (backup `/etc/arltuner/accepted.bak-20261013T141400Z`); restore = 281 reads, 0 writes, RESTORED.
-  Accepted profile has no turbo tables yet: after the next cold boot + restore, press "Set the current state as accepted" to record them.
+- Cold boot 2026-10-13 17:46: all 12 units stock (EC1/EC2 OC words cleared). GUI Restore accepted in one shot: 37 writes, all 36 words read
+  back as written, 353 ops, MCE 0. Re-read -> "Set the current state as accepted" -> `read-20261013-145635` (complete, 12 units, turbo tables
+  e 48x8 / p 57,57,55x6); EXPECTED-words identical to the tested state. Fingerprint kept.
 
 ## Operator to-do
-1. Cold boot when convenient (clears the EC1/EC2 OC words) → Tune → Restore accepted (or `bash tools/lnx/restore_tuning.sh`) → 12/12 match.
 2. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
 ## Next / open
