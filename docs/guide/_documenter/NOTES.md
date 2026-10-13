@@ -6,16 +6,16 @@
 | README.md (index) | complete; has the "Limits in one paragraph" box | 2026-10-12 (update) |
 | 01-requirements.md | complete; no polkit, systemd recommended | 2026-10-12 (G-146) |
 | 02-install.md | complete; helper units, allowlist, `--add-user`, without systemd | 2026-10-12 (G-146) |
-| 03-first-run.md | complete; connects to the helper socket, no password | 2026-10-12 (G-146) |
-| 04-arrow-lake-vf-primer.md | complete | 2026-10-12 (update) |
+| 03-first-run.md | complete; Profiles tab row reworded | 2026-10-13 (G-147/148) |
+| 04-arrow-lake-vf-primer.md | complete; §6 notes the left-over OC point + restore | 2026-10-13 (G-147/148) |
 | 05-measuring-curves.md | complete | 2026-10-12 (update) |
 | 06-undervolting.md | complete; G-133 labels are now real | 2026-10-12 (update) |
-| 07-overclocking.md | complete; OC model matches the merged page | 2026-10-12 (update) |
-| 08-stability-testing.md | complete | 2026-10-12 (update) |
-| 09-profiles-and-restore.md | complete; Windows section rewritten (fingerprint, %ProgramData%), still "untested on Windows" | 2026-10-12 (update) |
-| 10-cli-reference.md | complete (flags from `--help`); GUI/helper without pkexec | 2026-10-12 (G-146) |
-| 11-troubleshooting-faq.md | complete; GUI connect-error table | 2026-10-12 (G-146) |
-| 12-safety-and-internals.md | complete; §4 limits (canonical), §7 = D-043 access model (new), §8 = web hardening (was §7), sections 9-11 renumbered | 2026-10-12 (G-146) |
+| 07-overclocking.md | complete; cpufreq follow rule, "After an OC test", live restore count replaces the 172-operation line | 2026-10-13 (G-147/148) |
+| 08-stability-testing.md | complete; decision table says apply, read, then accept | 2026-10-13 (G-147/148) |
+| 09-profiles-and-restore.md | complete; D-044 model (complete profiles, one accepted profile, one-shot restore with rounds, accepted-migrate), new "A left-over OC point: equivalent" section (G-147); Windows still "untested" | 2026-10-13 (G-147/148) |
+| 10-cli-reference.md | complete (flags from `--help`); apply `--neutralize-residual`, compare-accepted, accepted-migrate, exit codes; `--accepted-before` gone | 2026-10-13 (G-147/148) |
+| 11-troubleshooting-faq.md | complete; rows for STEP_LIMIT (two kinds), SESSION/BOOT_LIMIT, ACCEPTED_CHAIN, PROFILE_TOPOLOGY, NO_READ/STALE_READ on save, NOT_REPRESENTABLE, EXISTS, EQUIVALENT FAQ | 2026-10-13 (G-147/148) |
+| 12-safety-and-internals.md | complete (checked clean for D-044 on 2026-10-13); §4 limits (canonical), §7 = D-043 access model (new), §8 = web hardening (was §7), sections 9-11 renumbered | 2026-10-12 (G-146) |
 Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 
 ## Style decisions
@@ -39,7 +39,13 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 - GUI: random loopback `127.x.y.z`, fallback `127.0.0.1` + warning, token TTL 900 s, session 30 min / 12 h, read/full scope, socketpair, undumpable -> `tools/arltuner-gui.py`, `web/server.py` (`READ_OPS`, `SCOPES`), D-042.
 - CLI commands/flags/exit codes -> `python3 tools/arltuner.py <cmd> --help` (re-run 2026-10-12): new `--fingerprint FILE`; audit default `$XDG_STATE_HOME/arltuner/audit.jsonl`; lock `/run/lock/arltuner-mailbox.lock`.
 - Restore scripts: `restore_tuning.sh` flags unchanged, runs `python3 -I`; `restore_tuning.ps1` / `reapply_current.ps1` use `%ProgramData%\arltuner` and require `fingerprint.json`; `ts_driver.py init-dir|carve|start|install|status|remove|check-dir`.
-- Accepted layout now includes `fingerprint.json`; `profiles.accept` refuses `STALE_READ`; `profiles.fingerprint` -> `helper/ops_accept.py`, ARCHITECTURE G-141.
+- D-044 layout: `CURRENT` = exactly one `profile =` line; profile = `complete = true` (one `[[core]]` per unit with `fused_top_ratio` + explicit `offset_mv`, a `[[point]]` for every fused point with `expect_ratio`, `[turbo]` both or neither); `EXPECTED-words.txt` and the profile derive from the same read; `fingerprint.json` beside them (op `profiles.fingerprint` = "Record CPU fingerprint for Windows", writes only that file) -> `profiles/schema.py` (`check_complete`), `profiles/complete.py`, `helper/ops_accept.py`, ARCHITECTURE "Addendum G-148".
+- Refusals: `ACCEPTED_CHAIN` (`ops_tune.py` `_accepted_profile`, `CHAIN_HINT`), `PROFILE_TOPOLOGY` (`_check_complete`: unit missing/twice, or top fused ratio differs), `NO_READ`/`STALE_READ`/`NOT_REPRESENTABLE`/`EXISTS` on `profiles.save` (`op_profiles_save`), `STEP_LIMIT` from `NeedsRamp` (partial profile) or `NeedsRounds` (complete/restore; `controls/model.py`, `planner.check_rounds`, `MAX_RAMP_ROUNDS = 16`), `SESSION_LIMIT`/`BOOT_LIMIT` (`_preflight_error`).
+- Rounds: `executor.apply_profile(auto_ramp=True)`, `planner.ramp_rounds` (ceil(delta/step)); judged before the first write; earlier rounds' results have negative step numbers.
+- Residual rule (G-147): `controls/residual.py` -- ratio kept, offset = accepted, target = min(fused V, fused V + accepted top-point offset) - 25 mV (`TARGET_MARGIN_MV`), floor = held target - one step limit, never above fused V; EQUIVALENT text `RESIDUAL_NOTE`; scan = 2 reads per unit without an accepted OC point (`SCAN_READS_PER_UNIT`). `0x1D` not sent when ratio <= top fused, not below the ratio in force, and below `0x1C[7:0]` (`planner.py` ~1042-1051). cpufreq follow rule `controls/cpufreq.py follow_cap` (GUI `tune.apply` + CLI `apply --device`; Linux only).
+- CLI (re-run `--help` 2026-10-13): `apply [--neutralize-residual]` (always on for complete profiles), `compare-accepted --readback --expected [--fingerprint]` (exit 0/2/1; prints OK/EQUIVALENT/BAD, `RESTORED: ... (K equivalent: ...)` or `STOP: N ...`), `accepted-migrate [--dir] [--dry-run] [--sim]` (exit 0/2/1); `--accepted-before` removed (grep of src/tools/web: none). `reapply_current.sh` = `exec restore_tuning.sh`; `.ps1` twins refuse a multi-line CURRENT. `install.sh:332` prints the migrate hint.
+- Web: badges "complete" / "partial (legacy)", accepted card note for a chain (`web/app.js` ~4731-4780), Dashboard text "cpu N is equivalent: ..." (~3743); no chain UI, no "As applied" toggle.
+- Live numbers: one-shot restore of an already matching state = 281 reads, 0 writes (orchestrator's run, docs/STATE.md 2026-10-13; no MEASURED tag there); simulator worst-case reserve 651 ops (reference layout) [`tests/helper/test_complete_profiles.py:72`]. EC1/EC2 incident values -> `examples/reference-285k/notes/tuning-history.md` §5.
 - Limits: `policies/default.toml` header (D-039), ARCHITECTURE G-133/G-137/G-141 addenda, `registers.md` "Limits in the tool"; `System > Tuning limits` card `web/app.js renderSysLimits`.
 - tune.read cost about 140 on 8P+16E (112 V/F + 12 fused + 8 favored + 4 limits + 4 E 0x1C) -> ARCHITECTURE G-137 addendum; the page computes it from the unit list (G-139).
 - GUI connect errors (exit status 2) -> `src/arltuner/web/helperlink.py` `HelperConnectError` texts and `tools/arltuner-gui.py`; helper start/units -> `install.sh -h`, `uninstall.sh -h`, `packaging/arltuner-helper.{socket,service}`; allowlist file keys `allow_taint_bits`, `idle_exit_s`, `[access] users|group` -> `helper/settings.py`; preflight `helper_service` -> `platform/preflight.py`.
@@ -66,6 +72,9 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
     `docs/SAFETY.md` has no paragraph on the D-043 access model (any process of an allowed user can drive the helper); guide 12 §7 carries it. Consider a short paragraph there.
 12. (G-146) "21 self-check checks" is from the coordinator; I did not run the installed self-check. Behaviour when the helper service is stopped while the GUI is open (page shows `helper: n/a`) is inferred from the code, not observed.
 
+13. (G-147/148) Code vs task files: (a) `residual.py` docstring says the default step limit is 20 mV but `policies/default.toml` has `max_v_step_mv = 200` (the built-in M1 policy may differ); guide quotes no default. (b) G-147 suggested "fused top - 100 mV" for the target; code uses -25 mV with a floor of one step limit (documented in `residual.py`; guide follows the code). (c) A neutralised target limited by the floor (tight step limit) is written but still above the accepted top point, so compare says BAD until a further restore; the guide says "moved as far as one step allows ... real difference" (not observed). (d) `docs/knowledge/platform-arl-s.md` says "no 0x1D is sent" for neutralising, broader than `planner.py` (~1042-1051: not sent only when the ratio is at/below the top fused ratio and below `0x1C[7:0]`). (e) G-148 decision 4 names only `--dry-run`; the CLI also has `--dir` and `--sim` (documented). (f) `web/app.js:161/166` has a duplicate `NO_READ` key and the `STEP_LIMIT` text there ("change fewer units at once") predates the rounds model; the helper's own message is quoted in the guide.
+14. (G-148) The first-run Windows scripts' EQUIVALENT handling and chain refusal are static-checked only (no pwsh); guide 09 section 4 stays "untested".
+
 ## Recheck after merges (all done 2026-10-12 against main c5eba92)
 - Tune labels All-Core/Per-Core, Whole Curve Offset/Per V/F point Offsets, OC box texts (with `·` and `×`), "No OC ratio" dropdown rules, "above 55× limit" tag, header "runs up to N×", live limits: verified in `web/app.js`.
 - D-038 +3: `policies/default.toml` header and ARCHITECTURE G-137; clamped by cmd `0x01`.
@@ -76,12 +85,12 @@ Next time: re-grep button names in `web/index.html`, `--help` of every CLI comma
 - A short glossary page (unit, OC point, DLVR, VID, VccIA, WRMSR) if readers ask.
 - Page 11: add real user problems as they arrive. Page 07: add a P-core OC result when one is validated.
 - After the first Windows run: correct 09 §4.
+- After the operator's next cold boot + restore: compare the real script output with the EQUIVALENT/OK example in 09 §3 (the example there is illustrative), and add the real operation count of a cold-boot one-shot restore if the orchestrator records one.
 
 ## Log (newest first)
-- 2026-10-12 (G-146 run, branch task/G-146-guide-no-polkit from main 27da86d): removed every polkit/pkexec/password description from guide 01, 02, 03, 09, 10, 11, 12, README (guide + root), `docs/SPEC.md` (O-3, preflight row, §4 diagram and 4.1, §10, §11);
-  added the D-043 access-model section (12 §7), the GUI connect-error table (11 §2), allowlist/`--add-user`/no-systemd text (02), License line in the guide index; verified G-145 citations (all section numbers resolve, `[USER]` gone). Commands verified with `--help`/`-h` only.
-- 2026-10-12 (update run, branch task/G-143-guide-update from main c5eba92): checked the recheck list against merged G-133..G-142 code; updated 01, 02, 03, 04, 05, 06, 07, 08, 09 (Windows fingerprint flow,
-  %ProgramData%, new button, STALE_READ), 10 (--fingerprint, D-041 paths, Windows scripts table, screenshots tool), 11, 12 (limits section, D-042 hardening, socketpair, health-gate limitation), README
-  limits paragraph; `docs/USER-GUIDE.md` is now a pointer; root `README.md` lines on setup/URL/limits/self-check refreshed (Screenshots section untouched). Scrubbed private-repo / predecessor / operator wording and
-  non-existent citation file names. Commands re-verified with `--help` only; no hardware, no sudo.
-- 2026-10-12 (first run, branch task/G-135-user-guide): created NOTES.md and all 13 pages from the repo; link check clean.
+- 2026-10-13 (G-147/G-148 run, branch docs/guide-g147-g148 from main e73819d): the G-148 worker had already rewritten 09/10 (commit c799ddb); I audited them against the code and fixed/extended:
+  09 (rounds bound of 16, new section "A left-over OC point: equivalent" with the target rule, EQUIVALENT output, favored-ratio and cpufreq rules, Save refusals, live restore count replaces unsourced op counts, no "ramp" wording),
+  10 (apply/compare-accepted/accepted-migrate exit codes, `--accepted-before` gone, restore script rows), 11 (new refusal rows, EQUIVALENT rows and FAQ, partial (legacy) FAQ), 04 §6, 07 (follow rule, "After an OC test", old 172-op chain line replaced), 03, 08.
+  Checked clean: 01, 02, 05, 06, 12, README (no chain/ramp/As applied wording; link check clean). Commands re-verified with `--help` only; nothing run on hardware, `accepted-migrate` not run.
+- 2026-10-12 (G-146, G-143 and first runs, summarised): G-146 removed polkit/pkexec from 01, 02, 03, 09, 10, 11, 12, README and SPEC (O-3, preflight, section 4, section 10), added 12 section 7 (D-043), the connect-error table (11 section 2) and `--add-user`/no-systemd text (02).
+  G-143 update run rebuilt 01-12 against merged G-133..G-142 (limits section, D-042 hardening, Windows fingerprint flow, `--fingerprint`, D-041 paths); first run (G-135) created all 13 pages.

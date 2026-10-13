@@ -16,6 +16,7 @@ to MSR `0x150`: use it as carefully as the GUI.
 | `python3 tools/arltuner.py read-vf` / `read` / `vf-dump` / `point-offset` | guarded mailbox reads / one offset write | yes (reads are WRMSRs) |
 | `bash tools/lnx/restore_tuning.sh` | restore the accepted state ([09](09-profiles-and-restore.md)) | yes, writes |
 | `sudo python3 -I tools/arltuner.py accepted-migrate` | turn an older accepted list of profiles into one complete profile ([09 §3](09-profiles-and-restore.md)) | no (files only) |
+| `python3 tools/arltuner.py compare-accepted --readback F --expected F` | compare a read-back with the accepted words (OK / EQUIVALENT / BAD) | no (reads two files) |
 | `python3 tools/run_tests.py` | the offline test suite | no |
 
 ## 2. `tools/arltuner.py` (the `arltuner` CLI)
@@ -66,17 +67,21 @@ python3 tools/arltuner.py plan examples/reference-285k/profiles/p-step7.toml --s
 The whole plan is budgeted against the policy before anything is sent. A **partial** profile (no `complete = true`) that asks for a step beyond the limits is refused
 with the next allowed step. A **complete** profile (D-044, the kind the app saves and accepts) is applied in one run: only the words that differ from what the CPU
 holds are written, a left-over OC ratio is neutralised (`--neutralize-residual` is implied), and a change beyond the step limits is split into rounds within
-the run; whether the rounds fit is decided before the first write (refused otherwise, nothing sent). A complete profile made on another CPU (a unit missing, or
-another top fused ratio) is refused. `--neutralize-residual` does the residual-OC-point rule for a partial profile too (the restore scripts pass it).
+the run; whether the rounds fit is decided before the first write (refused with `STEP_LIMIT` otherwise, nothing sent). A complete profile made on another CPU (a unit missing, or
+another top fused ratio) is refused. After a `0x1D` write, `apply --device` on Linux lets `scaling_max_freq` follow the new `cpuinfo_max_freq` (a cap you lowered is never raised;
+[09 §3](09-profiles-and-restore.md)). `--neutralize-residual` does the residual-OC-point rule for a partial profile too (the restore scripts pass it).
 
 **`compare-accepted --readback FILE --expected FILE [--fingerprint FILE]`**: no hardware. Compares a `vf-dump --json` read-back with `EXPECTED-words.txt`:
-identical words are OK, a left-over OC ratio that runs the accepted voltages is EQUIVALENT (a success), anything else is BAD (exit 2). The restore scripts use it.
+identical words are OK, a left-over OC ratio that runs the accepted voltages is EQUIVALENT (a success), anything else is BAD. Without `--fingerprint` (its fused `0x09` words
+tell a left-over OC point from an OC point the accepted state has) only identical words match. Exit 0 when no unit is BAD, 2 otherwise, 1 when an input cannot be read.
+The restore scripts use it ([09 §3](09-profiles-and-restore.md)).
 
 **`accepted-migrate [--dir DIR] [--dry-run] [--sim]`**: no hardware, run as root. Turns an accepted state that still lists several profiles in `CURRENT` (written
 before D-044) into one complete profile built from its `EXPECTED-words.txt` (never from a read), keeps `EXPECTED-words.txt` and `fingerprint.json`, copies the old
 directory to `accepted.bak-<UTC time>/` next to it and swaps the new one in atomically. `--dry-run` prints the profile and how it differs from the old list and
 changes nothing. `--dir` defaults to `/etc/arltuner/accepted`; `--sim` uses the simulated reference layout instead of this machine's (tests). A state that names
-one profile already is left alone ("nothing to migrate").
+one profile already is left alone ("nothing to migrate"). Exit 0 when migrated or nothing to migrate, 2 when refused (nothing changed), 1 for a usage error. It takes none of the
+common options and sends nothing to the CPU. The option `--accepted-before` of earlier versions no longer exists (the accepted state is one profile).
 
 **`read-vf --cpu N [backend] [common]`**: ONE guarded read of command `0x10` (the V/F word) on one CPU.
 
@@ -128,8 +133,8 @@ displays what the page shows and never presses Read, Review, Apply or Measure. D
 ## 5. Scripts in `tools/lnx/`
 | Script | What | Hardware access |
 |---|---|---|
-| `restore_tuning.sh [--check] [--from DIR] [--policy FILE] [--orchestrated]` | restore the accepted state and compare word for word ([09](09-profiles-and-restore.md)) | writes via the guard |
-| `reapply_current.sh [...]` | the same as `restore_tuning.sh` (kept as a name) | writes via the guard |
+| `restore_tuning.sh [--check] [--from DIR] [--policy FILE] [--orchestrated]` | restore the accepted state (one profile, one run) and compare word for word; EQUIVALENT counts as success; refuses a `CURRENT` that lists several profiles with the `accepted-migrate` command ([09](09-profiles-and-restore.md)) | writes via the guard |
+| `reapply_current.sh [...]` | another name for `restore_tuning.sh`; same options | writes via the guard |
 | `preflight.sh` | read-only state record (kernel, taint word, msr parameters, lockdown, Secure Boot state, other tuning tools, audit-log size, recent kernel lines); writes `captures/lnx/preflight-<UTC>.txt` | none (some lines need root and say so) |
 | `health_snapshot.sh LABEL [--since FILE]` | before/after record: taint, PCI count, module count, kernel-log length; with `--since` prints new kernel lines minus the expected `msr` notices | none |
 | `read_plain_msrs.py [--cpus LIST] [--msrs LIST]` (sudo) | plain `rdmsr` of the allowlisted non-mailbox MSRs (`0x1AD 0x1AE 0x650 0x651 0xCE 0x194 0x198`); refuses any other MSR | read-only |
@@ -143,9 +148,9 @@ you understand that you are removing that safety step**, and never schedule it o
 ## 6. Scripts in `tools/win/`
 | Script | What |
 |---|---|
-| `restore_tuning.ps1 [-From DIR] [-Policy FILE] [-Before] [-Orchestrated]` | restore the accepted state and compare word for word |
+| `restore_tuning.ps1 [-From DIR] [-Policy FILE] [-Before] [-Orchestrated]` | restore the accepted state (one profile, one run) and compare word for word; EQUIVALENT counts as success. Refuses a `CURRENT` that lists several profiles ([09 §3](09-profiles-and-restore.md)) |
 | `Restore-Tuning.cmd` | double-click launcher: elevates (UAC), runs `restore_tuning.ps1` |
-| `reapply_current.ps1 [-Check] [-From DIR] [-Policy FILE]` | apply the profile in `CURRENT`, one confirmation, no compare; `-Check` = read-only dump |
+| `reapply_current.ps1 [-Check] [-From DIR] [-Policy FILE]` | apply the one profile in `CURRENT`, one confirmation, no compare; `-Check` = read-only dump |
 | `preflight.ps1` | read-only checks (elevation, Memory integrity, driver blocklist, XTU service, other mailbox clients, Python, driver state) |
 | `ts_driver.py init-dir \| carve --exe PATH \| start \| install \| status \| remove \| check-dir DIR` | prepare the admin-only directory, carve the driver from your own ThrottleStop exe, manage the per-run service ([09 §4](09-profiles-and-restore.md)) |
 

@@ -108,7 +108,7 @@ plan, not a measured result [UNVERIFIED as a procedure].
 | Crash, freeze, reboot under load | cold boot (reverts all); go back to the last good state; make the change smaller |
 | Stress screen reports errors | treat as unstable; revert the last change; bisect by groups |
 | Screen clean, gate not yet run | not accepted; do not rely on it |
-| Gate passed, health clean, temperatures acceptable | candidate for **Set as accepted** ([09](09-profiles-and-restore.md)) |
+| Gate passed, health clean, temperatures acceptable | candidate for **Set as accepted**: apply it, read it back (Tune), then accept; the accepted state is the complete state of that read ([09](09-profiles-and-restore.md)) |
 | Gate passed but a different workload (games, compile, memory-heavy) misbehaves | the gate did not cover it; back off or extend the test |
 
 Next: [09 Profiles and restore](09-profiles-and-restore.md) · Previous: [07 Overclocking](07-overclocking.md)

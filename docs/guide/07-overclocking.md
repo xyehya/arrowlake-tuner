@@ -63,11 +63,18 @@ names where its limit came from ([12 §4](12-safety-and-internals.md)). To allow
 
 What the tool writes for a ratio raise: the voltage first, then the frequency (XTU's own ordering for a raise [DECOMPILED registers.md]);
 the guard refuses one request that moves both the same way. For an E-cluster raise, one plan writes the cluster's OC word on its four CPUs, the
-favored-ratio word `0x1D`, the granular-ratio word `0x27`, and the E turbo table `0x650`, and then lifts cpufreq's `scaling_max_freq` so
-the kernel actually uses the new ratio (G-126). Review shows all of them.
+favored-ratio word `0x1D`, the granular-ratio word `0x27`, and the E turbo table `0x650`, and then lets cpufreq's `scaling_max_freq` follow the new
+maximum so the kernel actually uses the new ratio (G-126, G-147). The rule: a cap that sat at the old `cpuinfo_max_freq` follows it (up or down); a cap you set below the old
+maximum is never raised. It runs in the GUI and in `arltuner apply --device` (so in the restore script), on Linux only. Review shows all of them.
 
-Cost (order of magnitude): the reference E-cluster raise was planned as 53 mailbox WRMSRs and one P-core as 13 [T-022, SAFETY.md]; restoring the whole
-accepted state on the reference machine took 172 operations and 57 read-back rows [MEASURED lnx 2026-10-11].
+Cost (order of magnitude): the reference E-cluster raise was planned as 53 mailbox WRMSRs and one P-core as 13 [T-022, SAFETY.md]. Restore accepted writes only the
+words that differ, so its size depends on the CPU's state: a live restore of a state the CPU already held was 281 reads and 0 writes on the reference machine
+(orchestrator's run, docs/STATE.md 2026-10-13) ([09 §3](09-profiles-and-restore.md)).
+
+**After an OC test.** An OC ratio cannot be written back to 0 at runtime; only a cold boot removes it ([04 §6](04-arrow-lake-vf-primer.md)). If you turn an OC test off
+without a cold boot, the unit keeps the OC ratio and the adaptive voltage you tested with. **Restore accepted** then rewrites that word so the unit runs the accepted voltages
+and reports it as "equivalent" ([09 §3](09-profiles-and-restore.md)). The tool also never sends a favored-ratio word (`0x1D`) that only restates a ratio below the unit's
+current favored maximum, because that lowers the maximum: on the reference chip `0x1D` = 46 took an E-cluster from 48x / 4.9 GHz to 46x / 4.7 GHz [MEASURED lnx 2026-10-13].
 
 ## 4. What was measured on the reference chip (example values from one chip)
 All from a Core Ultra 9 285K; the point is the behaviour, not the numbers.
@@ -112,6 +119,6 @@ follows. Observed side effect: the kernel rescaled the CPU capacity (`energy_mod
 - **Board.** Load-line calibration, the VccIA offset and cooling decide how much voltage droop you see; they are BIOS settings.
 - **Voltage ceiling.** E-core WHEA reports are reported above about 1.2 V [COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/];
   the tool warns on E targets above that.
-- **cpufreq.** A user-set `scaling_max_freq` below the new ratio wins. The tool lifts it for an OC raise but respects caps you set yourself (G-126).
+- **cpufreq.** A user-set `scaling_max_freq` below the new ratio wins. The tool makes the cap follow a changed maximum only when the cap sat at the old maximum, and never raises a cap you set yourself (G-126, G-147).
 
 Next: [08 Stability testing](08-stability-testing.md) · Previous: [06 Undervolting](06-undervolting.md)
