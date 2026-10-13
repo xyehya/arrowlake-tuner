@@ -37,6 +37,7 @@ numbers do not. Ratios marked "285K" are that SKU's values (other SKUs have othe
   write such words with target 0 (D-035, G-124) [MEASURED lnx 2026-10-11/12].
 - **OC target below the top fused point** is clamped up to it [MEASURED lnx 2026-10-11].
 - **An OC ratio cannot be written back to 0** at runtime; a cold boot clears it [MEASURED lnx 2026-10-11].
+- **Neutralising a residual OC point:** rewrite the ratio the unit holds with the intended offset and an adaptive target below the top fused point voltage (plus its point offset); the clamp above makes the unit run the intended voltages, and no `0x1D` is sent, because a `0x1D` that restates a ratio below `0x1C[7:0]` lowers the unit's maximum (`cpuinfo_max_freq`) and `scaling_max_freq` stays at the old value [MEASURED lnx 2026-10-13].
 - **Monotonic clamp:** the hardware enforces V(n) >= V(n-1); a deeper offset is silently clamped up (example: a -49.8 mV BIOS offset on a P 57x point
   landed at -42.5 mV, held by the 56x point) [MEASURED lnx 2026-10-02]. Check the re-measured voltage, not only the read-back word.
 - **Interpolation:** a ratio between two points runs at the linear interpolation of their voltages (54x = midpoint of 53x/55x within +-2 mV on every

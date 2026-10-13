@@ -52,6 +52,47 @@ class Static(unittest.TestCase):
         self.assertLess(text.index("fingerprint.json in"), text.index("Ts-Driver start"))
 
 
+class ResidualOcPoint(unittest.TestCase):
+    """G-147: both restore scripts neutralise a residual OC point with the LAST profile (the earlier ones say which OC ratios are accepted) and judge the read-back with
+    ``compare-accepted``, where an EQUIVALENT unit is a success. Text-level: the scripts cannot run without sudo / a driver."""
+
+    def test_the_linux_script_marks_only_the_last_profile_and_uses_the_shared_verdict(self) -> None:
+        text = (REPO / "tools/lnx/restore_tuning.sh").read_text()
+        self.assertIn('if [ "$((i + 1))" = "$n" ]; then', text)
+        self.assertIn("extra=(--neutralize-residual)", text)
+        self.assertIn('--accepted-before "$from/${profiles[$j]}"', text)
+        self.assertIn("compare-accepted --readback", text)
+        self.assertIn('--fingerprint "$from/fingerprint.json"', text)
+        self.assertNotIn("sys.exit(1 if bad else 0)", text)  # the inline compare is gone: one verdict for both scripts
+
+    def test_the_windows_script_does_the_same(self) -> None:
+        text = (REPO / "tools/win/restore_tuning.ps1").read_text()
+        self.assertIn("if ($i -eq $profiles.Count)", text)
+        self.assertIn("$applyArgs += '--neutralize-residual'", text)
+        self.assertIn("'--accepted-before', $profiles[$j]", text)
+        self.assertIn("'compare-accepted'", text)
+        self.assertIn("'--fingerprint' $fingerprint", text)
+        self.assertNotIn("ConvertFrom-Json", text)  # the compare is the CLI's, on THIS run's read-back file
+
+    def test_the_apply_loop_of_the_linux_script_builds_the_right_arguments(self) -> None:
+        """Run just the loop's argument logic in bash with a stub ``lm``: three profiles -> the third carries the flag and the two before it."""
+        script = (
+            'profiles=(profiles/a.toml profiles/b.toml profiles/c.toml); from=/acc; n=${#profiles[@]}\n'
+            'lm() { echo "$*"; }\n'
+            'for i in "${!profiles[@]}"; do prof="${profiles[$i]}"; extra=()\n'
+            '  if [ "$((i + 1))" = "$n" ]; then extra=(--neutralize-residual); for ((j = 0; j < i; j++)); do extra+=(--accepted-before "$from/${profiles[$j]}"); done; fi\n'
+            '  lm "apply-x" apply "$from/$prof" "${extra[@]}"; done\n'
+        )
+        r = subprocess.run(["bash", "-c", "set -euo pipefail\n" + script], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stdout.splitlines(), [
+            "apply-x apply /acc/profiles/a.toml", "apply-x apply /acc/profiles/b.toml",
+            "apply-x apply /acc/profiles/c.toml --neutralize-residual --accepted-before /acc/profiles/a.toml --accepted-before /acc/profiles/b.toml",
+        ])
+        loop = (REPO / "tools/lnx/restore_tuning.sh").read_text()
+        for needle in ('for i in "${!profiles[@]}"; do', 'prof="${profiles[$i]}"; extra=()', 'for ((j = 0; j < i; j++)); do extra+=(--accepted-before "$from/${profiles[$j]}"); done'):
+            self.assertIn(needle, loop)  # the logic exercised above is the script's own
+
+
 class Stops(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()

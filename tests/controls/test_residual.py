@@ -290,6 +290,27 @@ class StickyOcRatio(Case):
         self.assertEqual(s.sim.oc_point_voltage_raw(12), 0x48C)  # EC1: the target 1.137 V = the fused top point (no point offset yet)
 
 
+class CapRule(unittest.TestCase):
+    """``controls.cpufreq``: the one cap rule of the helper's tune.apply and the CLI's apply."""
+
+    def test_the_attribute_names_are_the_helpers(self) -> None:
+        from arltuner.controls import cpufreq
+        from arltuner.helper import ops_measure
+
+        self.assertEqual((cpufreq.CAP_ATTR, cpufreq.MAX_ATTR), (ops_measure.CAP_ATTR, ops_measure.MAX_ATTR))
+
+    def test_follow_cap_decisions(self) -> None:
+        from arltuner.controls.cpufreq import follow_cap
+
+        self.assertEqual(follow_cap(4_900_000, 5_000_000, 4_900_000), 5_000_000)  # cap at the old maximum follows it up
+        self.assertEqual(follow_cap(5_000_000, 4_900_000, 5_000_000), 4_900_000)  # ... and down
+        self.assertEqual(follow_cap(4_900_000, 5_000_000, 4_000_000), None)  # a cap the user lowered is never raised
+        self.assertEqual(follow_cap(5_000_000, 4_700_000, 4_900_000), 4_700_000)  # a cap above a lowered maximum is lowered
+        self.assertEqual(follow_cap(5_000_000, 4_700_000, 4_000_000), None)
+        self.assertEqual(follow_cap(4_900_000, 4_900_000, 4_900_000), None)  # nothing moved
+        self.assertEqual(follow_cap(None, 5_000_000, 4_900_000), None)
+
+
 class NoteText(unittest.TestCase):
     def test_the_note_is_the_one_every_surface_shows(self) -> None:
         self.assertEqual(R.RESIDUAL_NOTE, "residual OC point (cleared by a cold boot); voltages as accepted")

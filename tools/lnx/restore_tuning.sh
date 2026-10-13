@@ -8,7 +8,8 @@
 # The accepted state is the user's (D-036): the app writes it (Profiles > Set as accepted); nothing in this repo is one. With none, this stops.
 # Linux twin of tools/win/restore_tuning.ps1. Steps: health snapshot -> apply each accepted profile (guarded; the planner steps from what it reads,
 # so it works after a cold boot = stock and after a warm reboot = CPUs 1-7/E kept, CPU 0 reset) -> vf-dump -> compare with EXPECTED-words.txt
-# -> health snapshot. One confirmation per run (operator 2026-10-08, D-020 extended to Linux): after CONFIRM, the guard's per-command tokens are
+# -> health snapshot. G-147: a residual OC point (an OC ratio the accepted state lacks; only a cold boot clears it) is rewritten so it runs the accepted voltage and reported
+# EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as accepted"), which is a success; only a real difference is BAD. One confirmation per run (operator 2026-10-08, D-020 extended to Linux): after CONFIRM, the guard's per-command tokens are
 # answered by tools/lnx/orchestrator_confirm.py; every guard check (policy limits, per-write read-back, word compare) is unchanged.
 # Stops at the first failure. Revert = cold boot. The first MSR write of a boot sets taint bit 2 (CPU_OUT_OF_SPEC): expected.
 set -euo pipefail
@@ -54,24 +55,24 @@ lm() {  # one guarded arltuner command (run confirmed above / in chat); full out
 
 bash tools/lnx/health_snapshot.sh "restore-$ts-before" > "captures/lnx/health-restore-$ts-before.txt" 2>&1
 if [ "$check" = 0 ]; then
-  for prof in "${profiles[@]}"; do echo "=== apply $prof"; lm "apply-$(basename "$prof" .toml)" apply "$from/$prof"; done
+  # G-147: the LAST profile also looks for a residual OC point (an OC ratio the accepted state does not have; only a cold boot clears it) and rewrites it with a V target below the
+  # accepted top fused point, so the unit runs the accepted voltage; the earlier profiles of the chain tell it which OC ratios ARE accepted. apply --device also lets
+  # scaling_max_freq follow a cpuinfo_max_freq that a 0x1D moved (never raising a cap you lowered).
+  n=${#profiles[@]}
+  for i in "${!profiles[@]}"; do
+    prof="${profiles[$i]}"; extra=()
+    if [ "$((i + 1))" = "$n" ]; then
+      extra=(--neutralize-residual)
+      for ((j = 0; j < i; j++)); do extra+=(--accepted-before "$from/${profiles[$j]}"); done
+    fi
+    echo "=== apply $prof"; lm "apply-$(basename "$prof" .toml)" apply "$from/$prof" "${extra[@]}"
+  done
 fi
 echo "=== read-back"
 lm after vf-dump --json "captures/lnx/restore-$ts-after.json"
-python3 -I - "captures/lnx/restore-$ts-after.json" "$from/EXPECTED-words.txt" <<'PY'
-import json, sys
-d = json.load(open(sys.argv[1]))
-got = {}
-for u in d["units"]:
-    c = u["cpus"][0]
-    got[c["cpu"]] = " ".join(f"{int(w, 16):X}" for w in [c["oc"]["word"]] + [p["word"] for p in c["points"]])
-bad = 0
-for line in open(sys.argv[2]):
-    if not line.strip() or line.startswith("#"): continue
-    cpu, *words = line.split(); want = " ".join(words); g = got.get(int(cpu), "<missing>")
-    ok = g == want; bad += not ok
-    print(f"  cpu{cpu:<3}{'OK ' if ok else 'BAD'} {g}" + ("" if ok else f"\n         want {want}"))
-print("RESTORED: all cores/clusters match the accepted state." if not bad else f"STOP: {bad} core(s)/cluster(s) differ - report; cold boot = stock")
-sys.exit(1 if bad else 0)
-PY
+# the verdict is the CLI's compare-accepted (shared with the Windows script): identical words are OK; a residual OC point that runs the accepted voltages (or an OC word that is the
+# same state, e.g. 0x5B439 vs the cold 0x39) is EQUIVALENT and counts as success; anything else is BAD. fingerprint.json (written by 'Set as accepted') carries the fused words that
+# tell a residual OC point from an OC point the accepted state has; without it only identical words match.
+fp=(); [ -f "$from/fingerprint.json" ] && fp=(--fingerprint "$from/fingerprint.json")
+python3 -I tools/arltuner.py compare-accepted --readback "captures/lnx/restore-$ts-after.json" --expected "$from/EXPECTED-words.txt" "${fp[@]}"
 bash tools/lnx/health_snapshot.sh "restore-$ts-after" --since "captures/lnx/health-restore-$ts-before.txt" | tail -3
