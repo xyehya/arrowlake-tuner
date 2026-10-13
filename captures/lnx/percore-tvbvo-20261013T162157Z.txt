@@ -1,0 +1,14 @@
+cpu 0 uncapped: PASS  ran 55..57x (mostly 55x)  VID 1.2712..1.3864 V  Tmax 56.0 C
+cpu 0      52x: PASS  ran 48..53x (mostly 53x)  VID 1.1686..1.1686 V  Tmax 48.0 C  [0/18 s at 52x]
+cpu 0      53x: PASS  ran 48..53x (mostly 53x)  VID 1.1686..1.1686 V  Tmax 44.0 C  [17/18 s at 53x, VID 1.1686]
+cpu 0      54x: PASS  ran 49..54x (mostly 54x)  VID 1.2186..1.2186 V  Tmax 46.0 C  [17/18 s at 54x, VID 1.2186]
+cpu 0      55x: PASS  ran 51..55x (mostly 55x)  VID 1.2712..1.2712 V  Tmax 50.0 C  [17/18 s at 55x, VID 1.2712]
+cpu 0      56x: PASS  ran 55..56x (mostly 55x)  VID 1.2712..1.3588 V  Tmax 54.0 C  [7/18 s at 56x, VID 1.3588]
+cpu 0      57x: PASS  ran 54..57x (mostly 57x)  VID 1.2712..1.3864 V  Tmax 56.0 C  [11/18 s at 57x, VID 1.3864]
+cpu 1 uncapped: PASS  ran 51..55x (mostly 55x)  VID 1.2712..1.2712 V  Tmax 52.0 C
+cpu 1      52x: PASS  ran 53..53x (mostly 53x)  VID 1.1711..1.1711 V  Tmax 48.0 C  [0/18 s at 52x]
+cpu 1      53x: PASS  ran 48..53x (mostly 53x)  VID 1.1711..1.1711 V  Tmax 48.0 C  [17/18 s at 53x, VID 1.1711]
+cpu 1      54x: PASS  ran 49..54x (mostly 54x)  VID 1.2212..1.2212 V  Tmax 50.0 C  [16/18 s at 54x, VID 1.2212]
+cpu 1      55x: PASS  ran 51..55x (mostly 55x)  VID 1.2712..1.2712 V  Tmax 50.0 C  [18/19 s at 55x, VID 1.2712]
+cpu 2 uncapped: PASS  ran 50..55x (mostly 55x)  VID 1.2837..1.2837 V  Tmax 52.0 C
+restored scaling_max_freq on cpus 0-7

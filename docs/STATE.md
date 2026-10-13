@@ -44,20 +44,11 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   back as written, 353 ops, MCE 0. Re-read -> "Set the current state as accepted" -> `read-20261013-145635` (complete, 12 units, turbo tables
   e 48x8 / p 57,57,55x6); EXPECTED-words identical to the tested state. Fingerprint kept.
 
-## In flight (2026-10-13): BIOS "TVB Voltage Optimizations" test (one variable)
-- BEFORE (TVB-VO off, accepted tuning applied, this boot): VID baseline curve `20261013T154945Z-q9x7` ("tvbvo-off-baseline", quick, all 12
-  units, temps 30-78 C; e.g. P0 57x 1.3864, P2 55x 1.2837, EC0 48x 1.1226, EC1-3 48x 1.1125 V). Mailbox (read-only session policy =
-  /etc policy + 0x18 / 0x24 read entries, operator OK): `0x18` = `0x1E`; `0x24` set1 per-bucket 0x46 (1C) / 0x146 (2-8C) = 70 C, -0/-1 bin;
-  per-CCP 0x146 / 0x46; set2 (P1 16/17) all 0. Capture `captures/lnx/tvbvo-off-mailbox-*.txt`.
-  With that state the 70 C down-bin is NOT applied: 90 s all-core stress-ng at 79-82 C, P0/P1 held 5500 MHz, E 4800 (a TVB bin would be a
-  flat 5400); P2-P7 drifted to 5.30-5.43 GHz averages (not TVB; 0x64F status only "max turbo" at the sample, sticky log has thermal/VR-TDC/PL
-  bits from earlier, SDM decode unverified for ARL). P-cores only (8 threads on 0-7, 90 s): all 8 flat 5500 MHz at 58-72 C, 153 W, 0x64F
-  status clear. Operator wants no P down-bin above 70 C: re-check after TVB-VO on (0x18 bit 2); if it appears: BIOS knob, else a 0x25 G-task.
-- AFTER reboot with TVB-VO on: (1) re-read 0x18/0x24 (which bit moved) (2) Restore accepted, 12/12 (3) same vf.measure quick -> dVID per point
-  (4) LIGHT: percore_stress.py all P (uncapped + 52..max) + one CPU per E cluster; bursty `stress-ng --cpu 24 --cpu-load 25 --verify` 10 min
-  (5) MEDIUM: 12 threads ~60 % around the 70 C cutoff, 10 min (6) HEAVY: 24 threads --verify 10 min + stressapptest 5 min. Gate: verify
-  failures, dmesg MCE/hardware error/segfault. Then the operator runs the full suite.
-
+## Done (2026-10-13): BIOS "TVB Voltage Optimizations" — no measurable effect (one variable)
+- VO on + cold boot: `0x18` still `0x1E` (TVB-disable bit 2 set), `0x24` unchanged (70 C / -0,-1 bin; set 2 empty). Stock curve `fikh` vs VO-off
+  stock (`d53n`, `y4c7`): 0 mV at 48/53/55/57x on every unit; tuned curve `yfjh` vs VO-off tuned `q9x7`: within +-2 mV at every point. A cool
+  light-load sweep (44-58 C, P0-P2) requested the same VIDs (P0 53x 1.1686, 55x 1.2712, 57x 1.3864). Stopped there (operator: no added value).
+  Reading: VO acts only with TVB itself enabled [UNVERIFIED]. With TVB disabled the 70 C down-bin is not applied either (P0/P1 55x at 80 C).
 ## Operator to-do
 1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
