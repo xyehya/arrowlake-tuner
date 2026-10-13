@@ -49,5 +49,6 @@
 | G-144 | no polkit: helper as a root socket service (systemd socket activation or manual), SO_PEERCRED allowlist (D-043) | lnx | T0/T1 | **merged** 2026-10-12 (live-verified) | — |
 | G-145 | knowledge docs review (Opus): general ARL-S facts only, chip data to examples/reference-285k/notes, favored-cores revamp | lnx | T0 | **merged** 2026-10-12 | G-144 |
 | G-146 | guide/README/SPEC for the polkit-free socket service (documenter) | lnx | T0 | **merged** 2026-10-12 | G-144 |
+| G-147 | restore neutralises a residual OC point (EQUIVALENT), 0x1D never lowered as a side effect, cpufreq cap follows | lnx | T0 (+T2 live) | in progress | — |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

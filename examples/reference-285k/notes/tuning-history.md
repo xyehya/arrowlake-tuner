@@ -85,6 +85,10 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
 - EC1 OC 49x @ 1.165 V: `0x0004A931` on CPUs 12-15, `0x650` = `0x3131313131313131`, `0x1D` = 49. Measured 49x 1.1675 V, 48x 1.1475, 47x 1.130 (linear
   between point 6 = 1.1125 V with -25 mV and the OC point). HWP highest CPU 12 0x44 -> 0x45, `cpuinfo_max_freq` 4.9 -> 5.0 GHz; with `scaling_max_freq`
   raised: stress 49x (4901 MHz), 0 errors, 43 C. Reverted.
+- Residual OC words neutralised (2026-10-13 07:1x UTC, same boot, orchestrator): EC1 `0x11` ratio 48 + target 1.100 V -> read `0x00046630`, 48x
+  measured 1.1125 V (= accepted -25 mV curve; target clamped up to point 6). EC2 first written ratio 46 + target 0 (`0x0000002E`): the planner's `0x1D`
+  = 46 lowered its favored ratio (`0x1C` before `0x2e30`), `cpuinfo_max_freq` 4.9 -> 4.7 GHz; rewritten ratio 48 + 1.100 V (`0x00046630`): favored
+  48, 4.9 GHz, `scaling_max_freq` had to be written back to 4.9 GHz by hand; 48x then 1.1125 V. EC0 48x 1.1226 V. MCE 0. Fix in the app: G-147.
 - Short stress screens with the accepted tuning (2026-10-11): all 24 CPUs integer 60 s at P 55x / E 48x, 0 errors, 67 C, 170 W; P0-P3 capped 50x vector 30 s,
   70 C, 85 W; stressapptest 30 s, 0 errors.
 

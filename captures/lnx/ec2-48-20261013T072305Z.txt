@@ -1,0 +1,111 @@
+Plan for profile 'ec2-48': 4 CPU(s); baseline words are read through the guard after confirmation
+  E-Core 8 (cpu 16): ratio 48, OC-point voltage 1100 mV, offset +0 mV
+  E-Core 9 (cpu 17): ratio 48, OC-point voltage 1100 mV, offset +0 mV
+  E-Core 10 (cpu 18): ratio 48, OC-point voltage 1100 mV, offset +0 mV
+  E-Core 11 (cpu 19): ratio 48, OC-point voltage 1100 mV, offset +0 mV
+  read 0x14 on cpu 16; write 0x15 (old|0x8) only if bit 3 is clear;
+  read 0x10, 0x1C, 0x09 P1=0x11 and 0x26 on each of the 4 CPU(s) (and 0x28, the hardware maximum voltage, where an OC-point voltage is set);
+  then, per CPU, write 0x11 (the word XTU builds: ratio and V target filled in from 0x1C / 0x09, only the requested fields
+    changed; a ratio and V target moving the same way take two words - voltage first when rising, frequency first when falling),
+    0x1D (= its ratio) and 0x27 (= the 0x26 word); a change larger than the policy's step limits is refused with the next allowed step
+  effective offset = assumed BIOS offset (P +0 mV, E +0 mV) + runtime offset; floor -200 mV; runtime offset ceiling +200 mV
+Operations required: at most 56 mailbox WRMSRs (every read, every write and the guard's read-back of each write); policy allows 100000; dwell 0 s after each operation
+About to apply the plan above through the write guard.
+To proceed type exactly:  CONFIRM 205a7f5e
+> 
+step 1: cpu 0 msr 0x650 apply: read E turbo table (0x650) (plain rdmsr) before any write
+step 2: cpu 16 cmd 0x14 apply: read PerCore Voltage Enable state (0x14) before any write
+step 3: cpu 16 cmd 0x10 apply: read V/F baseline (0x10) of E-Core 8
+step 4: cpu 16 cmd 0x1c apply: read favored-core word (0x1C) of E-Core 8
+step 5: cpu 16 cmd 0x09 apply: read fused V/F point (0x09 P1=0x11) of E-Core 8
+step 6: cpu 16 cmd 0x26 apply: read granular-ratio word (0x26) of E-Core 8
+step 7: cpu 16 cmd 0x28 apply: read hardware maximum voltage (0x28) of E-Core 8
+step 8: cpu 17 cmd 0x10 apply: read V/F baseline (0x10) of E-Core 9
+step 9: cpu 17 cmd 0x1c apply: read favored-core word (0x1C) of E-Core 9
+step 10: cpu 17 cmd 0x09 apply: read fused V/F point (0x09 P1=0x11) of E-Core 9
+step 11: cpu 17 cmd 0x26 apply: read granular-ratio word (0x26) of E-Core 9
+step 12: cpu 17 cmd 0x28 apply: read hardware maximum voltage (0x28) of E-Core 9
+step 13: cpu 18 cmd 0x10 apply: read V/F baseline (0x10) of E-Core 10
+step 14: cpu 18 cmd 0x1c apply: read favored-core word (0x1C) of E-Core 10
+step 15: cpu 18 cmd 0x09 apply: read fused V/F point (0x09 P1=0x11) of E-Core 10
+step 16: cpu 18 cmd 0x26 apply: read granular-ratio word (0x26) of E-Core 10
+step 17: cpu 18 cmd 0x28 apply: read hardware maximum voltage (0x28) of E-Core 10
+step 18: cpu 19 cmd 0x10 apply: read V/F baseline (0x10) of E-Core 11
+step 19: cpu 19 cmd 0x1c apply: read favored-core word (0x1C) of E-Core 11
+step 20: cpu 19 cmd 0x09 apply: read fused V/F point (0x09 P1=0x11) of E-Core 11
+step 21: cpu 19 cmd 0x26 apply: read granular-ratio word (0x26) of E-Core 11
+step 22: cpu 19 cmd 0x28 apply: read hardware maximum voltage (0x28) of E-Core 11
+step 23: cpu 16 cmd 0x01 apply: read the CPU's own ratio limit (0x01) of a E CPU
+step 24: cpu 16 cmd 0x11 apply: write V/F word (0x11) of E-Core 8: ratio 48, OC-point voltage 1100 mV, offset +0 mV
+step 25: cpu 16 cmd 0x1d apply: write favored-core word (0x1D) of E-Core 8 = ratio 48 of the 0x11 word
+step 26: cpu 16 cmd 0x27 apply: write granular-ratio word (0x27) of E-Core 8 = the 0x26 word read (0x3)
+step 27: cpu 17 cmd 0x11 apply: write V/F word (0x11) of E-Core 9: ratio 48, OC-point voltage 1100 mV, offset +0 mV
+step 28: cpu 17 cmd 0x1d apply: write favored-core word (0x1D) of E-Core 9 = ratio 48 of the 0x11 word
+step 29: cpu 17 cmd 0x27 apply: write granular-ratio word (0x27) of E-Core 9 = the 0x26 word read (0x3)
+step 30: cpu 18 cmd 0x11 apply: write V/F word (0x11) of E-Core 10: ratio 48, OC-point voltage 1100 mV, offset +0 mV
+step 31: cpu 18 cmd 0x1d apply: write favored-core word (0x1D) of E-Core 10 = ratio 48 of the 0x11 word
+step 32: cpu 18 cmd 0x27 apply: write granular-ratio word (0x27) of E-Core 10 = the 0x26 word read (0x3)
+step 33: cpu 19 cmd 0x11 apply: write V/F word (0x11) of E-Core 11: ratio 48, OC-point voltage 1100 mV, offset +0 mV
+step 34: cpu 19 cmd 0x1d apply: write favored-core word (0x1D) of E-Core 11 = ratio 48 of the 0x11 word
+step 35: cpu 19 cmd 0x27 apply: write granular-ratio word (0x27) of E-Core 11 = the 0x26 word read (0x3)
+Apply report for profile 'ec2-48'
+Result: OK; 34 mailbox operation(s) reached the transport
+Steps:
+    1. cpu  0 msr 0x650 read E turbo table (0x650) (plain rdmsr, not a mailbox request) -> word 0x3030303030303030: buckets (1..8 active cores) 48/48/48/48/48/48/48/48
+    2. cpu 16 cmd 0x14 read PerCore Voltage Enable state (package-wide) -> rc 0 (Pass), word 0x00000008, PerCore Voltage Enable set
+    3. cpu 16 cmd 0x10 read V/F baseline of E-Core 8 -> rc 0 (Pass), ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    4. cpu 16 cmd 0x1C read favored-core word of E-Core 8 -> rc 0 (Pass), word 0x2e2e: favored ratio 46, fused ratio 46
+    5. cpu 16 cmd 0x09 read fused V/F point of E-Core 8 -> rc 0 (Pass), word 0x00048c2e: fused point ratio 46, V target 1136.72 mV (raw 0x48c), adaptive, offset +0.00 mV (raw 0)
+    6. cpu 16 cmd 0x26 read granular-ratio word of E-Core 8 -> rc 0 (Pass), word 0x3
+    7. cpu 16 cmd 0x28 read hardware maximum voltage (0x28) of E-Core 8 -> rc 0 (Pass), word 0x56d: hardware maximum voltage raw 1389 -> V target limit raw 1388 (XTU raw-1 rule)
+    8. cpu 17 cmd 0x10 read V/F baseline of E-Core 9 -> rc 0 (Pass), ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    9. cpu 17 cmd 0x1C read favored-core word of E-Core 9 -> rc 0 (Pass), word 0x2e2e: favored ratio 46, fused ratio 46
+   10. cpu 17 cmd 0x09 read fused V/F point of E-Core 9 -> rc 0 (Pass), word 0x00048c2e: fused point ratio 46, V target 1136.72 mV (raw 0x48c), adaptive, offset +0.00 mV (raw 0)
+   11. cpu 17 cmd 0x26 read granular-ratio word of E-Core 9 -> rc 0 (Pass), word 0x3
+   12. cpu 17 cmd 0x28 read hardware maximum voltage (0x28) of E-Core 9 -> rc 0 (Pass), word 0x56d: hardware maximum voltage raw 1389 -> V target limit raw 1388 (XTU raw-1 rule)
+   13. cpu 18 cmd 0x10 read V/F baseline of E-Core 10 -> rc 0 (Pass), ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   14. cpu 18 cmd 0x1C read favored-core word of E-Core 10 -> rc 0 (Pass), word 0x2e2e: favored ratio 46, fused ratio 46
+   15. cpu 18 cmd 0x09 read fused V/F point of E-Core 10 -> rc 0 (Pass), word 0x00048c2e: fused point ratio 46, V target 1136.72 mV (raw 0x48c), adaptive, offset +0.00 mV (raw 0)
+   16. cpu 18 cmd 0x26 read granular-ratio word of E-Core 10 -> rc 0 (Pass), word 0x3
+   17. cpu 18 cmd 0x28 read hardware maximum voltage (0x28) of E-Core 10 -> rc 0 (Pass), word 0x56d: hardware maximum voltage raw 1389 -> V target limit raw 1388 (XTU raw-1 rule)
+   18. cpu 19 cmd 0x10 read V/F baseline of E-Core 11 -> rc 0 (Pass), ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   19. cpu 19 cmd 0x1C read favored-core word of E-Core 11 -> rc 0 (Pass), word 0x2e2e: favored ratio 46, fused ratio 46
+   20. cpu 19 cmd 0x09 read fused V/F point of E-Core 11 -> rc 0 (Pass), word 0x00048c2e: fused point ratio 46, V target 1136.72 mV (raw 0x48c), adaptive, offset +0.00 mV (raw 0)
+   21. cpu 19 cmd 0x26 read granular-ratio word of E-Core 11 -> rc 0 (Pass), word 0x3
+   22. cpu 19 cmd 0x28 read hardware maximum voltage (0x28) of E-Core 11 -> rc 0 (Pass), word 0x56d: hardware maximum voltage raw 1389 -> V target limit raw 1388 (XTU raw-1 rule)
+   23. cpu 16 cmd 0x01 read the CPU's own ratio limit (0x01) of E CPUs -> rc 0 (Pass), word 0x778: CPU limit (fused max OC ratio) 120x, ratio overclocking ok
+   24. cpu 16 cmd 0x11 write V/F word of E-Core 8 -> rc 0 (Pass), read-back equal, read-back word 0x00046630
+   25. cpu 16 cmd 0x1D write favored-core word of E-Core 8 -> rc 0 (Pass), read-back equal, read-back word 0x00002e30
+   26. cpu 16 cmd 0x27 write granular-ratio word of E-Core 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000003
+   27. cpu 17 cmd 0x11 write V/F word of E-Core 9 -> rc 0 (Pass), read-back equal, read-back word 0x00046630
+   28. cpu 17 cmd 0x1D write favored-core word of E-Core 9 -> rc 0 (Pass), read-back equal, read-back word 0x00002e30
+   29. cpu 17 cmd 0x27 write granular-ratio word of E-Core 9 -> rc 0 (Pass), read-back equal, read-back word 0x00000003
+   30. cpu 18 cmd 0x11 write V/F word of E-Core 10 -> rc 0 (Pass), read-back equal, read-back word 0x00046630
+   31. cpu 18 cmd 0x1D write favored-core word of E-Core 10 -> rc 0 (Pass), read-back equal, read-back word 0x00002e30
+   32. cpu 18 cmd 0x27 write granular-ratio word of E-Core 10 -> rc 0 (Pass), read-back equal, read-back word 0x00000003
+   33. cpu 19 cmd 0x11 write V/F word of E-Core 11 -> rc 0 (Pass), read-back equal, read-back word 0x00046630
+   34. cpu 19 cmd 0x1D write favored-core word of E-Core 11 -> rc 0 (Pass), read-back equal, read-back word 0x00002e30
+   35. cpu 19 cmd 0x27 write granular-ratio word of E-Core 11 -> rc 0 (Pass), read-back equal, read-back word 0x00000003
+Values as read back (integer mV snaps to 1/1024 V):
+  E-Core 8 (cpu 16): ratio 48, V target 1099.61 mV (raw 0x466), adaptive, offset +0.00 mV (raw 0); was: ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  E-Core 9 (cpu 17): ratio 48, V target 1099.61 mV (raw 0x466), adaptive, offset +0.00 mV (raw 0); was: ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  E-Core 10 (cpu 18): ratio 48, V target 1099.61 mV (raw 0x466), adaptive, offset +0.00 mV (raw 0); was: ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  E-Core 11 (cpu 19): ratio 48, V target 1099.61 mV (raw 0x466), adaptive, offset +0.00 mV (raw 0); was: ratio 46, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+Revert plan (NOT executed; each is a new guarded request after the dwell, or reboot/power-cycle):
+  1. cpu 19 cmd 0x11 p1 0 p2 0 data 0x0000002e (restores the word in effect before the write (a zero ratio / V target is filled in as XTU does))
+  2. cpu 19 cmd 0x1D p1 0 p2 0 data 0x0000002e (favored-core word = the ratio of that CPU's revert 0x11 word)
+  3. cpu 19 cmd 0x27 p1 0 p2 0 data 0x00000003 (granular-ratio word as read before)
+  4. cpu 18 cmd 0x11 p1 0 p2 0 data 0x0000002e (restores the word in effect before the write (a zero ratio / V target is filled in as XTU does))
+  5. cpu 18 cmd 0x1D p1 0 p2 0 data 0x0000002e (favored-core word = the ratio of that CPU's revert 0x11 word)
+  6. cpu 18 cmd 0x27 p1 0 p2 0 data 0x00000003 (granular-ratio word as read before)
+  7. cpu 17 cmd 0x11 p1 0 p2 0 data 0x0000002e (restores the word in effect before the write (a zero ratio / V target is filled in as XTU does))
+  8. cpu 17 cmd 0x1D p1 0 p2 0 data 0x0000002e (favored-core word = the ratio of that CPU's revert 0x11 word)
+  9. cpu 17 cmd 0x27 p1 0 p2 0 data 0x00000003 (granular-ratio word as read before)
+  10. cpu 16 cmd 0x11 p1 0 p2 0 data 0x0000002e (restores the word in effect before the write (a zero ratio / V target is filled in as XTU does))
+  11. cpu 16 cmd 0x1D p1 0 p2 0 data 0x0000002e (favored-core word = the ratio of that CPU's revert 0x11 word)
+  12. cpu 16 cmd 0x27 p1 0 p2 0 data 0x00000003 (granular-ratio word as read before)
+  Note: a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio (a zero word cannot be written; only a reboot clears it), while a word without one reverts exactly (G-124; the revert requests put back the previous XTU-shaped word, never one with a zero field, in the reverse of the order they were applied: after a raise the ratio first, then the voltage; a V/F point word is restored exactly as read).
+  Volatility of these settings is unproven (SAFETY.md): if in doubt, reboot; a write taints the kernel (CPU_OUT_OF_SPEC).
+WARNING: the 0x11 word and its 0x1D/0x27 follow-ups reproduce what XTU sent on Windows; OC words written this way have been read back as sent on Linux, but the semantics of 0x1D/0x27 stay UNVERIFIED. A V target of 0 is sent only on a word with no OC point (ratio at or below the core's top fused ratio): the hardware keeps no target next to an offset there. A zero ratio is never sent (its acceptance is UNVERIFIED)
+WARNING: E-core entries apply to all 4 CPUs of their cluster (XTU writes every E-core); whether one write is cluster-wide is UNVERIFIED
+WARNING: effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV
