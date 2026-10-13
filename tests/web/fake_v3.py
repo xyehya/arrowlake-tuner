@@ -922,7 +922,7 @@ class V3Ops:
             rows.append(row)
         result = {"profiles": rows, "accepted": any(r["source"] == "accepted" for r in rows)}
         if any(r.get("chain") for r in rows):
-            result["note"] = "the accepted state is an older chain of 3 profiles; Restore accepted refuses it until it is one profile: run 'sudo python3 tools/arltuner.py accepted-migrate' once"
+            result["note"] = "the accepted state is an older chain of 3 profiles; Restore accepted refuses it until it is one profile: run 'sudo python3 -I tools/arltuner.py accepted-migrate' once"
         self._reply(rid, True, result=result)
 
     def _op_profiles_accept(self, rid, args):

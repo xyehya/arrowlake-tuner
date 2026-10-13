@@ -4772,7 +4772,7 @@
       return;
     }
     if (acc.length > 1 || acc.some((p) => p.chain === true)) {   // an accepted state from before G-148: a chain, refused by Restore until it is migrated
-      setText("pr-accepted-note", "An older chain of " + acc.length + " profiles. Restore accepted refuses it until it is one profile: run 'sudo python3 tools/arltuner.py accepted-migrate' once.");
+      setText("pr-accepted-note", "An older chain of " + acc.length + " profiles. Restore accepted refuses it until it is one profile: run 'sudo python3 -I tools/arltuner.py accepted-migrate' once.");
       fill($("pr-accepted"), acc.map((p) => el("span", "pr-accepted-name", p.name)));
       return;
     }

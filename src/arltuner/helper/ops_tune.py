@@ -1226,7 +1226,7 @@ def _read_accepted_text(helper: Helper, relative: str, limit: int = _ACCEPTED_FI
 
 #: G-148 (D-044): what to do with an accepted state that is still a chain (several ``profile =`` lines, applied in order before D-044).
 CHAIN_HINT = (
-    "run 'sudo python3 tools/arltuner.py accepted-migrate' once: it builds one complete profile from EXPECTED-words.txt (never from a read) and keeps a backup"
+    "run 'sudo python3 -I tools/arltuner.py accepted-migrate' once: it builds one complete profile from EXPECTED-words.txt (never from a read) and keeps a backup"
 )
 
 
@@ -1936,6 +1936,7 @@ def _predicted_steps(
     profile with ``known`` (the last read, ``_last_baseline``) a word the CPU already holds is not listed (the apply writes only what differs)."""
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
+    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)  # every word is read, also the unchanged ones
     if profile.complete and known is not None:
         baseline, words = known
 
@@ -1969,7 +1970,6 @@ def _predicted_steps(
         for key in ("e", "p"):
             if getattr(profile.turbo, key) is not None:
                 steps.append({"kind": StepKind.WRITE_MSR.value, "table": key})
-    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)
     total = len(steps)
     listed = [{"n": i, **s} for i, s in enumerate(steps[:_MAX_STEPS_LISTED], start=1)]
     return listed, total, reads

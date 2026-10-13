@@ -69,6 +69,7 @@ class ColdBoot(CompleteCase):
         plan, result = self.restore(h)
         self.assertTrue(plan["complete"])
         self.assertEqual(plan["rounds"], 1)  # the shipped policy's 200 mV step covers the deepest offset (-91 mV)
+        self.assertEqual(plan["ops_needed"], 651)  # worst case reserved: 24 scan reads + 257 reads + 185 writes and their read-backs (the reference layout)
         self.assert_expected_words()
         written = [r for r in self.sim.requests if r.cmd == 0x11]
         self.assertFalse([r for r in written if r.p2 == 0], "an OC word the CPU already holds (cold 0 / 0x39) is never rewritten")
@@ -86,6 +87,7 @@ class ColdBoot(CompleteCase):
         before = len(self.sim.requests)
         plan, result = self.restore(h)
         self.assertEqual(plan["steps"], [])  # the preview lists no write: the last read already holds every word
+        self.assertEqual(plan["reads"], 1 + 4 * 24 + 160)  # ... but the apply still reads every word (0x14, 4 per CPU, every point)
         self.assertEqual(result["writes_sent"], 0)
         self.assertFalse([r for r in self.sim.requests[before:] if r.cmd in (0x11, 0x15, 0x1D, 0x27)])
 
