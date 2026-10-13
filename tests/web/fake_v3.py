@@ -914,11 +914,16 @@ class V3Ops:
         for r in self.profiles.values():
             if self.no_accepted and r["source"] == "accepted":
                 continue
-            row = {"name": r["name"], "source": r["source"], "created": r["created"]}
+            row = {"name": r["name"], "source": r["source"], "created": r["created"], "complete": r.get("complete", r["source"] == "accepted")}  # G-148
+            if r.get("chain"):
+                row["chain"] = True
             if self.profiles_include_intent and r.get("intent") is not None:
                 row["intent"] = r["intent"]
             rows.append(row)
-        self._reply(rid, True, result={"profiles": rows, "accepted": any(r["source"] == "accepted" for r in rows)})
+        result = {"profiles": rows, "accepted": any(r["source"] == "accepted" for r in rows)}
+        if any(r.get("chain") for r in rows):
+            result["note"] = "the accepted state is an older chain of 3 profiles; Restore accepted refuses it until it is one profile: run 'sudo python3 tools/arltuner.py accepted-migrate' once"
+        self._reply(rid, True, result=result)
 
     def _op_profiles_accept(self, rid, args):
         """G-129: the user makes a saved profile (or the state of the last read) the accepted state; the fake keeps the current tuning as the accepted one."""
@@ -939,13 +944,37 @@ class V3Ops:
             del self.profiles[n]
         self.accepted = copy.deepcopy(self.tuning)
         self.no_accepted = False
-        self.accepted_chain = [(name, [])]
-        self.profiles[name if args.get("from") == "read" else "accepted:" + name] = {"name": name, "source": "accepted", "created": None, "intent": None}
+        self.accepted_chain = []
+        self.accepted_rows = None
+        self.profiles[name if args.get("from") == "read" else "accepted:" + name] = {"name": name, "source": "accepted", "created": None, "intent": None, "complete": True}
         self._reply(rid, True, result={"name": name, "source": "accepted", "from": "read" if args.get("from") == "read" else "saved", "accepted_at": "2026-10-12T12:00:00Z",
-                                       "replaced": replaced, "cpus": len(UNITS), "core_entries": 0, "points": 0, "turbo": False})
+                                       "replaced": replaced, "cpus": len(UNITS), "core_entries": len(UNITS), "points": 0, "turbo": True, "complete": True})
 
-    # G-123: the accepted chain of the reference machine (profiles/CURRENT: e-p6-split3 -> p-boot-ramp -> p-step7), as profiles.get returns it
-    def seed_accepted_chain(self) -> None:
+    # G-148: the reference machine's accepted state as ONE complete profile (examples/reference-285k/profiles/accepted-2026-10-04.toml), as profiles.get returns it
+    def seed_accepted_reference(self) -> None:
+        merged: dict[str, dict] = {u: {"target": u, "offset": None, "v_target_v": None, "ratio": None} for u in UNITS}
+        for _name, rows in self._reference_chain():
+            for r in rows:
+                old = merged[r["target"]]["offset"]["mv"] if merged[r["target"]]["offset"] else {}
+                merged[r["target"]]["offset"] = {"kind": "points", "mv": {**old, **r["offset"]["mv"]}}
+        for u, r in merged.items():  # every fused point of the unit, the untouched ones at 0 (a complete profile)
+            r["offset"] = {"kind": "points", "mv": {**{str(x): 0 for x in unit_ratios(u)}, **(r["offset"]["mv"] if r["offset"] else {})}}
+        self.profiles.pop("accepted", None)
+        self.accepted_chain = []
+        self.accepted_rows = [merged[u] for u in UNITS]
+        self.profiles["accepted-2026-10-04"] = {"name": "accepted-2026-10-04", "source": "accepted", "created": None, "intent": None, "complete": True}
+
+    # G-148: an accepted state written before G-148 (CURRENT: e-p6-split3 -> p-boot-ramp -> p-step7): listed with the accepted-migrate note, each member its own file
+    def seed_legacy_chain(self) -> None:
+        chain = self._reference_chain()
+        self.profiles.pop("accepted", None)
+        self.accepted_chain = chain
+        self.accepted_rows = None
+        for name, _rows in chain:
+            self.profiles[name] = {"name": name, "source": "accepted", "created": None, "intent": None, "complete": False, "chain": True}
+
+    @staticmethod
+    def _reference_chain() -> list:
         def pts(**by_ratio) -> dict:
             return {"kind": "points", "mv": {r[1:]: v for r, v in by_ratio.items()}}
 
@@ -963,11 +992,7 @@ class V3Ops:
             if i == 3:
                 kw.update(r56=-28, r57=-31)
             step7.append(row(f"P{i}", pts(**kw)))
-        chain = [("e-p6-split3", e_split), ("p-boot-ramp", ramp), ("p-step7", step7)]
-        self.profiles.pop("accepted", None)
-        self.accepted_chain = chain
-        for name, _rows in chain:
-            self.profiles[name] = {"name": name, "source": "accepted", "created": None, "intent": None}
+        return [("e-p6-split3", e_split), ("p-boot-ramp", ramp), ("p-step7", step7)]
 
     @staticmethod
     def _spread(intent: dict) -> list[dict]:
@@ -988,40 +1013,28 @@ class V3Ops:
                 vals += [o["mv"]] if o["kind"] == "curve" else list(o["mv"].values())
                 points += len(o["mv"]) if o["kind"] == "points" else 0
         return {"units": len(rows), "points": points, "deepest_offset_mv": min(vals) if vals else None,
-                "oc_ratios": sum(r.get("ratio") is not None for r in rows), "v_targets": sum(r.get("v_target_v") is not None for r in rows), "turbo": False}
+                "oc_ratios": sum(r.get("ratio") is not None for r in rows), "v_targets": sum(r.get("v_target_v") is not None for r in rows), "turbo": False, "complete": False}
 
     def _op_profiles_get(self, rid, args):
         name = args.get("name")
         if not isinstance(name, str) or not PROFILE_NAME.match(name):
             return self._err(rid, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -")
-        chain = getattr(self, "accepted_chain", [])
-        for i, (stem, rows) in enumerate(chain):
-            if stem != name:
-                continue
-            merged: dict[str, dict] = {}
-            for _s, rs in chain[: i + 1]:
-                for r in rs:
-                    cur = merged.setdefault(r["target"], {"target": r["target"], "offset": None, "v_target_v": None, "ratio": None})
-                    if r["offset"] is not None:
-                        old = cur["offset"]["mv"] if cur["offset"] else {}
-                        cur["offset"] = {"kind": "points", "mv": {**old, **r["offset"]["mv"]}}
-                    for k in ("v_target_v", "ratio"):
-                        if r[k] is not None:
-                            cur[k] = r[k]
-            cum = [merged[u] for u in UNITS if u in merged]
-            return self._reply(rid, True, result={"name": name, "source": "accepted", "created": None, "position": i + 1, "of": len(chain),
-                                                  "chain": [s for s, _ in chain], "contents": {"rows": rows, "turbo": None}, "cumulative": {"rows": cum, "turbo": None},
-                                                  "summary": self._summary_of(rows), "cumulative_summary": self._summary_of(cum)})
         rec = self.profiles.get(name)
-        if rec is not None and rec["source"] == "accepted":   # the placeholder "accepted" entry (no chain seeded): the state the fake treats as accepted
-            rows = [{"target": u, "offset": {"kind": "points", "mv": {str(p["ratio"]): p["offset_mv"] for p in self.accepted[u]["points"]}}, "v_target_v": None, "ratio": None} for u in UNITS]
-            return self._reply(rid, True, result={"name": name, "source": "accepted", "created": rec["created"], "position": 1, "of": 1, "chain": [name],
-                                                  "contents": {"rows": rows, "turbo": None}, "cumulative": {"rows": rows, "turbo": None},
-                                                  "summary": self._summary_of(rows), "cumulative_summary": self._summary_of(rows)})
-        if rec is None or rec.get("intent") is None:
+        for stem, rows in getattr(self, "accepted_chain", []):   # G-148: a member of an older chain stands for its own file only
+            if stem == name:
+                return self._reply(rid, True, result={"name": name, "source": "accepted", "created": None, "complete": False, "chain": True,
+                                                      "contents": {"rows": rows, "turbo": None, "complete": False}, "summary": self._summary_of(rows)})
+        if rec is not None and rec["source"] == "accepted":   # the one accepted profile (G-148: complete)
+            rows = getattr(self, "accepted_rows", None) or [
+                {"target": u, "offset": {"kind": "points", "mv": {str(p["ratio"]): p["offset_mv"] for p in self.accepted[u]["points"]}}, "v_target_v": None, "ratio": None} for u in UNITS]
+            return self._reply(rid, True, result={"name": name, "source": "accepted", "created": rec["created"], "complete": True,
+                                                  "contents": {"rows": rows, "turbo": None, "complete": True}, "summary": {**self._summary_of(rows), "complete": True}})
+        if rec is None or (rec.get("intent") is None and rec.get("rows") is None):
             return self._err(rid, "BAD_REQUEST", f"no saved profile named {name!r}", check="PROFILE_NOT_FOUND")
-        rows = self._spread(rec["intent"])
-        self._reply(rid, True, result={"name": name, "source": "saved", "created": rec["created"], "contents": {"rows": rows, "turbo": None}, "summary": self._summary_of(rows)})
+        complete = rec.get("complete", False)
+        rows = rec["rows"] if rec.get("rows") is not None else self._spread(rec["intent"])
+        self._reply(rid, True, result={"name": name, "source": "saved", "created": rec["created"], "complete": complete, "contents": {"rows": rows, "turbo": None, "complete": complete},
+                                       "summary": {**self._summary_of(rows), "complete": complete}})
 
     def _op_profiles_save(self, rid, args):
         name, intent = args.get("name"), args.get("intent")
@@ -1029,5 +1042,13 @@ class V3Ops:
             return self._err(rid, "BAD_REQUEST", "name must match ^[a-z0-9._-]{1,64}$ and intent must be an object")
         if name in self.profiles:
             return self._err(rid, "REFUSED", f"profile {name!r} exists and is never overwritten", check="EXISTS")
-        self.profiles[name] = {"name": name, "source": "saved", "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "intent": intent}
-        self._reply(rid, True, result={"name": name, "saved": True})
+        if not self.tuning_read:  # G-148: a saved profile is the complete state of this boot's read with the edits over it
+            return self._err(rid, "REFUSED", "no tune.read this boot: a saved profile is the complete state of the CPU (this boot's read with your edits over it), so read first (Tune > Read). Nothing was saved.", check="NO_READ")
+        edits = {r["target"]: r for r in self._spread(intent)}
+        rows = []
+        for u in UNITS:  # every unit: the read's point offsets, the edit's row over it
+            mv = {str(p["ratio"]): p["offset_mv"] for p in self.tuning[u]["points"]}
+            base = {"target": u, "offset": {"kind": "points", "mv": mv}, "v_target_v": None, "ratio": None}
+            rows.append(edits.get(u, base))
+        self.profiles[name] = {"name": name, "source": "saved", "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "intent": intent, "rows": rows, "complete": True}
+        self._reply(rid, True, result={"name": name, "source": "saved", "created": self.profiles[name]["created"], "complete": True, "units": len(UNITS)})

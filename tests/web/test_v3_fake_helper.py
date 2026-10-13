@@ -389,12 +389,15 @@ class TestProfilesAndSampler(V3Base):
     def test_profiles_list_save_never_overwrite_and_plan_by_name(self):
         self.assertEqual([p["name"] for p in self.ok("profiles.list")["profiles"]], ["accepted"])
         intent = {"scope": "simple", "rows": [{"target": "E", "offset": {"kind": "curve", "mv": -60}, "v_target_v": None, "ratio": None}]}
+        self.assertEqual(self.err("profiles.save", {"name": "e-minus-60", "intent": intent}, "REFUSED")["detail"]["check"], "NO_READ")  # G-148: the read is the base
+        self.ok("tune.read")
         self.ok("profiles.save", {"name": "e-minus-60", "intent": intent})
         rows = {p["name"]: p for p in self.ok("profiles.list")["profiles"]}
         self.assertEqual((rows["e-minus-60"]["source"], rows["accepted"]["source"]), ("saved", "accepted"))
         self.assertNotIn("intent", rows["e-minus-60"])   # like the real helper: the list names profiles, profiles.get says what they hold (G-123)
         got = self.ok("profiles.get", {"name": "e-minus-60"})
-        self.assertEqual([r["target"] for r in got["contents"]["rows"]], ["EC0", "EC1", "EC2", "EC3"])
+        self.assertEqual([r["target"] for r in got["contents"]["rows"]], list(v3.UNITS))   # G-148: complete, every unit
+        self.assertTrue(got["complete"])
         self.assertEqual(got["summary"]["deepest_offset_mv"], -60)
         self.err("profiles.get", {"name": "nope"}, "BAD_REQUEST")
         e = self.err("profiles.save", {"name": "e-minus-60", "intent": intent}, "REFUSED")
@@ -524,12 +527,19 @@ class TestContinuityOps(V3Base):
         self.fake.last_read_refused = True   # another boot
         self.assertEqual(self.ok("tune.last"), {"available": False})
 
-    def test_accepted_chain_contents_and_cumulative_state(self):
-        self.fake.seed_accepted_chain()
-        names = [p["name"] for p in self.ok("profiles.list")["profiles"]]
-        self.assertEqual(names, ["e-p6-split3", "p-boot-ramp", "p-step7"])
-        last = self.ok("profiles.get", {"name": "p-step7"})
-        self.assertEqual((last["position"], last["of"], last["chain"]), (3, 3, names))
-        cum = {r["target"]: r for r in last["cumulative"]["rows"]}
-        self.assertEqual(cum["P5"]["offset"]["mv"]["55"], -73)
-        self.assertEqual(cum["EC0"]["offset"]["mv"]["46"], -35)
+    def test_one_complete_accepted_profile_and_a_legacy_chain(self):  # G-148 (D-044)
+        self.fake.seed_accepted_reference()
+        listed = self.ok("profiles.list")["profiles"]
+        self.assertEqual([(p["name"], p["complete"]) for p in listed if p["source"] == "accepted"], [("accepted-2026-10-04", True)])
+        got = self.ok("profiles.get", {"name": "accepted-2026-10-04"})
+        self.assertNotIn("cumulative", got)
+        self.assertNotIn("position", got)
+        rows = {r["target"]: r for r in got["contents"]["rows"]}
+        self.assertEqual(set(rows), set(v3.UNITS))   # every unit
+        self.assertEqual(rows["P5"]["offset"]["mv"]["55"], -73)
+        self.assertEqual(rows["EC0"]["offset"]["mv"]["46"], -35)
+        self.fake.seed_legacy_chain()
+        res = self.ok("profiles.list")
+        self.assertIn("accepted-migrate", res["note"])
+        member = self.ok("profiles.get", {"name": "p-step7"})
+        self.assertEqual((member["complete"], member["chain"]), (False, True))

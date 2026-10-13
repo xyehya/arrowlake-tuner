@@ -329,7 +329,7 @@ fi
 # installs, or one saved in the app) is left exactly as it is; a fresh install has none until the user saves a profile as accepted.
 if [ -d "$ETC/accepted" ]; then echo "accepted/: kept (the user's accepted state is never touched)"; else echo "accepted/: none yet (created by Profiles > Set as accepted)"; fi
 # G-148 (D-044): an accepted state from before G-148 may still be a chain (several 'profile =' lines); Restore accepted refuses it until it is migrated (a hint only)
-if [ -f "$ETC/accepted/CURRENT" ] && [ "$(grep -c '^profile *=' "$ETC/accepted/CURRENT" || true)" -gt 1 ]; then echo "accepted/: an older chain of profiles - run once: sudo python3 -I tools/arltuner.py accepted-migrate --dry-run, then without --dry-run (keeps a backup)"; fi
+if [ -f "$ETC/accepted/CURRENT" ] && [ "$(grep -c '^profile *=' "$ETC/accepted/CURRENT" || true)" -gt 1 ]; then echo "accepted/: an older chain of profiles - run once as root: python3 -I tools/arltuner.py accepted-migrate --dry-run, then without --dry-run (keeps a backup)"; fi
 
 # --- 5. /var/lib/arltuner: audit log, seeded once from the per-user dev log (D-030) ------------------------------------------------
 mkdir -p "$DESTDIR/var/lib"

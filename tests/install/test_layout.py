@@ -243,7 +243,7 @@ class Idempotence(InstallCase):
         chain = self.accepted_bytes()
         r = self.ok_install()
         self.assertEqual([line for line in r.stdout.splitlines() if "accepted-migrate" in line],
-                         ["accepted/: an older chain of profiles - run once: sudo python3 -I tools/arltuner.py accepted-migrate --dry-run, then without --dry-run (keeps a backup)"])
+                         ["accepted/: an older chain of profiles - run once as root: python3 -I tools/arltuner.py accepted-migrate --dry-run, then without --dry-run (keeps a backup)"])
         self.assertEqual(self.accepted_bytes(), chain)
         self.assertNotEqual(chain, before)
 

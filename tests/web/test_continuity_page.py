@@ -41,7 +41,8 @@ class TestStatic(unittest.TestCase):
         self.assertIn("setPoint(", body)
         self.assertIn("confirmDialog(", body)                # replaces pending edits only after a yes
         self.assertEqual(len(re.findall(r'\bapi\(\s*"profiles\.get"', JS)), 1)
-        self.assertIn("isObj(info.cumulative) ? info.cumulative : info.contents", body)   # an accepted step loads the chain up to and including it
+        self.assertIn("info ? info.contents : null", body)   # G-148: a profile is its own state (no chain to accumulate); a complete one names every unit
+        self.assertNotIn("cumulative", JS)
 
     def test_the_budget_is_an_indicator_not_a_countdown(self):
         for gone in ('id="ring-ov"', 'id="ring-sys"', 'id="ov-left"', 'id="hb-left"', 'id="hb-budget"'):
@@ -72,12 +73,15 @@ class TestStatic(unittest.TestCase):
         self.assertGreaterEqual(JS.count("defaultCurveId()"), 4)   # Curves, the Tune preview (twice) and the definition's callers
         self.assertNotIn("CV.list.length ? CV.list[0].id : null;\n    sel.value", JS)
 
-    def test_profiles_page_has_the_chain_and_compare_table(self):
-        for ident in ("pr-chain", "pr-chain-card", "pr-diff", "pr-basis", "pr-load-status"):
+    def test_profiles_page_has_the_accepted_profile_and_compare_table(self):
+        for ident in ("pr-accepted", "pr-accepted-card", "pr-diff", "pr-load-status"):
             self.assertIn(f'id="{ident}"', HTML)
+        for gone in ('id="pr-chain"', 'id="pr-basis"', "As applied", "This file only"):   # G-148: no chain UI, no compare basis toggle
+            self.assertNotIn(gone, HTML + JS)
+        self.assertNotIn(".pr-step", CSS)
         self.assertIn("Change", HTML)
         self.assertIn("compareRows(", func_body("renderProfileDiff"))
-        self.assertIn(".pr-step", CSS)
+        self.assertIn('"partial (legacy)"', func_body("kindPill"))
 
 
 @unittest.skipUnless(os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and sync_playwright and CHROME, "set ARLTUNER_BROWSER_TESTS=1 (needs playwright + chrome)")
@@ -91,11 +95,13 @@ class TestBrowser(unittest.TestCase):
             time.sleep(0.1)
         raise AssertionError("condition not reached")
 
-    def test_stored_read_chain_compare_load_and_budget(self):
+    def test_stored_read_accepted_compare_load_and_budget(self):
         from tests.web import v3_harness as h
 
         srv, fake, stop = h.start(apply_delay=0.01, seed=False)
-        fake.seed_accepted_chain()
+        fake.seed_accepted_reference()
+        fake.profiles["old-p5"] = {"name": "old-p5", "source": "saved", "created": "2026-10-03T10:00:00Z",   # a profile saved before G-148: partial (legacy)
+                                   "intent": {"scope": "unit", "rows": [{"target": "P5", "offset": {"kind": "points", "mv": {"55": -50}}, "v_target_v": None, "ratio": None}]}}
         fake.seed_last_read(time.time() - 600)
         fake.ops_used_v3 = 262
         self.addCleanup(fake.close)
@@ -125,20 +131,22 @@ class TestBrowser(unittest.TestCase):
                 self.until(lambda: page.inner_text("#ov-used") == "262")
                 self.assertEqual(page.inner_text("#ov-used"), "262")
                 self.assertGreater(page.locator("#sp-ops-ov path").count(), 0)
-                # profiles: chain, per-profile summary, compare, load
+                # profiles: the one accepted profile, per-profile summary and kind, compare, load
                 page.click("#tab-profiles")
-                page.wait_for_selector("#pr-chain .pr-step >> nth=2", timeout=8000)
-                self.assertEqual(page.locator("#pr-chain .pr-step-name").all_inner_texts(), ["e-p6-split3", "p-boot-ramp", "p-step7"])
+                page.wait_for_selector("#pr-accepted .pr-accepted-name", timeout=8000)
+                self.assertEqual(page.locator("#pr-accepted .pr-accepted-name").all_inner_texts(), ["accepted-2026-10-04"])
                 self.until(lambda: "reading" not in page.inner_text("#pr-list"))
                 self.assertIn("deepest", page.inner_text("#pr-list"))
-                page.select_option("#pr-a", "p-boot-ramp")
-                page.select_option("#pr-b", "p-step7")
+                self.assertIn("partial (legacy)", page.locator("#pr-list li", has_text="old-p5").inner_text())
+                page.select_option("#pr-a", "accepted-2026-10-04")
+                page.select_option("#pr-b", "old-p5")
                 page.wait_for_selector("#pr-diff:not([hidden])")
                 self.assertIn("Offset at 55", page.inner_text("#pr-diff-body"))
-                self.assertIn("+22", page.inner_text("#pr-diff-body"))
-                page.click("#pr-list li:nth-child(3) button:has-text('Load into Tune')")
+                self.assertIn("+23", page.inner_text("#pr-diff-body"))   # P5 55x: -73 accepted, -50 in the old profile
+                self.assertIn("partial (legacy)", page.inner_text("#pr-diff-note"))
+                page.locator("#pr-list li", has_text="accepted-2026-10-04").locator("button:has-text('Load into Tune')").click()
                 page.wait_for_selector("#panel-tune:not([hidden])")
-                self.assertIn("Loaded \"p-step7\"", page.inner_text("#tn-status"))
+                self.assertIn("Loaded \"accepted-2026-10-04\"", page.inner_text("#tn-status"))
                 self.assertIn("units changed", page.inner_text("#tn-foot-msg"))
                 self.assertEqual([r["op"] for r in fake.requests if r["op"] in ("tune.apply", "tune.plan")], [])   # nothing sent by loading
             finally:

@@ -475,7 +475,7 @@ def shot_stress(b: Browser) -> list[str]:
 
 def shot_profiles(b: Browser) -> list[str]:
     show_tab(b, "profiles", "!document.getElementById('panel-profiles').hidden")
-    # the accepted chain and the list read each profile's contents; do not shoot while one is still loading or failed to load
+    # the accepted profile (G-148: one, no chain) and the list read each profile's contents; do not shoot while one is still loading or failed to load
     if not b.wait_for("!/reading\\.\\.\\.|contents unavailable/.test(document.getElementById('panel-profiles').textContent)", 20):
         raise Skip("profile contents did not load (still 'reading' or 'unavailable'); run again")
     b.pump(1.0)

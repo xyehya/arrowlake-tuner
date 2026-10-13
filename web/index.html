@@ -402,9 +402,9 @@
   <!-- ============================== Profiles ============================== -->
   <section class="panel" id="panel-profiles" role="tabpanel" aria-labelledby="tab-profiles" tabindex="0" hidden>
     <div class="pr-grid">
-      <article class="card pr-chain-card" id="pr-chain-card" hidden>
-        <div class="card-head"><h2>Accepted state</h2><span class="muted" id="pr-chain-note"></span></div>
-        <ol class="pr-chain" id="pr-chain" aria-label="Accepted profiles in the order Restore accepted applies them"></ol>
+      <article class="card pr-accepted-card" id="pr-accepted-card" hidden>
+        <div class="card-head"><h2>Accepted state</h2><span class="muted" id="pr-accepted-note"></span></div>
+        <div class="pr-accepted" id="pr-accepted" aria-label="The accepted profile"></div>
         <div class="row-tight"><button type="button" class="pr-act" id="btn-pr-accept-read" title="Records what the CPU holds now (the last read) as the accepted state. Nothing is written to the CPU.">Set the current state as accepted</button>
           <button type="button" class="pr-act" id="btn-pr-fingerprint" title="Records this CPU's identity and each core's fused top point (from the last read) next to the accepted state, for the Windows restore. The accepted tuning is not changed and nothing is written to the CPU.">Record CPU fingerprint for Windows</button></div>
       </article>
@@ -416,14 +416,14 @@
       </article>
       <article class="card">
         <div class="card-head"><h2>Save the current Tune settings</h2></div>
-        <p class="muted">Saves the unapplied choices from Tune as a profile. A saved profile is never overwritten.</p>
+        <p class="muted">Saves a complete profile: what the CPU holds (the last read) for every unit, with the unapplied choices from Tune over it. A saved profile is never overwritten.</p>
         <div class="field"><label class="field-label" for="pr-name">Name</label><input type="text" id="pr-name" maxlength="64" placeholder="a-z 0-9 . _ -" autocomplete="off" spellcheck="false" pattern="[a-z0-9._-]{1,64}"></div>
         <p id="pr-name-note" class="muted"></p>
         <div class="row-tight"><button type="button" id="btn-pr-save" class="primary" disabled>Save profile</button></div>
         <p id="pr-status" class="muted" role="status"></p>
       </article>
       <article class="card pr-diff">
-        <div class="card-head"><h2>Compare two profiles</h2><div class="seg" id="pr-basis" role="group" aria-label="What an accepted profile is compared as"></div></div>
+        <div class="card-head"><h2>Compare two profiles</h2></div>
         <div class="diff-pick">
           <select id="pr-a" aria-label="First profile"></select>
           <span class="muted">against</span>
