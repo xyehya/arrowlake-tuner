@@ -109,6 +109,9 @@ __all__ = [
     "main",
 ]
 
+#: The accepted state the root helper writes (``profiles.accept``, D-036); ``accepted-migrate`` works on it by default.
+ACCEPTED_DIR = "/etc/arltuner/accepted"
+
 EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_REFUSED = 2
@@ -322,7 +325,7 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
         out=out,
         err=err,
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="{topology,plan,apply,read-vf,read,vf-dump,point-offset,compare-accepted}")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{topology,plan,apply,read-vf,read,vf-dump,point-offset,compare-accepted,accepted-migrate}")
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
@@ -369,14 +372,8 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
         "--neutralize-residual",
         action="store_true",
         help="restore of the accepted state (G-147): first read the OC word of every unit the accepted state gives no OC ratio and rewrite a residual OC point (an OC ratio "
-        "above the top fused ratio that only a cold boot clears) with a V target below the accepted top fused point, so it runs the accepted voltages; costs 2 reads per unit",
-    )
-    p_apply.add_argument(
-        "--accepted-before",
-        metavar="PROFILE.toml",
-        action="append",
-        default=[],
-        help="with --neutralize-residual: a profile of the accepted chain applied before this one (repeatable); its OC ratios count as accepted",
+        "above the top fused ratio that only a cold boot clears) with a V target below the accepted top fused point, so it runs the accepted voltages; costs 2 reads per unit. "
+        "Always on for a complete profile (G-148), which is also applied in one run within the step limits (rounds) and writes only the words that differ",
     )
     common(p_apply)
 
@@ -443,6 +440,17 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
     p_cmp.add_argument("--readback", metavar="FILE", required=True, help="JSON written by 'vf-dump --json'")
     p_cmp.add_argument("--expected", metavar="FILE", required=True, help="the accepted state's EXPECTED-words.txt")
     p_cmp.add_argument("--fingerprint", dest="fingerprint_file", metavar="FILE", help="the accepted state's fingerprint.json (its fused 0x09 words decide what is a residual OC point; without it only identical words match)")
+
+    p_mig = sub.add_parser(
+        "accepted-migrate",
+        out=out,
+        err=err,
+        help="no hardware, run as root: turn an accepted CHAIN (CURRENT with several 'profile =' lines) into ONE complete profile built from EXPECTED-words.txt "
+        "(never from a read); keeps EXPECTED-words.txt and fingerprint.json, backs the old directory up to accepted.bak-<UTC>/ (G-148, D-044)",
+    )
+    p_mig.add_argument("--dir", default=ACCEPTED_DIR, metavar="DIR", help=f"the accepted state (default {ACCEPTED_DIR})")
+    p_mig.add_argument("--dry-run", action="store_true", help="print the profile it would write and its differences from the chain's merge; change nothing")
+    p_mig.add_argument("--sim", action="store_true", help="use the simulated reference topology instead of this system's (tests and dry runs off the machine)")
     return parser
 
 
@@ -827,6 +835,7 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
         msr_words=msr_words,
         point_words=point_words,
         oc_cap_words=oc_cap_words,
+        only_changed=profile.complete,
     )
 
 
@@ -891,10 +900,13 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
         _identity_policy_check(ctx, policy)
         plan_policy = dataclasses.replace(policy, max_operations_per_session=policy.max_operations_per_session - _identity_ops(ctx))
         extra_ops = _identity_ops(ctx)
-    accepted_before = [_load_profile_or_exit(ctx, path) for path in args.accepted_before]
-    if accepted_before and not args.neutralize_residual:
-        ctx.fail(EXIT_USAGE, "--accepted-before only applies with --neutralize-residual")
-    scan = residual.scan_plan(profile, accepted_before, topology, plan_policy) if args.neutralize_residual else ()
+    restore = bool(args.neutralize_residual) or profile.complete  # G-148: a complete profile is the accepted kind of state: residual rule and rounds always
+    if profile.complete:
+        try:
+            profile.check_complete(topology)
+        except ProfileError as exc:
+            ctx.refuse(f"{exc}. Nothing was sent.")
+    scan = residual.scan_plan(profile, topology, plan_policy) if restore else ()
     boot_used = _boot_ops_used(ctx, args.audit) + extra_ops
     try:
         preflight(profile, topology, plan_policy, boot_ops_used=boot_used, extra_ops=len(scan))
@@ -914,7 +926,9 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
             sim = ctx.sim_factory()
             plan = _sim_plan(ctx, sim, profile, topology, policy)
             ctx.say(format_plan(plan))
-            if not plan.allowed:
+            if restore and plan.next_profile_text is not None:
+                ctx.say("the change is larger than the per-operation step limits: the apply splits it into guarded rounds within this run (G-148); nothing else is assumed.")
+            elif not plan.allowed:
                 ctx.refuse("the plan would not be allowed (see above). Nothing was sent.")
     except (ProfileError, PlanError) as exc:
         ctx.fail(EXIT_USAGE, f"plan error: {exc}")
@@ -943,9 +957,9 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
                 sleep=sleep,
                 clock=clock,
                 progress=ctx.say,
-                neutralize_residual=bool(args.neutralize_residual),
-                accepted_before=accepted_before,
+                neutralize_residual=restore,
                 boot_ops_used=boot_used,
+                auto_ramp=restore,
             )
         except PreflightError as exc:
             partial = exc.report
@@ -1073,6 +1087,36 @@ def _cmd_compare_accepted(ctx: _Ctx, args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     extra = f" ({equivalent} equivalent: {residual.RESIDUAL_NOTE})" if equivalent else ""
     ctx.say(f"RESTORED: all {len(expected)} cores/clusters match the accepted state{extra}.")
+    return EXIT_OK
+
+
+def _cmd_accepted_migrate(ctx: _Ctx, args: argparse.Namespace) -> int:
+    """G-148 (D-044, decision 4): the accepted chain -> one complete profile from ``EXPECTED-words.txt`` (never a read), with a backup; ``--dry-run`` changes nothing.
+    Exit 0 when migrated (or nothing to migrate), 2 when refused (nothing was changed), 1 on usage errors. Sends nothing to the CPU."""
+    from arltuner.profiles.migrate import MigrateError, apply_migration, plan_migration, summary_lines
+
+    topology = arl_s_285k() if args.sim else _topology_for(ctx, True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(ctx.wall_clock()))
+    try:
+        migration = plan_migration(args.dir, topology, stamp)
+    except MigrateError as exc:
+        if "nothing to migrate" in str(exc):
+            ctx.say(f"{exc}.")
+            return EXIT_OK
+        ctx.refuse(f"accepted-migrate: {exc}. Nothing was changed.")
+    for line in summary_lines(migration):
+        ctx.say(line)
+    if args.dry_run:
+        ctx.say(f"--dry-run: nothing was changed. The profile it would write (profiles/{migration.name}.toml):")
+        ctx.say(migration.profile_toml.rstrip("\n"))
+        return EXIT_OK
+    try:
+        backup = apply_migration(args.dir, migration, euid=os.geteuid(), stamp=stamp)
+    except MigrateError as exc:
+        ctx.refuse(f"accepted-migrate: {exc}")
+    ctx.say(f"backup of the old accepted state: {backup}")
+    ctx.say(f"{args.dir}/CURRENT now names one profile: profiles/{migration.name}.toml (EXPECTED-words.txt and fingerprint.json unchanged).")
+    ctx.say("Next: Restore accepted (Tune) or tools/lnx/restore_tuning.sh applies it in one run; check the result with --check.")
     return EXIT_OK
 
 
@@ -1466,6 +1510,7 @@ _COMMANDS: dict[str, Callable[[_Ctx, argparse.Namespace], int]] = {
     "vf-dump": _cmd_vf_dump,
     "point-offset": _cmd_point_offset,
     "compare-accepted": _cmd_compare_accepted,
+    "accepted-migrate": _cmd_accepted_migrate,
 }
 
 

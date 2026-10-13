@@ -55,7 +55,9 @@ class AcceptSaved(AcceptCase):
         profile = load_profile(files["profiles/mine.toml"])
         self.assertEqual(profile.name, "mine")
         self.assertEqual({(p.kind, p.index, p.point, p.offset_mv, p.expect_ratio) for p in profile.points if p.index == 3 and p.point == 5}, {("P", 3, 5, -60, 53)})
-        self.assertEqual({(c.kind, c.index, c.offset_mv) for c in profile.entries}, {("P", 4, -40)})
+        self.assertTrue(profile.complete)  # G-148 (D-044): the complete state of the read, every unit and fused point
+        self.assertEqual({(c.kind, c.index, c.offset_mv) for c in profile.entries if c.offset_mv}, {("P", 4, -40)})
+        self.assertEqual(len(profile.entries), 12)
         # the words file is what the chip holds, in the format accepted_match reads
         table = _parse_expected(files["EXPECTED-words.txt"])
         self.assertEqual(sorted(table), [*range(8), 8, 12, 16, 20])
@@ -76,7 +78,7 @@ class AcceptSaved(AcceptCase):
         self.assertTrue(after["accepted_match"] and all(c["match"] for c in after["accepted_match"]), after["accepted_match"])
         listed = h.call("l", "profiles.list", {})["result"]
         self.assertTrue(listed["accepted"])
-        self.assertIn({"name": "mine", "source": "accepted", "created": None}, listed["profiles"])
+        self.assertIn({"name": "mine", "source": "accepted", "created": None, "complete": True}, listed["profiles"])
 
     def test_tune_last_compares_with_the_state_accepted_after_the_read(self) -> None:
         """No apply this boot (applied_at is null): the stored read must still be compared with an accepted state that appeared after it."""

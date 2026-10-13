@@ -4,6 +4,10 @@ Pure: no files, no hardware. A saved profile is already an intent (rows over ``P
 :class:`~arltuner.profiles.schema.Profile` (TOML) whose ``[[point]]`` entries are numbered points, converted here to ``{ratio: mV}`` with the platform's
 point ratios of the last read (live; a point without a known ratio falls back to its ``expect_ratio``). A unit with a whole-curve offset *and* point entries becomes ``points`` over every fused ratio (the curve
 value first, the point entries over it), the order the planner writes them in.
+
+G-148 (D-044): a **complete** profile names every unit and every fused point (offsets of 0 included). Its rows say so (``complete: true`` in the contents):
+a unit whose points all hold 0 and whose OC word carries a whole-curve offset is shown as that curve offset (what the Tune editor set); otherwise the points
+are listed. "Load into Tune" therefore fills every unit. A saved partial profile (older than G-148) is ``complete: false`` ("partial (legacy)").
 """
 from __future__ import annotations
 
@@ -49,20 +53,22 @@ def profile_contents(profile: Profile, topology: Any, unit_of_cpu: Callable[[int
         unit = unit_of_cpu(p.cpu)
         kinds[unit] = p.kind
         table = point_ratios.get(unit) or point_ratios.get(p.kind) or ()
-        ratio = table[p.point - 1] if 1 <= p.point <= len(table) else p.expect_ratio
+        ratio = (p.expect_ratio if profile.complete else None) or (table[p.point - 1] if 1 <= p.point <= len(table) else p.expect_ratio)
         if ratio is not None:
             pts.setdefault(unit, {})[int(ratio)] = p.offset_mv
     rows: list[dict[str, Any]] = []
     for unit in sorted({*curve, *vt, *oc, *pts}, key=unit_order):
         offset: dict[str, Any] | None = None
-        if unit in pts:
+        if profile.complete and unit in pts and not any(pts[unit].values()):
+            offset = {"kind": "curve", "mv": curve.get(unit, 0)}  # G-148: every point at 0: the unit's state is its whole-curve offset (0 = untouched)
+        elif unit in pts:
             base = {int(r): curve[unit] for r in (point_ratios.get(unit) or point_ratios.get(kinds[unit]) or ())} if unit in curve else {}
             base.update(pts[unit])
             offset = {"kind": "points", "mv": {str(r): base[r] for r in sorted(base)}}
         elif unit in curve:
             offset = {"kind": "curve", "mv": curve[unit]}
         rows.append(_row(unit, offset, vt.get(unit), oc.get(unit)))
-    return {"rows": rows, "turbo": _turbo(profile)}
+    return {"rows": rows, "turbo": _turbo(profile), "complete": profile.complete}
 
 
 def intent_contents(intent: Mapping[str, Any], unit_ids: Sequence[str]) -> dict[str, Any]:
@@ -75,11 +81,11 @@ def intent_contents(intent: Mapping[str, Any], unit_ids: Sequence[str]) -> dict[
             if unit in unit_ids:
                 by_unit[unit] = _row(unit, r.get("offset"), r.get("v_target_v"), r.get("ratio"))
     turbo = intent.get("turbo")
-    return {"rows": [by_unit[u] for u in sorted(by_unit, key=unit_order)], "turbo": turbo if isinstance(turbo, dict) and turbo else None}
+    return {"rows": [by_unit[u] for u in sorted(by_unit, key=unit_order)], "turbo": turbo if isinstance(turbo, dict) and turbo else None, "complete": False}
 
 
 def summarize(contents: Mapping[str, Any]) -> dict[str, Any]:
-    """``{units, points, deepest_offset_mv, oc_ratios, v_targets, turbo}`` for the list view and the compare header."""
+    """``{units, points, deepest_offset_mv, oc_ratios, v_targets, turbo, complete}`` for the list view and the compare header."""
     deepest: int | None = None
     points = oc = vt = 0
     rows = contents.get("rows", [])
@@ -92,4 +98,5 @@ def summarize(contents: Mapping[str, Any]) -> dict[str, Any]:
             deepest = low if deepest is None else min(deepest, low)
         oc += r.get("ratio") is not None
         vt += r.get("v_target_v") is not None
-    return {"units": len(rows), "points": points, "deepest_offset_mv": deepest, "oc_ratios": oc, "v_targets": vt, "turbo": bool(contents.get("turbo"))}
+    return {"units": len(rows), "points": points, "deepest_offset_mv": deepest, "oc_ratios": oc, "v_targets": vt, "turbo": bool(contents.get("turbo")),
+            "complete": contents.get("complete") is True}

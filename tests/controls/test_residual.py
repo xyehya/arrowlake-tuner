@@ -229,13 +229,6 @@ class Restore(Case):
         self.assertNotIn(12, scan)
         self.assertEqual(len(scan), 2 * 11)
 
-    def test_chain_rows_before_the_last_profile_count_as_accepted(self) -> None:
-        s = self.session()
-        earlier = profile(e_core(4, ratio=48, oc_voltage_mv=1150), name="earlier")
-        report = s.apply(accepted_profile(), neutralize_residual=True, accepted_before=(earlier,))
-        scan = [r.step.cpu for r in report.steps if "restore scan" in r.step.purpose]
-        self.assertNotIn(12, scan)
-
     def test_the_policy_ratio_ceiling_is_never_widened(self) -> None:
         pol = with_point_entries(policy_with(max_ops=400, dwell=0.0, boot_ops=2000, ratio_max={"P": None, "E": 47}))
         s = self.session(policy=pol)

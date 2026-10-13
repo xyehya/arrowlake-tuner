@@ -44,7 +44,7 @@ __all__ = [
     "ResidualUnit",
     "classify",
     "compare_words",
-    "merged_rows",
+    "unit_rows",
     "neutral_equivalent",
     "neutral_target",
     "neutralise",
@@ -105,36 +105,34 @@ def _unit_rep(topology: Topology) -> dict[str, tuple[str, int, int]]:
     return out
 
 
-def merged_rows(profiles: Sequence[Profile], topology: Topology) -> dict[str, dict[str, int | None]]:
-    """unit id -> ``{ratio, oc_voltage_mv, offset_mv}`` of ``profiles`` applied in order (a later row overrides the fields it sets), as the restore merges the accepted chain."""
+def unit_rows(profile: Profile, topology: Topology) -> dict[str, dict[str, int | None]]:
+    """unit id -> ``{ratio, oc_voltage_mv, offset_mv}`` of the accepted profile's ``[[core]]`` rows (G-148, D-044: the accepted state is one profile)."""
     rows: dict[str, dict[str, int | None]] = {}
-    for prof in profiles:
-        for c in prof.entries:
-            unit = topology.unit_of_cpu(topology.resolve(c.kind, c.index).cpu)
-            cur = rows.setdefault(unit, {"ratio": None, "oc_voltage_mv": None, "offset_mv": None})
-            for key in ("ratio", "oc_voltage_mv", "offset_mv"):
-                value = getattr(c, key)
-                if value is not None:
-                    cur[key] = value
+    for c in profile.entries:
+        unit = topology.unit_of_cpu(topology.resolve(c.kind, c.index).cpu)
+        cur = rows.setdefault(unit, {"ratio": None, "oc_voltage_mv": None, "offset_mv": None})
+        for key in ("ratio", "oc_voltage_mv", "offset_mv"):
+            value = getattr(c, key)
+            if value is not None:
+                cur[key] = value
     return rows
 
 
-def _top_offsets(profiles: Sequence[Profile], topology: Topology) -> dict[tuple[str, int], int]:
-    """(unit id, point ratio) -> accepted offset in mV of the ``[[point]]`` rows that name that ratio (``expect_ratio``); a later profile replaces an earlier one."""
+def _top_offsets(profile: Profile, topology: Topology) -> dict[tuple[str, int], int]:
+    """(unit id, point ratio) -> accepted offset in mV of the ``[[point]]`` rows that name that ratio (``expect_ratio``)."""
     out: dict[tuple[str, int], int] = {}
-    for prof in profiles:
-        for p in prof.points:
-            if p.expect_ratio is None:
-                continue
-            unit = topology.unit_of_cpu(topology.resolve(p.kind, p.index).cpu)
-            out[(unit, p.expect_ratio)] = p.offset_mv
+    for p in profile.points:
+        if p.expect_ratio is None:
+            continue
+        unit = topology.unit_of_cpu(topology.resolve(p.kind, p.index).cpu)
+        out[(unit, p.expect_ratio)] = p.offset_mv
     return out
 
 
-def scan_cpus(profile: Profile, accepted_before: Sequence[Profile], topology: Topology) -> tuple[int, ...]:
-    """The CPU to read in every unit for which the accepted state (``accepted_before`` + ``profile``) sets no OC ratio and no OC voltage: those are the units a residual OC
-    point could sit in. A unit with an OC ratio in the accepted state is left to the normal plan."""
-    rows = merged_rows([*accepted_before, profile], topology)
+def scan_cpus(profile: Profile, topology: Topology) -> tuple[int, ...]:
+    """The CPU to read in every unit for which the accepted profile sets no OC ratio and no OC voltage: those are the units a residual OC point could sit in. A unit
+    with an OC ratio in the accepted state is left to the normal plan."""
+    rows = unit_rows(profile, topology)
     out: list[int] = []
     for unit, (_, _, cpu) in _unit_rep(topology).items():
         row = rows.get(unit)
@@ -161,9 +159,9 @@ def scan_steps(cpus: Sequence[int], topology: Topology, policy: Policy, first_nu
     return tuple(steps)
 
 
-def scan_plan(profile: Profile, accepted_before: Sequence[Profile], topology: Topology, policy: Policy) -> tuple[PlanStep, ...]:
+def scan_plan(profile: Profile, topology: Topology, policy: Policy) -> tuple[PlanStep, ...]:
     """The scan reads that will be sent: ``scan_steps`` of ``scan_cpus``, minus the CPUs whose reads the policy does not allow (those units are not scanned)."""
-    cpus = scan_cpus(profile, accepted_before, topology)
+    cpus = scan_cpus(profile, topology)
     steps = scan_steps(cpus, topology, policy)
     skipped = {st.cpu for st in steps if not st.verdict.allowed}
     # numbered -1, -2, ...: they are no steps of the plan, and a report keyed by step number (``tune.apply`` rows) must not mistake them for one
@@ -208,18 +206,17 @@ def neutral_target(fused_word: int, top_offset_mv: int, held_raw: int, max_v_ste
 # --------------------------------------------------------------------------------------------------------------
 def neutralise(
     profile: Profile,
-    accepted_before: Sequence[Profile],
     topology: Topology,
     policy: Policy,
     vf_words: Mapping[int, int],
     fused_words: Mapping[int, int],
 ) -> Neutralisation:
-    """``profile`` plus one ``[[core]]`` row per unit whose live OC word (``vf_words``, cpu -> ``0x10``) is a residual OC point against the accepted state
-    (``accepted_before`` + ``profile``) with the top fused ratio of ``fused_words`` (cpu -> ``0x09``). A unit that is already neutral, whose word is static, whose
-    ratio the policy forbids, or whose target is not reachable in one step is left alone (and named in ``notes``)."""
-    chain = [*accepted_before, profile]
-    rows = merged_rows(chain, topology)
-    tops = _top_offsets(chain, topology)
+    """``profile`` (the accepted profile) plus one ``[[core]]`` row per unit whose live OC word (``vf_words``, cpu -> ``0x10``) is a residual OC point against it, with the
+    top fused ratio of ``fused_words`` (cpu -> ``0x09``). A unit that is already neutral, whose word is static, whose ratio the policy forbids, or whose target is not
+    reachable in one step is left alone (and named in ``notes``). A replaced row keeps the accepted row's ``fused_top_ratio`` (G-148: a complete profile stays one)."""
+    rows = unit_rows(profile, topology)
+    tops = _top_offsets(profile, topology)
+    accepted_rows = {topology.unit_of_cpu(topology.resolve(e.kind, e.index).cpu): e for e in profile.entries}
     reps = _unit_rep(topology)
     new_rows: dict[str, CoreSetting] = {}
     units: list[ResidualUnit] = []
@@ -251,7 +248,11 @@ def neutralise(
             continue
         raw, mv = target
         try:
-            new_rows[unit] = CoreSetting(kind, index, ratio=live.ratio, oc_voltage_mv=mv, offset_mv=offset_mv)
+            old = accepted_rows.get(unit)
+            new_rows[unit] = CoreSetting(
+                kind if old is None else old.kind, index if old is None else old.index, ratio=live.ratio, oc_voltage_mv=mv, offset_mv=offset_mv,
+                fused_top_ratio=None if old is None else old.fused_top_ratio,
+            )
         except ProfileError as exc:
             notes.append(f"{unit}: residual OC point {live.ratio}x not neutralised: {exc}")
             continue
@@ -263,7 +264,7 @@ def neutralise(
         return Neutralisation(profile, (), tuple(notes))
     kept = [e for e in profile.entries if topology.unit_of_cpu(topology.resolve(e.kind, e.index).cpu) not in new_rows]
     entries = (*kept, *new_rows.values())
-    return Neutralisation(Profile(profile.name, entries, profile.turbo, profile.points), tuple(units), tuple(notes))
+    return Neutralisation(replace(profile, entries=entries), tuple(units), tuple(notes))
 
 
 def v_step_raw(policy: Policy) -> int:

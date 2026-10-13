@@ -13,8 +13,12 @@ from .schema import (
     TurboTables,
     load_profile,
 )
+from .complete import BuildError, complete_from_words, overlay
 
 __all__ = [
+    "BuildError",
+    "complete_from_words",
+    "overlay",
     "PLATFORM",
     "POINT_RANGE",
     "TURBO_BUCKETS",

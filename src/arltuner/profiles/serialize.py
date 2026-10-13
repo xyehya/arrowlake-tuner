@@ -20,10 +20,13 @@ def dump_profile(profile: Profile, header: str = "") -> str:
     if not _PLAIN_NAME.match(profile.name):
         raise ProfileError(f"meta.name: {profile.name!r} is not a plain name (A-Z a-z 0-9 . _ -)")
     lines: list[str] = [f"# {line}".rstrip() for line in header.splitlines()]
-    lines += ["[meta]", f'name = "{profile.name}"', f'platform = "{PLATFORM}"', ""]
+    lines += ["[meta]", f'name = "{profile.name}"', f'platform = "{PLATFORM}"']
+    if profile.complete:
+        lines.append("complete = true  # G-148 (D-044): the whole tuning state of the CPU; applying it writes only the words that differ")
+    lines.append("")
     for c in profile.entries:
         lines += ["[[core]]", f'kind = "{c.kind}"', f"index = {c.index}"]
-        for key in ("ratio", "oc_voltage_mv", "offset_mv"):
+        for key in ("fused_top_ratio", "ratio", "oc_voltage_mv", "offset_mv"):
             value = getattr(c, key)
             if value is not None:
                 lines.append(f"{key} = {int(value)}")

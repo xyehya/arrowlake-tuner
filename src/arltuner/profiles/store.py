@@ -1,7 +1,8 @@
 """Root-owned store of saved tuning intents (G-112, contract 9 ``profiles.*``): ``/var/lib/arltuner/profiles/<name>.json``.
 
-A saved profile is the *intent* the Tune page sends (``{scope, rows}``), not a word table: it is resolved against the words read this boot every time
-it is planned. Names are ``^[a-z0-9._-]{1,64}$`` and **never overwritten** (``EXISTS``). The same open rules as the rest of the helper (SPEC 4.4,
+G-148 (D-044): a profile saved now is **complete**: ``{name, created, profile}`` where ``profile`` is the TOML text of a complete profile (this boot's read
+with the editor's rows laid over it, :mod:`arltuner.profiles.complete`). A profile saved before G-148 is ``{name, created, intent}``: the *intent* the Tune page
+sent (``{scope, rows}``), resolved against the words read this boot every time it is planned -- "partial (legacy)", still loadable. Names are ``^[a-z0-9._-]{1,64}$`` and **never overwritten** (``EXISTS``). The same open rules as the rest of the helper (SPEC 4.4,
 contract 8): the directory is created 0700 and must be owned by the helper's euid and not group/world-writable; files are created with
 ``O_CREAT | O_EXCL | O_NOFOLLOW`` (mode 0600), read with ``O_NOFOLLOW`` (the same checks on the opened descriptor).
 Standard library only, no hardware.
@@ -75,10 +76,14 @@ class ProfileStore:
         return self.directory / (name + _SUFFIX)
 
     # ---------------------------------------------------------------- operations
-    def save(self, name: str, intent: dict[str, Any]) -> dict[str, Any]:
-        """Create ``<name>.json`` (never overwrite: ``EXISTS``). Returns the stored record ``{name, created, intent}``."""
+    def save(self, name: str, intent: dict[str, Any] | None = None, *, profile: str | None = None) -> dict[str, Any]:
+        """Create ``<name>.json`` (never overwrite: ``EXISTS``) holding a complete profile's TOML text (``profile``, G-148) or -- legacy shape, kept for the tests and
+        older callers -- an ``intent``. Returns the stored record ``{name, created, profile | intent}``."""
         path = self._path(name)
-        record = {"name": name, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._wall())), "intent": intent}
+        if (intent is None) == (profile is None):
+            raise ValueError("save needs exactly one of intent / profile")
+        body: dict[str, Any] = {"profile": profile} if profile is not None else {"intent": intent}
+        record = {"name": name, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._wall())), **body}
         data = _json_bytes(record)
         if len(data) > MAX_PROFILE_BYTES:
             raise ProfileStoreError("TOO_BIG", f"the profile is {len(data)} bytes (limit {MAX_PROFILE_BYTES})")
@@ -141,12 +146,13 @@ class ProfileStore:
             record = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             raise ProfileStoreError("UNTRUSTED", f"{path} is not valid JSON") from None
-        if not isinstance(record, dict) or record.get("name") != name or not isinstance(record.get("intent"), dict):
+        if not isinstance(record, dict) or record.get("name") != name or not (isinstance(record.get("intent"), dict) or isinstance(record.get("profile"), str)):
             raise ProfileStoreError("UNTRUSTED", f"{path} is not a saved profile named {name!r}")
         return record
 
     def list(self) -> list[dict[str, Any]]:
-        """``[{name, source: "saved", created}]``, oldest first by name. A file that is not a trusted profile is skipped (never an error)."""
+        """``[{name, source: "saved", created, complete}]``, oldest first by name (``complete``: G-148 complete profile, else a legacy partial intent). A file that is not a
+        trusted profile is skipped (never an error)."""
         if not self._check_directory(create=False):
             return []
         try:
@@ -160,5 +166,5 @@ class ProfileStore:
             except ProfileStoreError:
                 continue
             created = record.get("created")
-            out.append({"name": name, "source": "saved", "created": created if isinstance(created, str) else None})
+            out.append({"name": name, "source": "saved", "created": created if isinstance(created, str) else None, "complete": isinstance(record.get("profile"), str)})
         return out

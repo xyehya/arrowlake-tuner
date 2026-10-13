@@ -186,14 +186,14 @@ class FileRules(LastReadCase):
 
 
 class ProfilesGet(TuneCase):
-    def accepted(self, chain: bool = True) -> Path:
+    def accepted(self) -> Path:
+        """An accepted state written before G-148: the reference machine's chain of three profiles (CURRENT with three lines)."""
         acc = self.tmp / "accepted"
         (acc / "profiles").mkdir(parents=True)
-        shutil.copy(REPO / "examples/reference-285k/profiles/CURRENT", acc / "CURRENT")
-        for line in (REPO / "examples/reference-285k/profiles/CURRENT").read_text().splitlines():
-            if line.startswith("profile"):
-                rel = line.split("=", 1)[1].strip()
-                shutil.copy(REPO / "examples/reference-285k" / rel, acc / rel)
+        names = ("e-p6-split3", "p-boot-ramp", "p-step7")
+        (acc / "CURRENT").write_text("".join(f"profile = profiles/{n}.toml\n" for n in names))
+        for n in names:
+            shutil.copy(REPO / "examples/reference-285k/profiles" / f"{n}.toml", acc / "profiles" / f"{n}.toml")
         return acc
 
     def get(self, h: Harness, name: str) -> dict[str, Any]:
@@ -207,34 +207,30 @@ class ProfilesGet(TuneCase):
         intent = {"scope": "simple", "rows": [row("P", curve=-20), row("E", points={"46": -35}, v=None, ratio=None)]}
         self.assertTrue(h.call("s", "profiles.save", {"name": "mine", "intent": intent})["ok"])
         got = self.get(h, "mine")
-        self.assertEqual((got["name"], got["source"]), ("mine", "saved"))
+        self.assertEqual((got["name"], got["source"], got["complete"]), ("mine", "saved", True))  # G-148: the read with the edits over it, every unit
         targets = [r["target"] for r in got["contents"]["rows"]]
-        self.assertEqual(targets, [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])  # P and E rows spread over their units
+        self.assertEqual(targets, [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])
         self.assertEqual(got["contents"]["rows"][0]["offset"], {"kind": "curve", "mv": -20})
-        self.assertEqual(got["contents"]["rows"][8]["offset"], {"kind": "points", "mv": {"46": -35}})
-        self.assertEqual(got["summary"], {"units": 12, "points": 4, "deepest_offset_mv": -35, "oc_ratios": 0, "v_targets": 0, "turbo": False})
-        self.assertIsNone(got["contents"]["turbo"])
+        ec0 = got["contents"]["rows"][8]["offset"]
+        self.assertEqual((ec0["kind"], ec0["mv"]["46"], ec0["mv"]["40"]), ("points", -35, 0))  # every fused point, the untouched ones at 0
+        summary = got["summary"]
+        self.assertEqual((summary["units"], summary["points"], summary["deepest_offset_mv"], summary["complete"]), (12, 24, -35, True))
+        self.assertEqual(got["contents"]["turbo"], {"P": [57, 57, 55, 55, 55, 55, 55, 55], "E": [48] * 8})  # both tables of the read
         self.assertNotIn("cumulative", got)
 
-    def test_the_accepted_chain_members_and_their_cumulative_state(self) -> None:
+    def test_an_older_accepted_chain_lists_its_members_with_the_migrate_hint(self) -> None:
         h = self.boot(accepted_dir=self.accepted())
-        listed = [p["name"] for p in h.call("l", "profiles.list", {})["result"]["profiles"]]
-        self.assertEqual(listed, ["e-p6-split3", "p-boot-ramp", "p-step7"])
+        listed = h.call("l", "profiles.list", {})["result"]
+        self.assertEqual([p["name"] for p in listed["profiles"]], ["e-p6-split3", "p-boot-ramp", "p-step7"])
+        self.assertTrue(all(p["chain"] and not p["complete"] for p in listed["profiles"]))
+        self.assertIn("accepted-migrate", listed["note"])
         e = self.get(h, "e-p6-split3")
-        self.assertEqual((e["source"], e["position"], e["of"], e["chain"]), ("accepted", 1, 3, listed))
-        self.assertEqual([r["target"] for r in e["contents"]["rows"]], ["EC0", "EC1", "EC2", "EC3"])
+        self.assertEqual((e["source"], e["complete"], e["chain"]), ("accepted", False, True))
+        self.assertNotIn("position", e)
+        self.assertNotIn("cumulative", e)
+        self.assertEqual([r["target"] for r in e["contents"]["rows"]], ["EC0", "EC1", "EC2", "EC3"])  # the member's own file only
         ec0 = e["contents"]["rows"][0]["offset"]
-        self.assertEqual((ec0["kind"], ec0["mv"]["46"]), ("points", -35))
-        self.assertEqual(ec0["mv"]["40"], 0)  # point 5 of an E cluster is 40x
-        last = self.get(h, "p-step7")
-        self.assertEqual(last["position"], 3)
-        cum = {r["target"]: r for r in last["cumulative"]["rows"]}
-        self.assertEqual(set(cum), {*(f"P{i}" for i in range(8)), *(f"EC{i}" for i in range(4))})  # the chain up to and including p-step7
-        self.assertEqual(cum["P1"]["offset"]["mv"]["53"], -50)  # p-step7: 53x -50 on every P-core
-        self.assertEqual(cum["EC0"]["offset"]["mv"]["46"], -35)  # from the first member
-        self.assertLessEqual(last["summary"]["units"], last["cumulative_summary"]["units"])
-        first_cum = self.get(h, "e-p6-split3")["cumulative"]
-        self.assertEqual([r["target"] for r in first_cum["rows"]], ["EC0", "EC1", "EC2", "EC3"])
+        self.assertEqual((ec0["kind"], ec0["mv"]["46"], ec0["mv"]["40"]), ("points", -35, 0))
 
     def test_a_curve_offset_with_points_becomes_points_over_every_fused_ratio(self) -> None:
         acc = self.tmp / "accepted"
@@ -264,8 +260,9 @@ class ProfilesGet(TuneCase):
             with self.subTest(bad=bad):
                 self.assertEqual(error_code(h.call(f"b{len(h.messages)}", "profiles.get", bad)), "BAD_REQUEST")
 
-    def test_a_saved_profile_without_a_read(self) -> None:
+    def test_a_saved_profile_needs_a_read(self) -> None:  # G-148: a saved profile is the complete state of the read, so there is none without one
         h = self.boot()
-        self.assertTrue(h.call("s", "profiles.save", {"name": "k", "intent": rows(row("P0", curve=-10))})["ok"])
-        self.assertEqual(self.get(h, "k")["contents"]["rows"][0]["target"], "P0")
+        r = h.call("s", "profiles.save", {"name": "k", "intent": rows(row("P0", curve=-10))})
+        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "NO_READ"))
+        self.assertIn("read first", r["error"]["message"])
 

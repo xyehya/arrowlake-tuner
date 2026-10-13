@@ -70,16 +70,11 @@ class ApplyNeutralize(CliCase):
         self.assertEqual((code, err), (0, ""), out)
         self.assertEqual(self.sim.vf(12).to_u32(), EC1_WORD)
 
-    def test_accepted_before_counts_the_earlier_profiles_oc_ratio_as_accepted(self) -> None:
-        earlier = self.write("earlier.toml", profile_text(e_core(4, ratio=48, oc_voltage_mv=1130), name="earlier"))
-        code, out, err = self.apply("--neutralize-residual", "--accepted-before", earlier)
-        self.assertEqual((code, err), (0, ""), out)
-        self.assertEqual(self.sim.vf(12).to_u32(), EC1_WORD)  # EC1 has an accepted OC ratio: not a residual
-
-    def test_accepted_before_needs_the_flag(self) -> None:
-        code, _, err = self.apply("--accepted-before", self.accepted)
+    def test_accepted_before_is_gone(self) -> None:  # G-148 (D-044): the accepted state is one profile, never a chain replayed in order
+        code, _, err = self.apply("--neutralize-residual", "--accepted-before", self.accepted)
         self.assertEqual(code, 1)
-        self.assertIn("--neutralize-residual", err)
+        self.assertIn("--accepted-before", err)
+        self.assertEqual(self.sim.requests, [])
 
     def test_the_scan_reads_are_budgeted_before_anything_is_sent(self) -> None:
         tight = self.write("tight.toml", ROOMY.replace("max_operations_per_session = 600", "max_operations_per_session = 30"))
