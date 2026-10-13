@@ -9,9 +9,12 @@ stock ([04 §11](04-arrow-lake-vf-primer.md)), so after every boot you restore d
 ## 1. Three words
 | Term | Meaning |
 |---|---|
-| **Profile** | a saved set of intended changes (offsets, OC ratio, adaptive voltage, turbo tables) stored as a TOML file under `/var/lib/arltuner/profiles/`. Saving writes nothing to the CPU |
+| **Profile** | a **complete** tuning state (D-044): for every P-core and E-cluster the OC word (OC ratio, adaptive voltage, whole-curve offset), the offset of **every** fused V/F point (0 included), and both turbo tables when they were read. Stored under `/var/lib/arltuner/profiles/`. Profiles stand alone: none builds on another. Saving writes nothing to the CPU |
 | **Applied state** | what the CPU holds right now. The tool shows it from the last read this boot (the "applied" chip) |
-| **Accepted state** | the tuning *you* decided is good: a profile, plus the exact V/F words the CPU read back when it was applied. It lives in `/etc/arltuner/accepted/`. This is what "Restore accepted" brings back |
+| **Accepted state** | the tuning *you* decided is good: **one** complete profile, plus the exact V/F words the CPU read back (the same words, recorded together). It lives in `/etc/arltuner/accepted/`. This is what "Restore accepted" brings back, in one run |
+
+Profiles saved before this version hold only the rows that were changed; the app lists them as **partial (legacy)**. They still load and apply (over what the
+CPU holds), and **Set as accepted** on one records the complete state the CPU holds after you applied it, never the partial file.
 
 A fresh install has no accepted state ("No accepted state yet"). It is user data (D-036): the repository ships none. One chip's tuning is kept only as an
 illustration in `examples/reference-285k/`, and the app never reads that directory.
@@ -19,16 +22,18 @@ illustration in `examples/reference-285k/`, and the app never reads that directo
 ## 2. The Profiles tab
 | Card | What it does |
 |---|---|
-| **Accepted state** | shows the chain of accepted profiles in the order **Restore accepted** applies them. Button **Set the current state as accepted** records what the CPU holds now (the last read) as the accepted state; nothing is written to the CPU. Button **Record CPU fingerprint for Windows** adds `fingerprint.json` to an existing accepted state (section 4) |
-| **Profiles** | the list of saved profiles with a short summary. Per profile: **Load into Tune** (fills the Tune editor; nothing is sent), **Review and apply** (plan flow), **Set as accepted** |
-| **Save the current Tune settings** | saves the unapplied choices from Tune as a profile. Name: lowercase letters, digits, `.`, `_`, `-`, 1 to 64 characters. A saved profile is never overwritten (an existing name is refused: `EXISTS`) |
-| **Compare two profiles** | a diff table; the toggle chooses **As applied** (an accepted profile counts as the state after its step of the chain) or **This file only** |
+| **Accepted state** | shows the one accepted profile, its kind and a summary. Button **Set the current state as accepted** records what the CPU holds now (the last read) as the accepted state; nothing is written to the CPU. Button **Record CPU fingerprint for Windows** adds `fingerprint.json` to an existing accepted state (section 4). An accepted state from an older version that is still a list of several profiles is shown with the command that converts it (section 3, "An older accepted state") |
+| **Profiles** | the list of profiles with a badge **complete** or **partial (legacy)** and a short summary. Per profile: **Load into Tune** (fills the Tune editor; a complete profile fills every unit; nothing is sent), **Review and apply** (plan flow), **Set as accepted** |
+| **Save the current Tune settings** | saves a complete profile: this boot's read of every unit with the unapplied choices from Tune over it (no changes = the read as it is). It needs a read this boot (`NO_READ`, "read first"). Name: lowercase letters, digits, `.`, `_`, `-`, 1 to 64 characters. A saved profile is never overwritten (an existing name is refused: `EXISTS`) |
+| **Compare two profiles** | a diff table of what the two profiles hold; with a partial (legacy) profile, "–" marks a value it does not set |
 
 ### Making a state accepted
 The helper's rule (`ops_accept.py`): **accepted = what the CPU holds now.**
 
 1. Apply the tuning (Tune → Review changes → Apply, read-back matches), and stress-test it.
-2. Either press **Set the current state as accepted** (it takes the state from this boot's last read), or choose **Set as accepted** on a saved profile.
+2. Either press **Set the current state as accepted** (it takes the state from this boot's last read), or choose **Set as accepted** on a saved profile. Either way
+   the helper records the **complete** state of the last read (every unit, every fused point, both turbo tables when read) as one profile, and the same words as
+   `EXPECTED-words.txt`: the two cannot disagree.
 3. Confirm the dialog ("Set as accepted?"); it shows what it replaces. The helper writes `/etc/arltuner/accepted/` as a whole, atomically, and records the
    change in the audit log first (it refuses if it cannot).
 
@@ -43,9 +48,9 @@ Refusals you may meet:
 
 Layout of the accepted state (readable by the restore scripts and the Dashboard comparison):
 ```
-/etc/arltuner/accepted/CURRENT                 one line per profile, applied in order:  profile = profiles/<name>.toml
+/etc/arltuner/accepted/CURRENT                 exactly one line:  profile = profiles/<name>.toml
 /etc/arltuner/accepted/EXPECTED-words.txt      one line per core / E-cluster:  <cpu> <OC word> <point 1> ... <point n>   (hex, no 0x)
-/etc/arltuner/accepted/profiles/<name>.toml    the profiles
+/etc/arltuner/accepted/profiles/<name>.toml    the complete profile (the same words as EXPECTED-words.txt)
 /etc/arltuner/accepted/fingerprint.json        which core is which (kind, cluster, favored, fused top-point word) and the CPU model; used by the Windows restore
 ```
 Back it up if you value it (`sudo cp -a /etc/arltuner/accepted ~/accepted-backup`).
@@ -58,35 +63,45 @@ judges every plan.
 [meta]
 name = "example"
 platform = "arl-s"
+complete = true        # the whole tuning state (the app writes this)
 
-[[core]]               # the OC word of a unit: optional ratio, adaptive OC voltage, whole-curve offset
+[[core]]               # the OC word of a unit; ONE per P-core and per E-cluster
 kind = "P"             # "P" | "E"
-index = 4              # XTU numbering: P 0..7, E 0..15 (E entries are cluster-wide)
-ratio = 55
-oc_voltage_mv = 1300
-offset_mv = -30
+index = 4              # XTU numbering: P 0..7, E 0..15 (an E entry is its whole cluster)
+fused_top_ratio = 57   # the unit's top fused ratio where the profile was made: on another CPU the profile is refused
+ratio = 60             # optional: an OC point (a ratio above the top fused ratio) with its adaptive voltage;
+oc_voltage_mv = 1400   #   absent = no OC point
+offset_mv = -30        # whole-curve offset, always stated (0 included)
 
-[[point]]              # one fused V/F point's offset
+[[point]]              # every fused V/F point of every unit, 1..n, the last one at fused_top_ratio
 kind = "E"
 index = 8
-point = 6              # P points 1..8, E points 1..6 (read from your CPU: the OC point is [[core]])
-offset_mv = -20
-expect_ratio = 46      # optional: refuse if the point's ratio read from the hardware differs
+point = 6              # P points 1..8, E points 1..6 (read from your CPU)
+offset_mv = -20        # 0 included
+expect_ratio = 46      # refuse if the point's ratio read from the hardware differs
 
-[turbo]                # optional; bucket 0 = one active core first, 8 values each
+[turbo]                # both tables or none (none = not part of this profile, left as they are); bucket 0 = one active core first
 p = [57, 57, 55, 55, 55, 55, 55, 55]
 e = [48, 48, 48, 48, 48, 48, 48, 48]
 ```
-Values are examples. The app writes these files for you; you rarely edit one by hand.
+Values are examples, and a real complete profile has a `[[core]]` for every unit and a `[[point]]` for every fused point. The app writes these files for you; you
+rarely edit one by hand. A file without `complete = true` is a partial profile: only what it names is changed.
 
 ## 3. After every boot: Restore accepted
 **In the GUI.** Start the GUI ([03](03-first-run.md)), open **Tune**, press **Restore accepted** (the button is disabled until an accepted state exists),
-then **Review changes**, check the before/after and the operation count, and **Apply**. The planner reads the live words first and writes only what differs,
-so it works from a cold boot (all stock) and from a warm reboot (a mix) alike. Afterwards the Dashboard's "applied" chip and the comparison with the
-accepted state tell you whether every word matches.
+then **Review changes**, check the before/after and the operation count, and **Apply**. It is **one run**: the apply reads every word of the accepted profile
+first and writes only the words that differ, so it works from a cold boot (all stock) and from a warm reboot (a mix) alike. An OC ratio left over from a warm
+reboot that the accepted state does not have (it cannot be removed at runtime) is rewritten so the unit runs the accepted voltages and reported as **equivalent**.
 
-On the reference machine restoring the whole accepted state took 172 operations and 57 read-back rows, all matching
-[MEASURED lnx 2026-10-11, 2026-10-12, examples/reference-285k/notes/tuning-history.md §5]. Example value from one chip.
+If a word is further from the accepted value than your policy's per-write step limit (`max_offset_step_mv`, `max_v_step_mv`, `max_ratio_step`), the apply splits
+the change into **rounds** within the same run: read, write every word one step closer, read again, until the accepted values are reached. How many rounds
+are needed, and whether they fit the policy's operation caps, is decided before the first write; if they do not fit, nothing is sent and the plan is refused
+`STEP_LIMIT`, naming the unit and the field that needs the most rounds. A hand-made "ramp" profile is never needed. Afterwards the Dashboard's "applied" chip
+and the comparison with the accepted state tell you whether every word matches.
+
+Operation count: the apply reserves the worst case (every word read, every word written and read back). For the reference layout (8 P-cores x 8 points,
+4 E-clusters x 4 CPUs x 6 points) that is about 650 operations per round; a cold-boot restore of the reference state spends about 350 (only the tuned points
+differ) [simulator, G-148]. The default policy allows 100000 per session; a stricter policy refuses up front (`SESSION_LIMIT`).
 
 **From a terminal.** The restore script restores the accepted state and proves it word for word:
 ```
@@ -97,13 +112,13 @@ bash tools/lnx/restore_tuning.sh --policy FILE
 ```
 | Option | Meaning |
 |---|---|
-| (none) | prints the policy, profiles and expected-words file, then asks you to type `CONFIRM` (exactly; anything else sends nothing) |
+| (none) | prints the policy, the accepted profile and the expected-words file, then asks you to type `CONFIRM` (exactly; anything else sends nothing) |
 | `--check` | mailbox reads only (they are still WRMSRs), then compare; nothing is written |
 | `--from DIR` | accepted state to restore; default `/etc/arltuner/accepted` |
 | `--policy FILE` | the root policy for the guarded writes; default `/etc/arltuner/policy.toml` |
 | `--orchestrated` | for the project's automation after a go-ahead in chat; skips the prompt. Do not use it unless you know why |
 
-What it does: records a health snapshot (kernel taint, PCI devices, modules), applies each profile listed in `CURRENT` through the guard with `sudo`
+What it does: records a health snapshot (kernel taint, PCI devices, modules), applies the one profile named in `CURRENT` in one guarded run with `sudo`
 (it asks for your `sudo` password once), dumps the V/F words, compares every one with `EXPECTED-words.txt`, and takes a second health snapshot. It stops at the first
 failure and retries nothing. A good run ends:
 ```
@@ -113,10 +128,21 @@ and a bad one with `STOP: N core(s)/cluster(s) differ`. It refuses to start when
 Captures are written to `captures/lnx/`. It uses the checkout's Python with `sudo`, in isolated mode (`python3 -I`), as the command-line path (D-031), and sets
 `ARLTUNER_ALLOW_MAILBOX=1` itself for the guarded commands.
 
-`bash tools/lnx/reapply_current.sh [--check] [--from DIR] [--policy FILE]` is the older, simpler script: it applies each profile in `CURRENT` with one `CONFIRM <token>` per
-profile; `--check` dumps the words read-only and compares them.
+`bash tools/lnx/reapply_current.sh` is kept as a name only: it runs `restore_tuning.sh` with the same options.
 
-Operation counts depend on how much differs; the planner budgets the whole plan before sending the first request.
+Operation counts depend on how much differs; the planner budgets the whole plan (all its rounds) before sending the first request.
+
+### An older accepted state (a list of profiles)
+Before profiles were complete (D-044), `CURRENT` could list several profiles applied in order. **Restore accepted**, both restore scripts and the Windows scripts
+now refuse such a state and name the conversion; `install.sh` prints the same hint. Convert it once, as root, from the repository:
+```
+sudo python3 -I tools/arltuner.py accepted-migrate --dry-run   # prints the profile it would write and how it differs from the old list
+sudo python3 -I tools/arltuner.py accepted-migrate             # writes it; the old directory is kept as /etc/arltuner/accepted.bak-<UTC time>/
+```
+The new profile is built from `EXPECTED-words.txt` (the words the old list was verified to leave on the chip), never from a read: after a warm reboot the CPU can
+hold a left-over OC ratio that must not become the accepted state. `EXPECTED-words.txt` and `fingerprint.json` are kept unchanged; the top fused ratio of each unit
+comes from `fingerprint.json` (or, without one, from the last point in `EXPECTED-words.txt`). If the old list set no turbo tables, the new profile has none either
+(they stay as the CPU holds them); the next **Set the current state as accepted** records both. It sends nothing to the CPU. `--dir DIR` converts another directory.
 
 ## 4. Windows restore (any Arrow Lake-S through the fingerprint; untested on Windows)
 Windows has no GUI. `tools\win\restore_tuning.ps1` restores the accepted state through a signed third-party driver. **Status: the scripts were used on the reference
@@ -172,12 +198,13 @@ The preflight's line "driver service ThrottleStop" shows FIX until a run has sta
 
 What a run does: checks (administrator, XTU service stopped, no OCCT/XTU, admin-only directories, `fingerprint.json` present), then one `CONFIRM`, then `ts_driver.py start`
 (verifies the directory, its ACL, reparse points and the driver's SHA-256, writes a **new uniquely named copy** of the driver for this run, creates the service on it, re-verifies, starts it),
-then the guarded identity reads, each profile of `CURRENT` applied, every V/F word read back and compared with `EXPECTED-words.txt`, and finally `ts_driver.py remove` (stops and deletes the
+then the guarded identity reads, the one profile of `CURRENT` applied in one run (only the words that differ), every V/F word read back and compared with `EXPECTED-words.txt`, and finally `ts_driver.py remove` (stops and deletes the
 service and the copy). The verdict `RESTORED: all <n> cores/clusters match the accepted state.` comes from this run's own read-back file, never from the audit log. Any mismatch stops
 it; nothing is retried.
 
 Options of `restore_tuning.ps1`: `-From DIR`, `-Policy FILE`, `-Before` (also dump the state before applying; about 132 extra mailbox reads), `-Orchestrated`. `reapply_current.ps1 [-Check]
-[-From DIR] [-Policy FILE]` is the simpler twin (one confirmation per profile; `-Check` is a read-only dump). The Windows health check counts new WHEA events in the System log.
+[-From DIR] [-Policy FILE]` is the simpler twin (one confirmation, no compare; `-Check` is a read-only dump). Both refuse an accepted state that still lists several profiles:
+convert it on Linux (`accepted-migrate`, section 3) and copy it again. The Windows health check counts new WHEA events in the System log.
 Applied offsets stay until a cold boot even after the driver service is removed.
 
 Driver blocklist: on the reference machine the driver loaded with Windows' Microsoft Vulnerable Driver Blocklist **on** (Windows 11 build 26200/26300) [MEASURED win 2026-10-02],
