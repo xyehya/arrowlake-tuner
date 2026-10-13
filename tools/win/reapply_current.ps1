@@ -1,6 +1,8 @@
 <#
-  reapply_current.ps1 - Windows twin of tools/lnx/reapply_current.sh: re-apply the profiles listed in YOUR accepted CURRENT after a boot.
-    powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1          # interactive: type CONFIRM <token> once per profile
+  reapply_current.ps1 - re-apply THE profile YOUR accepted CURRENT names after a boot (G-148, D-044: one complete profile, one guarded run that writes only the words
+  that differ, rounds within the step limits; a CURRENT that still lists a chain is refused: run 'accepted-migrate' on Linux and copy again). restore_tuning.ps1 does
+  the same and also proves the result word for word; this one is the interactive variant (no read-back compare).
+    powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1          # interactive: type CONFIRM <token> once
     powershell -ExecutionPolicy Bypass -File tools\win\reapply_current.ps1 -Check   # read-only vf-dump, no writes
     -From DIR (default %ProgramData%\arltuner\accepted, an admin-only directory) and -Policy FILE (default DIR\policy.toml): see tools\win\restore_tuning.ps1. No accepted state = stop (D-036).
   DIR\fingerprint.json (written by 'Set as accepted' on Linux) is required: the Linux CPU -> Windows LP map is derived from it at run time. None = stop, re-accept on Linux.
@@ -30,6 +32,8 @@ foreach ($l in Get-Content (Join-Path $From 'CURRENT')) {   # a legacy 'policy =
     }
 }
 if ($profiles.Count -eq 0) { Write-Error "$From\CURRENT lists no profile"; exit 2 }
+if ($profiles.Count -gt 1) { Write-Error "$From\CURRENT lists $($profiles.Count) profiles (an accepted chain from before G-148): on Linux run 'sudo python3 -I tools/arltuner.py accepted-migrate' once, then copy /etc/arltuner/accepted here again"; exit 2 }
+$prof = $profiles[0]
 
 # -I: isolated Python (no PYTHON* variables, no user site, no script directory or cwd on sys.path); tools\arltuner.py adds .\src from its own path
 if (Get-Command py -ErrorAction SilentlyContinue) { $pyExe = 'py'; $pyPre = @('-3', '-I') } else { $pyExe = 'python'; $pyPre = @('-I') }
@@ -48,15 +52,13 @@ if ($Check) {
     Run-Lm @('vf-dump', '--device-win', '--fingerprint', $fingerprint, '--policy', $policy, '--audit', $audit)
     exit $LASTEXITCODE
 }
-foreach ($prof in $profiles) {
-    $name = [IO.Path]::GetFileNameWithoutExtension($prof)
-    $ts = Get-Date -Format 'yyyyMMddTHHmmss'
-    Write-Host "=== applying $prof (policy $policy) ==="
-    # no pipe: a piped python's CONFIRM prompt (no newline) can stay hidden in Windows PowerShell; a transcript records the session instead
-    Start-Transcript -Path "captures\win\reapply-$name-$ts.txt" | Out-Null
-    Run-Lm @('apply', $prof, '--device-win', '--fingerprint', $fingerprint, '--policy', $policy, '--audit', $audit)
-    $rc = $LASTEXITCODE
-    Stop-Transcript | Out-Null
-    if ($rc -ne 0) { Write-Error "apply $prof failed (exit $rc); stopping"; exit $rc }
-}
+$name = [IO.Path]::GetFileNameWithoutExtension($prof)
+$ts = Get-Date -Format 'yyyyMMddTHHmmss'
+Write-Host "=== applying $prof (policy $policy) ==="
+# no pipe: a piped python's CONFIRM prompt (no newline) can stay hidden in Windows PowerShell; a transcript records the session instead
+Start-Transcript -Path "captures\win\reapply-$name-$ts.txt" | Out-Null
+Run-Lm @('apply', $prof, '--neutralize-residual', '--device-win', '--fingerprint', $fingerprint, '--policy', $policy, '--audit', $audit)
+$rc = $LASTEXITCODE
+Stop-Transcript | Out-Null
+if ($rc -ne 0) { Write-Error "apply $prof failed (exit $rc); stopping"; exit $rc }
 Write-Host 'done. Verify with: powershell -File tools\win\reapply_current.ps1 -Check'

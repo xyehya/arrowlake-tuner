@@ -2,20 +2,22 @@
   restore_tuning.ps1 - after any Windows boot: bring the CPU back to YOUR accepted tuning and prove it by read-back.
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1                # operator: type CONFIRM once (or double-click tools\win\Restore-Tuning.cmd)
     powershell -ExecutionPolicy Bypass -File tools\win\restore_tuning.ps1 -Orchestrated  # orchestrator session only, after the operator's go-ahead in chat
-    -From DIR     the accepted state: CURRENT, EXPECTED-words.txt, profiles\*.toml (default %ProgramData%\arltuner\accepted). The app writes it on Linux
+    -From DIR     the accepted state: CURRENT naming ONE profile, EXPECTED-words.txt, profiles\<name>.toml (default %ProgramData%\arltuner\accepted). The app writes it on Linux
                   (Profiles > Set as accepted, /etc/arltuner/accepted); copy that directory here from an Administrator terminal. Nothing in this repo is one (D-036): absent = stop.
     -Policy FILE  the policy for the guarded writes (default DIR\policy.toml; copy /etc/arltuner/policy.toml next to the accepted state, or name another).
   Admin-only (G-142, D-042): this script runs elevated, so everything that decides what it does - the accepted state, the policy, the driver, the audit log, the
   read-back file the verdict is computed from - must sit in a directory only Administrators/SYSTEM can write (%ProgramData%\arltuner, locked down by
   'py -3 tools\win\ts_driver.py init-dir'). The script refuses a -From / -Policy directory that is not (ts_driver.py check-dir) and verifies the driver's SHA-256 and
   directory again right before 'sc start'. RESTORED is decided from the vf-dump read-back of THIS run (a JSON file in that directory), never from the audit file.
-  G-147: the last profile is applied with --neutralize-residual (a residual OC point the accepted state does not have, which only a cold boot clears, is rewritten with a V target below the
+  G-148 (D-044): the accepted state is ONE complete profile, applied in one guarded run that writes only the words that differ (a change larger than the policy's step
+  limits is split into rounds within the run, judged before the first write); a CURRENT that still lists a chain is refused (run 'accepted-migrate' on Linux, copy again).
+  G-147: the profile is applied with --neutralize-residual (a residual OC point the accepted state does not have, which only a cold boot clears, is rewritten with a V target below the
   accepted top fused point so the unit runs the accepted voltage) and the verdict is 'arltuner compare-accepted': EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as
   accepted") counts as success, only a real difference is BAD. There is no cpufreq on Windows: scaling_max_freq is a Linux-side step (restore_tuning.sh).
   DIR\fingerprint.json (written by 'Set as accepted' on Linux) tells this machine which cores are which: the Linux CPU -> Windows logical-processor map is derived at
   run time from Windows' own data and settled by guarded reads of the fused V/F point of every P-core. A state accepted before that existed has none: stop, re-accept on Linux.
   Steps: checks (admin, XtuService stopped, no OCCT/XTU, admin-only directories) -> one CONFIRM -> ts_driver.py start (service created for this run) -> [-Before: vf-dump] ->
-  apply each CURRENT profile -> vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> ts_driver.py remove (stop + delete the service). Stops at the first
+  apply the CURRENT profile -> vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> ts_driver.py remove (stop + delete the service). Stops at the first
   failure; nothing is retried. Revert = cold boot.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
   Captures: captures\win\restore-<ts>-*.txt (logs for reading, not evidence). Audit: %ProgramData%\arltuner\audit.jsonl.
@@ -63,6 +65,10 @@ foreach ($l in Get-Content (Join-Path $From 'CURRENT')) {   # a legacy 'policy =
     }
 }
 if ($profiles.Count -eq 0) { Fail "$From\CURRENT lists no profile" }
+if ($profiles.Count -gt 1) {   # G-148 (D-044): never replay a chain
+    Fail "$From\CURRENT lists $($profiles.Count) profiles (an accepted chain from before G-148). The accepted state is ONE complete profile now: on Linux run 'sudo python3 -I tools/arltuner.py accepted-migrate' once (it keeps a backup), then copy /etc/arltuner/accepted here again"
+}
+$prof = $profiles[0]
 $Expected = [ordered]@{}
 foreach ($l in Get-Content $wordsFile) {
     if ($l -match '^\s*(#|$)') { continue }
@@ -86,7 +92,7 @@ $env:PYTHONUNBUFFERED = '1'
 
 # --- one confirmation for the whole run (operator mode); -Orchestrated = the orchestrator already has the operator's go-ahead in chat
 if (-not $Orchestrated) {
-    Write-Host "Restore the accepted tuning: $(($profiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' -> ')  (from $From, policy $policy)"
+    Write-Host "Restore the accepted tuning: $(Split-Path $prof -Leaf)  (from $From, policy $policy; one run, only the words that differ)"
     Write-Host 'Writes V/F point offsets via the ThrottleStop driver; every write is read back; revert = cold boot.'
     if ((Read-Host 'Type CONFIRM to proceed') -cne 'CONFIRM') { Fail 'not confirmed - nothing was sent' }
 }
@@ -113,19 +119,10 @@ try {
         Write-Host "=== 1/3 read-only check (before)"
         Run-Lm 'before' @('vf-dump')
     }
-    $i = 0
-    foreach ($prof in $profiles) {
-        $i++
-        Write-Host "=== 2/3 apply $prof ($i/$($profiles.Count))"
-        $applyArgs = @('apply', $prof)
-        if ($i -eq $profiles.Count) {
-            # G-147: the LAST profile also looks for a residual OC point (an OC ratio the accepted state does not have; only a cold boot clears it) and rewrites it with a V target
-            # below the accepted top fused point, so the unit runs the accepted voltage; the earlier profiles of the chain say which OC ratios ARE accepted.
-            $applyArgs += '--neutralize-residual'
-            for ($j = 0; $j -lt $i - 1; $j++) { $applyArgs += @('--accepted-before', $profiles[$j]) }
-        }
-        Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) $applyArgs
-    }
+    Write-Host "=== 2/3 apply $prof"
+    # G-147: the apply also looks for a residual OC point (an OC ratio the accepted profile does not have; only a cold boot clears it) and rewrites it with a V target
+    # below the accepted top fused point, so the unit runs the accepted voltage. G-148: one run, only the words that differ.
+    Run-Lm ("apply-" + [IO.Path]::GetFileNameWithoutExtension($prof)) @('apply', $prof, '--neutralize-residual')
     Write-Host "=== 3/3 read-back"
     # The verdict comes from THIS run's live read-back: vf-dump writes its own JSON (words as read from the CPU) into the admin-only directory - not from the
     # audit file and not from a file in the repo (both could be edited between the read and the compare).
