@@ -1,6 +1,6 @@
 # G-148 — Profiles are complete and independent; the accepted state is one profile restored in one shot (D-044)
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-13)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake sysfs only). The orchestrator runs the migration and the live restore after merge.
 - **Branch/worktree:** `task/G-148-complete-profiles`

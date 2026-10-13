@@ -35,6 +35,13 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   as `yk`; audit operator `gui:uid1000`. The temporary polkit rule was removed (nothing uses polkit any more).
 - MCE count 0 all session.
 
+## 2026-10-13
+- EC1/EC2 residual OC words neutralised live (48x, target 1.100 V -> clamps to the accepted 46x point; all E clusters measured at the accepted
+  48x voltage, EC0 1.1226 / EC1-3 1.1125 V). **G-147**: restore does this itself and reports EQUIVALENT; no 0x1D decrease; cpufreq cap follows.
+- **G-148 (D-044)**: profiles are complete and independent; accepted = ONE profile restored in one shot (step splitting inside the apply).
+  Live: chain migrated with `accepted-migrate` (backup `/etc/arltuner/accepted.bak-20261013T141400Z`); restore = 281 reads, 0 writes, RESTORED.
+  Accepted profile has no turbo tables yet: after the next cold boot + restore, press "Set the current state as accepted" to record them.
+
 ## Operator to-do
 1. Cold boot when convenient (clears the EC1/EC2 OC words) → Tune → Restore accepted (or `bash tools/lnx/restore_tuning.sh`) → 12/12 match.
 2. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
@@ -48,7 +55,7 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
 
 ## How we work
 Orchestrator + Sonnet workers in worktrees (`docs/ORCHESTRATION.md`); workers never touch hardware (one-off exceptions D-037, D-040).
-Before every merge: `ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py` green. Decisions in `docs/DECISIONS.md` (latest D-042).
+Before every merge: `ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py` green. Decisions in `docs/DECISIONS.md` (latest D-044).
 
 ## Tools
 CLI `python3 tools/arltuner.py read | read-vf | vf-dump | plan | apply` (`--device`, `--device-win`) · GUI `python3 tools/arltuner-gui.py --open` ·
