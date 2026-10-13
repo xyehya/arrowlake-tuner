@@ -1,0 +1,5 @@
+time 2026-10-13T08:12:47Z
+taint 12292
+pci 35
+modules 187
+klog_lines 1420

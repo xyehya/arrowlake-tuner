@@ -1,6 +1,6 @@
 # G-147 — Restore handles a residual OC point (cannot be zeroed) and never lowers the favored ratio
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-13)
 - **Host:** lnx
 - **Safety tier:** T0 (worker, simulator + fake sysfs); the orchestrator verifies live (T2)
 - **Branch/worktree:** `task/G-147-restore-residual-oc`
