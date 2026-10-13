@@ -207,3 +207,10 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   time, read-back, health gate, audit log, read-only web scope, idle exit, nothing applied on its own (autostart OD-3/OD-4 stays unsigned).
   Supersedes the pkexec/polkit parts of D-029 (root argv: exactly `--device` or `--device --socket`), D-028 and D-042; the polkit action
   file, its self-check items and the preflight `pkexec`/`polkit`/`polkit_agent` checks go. 2026-10-12 amendment: socket 0666; the peer-cred allowlist is the gate, so a newly allowed user needs no re-login; the group is optional.
+- **D-044 · 2026-10-13 · Profiles are complete and independent; the accepted state is one profile, restored in one shot.** Operator: "profiles
+  should represent discrete and independent tweakings and tunings and we shouldnt chain them and one profile can be restored in one shot."
+  A profile holds the whole tuning state of the CPU (every unit's OC word fields, every fused point's offset, both turbo tables); applying it writes
+  only the words that differ from the live read. `accepted/CURRENT` names exactly one profile; Restore accepted = apply it (G-147 residual rule,
+  OK / EQUIVALENT / BAD compare). Saved profiles are the last read + the editor's edits. Older partial profiles stay usable as deltas ("partial
+  (legacy)"); an older multi-line chain is migrated from its `EXPECTED-words.txt` (never from a read, which may hold neutralised residual OC words)
+  with a backup. Task G-148.

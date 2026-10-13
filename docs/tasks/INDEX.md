@@ -50,5 +50,6 @@
 | G-145 | knowledge docs review (Opus): general ARL-S facts only, chip data to examples/reference-285k/notes, favored-cores revamp | lnx | T0 | **merged** 2026-10-12 | G-144 |
 | G-146 | guide/README/SPEC for the polkit-free socket service (documenter) | lnx | T0 | **merged** 2026-10-12 | G-144 |
 | G-147 | restore neutralises a residual OC point (EQUIVALENT), 0x1D never lowered as a side effect, cpufreq cap follows | lnx | T0 (+T2 live) | **merged** 2026-10-13 (live check: 10 OK + 2 EQUIVALENT) | — |
+| G-148 | complete, independent profiles; accepted = one profile restored in one shot; chain migration (D-044) | lnx | T0 (+T2 live) | in progress | G-147 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
