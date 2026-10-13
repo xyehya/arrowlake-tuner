@@ -117,7 +117,7 @@ A **P-core** OC ratio raise (58x on P0) had been written once on Windows without
 
 An OC ratio cannot be cleared to 0 at runtime; a cold boot clears it [MEASURED lnx 2026-10-11, tuning-results.md]. A unit that keeps such a left-over OC point runs the
 adaptive voltage the test left in it, not the curve you accepted. Restore accepted rewrites the word with a target below the top fused point, which the hardware clamps up to
-that point, so the unit runs the accepted voltages again (reported "equivalent") [MEASURED lnx 2026-10-13, platform-arl-s.md §3; [09 §3](09-profiles-and-restore.md)].
+that point, so the unit runs the accepted voltages again (reported "equivalent") [MEASURED lnx 2026-10-13, platform-arl-s.md §3]; see [09 §3](09-profiles-and-restore.md).
 
 ## 7. How the CPU combines points: interpolation and the monotonic clamp
 - **Between two points the voltage interpolates linearly.** At 54x, a ratio without a point, the requested voltage is the midpoint of the 53x and 55x

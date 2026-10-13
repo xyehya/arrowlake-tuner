@@ -69,7 +69,7 @@ maximum is never raised. It runs in the GUI and in `arltuner apply --device` (so
 
 Cost (order of magnitude): the reference E-cluster raise was planned as 53 mailbox WRMSRs and one P-core as 13 [T-022, SAFETY.md]. Restore accepted writes only the
 words that differ, so its size depends on the CPU's state: a live restore of a state the CPU already held was 281 reads and 0 writes on the reference machine
-[MEASURED lnx 2026-10-13, docs/STATE.md] ([09 §3](09-profiles-and-restore.md)).
+(orchestrator's run, docs/STATE.md 2026-10-13) ([09 §3](09-profiles-and-restore.md)).
 
 **After an OC test.** An OC ratio cannot be written back to 0 at runtime; only a cold boot removes it ([04 §6](04-arrow-lake-vf-primer.md)). If you turn an OC test off
 without a cold boot, the unit keeps the OC ratio and the adaptive voltage you tested with. **Restore accepted** then rewrites that word so the unit runs the accepted voltages

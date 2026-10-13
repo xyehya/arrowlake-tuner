@@ -102,9 +102,9 @@ needs the most rounds; raise the step limits or the operation caps in `/etc/arlt
 Afterwards the Dashboard's "applied" chip and the comparison with the accepted state tell you whether every word matches.
 
 Operation count: the plan reserves the worst case (every word read, every word written and read back, plus two reads per unit that has no OC point in the accepted
-state, to look for a left-over OC point). For the reference layout (8 P-cores, 4 E-clusters of 4 CPUs) the simulator reserves 651 operations per round
-[simulator test, `tests/helper/test_complete_profiles.py`]. Only the words that differ are written, so a restore of a state the CPU already holds sends reads only: a
-live one-shot restore on the reference machine was 281 reads and 0 writes [MEASURED lnx 2026-10-13, docs/STATE.md]. The default policy allows 100000 operations per
+state, to look for a left-over OC point). For the reference layout (8 P-cores, 4 E-clusters of 4 CPUs) the simulator reserves 651 operations for a one-round plan
+(24 of them the scan) [simulator test, `tests/helper/test_complete_profiles.py`]. Only the words that differ are written, so a restore of a state the CPU already holds sends reads only: a
+live one-shot restore on the reference machine was 281 reads and 0 writes (orchestrator's run, docs/STATE.md 2026-10-13). The default policy allows 100000 operations per
 session; a stricter policy refuses up front (`SESSION_LIMIT`).
 
 ### A left-over OC point: "equivalent"
@@ -245,7 +245,7 @@ What a run does: checks (administrator, XTU service stopped, no OCCT/XTU, admin-
 (verifies the directory, its ACL, reparse points and the driver's SHA-256, writes a **new uniquely named copy** of the driver for this run, creates the service on it, re-verifies, starts it),
 then the guarded identity reads, the one profile of `CURRENT` applied in one run (only the words that differ), every V/F word read back and compared with `EXPECTED-words.txt`, and finally `ts_driver.py remove` (stops and deletes the
 service and the copy). The verdict `RESTORED: all <n> cores/clusters match the accepted state.` comes from this run's own read-back file, never from the audit log. Any mismatch stops
-it; nothing is retried.
+it; nothing is retried. As on Linux, an EQUIVALENT unit (a left-over OC ratio that runs the accepted voltages) counts as success.
 
 Options of `restore_tuning.ps1`: `-From DIR`, `-Policy FILE`, `-Before` (also dump the state before applying; about 132 extra mailbox reads), `-Orchestrated`. `reapply_current.ps1 [-Check]
 [-From DIR] [-Policy FILE]` is the simpler twin (one confirmation, no compare; `-Check` is a read-only dump). Both refuse an accepted state that still lists several profiles:
