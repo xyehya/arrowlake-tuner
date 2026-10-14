@@ -13,7 +13,9 @@
   limits is split into rounds within the run, judged before the first write); a CURRENT that still lists a chain is refused (run 'accepted-migrate' on Linux, copy again).
   G-147: the profile is applied with --neutralize-residual (a residual OC point the accepted state does not have, which only a cold boot clears, is rewritten with a V target below the
   accepted top fused point so the unit runs the accepted voltage) and the verdict is 'arltuner compare-accepted': EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as
-  accepted") counts as success, only a real difference is BAD. There is no cpufreq on Windows: scaling_max_freq is a Linux-side step (restore_tuning.sh).
+  accepted") counts as success, only a real difference is BAD. G-151: the same apply writes in a transition-safe order (raising voltages first; an OC word that creates the OC point
+  goes before the point offsets that lower the curve under it) and compare-accepted treats the OC point's table slot (P2 = n+1) as the OC word's: no separate failure while the OC word
+  is not written, an exact match once it is. Both live in the shared Python (planner, compare-accepted); this script only runs them. There is no cpufreq on Windows: scaling_max_freq is a Linux-side step (restore_tuning.sh).
   DIR\fingerprint.json (written by 'Set as accepted' on Linux) tells this machine which cores are which: the Linux CPU -> Windows logical-processor map is derived at
   run time from Windows' own data and settled by guarded reads of the fused V/F point of every P-core. A state accepted before that existed has none: stop, re-accept on Linux.
   Steps: checks (admin, XtuService stopped, no OCCT/XTU, admin-only directories) -> one CONFIRM -> ts_driver.py start (service created for this run) -> [-Before: vf-dump] ->

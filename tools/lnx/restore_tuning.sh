@@ -11,7 +11,10 @@
 # so it works after a cold boot = stock and after a warm reboot) -> vf-dump -> compare with EXPECTED-words.txt -> health snapshot.
 # An accepted state that is still a chain (CURRENT with several 'profile =' lines, written before G-148) is refused: run 'accepted-migrate' once.
 # G-147: a residual OC point (an OC ratio the accepted state lacks; only a cold boot clears it) is rewritten so it runs the accepted voltage and reported
-# EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as accepted"), which is a success; only a real difference is BAD. One confirmation per run (operator 2026-10-08, D-020 extended to Linux): after CONFIRM, the guard's per-command tokens are
+# EQUIVALENT ("residual OC point (cleared by a cold boot); voltages as accepted"), which is a success; only a real difference is BAD.
+# G-151: the one apply writes in a transition-safe order (the planner puts the writes that raise a voltage first: an OC word that creates the OC point before the point
+# offsets that lower the curve under it), and the compare treats the OC point's table slot (P2 = n+1, 7 for an E cluster) as the OC word's: a unit whose OC word is not written
+# yet is not also reported for the missing slot; once it is, the slot must read exactly the accepted word. One confirmation per run (operator 2026-10-08, D-020 extended to Linux): after CONFIRM, the guard's per-command tokens are
 # answered by tools/lnx/orchestrator_confirm.py; every guard check (policy limits, per-write read-back, word compare) is unchanged.
 # Stops at the first failure. Revert = cold boot. The first MSR write of a boot sets taint bit 2 (CPU_OUT_OF_SPEC): expected.
 set -euo pipefail

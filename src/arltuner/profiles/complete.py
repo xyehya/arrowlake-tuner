@@ -8,6 +8,8 @@ cluster) the OC word's fields and the offset of every fused V/F point, plus both
 * OC word: an OC point (ratio above the top fused ratio, with an adaptive target) becomes ``ratio`` + ``oc_voltage_mv``; at or below the top fused ratio the
   word is neutral (G-120/G-124: the hardware keeps no target there) and no ratio is recorded. The whole-curve offset is always recorded (``0`` included).
 * Points: every point whose ratio is non-zero and at most the top fused ratio, with ``expect_ratio``; the point above it is the one the OC ratio created.
+  G-151: the profile **derives** that slot (``P2 = n + 1``, ratio = the OC ratio, offset 0) from the OC word and does not store it: it is never written as a fused point
+  and never planned; ``EXPECTED-words.txt`` keeps it as read, and the compare (``controls.residual.oc_slot_pending``) holds it to those words once the OC word is written.
 * A value the profile format cannot hold exactly (whole millivolts) is refused (``NOT_REPRESENTABLE``) rather than rounded: the restore would write a
   different word than the one recorded.
 

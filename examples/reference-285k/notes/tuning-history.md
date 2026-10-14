@@ -21,7 +21,7 @@ Offsets in mV from stock; 55x-57x on P were set as TARGET voltages (offset = tar
 |---|---|---|
 | 0 (CPUs 8-11) | 0 (never offset) | -35 |
 | 1-3 (CPUs 12-23) | 0 | -25 |
-Words the chip must read back (OC word, then points 1..n; hex) = `../profiles/EXPECTED-words.txt` = `$Expected` in `tools/win/restore_tuning.ps1`:
+Words the chip must read back (OC word, then points 1..n; hex) = `../profiles/EXPECTED-words.txt` (the restore scripts read the installed copy; their verdict is `compare-accepted`):
 ```
 cpu0  39 8 14 1E 30 F9A00035 FC600037 FCA00038 FA800039
 cpu1  0 8 14 1E 30 F9A00035 FB600037 38 39        cpu5  0 8 14 1E 30 F9A00035 F6A00037 38 39

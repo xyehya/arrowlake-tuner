@@ -175,6 +175,22 @@ class CompareAccepted(CliCase):
         self.assertIn(residual.RESIDUAL_NOTE, out)
         self.assertIn("RESTORED: all 2 cores/clusters match the accepted state (1 equivalent: ", out)
 
+    def test_the_oc_points_slot_is_judged_by_the_oc_word(self) -> None:
+        """G-151: the accepted state holds an OC point (48x, 1.1230 V) and its table slot (``0x30``); a cold unit has neither yet."""
+        oc = 0x00047E30
+        self.WANT = f"12  {oc:X} 8 F 17 1E 28 {VfWord(46, 0, False, POINT6_OFFSET_RAW).to_u32():X} 30\n0  39 8\n"
+        code, out, err = self.run_cli(*self.files([oc, *self.POINTS, 0x30], [0x39, 0x8]))
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("RESTORED: all 2 cores/clusters match the accepted state.", out)
+        code, out, _ = self.run_cli(*self.files([0, *self.POINTS], [0x39, 0x8]))  # cold: the OC word differs; the missing slot is no difference of its own
+        self.assertEqual(code, 2)
+        self.assertIn("cpu12 BAD", out)
+        code, out, _ = self.run_cli(*self.files([oc, *self.POINTS], [0x39, 0x8]))  # the OC word is written but the seventh point is not there: a failure
+        self.assertEqual(code, 2)
+        self.assertIn("cpu12 BAD", out)
+        code, out, _ = self.run_cli(*self.files([oc, *self.POINTS, 0x00200030], [0x39, 0x8]))  # ... or reads another offset
+        self.assertEqual(code, 2)
+
     def test_the_unneutralised_residual_is_bad(self) -> None:
         code, out, _ = self.run_cli(*self.files([EC1_WORD, *self.POINTS, 0x30], [0x39, 0x8]))
         self.assertEqual(code, 2)
