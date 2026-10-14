@@ -55,5 +55,6 @@
 | G-150 | Tune: name a boot-time OC ratio (E 48× above fused 46×) as one; 48× offset control (OC point target as offset from the fused top, floor = point 6) | lnx | T0 | **merged** 2026-10-14 | — |
 | G-151 | write order: raising writes before lowering ones (no ratio dips during apply/restore); restore of an accepted state with an OC point + its 7th point slot | lnx | T0 | **merged** 2026-10-14 | G-150 |
 | G-152 | Stress: E caps per whole cluster + kernel frequency map (E 46× = 4.7 GHz), exact "cap held" report | lnx | T0 | **merged** 2026-10-14 | — |
+| G-153 | plan preview lists the apply's real (G-151) write order; GUI reconnects to a restarted helper | lnx | T0 | ready 2026-10-14 | G-151 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
