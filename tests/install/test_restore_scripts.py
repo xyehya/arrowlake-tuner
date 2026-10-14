@@ -80,6 +80,20 @@ class OneProfile(unittest.TestCase):
             self.assertIn("accepted-migrate", text, rel)
             self.assertLess(text.index("if ($profiles.Count -gt 1)"), text.index("ARLTUNER_ALLOW_MAILBOX"), rel)  # refused before anything is armed
 
+    def test_the_write_order_and_the_oc_slot_rule_are_the_shared_codes_not_the_scripts(self) -> None:
+        """G-151: each script makes ONE apply (the planner orders its writes: raising voltages first) and ONE compare-accepted (the OC point's slot rule); neither orders words
+        or judges points itself. Static checks only for the PowerShell script."""
+        sh = (REPO / "tools/lnx/restore_tuning.sh").read_text()
+        ps = (REPO / "tools/win/restore_tuning.ps1").read_text()
+        self.assertEqual(sh.count(' apply "$from/$prof"'), 1)
+        self.assertEqual(ps.count("@('apply', $prof"), 1)
+        self.assertEqual(sh.count("compare-accepted --readback"), 1)
+        self.assertEqual(ps.count("'compare-accepted'"), 1)
+        for text in (sh, ps):
+            self.assertIn("G-151", text)
+            self.assertNotIn("--point", text)  # no per-point writes of its own
+        self.assertNotIn("EXPECTED_POINTS", ps)
+
     def test_reapply_current_is_the_restore(self) -> None:
         text = (REPO / "tools/lnx/reapply_current.sh").read_text()
         self.assertIn('exec bash "$(cd "$(dirname "$0")" && pwd)/restore_tuning.sh" "$@"', text)

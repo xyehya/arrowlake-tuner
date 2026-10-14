@@ -62,6 +62,11 @@ POINT_OFFSETS_ARL_S: dict[tuple[str, int], int] = {("P", 5): -51, ("P", 6): -15,
 POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
 #: T-028 ``[MEASURED lnx 2026-10-02]`` (examples/reference-285k/notes/platform.md section 3): ``0x10 P1=2 P2=1..8`` read from CPU 0 = the ring
 #: points 8,14,20,28,34,37,38,39x (V target 0), ``P2 = 9`` -> rc ``0x11``; point 8 = ``0xF6600027`` = 39x with the BIOS offset -75.2 mV (raw -77).
+#: G-151 [MEASURED lnx 2026-10-14]: the E curve split live -- an OC point at 48x holding the old 48x voltage (EC0 ``0x00047E30`` = 1.1230 V, EC1-3 ``0x00047330`` = 1.1123 V)
+#: and point 6 (46x) lowered by 15 mV (EC0 ``0xF9A0002E``, EC1-3 ``0xFAE0002E``). ``SimConfig.measured_split()``; the seventh E point the OC ratio creates reads ``0x30``.
+SPLIT_E_OC_WORDS: dict[int, int] = {8: 0x00047E30, 12: 0x00047330, 16: 0x00047330, 20: 0x00047330}  # first CPU of EC0..EC3 -> OC word
+SPLIT_E_POINT6_WORDS: dict[int, int] = {8: 0xF9A0002E, 12: 0xFAE0002E, 16: 0xFAE0002E, 20: 0xFAE0002E}
+
 RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_REF_POINTS["ring"], start=1))
 RING_POINT_OFFSETS_ARL_S: dict[int, int] = {8: -77}
 _ZERO_VF = VfWord(ratio=0, v_target_raw=0, static=False, offset_raw=0)
@@ -235,6 +240,21 @@ class SimConfig:
         }
         fields.update(overrides)
         return cls(**fields)  # type: ignore[arg-type]
+
+
+    @classmethod
+    def measured_split(cls, **overrides: object) -> SimConfig:
+        """G-151: ``measured()`` holding the live-split E curve (``SPLIT_E_OC_WORDS`` / ``SPLIT_E_POINT6_WORDS``) on every CPU of the four E clusters; ``oc_adds_point`` makes
+        the seventh point (``0x30``) read. A warm reboot that kept it, or the state the accepted words record."""
+        cfg = cls.measured(**overrides)
+        topo = cfg.topology
+        initial, offsets = dict(cfg.initial_vf), dict(cfg.cpu_point_offsets)
+        for lead, word in SPLIT_E_OC_WORDS.items():
+            for cpu in topo.unit_cpus(topo.unit_of_cpu(lead)):
+                initial[cpu] = VfWord.from_u32(word)
+                offsets[(cpu, 6)] = VfWord.from_u32(SPLIT_E_POINT6_WORDS[lead]).offset_raw
+        cfg.initial_vf, cfg.cpu_point_offsets = initial, offsets
+        return cfg
 
 
 @dataclass(frozen=True)
