@@ -123,8 +123,11 @@ share point 6's voltage, so lowering point 6 alone lowers 48x too. An OC point g
 4. **Review changes**. Check the 48x target and that no "raised to point 6's voltage" warning shows, then **Apply**. Read the result, then stress-test 46x, 47x and 48x ([08](08-stability-testing.md)).
 
 What the tool does with it: it creates the OC point, and the OC point stays until a cold boot (the warning says so; Restore accepted then reports it EQUIVALENT, [09 §3](09-profiles-and-restore.md)).
-One plan writes all point offsets first and the OC word after them, so for the few transactions in between 48x runs on the lowered point-6 voltage (planner.py module docstring).
-The reference run avoided that by applying in two plans: the OC point at the old 48x voltage first, then point 6.
+You do not have to split the change. Every plan (GUI apply, CLI apply, Restore accepted) is written in a transition-safe order per unit (G-151): no ratio's voltage dips below
+the lower of its voltage before and after the plan while the words are written. Writes that raise a voltage go first, so the OC word that creates the OC point is written
+before the point offsets that lower the curve under it, and 48x never runs on the lowered point-6 voltage. A unit for which no such order exists is refused by name
+(`write_order`) and nothing is written for it; the message suggests splitting the change into two profiles, raising voltages first (`controls/order.py`).
+After the OC point exists, the CPU shows its table slot (on the reference E-clusters: point 7, ratio 48, offset 0); that slot is part of the OC point, see [09 §3](09-profiles-and-restore.md).
 
 Result on the reference chip (example values from one Core Ultra 9 285K; yours will differ), 46x lowered by 15 mV, 48x kept [MEASURED lnx 2026-10-14, examples/reference-285k/notes/tuning-history.md §5]:
 
@@ -179,7 +182,7 @@ follows. Observed side effect: the kernel rescaled the CPU capacity (`energy_mod
 - **Board.** Load-line calibration, the VccIA offset and cooling decide how much voltage droop you see; they are BIOS settings.
 - **Voltage ceiling.** E-core WHEA reports are reported above about 1.2 V [COMMUNITY skatterbencher.com/2025/02/14/285k-whea-when-e-core-voltage-over-1-2v/];
   the tool warns on E targets above that.
-- **E-cluster caps.** The four E-cores of a cluster run one ratio. When you test an E-cluster at a fixed ratio with cpufreq caps, cap **all four** cores: a cap on one core alone did not hold it below its neighbours' (one core capped at 4.7 GHz ran 48x); capping all four did (46x). On the reference chip a cap of (ratio + 1) x 100 MHz holds that ratio [MEASURED lnx 2026-10-14, platform-arl-s.md §3].
+- **E-cluster caps.** The four E-cores of a cluster run one ratio. When you test an E-cluster at a fixed ratio with cpufreq caps, cap **all four** cores (the Stress tab does this for you, [08](08-stability-testing.md)): a cap on one core alone did not hold it below its neighbours' (one core capped at 4.7 GHz ran 48x); capping all four did (46x). On the reference chip a cap of (ratio + 1) x 100 MHz holds that ratio [MEASURED lnx 2026-10-14, platform-arl-s.md §3].
 - **cpufreq.** A user-set `scaling_max_freq` below the new ratio wins. The tool makes the cap follow a changed maximum only when the cap sat at the old maximum, and never raises a cap you set yourself (G-126, G-147).
 
 Next: [08 Stability testing](08-stability-testing.md) · Previous: [06 Undervolting](06-undervolting.md)

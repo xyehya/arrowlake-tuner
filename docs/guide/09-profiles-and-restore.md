@@ -101,6 +101,15 @@ not a hardware one), is decided before the first write. If they do not fit, noth
 needs the most rounds; raise the step limits or the operation caps in `/etc/arltuner/policy.toml`, or bring the CPU closer first ([11 §3](11-troubleshooting-faq.md)).
 Afterwards the Dashboard's "applied" chip and the comparison with the accepted state tell you whether every word matches.
 
+**Write order (G-151).** Within each unit the apply writes in a transition-safe order: no ratio's voltage goes below the lower of its voltage before and after the plan while
+the words are written. Writes that raise a voltage go before writes that lower one. So when the accepted state has an OC point and a lowered top point (for example an E-cluster
+with 48x held at its old voltage and point 6 lowered), the OC word is written before the point-6 offset, from a cold boot as well. A unit with no such order is refused by name
+(`write_order`) and not written ([07 how-to](07-overclocking.md)).
+
+**The OC point's table slot.** Once an OC point exists the CPU also shows a table slot for it (on the reference E-clusters: point 7, ratio 48, offset 0). It is never written as a
+fused point. The compare treats a missing slot, on a unit whose OC word has not been written yet, as part of the OC word's difference, not as a separate failure; after the OC word
+it must read the OC ratio with offset 0 (task G-151, `controls/order.py`).
+
 Operation count: the plan reserves the worst case (every word read, every word written and read back, plus two reads per unit that has no OC point in the accepted
 state, to look for a left-over OC point). For the reference layout (8 P-cores, 4 E-clusters of 4 CPUs) the simulator reserves 651 operations for a one-round plan
 (24 of them the scan) [simulator test, `tests/helper/test_complete_profiles.py`]. Only the words that differ are written, so a restore of a state the CPU already holds sends reads only: a
