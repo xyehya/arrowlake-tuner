@@ -1,0 +1,41 @@
+# E 46x/48x split screen, 2026-10-14 (lnx, orchestrator). Applied 07:5x UTC: OC point 48x EC0 0x00047E30 (1.1230 V) / EC1-3 0x00047330 (1.1123 V),
+# then point 6 EC0 0xF9A0002E (-49.8 mV) / EC1-3 0xFAE0002E (-40.0 mV). Curve 20261014T075530Z-gbw6. MCE 0 throughout.
+
+## esplit_tests.sh
+=== log /home/yk/.local/share/arltuner-dev/siolog-esplit-20261014T080212Z.jsonl
+=== allE46: stress-ng 16 threads on CPUs 8-23, cap 4700000 kHz, load 100 %, 300 s, --verify
+stress-ng: info:  [1119208] failed: 0
+stress-ng: info:  [1119208] successful run completed in 5 mins
+=== allE47: stress-ng 16 threads on CPUs 8-23, cap 4800000 kHz, load 100 %, 180 s, --verify
+stress-ng: info:  [1172692] failed: 0
+stress-ng: info:  [1172692] successful run completed in 3 mins
+=== allE48: stress-ng 16 threads on CPUs 8-23, cap 4900000 kHz, load 100 %, 120 s, --verify
+stress-ng: info:  [1236603] failed: 0
+stress-ng: info:  [1236603] successful run completed in 2 mins
+=== bursty46: stress-ng 16 threads on CPUs 8-23, cap 4700000 kHz, load 25 %, 180 s, --verify
+stress-ng: info:  [1254246] failed: 0
+stress-ng: info:  [1254246] successful run completed in 3 mins
+=== sweep: per-core CPUs 8-23, 44..48x, 10 s/step
+cpu 23      47x: PASS  ran 46..48x (mostly 46x)  VID 1.0975..1.1125 V  Tmax 42.0 C  [0/9 s at 47x]
+cpu 23      48x: PASS  ran 48..48x (mostly 48x)  VID 1.1125..1.1125 V  Tmax 40.0 C  [9/9 s at 48x, VID 1.1125]
+restored scaling_max_freq on cpus 8-23
+ALL PASSED; log /home/yk/.local/share/arltuner-dev/siolog-esplit-20261014T080212Z.jsonl
+
+## e46_single.py (cluster capped 4.7 GHz, 1 thread per core, 20 s)
+cpu 8: PASS ratios [46] VIDs [1.1075]
+cpu 9: PASS ratios [46] VIDs [1.1075]
+cpu 10: PASS ratios [46] VIDs [1.1075]
+cpu 11: PASS ratios [46] VIDs [1.1075]
+cpu 12: PASS ratios [46] VIDs [1.0975]
+cpu 13: PASS ratios [46] VIDs [1.0975]
+cpu 14: PASS ratios [46] VIDs [1.0975]
+cpu 15: PASS ratios [46] VIDs [1.0975]
+cpu 16: PASS ratios [46] VIDs [1.0975]
+cpu 17: PASS ratios [46] VIDs [1.0975]
+cpu 18: PASS ratios [46] VIDs [1.0975]
+cpu 19: PASS ratios [46] VIDs [1.0975]
+cpu 20: PASS ratios [46] VIDs [1.0975]
+cpu 21: PASS ratios [46] VIDs [1.0975]
+cpu 22: PASS ratios [46] VIDs [1.0975]
+cpu 23: PASS ratios [46] VIDs [1.0975]
+ALL PASSED

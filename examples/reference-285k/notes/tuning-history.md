@@ -89,6 +89,12 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
   measured 1.1125 V (= accepted -25 mV curve; target clamped up to point 6). EC2 first written ratio 46 + target 0 (`0x0000002E`): the planner's `0x1D`
   = 46 lowered its favored ratio (`0x1C` before `0x2e30`), `cpuinfo_max_freq` 4.9 -> 4.7 GHz; rewritten ratio 48 + 1.100 V (`0x00046630`): favored
   48, 4.9 GHz, `scaling_max_freq` had to be written back to 4.9 GHz by hand; 48x then 1.1125 V. EC0 48x 1.1226 V. MCE 0. Fix in the app: G-147.
+- E 46x/48x split (2026-10-14 07:5x UTC, operator's request: 48x unchanged, 46x -15 mV more): first the OC point 48x at the old 48x voltage
+  (EC0 `0x00047E30` = 1.1230 V, EC1-3 `0x00047330` = 1.1123 V), then point 6 EC0 -35.2 -> -49.8 mV (`0xF9A0002E`), EC1-3 -25.4 -> -40.0 mV (`0xFAE0002E`);
+  two plans so 48x never ran on the lower point 6. VID (curve `gbw6`): 46x EC0 1.1226 -> 1.1075, EC1-3 1.1125 -> 1.0975; 47x 1.1150 / 1.1050 (midpoint);
+  48x 1.1250 / 1.1125 (EC0 +2.4 mV: target rounded up one 1/1024 V step); 43x -5..-8 mV. Screen: all 16 E 46x 300 s, 47x 180 s, 48x 120 s, bursty 25 %
+  46x 180 s (stress-ng --verify, 0 failed), per-core sweep 44..48x 80 steps PASS, 46x single-thread per core with the cluster capped 16/16 PASS; MCE 0
+  (`captures/lnx/esplit-tests-20261014.txt`). Live, not accepted (operator's own longer test first).
 - BIOS "TVB Voltage Optimizations" (2026-10-13, ASRock Z890, accepted tuning): no change in `0x18` (`0x1E`) or `0x24` (set 1: 70 C, -0 bin 1C /
   -1 bin 2-8C; set 2 all 0); requested VID identical within +-2 mV, stock and tuned, all units (curves `fikh`/`d53n`, `yfjh`/`q9x7`); with TVB disabled
   (bit 2) the 70 C down-bin is not applied (all-core 80 C: P0/P1 55x flat). siomon (`sio sensors --direct-io -f json`) used as a 1 Hz logger.
@@ -96,5 +102,5 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
   70 C, 85 W; stressapptest 30 s, 0 errors.
 
 ## 6. Parked by the operator
-58x P0 stability; a newer Linpack build (Intel oneMKL Benchmarks Suite 2026.0 vs Linpack Xtreme 1.1.8); E 48x/46x split through the OC-point V target
-(never applied).
+58x P0 stability; a newer Linpack build (Intel oneMKL Benchmarks Suite 2026.0 vs Linpack Xtreme 1.1.8). (The E 48x/46x split was applied
+2026-10-14, §5.)

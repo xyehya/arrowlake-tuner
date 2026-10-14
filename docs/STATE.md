@@ -1,7 +1,7 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-12 · lnx · public-readiness pass done (operator goal: fine-tune every page, code / UI / security / git-history review, remove
-private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
+_Updated: 2026-10-14 · lnx · G-150 merged; E 46x/48x split applied live and screened (not accepted yet). Suite **2912 tests OK**
+(`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
 
 ## Where we are
 - **App:** local web GUI (Dashboard, Curves, Tune, Stress, Profiles, System, Audit) + root helper as a socket service (no polkit, D-043) + CLI; Linux. Windows: restore of the
@@ -12,24 +12,17 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   README has a Screenshots section (`docs/img/`, captured read-only with `tools/screenshots.py`).
 - **Remote:** `github.com/xyehya/arrowlake-tuner` (`origin`, only `main` pushed).
 
-## This session (2026-10-12), all merged + installed + checked live
-| Task | What |
-|---|---|
-| G-133/G-139 | Tune: All-Core/Per-Core, Whole Curve / Per V/F point Offsets, OC ratio before adaptive voltage (gated), limits live, no turbo text in cards, interpolated predictions, BUSY retry of read-only ops |
-| G-134/G-137 | Limits: `"auto"` ratio = fused 0x1C[15:8] + 3; policy may go up to the CPU's own maxima (0x01 OC ratio, 0x28 V) and the field encoding; `hw_limits`; CLI reads 0x01 (D-038, D-039) |
-| G-136 | README screenshots tool (read-only allowlist, CDP over pipe, read-scope session) |
-| G-138 | Windows restore for any ARL-S: `fingerprint.json` at accept, LP map derived live |
-| G-140 | Public scrub: no private-repo refs, D-041 dev paths (`~/.local/state/arltuner/`, `/run/lock/arltuner-mailbox.lock`) |
-| G-141 | Code-review fixes (kind-wide plan ratio, paced extras, journals, turbo fold, encoding bounds, BIOS offset default 0, stale-read accept, `profiles.fingerprint`, audit 0600, `ops_done` total) |
-| G-142 | Security fixes (D-042): random 127.x.y.z bind + read-only scope, restore under `-I`, socketpair + undumpable GUI, admin-only Windows driver dir with per-run copy re-hashed, caps, NaN |
-| polish | Audit names/filter, System Tuning-limits card, E-cluster labels, applied chip ranges, fingerprint button, no internal ids in UI |
+## 2026-10-12 (merged + installed + checked live)
+G-133/G-139 Tune model · G-134/G-137 live limits (D-038/D-039) · G-136 screenshots · G-138 Windows fingerprint · G-140 public scrub (D-041) ·
+G-141 review fixes · G-142 security (D-042) · polish.
 
 ## Machine state (reference 285K)
 - Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV.
-- Warm reboot this morning; **restore run by the orchestrator 2026-10-12 19:0x** (`restore_tuning.sh --orchestrated`, new code under `-I`, live
-  0x01 binding): 3 profiles applied (65 + 51 + 51 ops), all P-cores + EC0/EC3 match; **EC1 (OC word 48× + 1.137 V) and EC2 (OC word 46× +
-  1.137 V) differ only in the OC word** — cannot be zeroed at runtime, a cold boot clears them. `fingerprint.json` recorded (tuning untouched).
-- Tune controls exercised in Chrome on live data (OC ratio 58× on P0 → adaptive voltage enabled + prefilled 1.4248 V → Review 17 ops → discarded).
+- Boot 2026-10-13 19:03 (cold, BIOS TVB Voltage Optimizations ON — inert). Accepted = `read-20261013-145635`.
+- **Live now differs from accepted on the E-clusters (2026-10-14, operator's test):** OC point 48x (EC0 1.1230 V, EC1-3 1.1123 V = the old 48x
+  voltage) + point 6 EC0 -49.8 / EC1-3 -40.0 mV (was -35.2 / -25.4). P-cores = accepted. The OC points stay until a cold boot; Restore accepted
+  would put point 6 back and report E as EQUIVALENT.
+- Headless GUI restarted 2026-10-14 (serves G-150); port in `~/.local/share/arltuner-dev/port` (assets are loaded at server start: restart after web/ merges).
 - **No polkit (G-144, D-043), live-verified 2026-10-12:** `arltuner-helper.socket` (systemd, `/run/arltuner/helper.sock` 0666) starts the root
   helper on connect; SO_PEERCRED allowlist `[access] users = ["yk"]` in `/etc/arltuner/helper.toml`; second client and root refused; stress child runs
   as `yk`; audit operator `gui:uid1000`. The temporary polkit rule was removed (nothing uses polkit any more).
@@ -49,6 +42,16 @@ private references, final polish). Suite **2685 tests OK** (`ARLTUNER_BROWSER_TE
   stock (`d53n`, `y4c7`): 0 mV at 48/53/55/57x on every unit; tuned curve `yfjh` vs VO-off tuned `q9x7`: within +-2 mV at every point. A cool
   light-load sweep (44-58 C, P0-P2) requested the same VIDs (P0 53x 1.1686, 55x 1.2712, 57x 1.3864). Stopped there (operator: no added value).
   Reading: VO acts only with TVB itself enabled [UNVERIFIED]. With TVB disabled the 70 C down-bin is not applied either (P0/P1 55x at 80 C).
+## 2026-10-14
+- Operator: "48x is an OC ratio" and no offset control for it. **G-150** merged: OC ratio (any ratio above the fused top) vs OC point (own
+  voltage) named apart; header "OC ratio: 48x (fused top 46x) · no OC point"; Point 6 "(also 47-48x)"; a "48x offset" dropdown (offset from the
+  fused 0x09 voltage, exact 1/1024 V targets, floor = point 6: the CPU raises lower targets); "No OC point"; 47x says it lowers the max.
+- **E 46x/48x split** applied (two plans: OC point first, then point 6). VID 46x -15 mV (1.1075 / 1.0975 V), 47x midpoint, 48x same (EC0 +2.4 mV).
+  Screen PASS: all-E 46x 5 min / 47x 3 / 48x 2, bursty 46x, per-core sweep 44-48x, 46x single-thread per core with the cluster capped; MCE 0.
+  `captures/lnx/esplit-tests-20261014.txt`. E clusters share one ratio: cap all four cores (`platform-arl-s.md`).
+- **Next:** operator's own longer E test (OCCT); if it holds, Tune -> Read -> "Set the current state as accepted". Then the documenter updates
+  the guide's Tune/OC page for G-150.
+
 ## Operator to-do
 1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
 
