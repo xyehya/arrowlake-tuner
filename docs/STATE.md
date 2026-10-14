@@ -54,7 +54,7 @@ G-141 review fixes · G-142 security (D-042) · polish.
   cold-boot restore of the split writes the OC word before point 6. **G-152** merged + installed: Stress caps whole E clusters at the kernel's map
   (E 46x = 4.7 GHz), "cap held at Nx" / "ran Mx (cap Nx)". Gate 2933 OK. `install.sh` 21/21 self-checks.
 - In flight: **G-153** (plan preview still lists the static order, not G-151's: the apply is right, the Review list is not; GUI does not reconnect
-  to a restarted helper - restart the GUI after `install.sh`). Guide update for G-150/151/152 (documenter, worktree, not merged yet).
+  to a restarted helper - restart the GUI after `install.sh`). Guide updated for G-150/151/152 (merged).
 - **Next:** operator's own longer E test at 46x (caps on all 16 E-cores, 4.7 GHz); then Tune -> Read -> "Set the current state as accepted".
 
 ## Operator to-do
