@@ -84,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
             except HelperConnectError as e:
                 print(f"arltuner-gui: {e}", file=sys.stderr)
                 return 2
-    srv = WebServer(Config(web_root=a.web_root), link)
+    again = (lambda: connect_helper(HELPER_SOCKET)) if link is not None and not (a.helper and not a.no_helper) else None  # G-153: the installed helper restarts under us (install.sh)
+    srv = WebServer(Config(web_root=a.web_root), link, again)
     if srv.bind_note:
         print(f"arltuner-gui: warning: {srv.bind_note}", file=sys.stderr)
     path = write_launcher(a.launcher, srv.origin, srv.token)

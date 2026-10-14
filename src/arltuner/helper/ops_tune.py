@@ -78,7 +78,7 @@ from arltuner.guard import (
 )
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
-from arltuner.controls.planner import POINT_CAVEAT, _same_state, _goal_word, current_word, kept_word, oc_cap_reads_of
+from arltuner.controls.planner import POINT_CAVEAT, build_plan, _same_state, _goal_word, current_word, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
@@ -1928,12 +1928,43 @@ def _rounds_from_last(helper: Helper, profile: Profile, topology: Topology, poli
     return ramp_rounds(profile, topology, known[0], known[1], policy, only_changed=profile.complete)
 
 
+_ORDER_NOTE = "the apply orders the writes so that no ratio's voltage dips (G-151); the order is decided from its own reads"
+
+
+def _apply_order(
+    profile: Profile, topology: Topology, policy: Policy, known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None
+) -> dict[tuple[str, int, int], int] | None:
+    """G-153: the place of every point / per-core write in the order the apply will send them, from the planner itself (``build_plan`` on the last read's words, so
+    ``reorder_writes`` is the one ordering rule) -- ``{(kind, cpu, point): place}``; ``None`` without a read that covers every unit (the static order stays). A unit the order model
+    refuses (``write_order``) raises the apply's own refusal. The turbo tables are left out (their MSR words are not in the last read; they are listed last)."""
+    if known is None:
+        return None
+    try:
+        plan = build_plan(
+            dataclasses.replace(profile, turbo=None), topology, known[0], per_core_enabled=None, policy=policy, point_words=known[1], only_changed=profile.complete
+        )
+    except (PlanError, ProfileError, ValueError):  # a word the last read does not hold: the apply decides from its own reads
+        return None
+    refused = tuple(r for r in plan.refusals if r.reason == "CHECK_FAILED" and r.detail.startswith("write_order"))
+    if refused:
+        raise _preflight_error(PlanRefused(refused, plan))
+    place: dict[tuple[str, int, int], int] = {}
+    for st in plan.steps:
+        if st.kind.is_write and st.msr is None and st.kind is not StepKind.WRITE_PERCORE_ENABLE:
+            place.setdefault((st.kind.value, st.cpu, st.p2), len(place))
+    return place
+
+
 def _predicted_steps(
-    profile: Profile, topology: Topology, known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None = None
+    profile: Profile,
+    topology: Topology,
+    known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None = None,
+    order: Mapping[tuple[str, int, int], int] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
     words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``. G-148: for a complete
-    profile with ``known`` (the last read, ``_last_baseline``) a word the CPU already holds is not listed (the apply writes only what differs)."""
+    profile with ``known`` (the last read, ``_last_baseline``) a word the CPU already holds is not listed (the apply writes only what differs). G-153: ``order``
+    (``_apply_order``) puts the point and per-core steps in the apply's own order."""
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
     reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)  # every word is read, also the unchanged ones
@@ -1966,6 +1997,9 @@ def _predicted_steps(
         kinds = (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) if t.ratio is not None else (StepKind.WRITE_VF,)
         for kind in kinds:
             steps.append({"kind": kind.value, "unit": u, "cpu": t.cpu, "point": 0})
+    if order is not None:  # the 0x15 (first) and the tables (last) keep their places; the writes between them follow the apply
+        first = 1 if steps and steps[0]["kind"] == StepKind.WRITE_PERCORE_ENABLE.value else 0
+        steps[first:] = sorted(steps[first:], key=lambda s: order.get((s["kind"], s["cpu"], s.get("point", 0)), len(order)))
     if profile.turbo is not None:
         for key in ("e", "p"):
             if getattr(profile.turbo, key) is not None:
@@ -2095,9 +2129,13 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         raise _preflight_error(exc) from None
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
-    steps, writes, reads = _predicted_steps(profile, topology, _last_baseline(helper, profile, topology) if profile.complete else None)
+    known = _last_baseline(helper, profile, topology)
+    order = _apply_order(profile, topology, policy, known)  # G-153: the Review dialog lists the order the apply sends (G-151)
+    steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
+    if order is None and (targets or points):
+        warnings.append(_ORDER_NOTE)
     if restore:
         warnings.extend(_residual_preview(found_residual))
     if rounds > 1:

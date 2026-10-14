@@ -276,9 +276,11 @@ class _HTTPD(http.server.ThreadingHTTPServer):
 class WebServer:
     """Owns the listening socket, the bootstrap token, the sessions and the manifest contents."""
 
-    def __init__(self, config: Config, helper: HelperLink | None) -> None:
+    def __init__(self, config: Config, helper: HelperLink | None, reconnect: Callable[[], HelperLink] | None = None) -> None:
         self.cfg = config
         self.helper = helper
+        self.reconnect = reconnect  # G-153: opens a fresh link to the installed helper (``connect_helper``: the same peer checks as the first connect); None: never
+        self._reconnect_lock = threading.Lock()
         self._token = config.token or secrets.token_urlsafe(32)
         self._token_born = config.clock()
         self._token_used = False
@@ -330,7 +332,7 @@ class WebServer:
 
     def start(self) -> "WebServer":
         if self.helper is not None:
-            threading.Thread(target=self._watch_helper, name="web-helper-watch", daemon=True).start()
+            threading.Thread(target=self._watch_helper, args=(self.helper,), name="web-helper-watch", daemon=True).start()
         self._thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.1}, name="web", daemon=True)
         self._thread.start()
         return self
@@ -434,8 +436,26 @@ class WebServer:
             self._long[rid] = [sid, 0]
             return rid
 
-    def _watch_helper(self) -> None:
-        sub = self.helper.subscribe()  # type: ignore[union-attr]
+    def live_helper(self) -> HelperLink | None:
+        """G-153: the helper link; after the helper service restarted (the link is dead) one reconnect attempt per call, serialized, no loop. A failed attempt leaves the
+        dead link (the caller answers 503 as before). An op in flight on the dead link was already reported lost; nothing is replayed."""
+        helper = self.helper
+        if helper is None or helper.alive or self.reconnect is None or self.stop.is_set():
+            return helper
+        with self._reconnect_lock:
+            helper = self.helper
+            if helper is None or helper.alive:  # another request reconnected meanwhile
+                return helper
+            try:
+                fresh = self.reconnect()
+            except Exception:  # HelperConnectError (missing, untrusted, busy, ...): still unavailable
+                return helper
+            self.helper = fresh
+            threading.Thread(target=self._watch_helper, args=(fresh,), name="web-helper-watch", daemon=True).start()
+            return fresh
+
+    def _watch_helper(self, helper: HelperLink) -> None:
+        sub = helper.subscribe()
         try:
             while not self.stop.is_set():
                 try:
@@ -454,7 +474,7 @@ class WebServer:
                             lost.append((rid, rec[0]))
                             del self._long[rid]
                 for rid, sid in lost:
-                    self.helper.publish({"event": "result", "id": rid, "ok": False, "server_error": "helper_lost"}, sid)  # type: ignore[union-attr]
+                    helper.publish({"event": "result", "id": rid, "ok": False, "server_error": "helper_lost"}, sid)
         finally:
             sub.close()
 
@@ -666,7 +686,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _status(self) -> None:
         if self._auth() is None:
             return
-        h = self.srv.helper
+        h = self.srv.live_helper()
         self._json(200, {"ok": True, "helper_alive": bool(h and h.alive), "sse_clients": self.srv.sse_clients})
 
     def _logout(self) -> None:
@@ -740,7 +760,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             valid = False
         if not valid:
             return self._err(400, "bad_args")
-        helper = self.srv.helper
+        helper = self.srv.live_helper()
         if helper is None:
             return self._err(503, "helper_unavailable")
         if is_long:
@@ -784,7 +804,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if sid is None:
             return
         srv = self.srv
-        helper = srv.helper
+        helper = srv.live_helper()
         if helper is None:
             return self._err(503, "helper_unavailable")
         with srv._lock:
