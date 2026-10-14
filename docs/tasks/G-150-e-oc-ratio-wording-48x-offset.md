@@ -1,6 +1,6 @@
 # G-150 — Tune: name a boot-time OC ratio as one (E 48× above fused 46×) and give it an offset control
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-14)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake helper only)
 - **Branch/worktree:** `task/G-150-e-oc-ratio-offset`
