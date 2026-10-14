@@ -47,6 +47,7 @@ __all__ = [
     "unit_rows",
     "neutral_equivalent",
     "neutral_target",
+    "oc_slot_pending",
     "neutralise",
     "scan_cpus",
     "scan_plan",
@@ -335,11 +336,35 @@ def neutral_equivalent(fused_word: int | None, expected: int | None, actual: int
     return neutral(expected) and neutral(actual) and VfWord.from_u32(expected).ratio == VfWord.from_u32(actual).ratio
 
 
+def oc_slot_pending(fused_word: int | None, want: Sequence[int], got: Sequence[int | None]) -> int | None:
+    """G-151: the index of the accepted OC point's table slot (the point after the fused table that the OC ratio creates: ``P2 = n + 1``, the last accepted word, ratio = the
+    accepted OC ratio, above the top fused ratio) when the live unit cannot show it yet -- its OC word is not written (ratio at or below the top fused ratio, or none), so the
+    slot does not exist (a cold boot has no such point [MEASURED lnx 2026-10-14]). That missing word is not a failure of its own: the OC word is the difference, and once it
+    is written the slot must read exactly the accepted word (the compare is by word, so a wrong ratio or offset there is a difference). ``None`` when this does not apply."""
+    if fused_word is None or len(want) < 2 or not got:
+        return None
+    top = fused_top_ratio(fused_word)
+    exp = VfWord.from_u32(want[0])
+    slot = len(want) - 1
+    last = VfWord.from_u32(want[slot])
+    if top is None or exp.static or exp.ratio <= top or last.ratio != exp.ratio or last.offset_raw != 0:
+        return None
+    if len(got) > slot and got[slot] is not None:
+        return None
+    live = None if got[0] is None else VfWord.from_u32(got[0])
+    if live is not None and not live.static and live.ratio > top:
+        return None  # the OC word is written: the slot must be there
+    return slot
+
+
 def compare_words(fused_word: int | None, want: Sequence[int], got: Sequence[int | None]) -> tuple[str, str]:
     """Verdict of one unit's live words against the accepted ones, for the restore scripts: ``("ok", "")`` identical, ``("equivalent", text)`` only an equivalent OC word
     (``neutral_equivalent``) or a residual OC point (``classify``, ``RESIDUAL_NOTE``) differs, else ``("bad", "")``. The same rules as the helper's ``accepted_match``."""
     if list(want) == list(got):
         return "ok", ""
+    slot = oc_slot_pending(fused_word, want, got)
+    if slot is not None:  # G-151: the OC point's slot cannot exist before the OC word does; judge the rest
+        return compare_words(fused_word, list(want[:slot]), list(got))
     if classify(fused_word, want, got) is not None:
         return "equivalent", RESIDUAL_NOTE
     if want and got and got[0] is not None and len(want) == len(got) and list(want[1:]) == list(got[1:]) and neutral_equivalent(fused_word, want[0], got[0]):

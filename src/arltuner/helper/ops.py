@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import secrets
-import stat
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ from arltuner import vfdump
 from arltuner.controls import predict
 from arltuner.controls.residual import RESIDUAL_NOTE
 from arltuner.controls.residual import classify as classify_residual
-from arltuner.controls.residual import neutral_equivalent
+from arltuner.controls.residual import neutral_equivalent, oc_slot_pending
 from arltuner.guard import (
     ENV_FLAG,
     AuditLog,
@@ -36,7 +35,6 @@ from arltuner.guard import (
     read_state,
 )
 from arltuner.guard.audit import parse_audit_ts
-from arltuner.mailbox import VfWord
 from arltuner.msr import MailboxTransport
 from arltuner.platform.preflight import PreflightReport, Status
 from arltuner.topology import Topology, TopologyError, UnknownCore
@@ -518,7 +516,10 @@ def accepted_match(
                         equivalents.append({"point": residual["extra_point"], "expected": None, "actual": _hex(got[residual["extra_point"]]), "residual": True, "note": note})
                     out.append({"cpu": cpu["cpu"], "match": True, "diffs": [], "equivalent": True, "equivalents": equivalents})
                     continue
+                slot = oc_slot_pending(fused.get(cpu["cpu"]), want, got)  # G-151: the OC point's slot does not exist before the OC word is written: not a difference of its own
                 for point in range(max(len(want), len(got))):
+                    if point == slot:
+                        continue
                     expected = want[point] if point < len(want) else None
                     actual = got[point] if point < len(got) else None
                     if point == 0 and _equivalent_oc_words(fused.get(cpu["cpu"]), expected, actual):
