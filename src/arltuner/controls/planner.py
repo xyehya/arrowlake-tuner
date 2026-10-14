@@ -48,9 +48,12 @@ T-025 (per-V/F-point offsets, ``[[point]]``): per target CPU and point the plan 
 writes ``0x11 P2=point`` -- the word read with only its offset field replaced (``[MEASURED lnx 2026-10-02]``: the top fused point of an E CPU reads
 ``0x0000002E`` = 46x, V target 0; OCCT wrote ``ratio | offset << 21``). The ``0x15`` enable rule is the same as for a ``[[core]]``; no ``0x1C`` / ``0x09`` /
 ``0x26`` / ``0x28`` read and no ``0x1D`` / ``0x27`` write belongs to a point. A point's ``expect_ratio`` that differs from the ratio field read refuses
-the write step (predicted ``CHECK_FAILED``, nothing is sent). Ordering when a profile has several kinds of change (a documented simplification, no
-interleaving by direction): ``0x15``, a lowering-only turbo table, **all point writes, then all per-core words**, then a raising turbo table; the budget
-counts every point read, write and read-back. The hardware's V(n) >= V(n-1) rule across points is not checked here (fused-point voltages are not readable).
+the write step (predicted ``CHECK_FAILED``, nothing is sent). Ordering: ``0x15``, a lowering-only turbo table, the **point writes and per-core words**, then a raising turbo
+table. G-151: those point and per-core writes are put in a transition-safe order per unit (``controls.order``): no ratio's voltage dips below ``min(before, after)`` at any
+prefix, so writes that raise a voltage go first and an OC word that creates or raises the OC point goes before the point offsets that lower the curve under it; the planner's
+order (points, then the OC word) is kept wherever it is already safe, and a unit with no safe order is refused (``write_order``). The budget counts every point read, write and
+read-back. The hardware's V(n) >= V(n-1) rule across points is not checked here (fused-point voltages are not readable). A point whose word reads a ratio above the top fused
+ratio is the OC point's slot (``P2 = n + 1``): never written as a fused point (``oc_point_slot``).
 
 Pre-flight mirrors the guard: ``Policy.cpu_allowed``, ``Policy.match`` and the entry's named predicate from ``guard.CHECKS``, with the same
 session facts (``guard.build_context``: the ``0x1C`` / ``0x09`` / ``0x28`` words, the planned ``0x11`` word, the D-015 / D-016 bounds), so a
@@ -91,6 +94,7 @@ from .model import (
     Target,
     Verdict,
 )
+from .order import reorder_writes
 
 __all__ = [
     "PLATFORM_INFO_MSR",
@@ -789,6 +793,16 @@ def _is_step_only(policy: Policy, req: Request, baseline: int, ctx: CheckContext
     return predict(policy, req, baseline, ctx.unlimited_steps()).allowed
 
 
+def _kind_top_ratio(policy: Policy, baseline: Mapping[int, CoreReadings], cpu: int) -> int | None:
+    """G-151: the top fused ratio of ``cpu``'s core kind -- from its own ``0x09`` word, else from any CPU of the kind the plan read (every P-core carries the same fused table,
+    every E cluster another [MEASURED lnx 2026-10-02]); ``None`` when none was read."""
+    own = baseline.get(cpu)
+    if own is not None:
+        return fused_top_ratio(own.fused)
+    kind = policy.core_kind(cpu)
+    return next((fused_top_ratio(r.fused) for c, r in baseline.items() if policy.core_kind(c) == kind), None)
+
+
 def build_plan(
     profile: Profile,
     topology: Topology,
@@ -943,7 +957,8 @@ def build_plan(
     currents: dict[int, VfWord] = {}
     oc_notes: list[str] = []
     raises = False
-    for pt in point_targets:  # T-025: V/F point offsets first, then the per-core words
+    segment = len(steps)  # G-151: the point and per-core writes from here on are put in a transition-safe order below
+    for pt in point_targets:  # T-025: V/F point offsets, then the per-core words (G-151: reordered below)
         word = point_words[(pt.cpu, pt.point)]
         base = VfWord.from_u32(word)
         try:
@@ -965,6 +980,13 @@ def build_plan(
                 Refusal.CHECK_FAILED.value,
                 f"expect_ratio (planner): the ratio field read for {pt.label} point {pt.point} is {base.ratio} (word {word:#010x}), the profile expects "
                 f"{pt.expect_ratio}; nothing is sent",
+            )
+        elif verdict.allowed and base.ratio > (_kind_top_ratio(policy, baseline, pt.cpu) or base.ratio):
+            verdict = Verdict(
+                False,
+                Refusal.CHECK_FAILED.value,
+                f"oc_point_slot (planner): point {pt.point} of {pt.label} reads ratio {base.ratio} (word {word:#010x}), above the top fused ratio: it is the OC point the P2 = 0 word "
+                f"creates, never a fused point; set the OC ratio and voltage instead; nothing is sent",
             )
         elif not verdict.allowed and verdict.reason == Refusal.CHECK_FAILED.value and predict(policy, req, word, ctx.unlimited_steps()).allowed:
             offset_raw = _step_toward(base.offset_raw, goal_raw, ctx.max_offset_step_raw)
@@ -1089,6 +1111,11 @@ def build_plan(
                 core_kind=t.kind,
             )
         )
+    ordered, order_notes = reorder_writes(steps[segment:], topology, baseline, point_words)  # G-151
+    new_numbers = {st.number: segment + i for i, st in enumerate(ordered, start=1)}  # ordered keeps the step numbers it was given: the same set, new places
+    steps[segment:] = [replace(st, number=new_numbers[st.number]) for st in ordered]
+    step_only = {new_numbers[n] for n in step_only}
+    oc_notes.extend(order_notes)
     append_turbo(raising)
     if only_changed and not any(s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) for s in steps):
         # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; the step-limit set is empty without a mailbox write)
