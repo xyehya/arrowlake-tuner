@@ -1,6 +1,6 @@
 # G-152 — Stress: E-core ratio caps that hold (whole cluster, kernel frequency map), exact "cap held" report
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-14)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake sysfs only)
 - **Branch/worktree:** `task/G-152-stress-e-caps`
