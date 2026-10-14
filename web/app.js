@@ -2691,14 +2691,17 @@
   // F1 point numbering as overclockers know it (SkatterBencher / XTU): points 1..n are fused (offset only), the OC point follows (P 9, E 7).
   function ocPointNo(units) { return Math.max(0, ...units.map((u) => curPts(u).length)) + 1; }
   function ocHeadText(units) { return "Point " + ocPointNo(units) + " \u00b7 OC"; }
-  const OC_TIP = "An OC ratio is a ratio above what the unit runs at stock. The OC point (ratio + adaptive voltage) exists once that ratio is above the top fused ratio; it is written through the P2=0 word.";
+  // G-150: two words. OC ratio = any ratio a unit runs above its fused top ratio, however it got there (the boot-time max ratio / turbo table, or an OC point). OC point = the P2=0 word's ratio + adaptive
+  // voltage: the only way a ratio above the fused top gets a voltage of its own.
+  const OC_TIP = "An OC ratio is any ratio a unit runs above its fused top ratio, however it got there (set at boot or by an OC point). The OC point (ratio + adaptive voltage, written through the P2=0 word) is the only way such a ratio gets a voltage of its own; without one it runs on the top fused point\u2019s voltage.";
   const NEED_RATIO = "set an OC ratio first: the adaptive voltage belongs to the OC point";
 
   function fusedOf(u) { return T.words && T.words.fused ? T.words.fused[u] || null : null; }
 
   // ---- G-133: the OC ratio model ---------------------------------------------------------------------------------------------------------
   // stockMax: the highest ratio a unit runs without an OC ratio: a P-core's own 0x1C ratio (turbo.favored; capped at the fused top, because a written OC ratio is followed by 0x1C), an E-cluster's
-  // fused top (it has no 0x1C of its own). fusedTop: the ratio of the top fused point (0x09). A ratio up to stockMax is no OC ratio; above it and up to fusedTop it lands on a fused point (offset only);
+  // fused top (an E-cluster does answer 0x1C, e.g. 48 = its boot-time max ratio, but it is not read here: a ratio above the fused top must stay class "oc" so that picking it creates the OC point, G-150).
+  // fusedTop: the ratio of the top fused point (0x09). A ratio up to stockMax is no OC ratio; above it and up to fusedTop it lands on a fused point (offset only);
   // above fusedTop it creates the OC point, the only point whose adaptive voltage can be set. Null = not read: nothing is claimed.
   function fusedTopOf(u) {
     const f = fusedOf(u);
@@ -2718,13 +2721,24 @@
     if (sm === null || ft === null) return "unknown";
     return r <= sm ? "none" : r <= ft ? "middle" : "oc";
   }
+  // G-150: a unit that runs above its fused top with no OC point (the BIOS raised the max ratio / the E turbo table): {ft, max}, else null. Its ratios above ft run on the top fused point's voltage.
+  function aboveTop(u, eff) {
+    const ft = fusedTopOf(u), max = runsUpTo(u), cls = ocClass(u, eff ? effRatio(u) : curRatio(u));
+    return isNum(ft) && isNum(max) && max > ft && (cls === "none" || cls === "middle") ? { ft: ft, max: max } : null;
+  }
+  function aboveTopOf(units, eff) {   // the same {ft, max} for every unit of a row, else null
+    const a = units.map((u) => aboveTop(u, eff));
+    return a.length && a.every((x) => x && x.ft === a[0].ft && x.max === a[0].max) ? a[0] : null;
+  }
   // The OC state of a row (one unit or a group), from the values read (eff false) or as edited: class, the ratio, and the one line the row and the OC box show.
   function ocInfo(units, eff) {
     const cls = units.map((u) => ocClass(u, eff ? effRatio(u) : curRatio(u)));
     const cls0 = cls.every((c) => c === cls[0]) ? cls[0] : "mixed";
     const rt = ratioOf(units, eff), rtxt = isNum(rt) ? rt + "×" : "mixed ratios";
     let text;
-    if (cls0 === "none") text = "No OC ratio configured";
+    const ab = cls0 === "none" ? aboveTopOf(units, eff) : null;
+    if (ab) text = ab.max + "\u00d7 (OC ratio set at boot) \u00b7 no OC point";
+    else if (cls0 === "none") text = "No OC ratio configured";
     else if (cls0 === "unknown") text = "OC ratio not judged: this unit’s stock ratio was not read";
     else if (cls0 === "mixed") text = "mixed: the units differ";
     else if (cls0 === "middle") {
@@ -2794,8 +2808,14 @@
     T.pc[u] = out;
     return out;
   }
-  // Effective voltage at any ratio: straight between the points, flat above the top one (E 47-48x follow point 6) and below the first.
+  // Effective voltage at any ratio on the fused points: straight between them, flat above the top one (E 47-48x follow point 6) and below the first.
   function predAt(u, ratio) {
+    const v = predFlat(u, ratio);
+    // G-150: from the OC point's ratio up the unit asks for its target (never below the top fused point's voltage: the CPU raises a lower target to it)
+    const t = effVt(u);
+    return v !== null && ocClass(u, effRatio(u)) === "oc" && isNum(t) && t > 0 && ratio >= effRatio(u) ? Math.max(v, t) : v;
+  }
+  function predFlat(u, ratio) {
     const pts = Object.keys(predictUnit(u).byRatio).map(Number).filter((r) => predictUnit(u).byRatio[r]).sort((a, b) => a - b).map((r) => ({ r: r, v: predictUnit(u).byRatio[r].v }));
     if (!pts.length) return null;
     if (ratio <= pts[0].r) return pts[0].v;
@@ -2870,7 +2890,7 @@
   function setVt(units, v) {
     for (const u of units) { const d = ensureDraft(u); if (same(curVt(u), v, V_TOL)) delete d.vt; else d.vt = v; delete d.vtAuto; tidy(u); }
   }
-  // r = null: "No OC ratio" (back to what was read). A ratio above a unit's top fused point creates the OC point, which needs a target: where the unit has none the draft takes the fused top
+  // r = null: "No OC point" (back to what was read). A ratio above a unit's top fused point creates the OC point, which needs a target: where the unit has none the draft takes the fused top
   // voltage (0x09) on the dropdown grid, marked `vtAuto` so the row shows it as changed and dropping the ratio again takes it back (D-035: the plan never sends a zero target).
   function setRatio(units, r) {
     for (const u of units) {
@@ -2882,6 +2902,34 @@
         if (f && isNum(f.v)) { d.vt = Math.min(Math.max(snapGrid(f.v), GRID.vtMin), lim && isNum(lim.vtMax) ? lim.vtMax : Infinity); d.vtAuto = true; }
       } else if (cls !== "oc" && d.vtAuto) { delete d.vt; delete d.vtAuto; }
       tidy(u);
+    }
+  }
+  // ---- G-150: the "48x offset": the OC ratio's voltage as an offset from the fused top point's voltage (0x09) -----------------------------------------------
+  // Ratios above the fused top run on that point's voltage unless an OC point gives them one of their own; the point's target is an absolute voltage, so the offset is target - fused V (the number XTU
+  // shows). A target below the top fused point is raised to it by the CPU [MEASURED lnx 2026-10-11, 2026-10-13], so offsets below point 6's are not offered. Everything goes through setRatio / setVt.
+  function ocOffUnit(u) {   // what the control needs about one unit, or null when it does not apply (no OC ratio above the fused top, or the fused voltage / top point was not read)
+    const f = fusedOf(u), ft = fusedTopOf(u), top = curPts(u).find((q) => q.ratio === ft), ab = aboveTop(u, true);
+    const ratio = ocClass(u, effRatio(u)) === "oc" ? effRatio(u) : ab ? ab.max : null;
+    return f && isNum(f.v) && top && isNum(ratio) ? { u: u, f: f, ft: ft, top: top, ratio: ratio, p6: effPointMv(u, top) } : null;
+  }
+  function ocOffTarget(c, x) {   // the target for offset x: on the target grid, inside [vtMin, the policy's v_target_max]
+    const lim = limitsOf(unitKind(c.u));
+    return Math.min(Math.max(snapGrid(c.f.v + x / 1000), GRID.vtMin), lim && isNum(lim.vtMax) ? lim.vtMax : Infinity);
+  }
+  // x = null: the same voltage as point 6. Where the unit has no OC point read that is no OC point (drop the draft); where it has one, its target goes to point 6's voltage (it cannot be removed).
+  function setOcOffset(units, x) {
+    for (const u of units) {
+      const c = ocOffUnit(u);
+      if (!c) continue;
+      const read = ocClass(u, curRatio(u)) === "oc";
+      if (x === null && !read) {
+        setRatio([u], null);
+        const d = T.draft[u];
+        if (d) { delete d.vt; delete d.vtAuto; tidy(u); }
+      } else {
+        setRatio([u], c.ratio);
+        setVt([u], ocOffTarget(c, x === null ? c.p6 : x));
+      }
     }
   }
   function snapGrid(v) { return Math.round((GRID.vtMin * 1000 + Math.round((v - GRID.vtMin) / GRID.vtStep) * GRID.vtStep * 1000)) / 1000; }
@@ -2996,7 +3044,7 @@
       // ratio
       const rCell = el("div", "tn-cell");
       const rSel = el("select", "tn-sel");
-      rSel.setAttribute("aria-label", def.label + ": OC ratio");
+      rSel.setAttribute("aria-label", def.label + ": OC point ratio");
       rSel.addEventListener("change", () => { setRatio(def.units, rSel.value === "__none" ? null : Number(rSel.value)); refreshRows(); });
       const rHint = el("span", "tn-hint muted"), rNote = el("span", "tn-hint muted");
       rCell.append(rSel, rHint, rNote);
@@ -3027,7 +3075,7 @@
     refreshRows();
   }
 
-  // The OC ratio dropdown of a row (G-133): "No OC ratio", then stockMax + 1 ... the live ratio max of the policy. A group starts above its highest stockMax, so every value is an OC ratio for
+  // The OC point ratio dropdown of a row (G-133): "No OC point", then stockMax + 1 ... the live ratio max of the policy. A group starts above its highest stockMax, so every value is an OC ratio for
   // every unit in it. A ratio held now stays an option. r.rWhy is the one-line reason when nothing can be chosen (a muted hint under the box, never a guess).
   function fillRatioSelect(r) {
     const units = r.def.units, lim = limitsOf(r.def.kind), sms = units.map(stockMaxOf);
@@ -3042,15 +3090,18 @@
     else if (sms.some((x) => x === null)) r.rWhy = "this unit’s stock ratio (0x1C) was not read";
     else if (max === null) r.rWhy = lim.ratioSrc === "auto" ? "ratio_max is “auto” and could not be resolved from this read: state a number in /etc/arltuner/policy.toml ratio_max" : "your policy states no ratio_max (/etc/arltuner/policy.toml)";
     else if (max <= Math.max(...sms)) r.rWhy = "OC ratios above " + max + "× are not allowed by your policy (/etc/arltuner/policy.toml ratio_max)";
-    const none = el("option", "", "No OC ratio"), mixed = el("option", "", "mixed");
+    const none = el("option", "", "No OC point"), mixed = el("option", "", "mixed");
     none.value = "__none"; mixed.value = "__mixed";
     mixed.disabled = mixed.hidden = true;
     const heldNone = units.some((u) => ocClass(u, curRatio(u)) !== "none");
-    none.disabled = heldNone;   // an OC ratio cannot be cleared at runtime
-    if (heldNone) none.title = "an OC ratio cannot be cleared at runtime; a cold boot clears it";
+    none.disabled = heldNone;   // an OC point cannot be cleared at runtime
+    if (heldNone) none.title = "an OC point cannot be cleared at runtime; a cold boot clears it";
     const opts = [none, mixed];
     const now = ratioOf(units, false);
-    for (const v of values) { const o = el("option", "", v + "×" + (isNum(now) && v === now && held.length ? "  · now" : "")); o.value = String(v); opts.push(o); }
+    // G-150: a ratio above the fused top but below what the unit runs now (E 47× while the max is 48×) is written to 0x1D and lowers that max (measured, G-147)
+    const maxes = units.map(runsUpTo), fts = units.map(fusedTopOf), lo = Math.min(...maxes), hi = Math.max(...maxes);
+    const lowers = (v) => maxes.every(isNum) && fts.every(isNum) && units.every((u, i) => v > fts[i] && v < maxes[i]) ? "  · lowers the max from " + (lo === hi ? lo + "×" : lo + "–" + hi + "×") : "";
+    for (const v of values) { const isNow = isNum(now) && v === now && held.length; const o = el("option", "", v + "×" + (isNow ? "  · now" : lowers(v))); o.value = String(v); opts.push(o); }
     fill(r.rSel, opts);
   }
 
@@ -3075,7 +3126,8 @@
       const lab = el("label", "tn-pt");
       const no = pointNo(r.def.units, ratio);
       const tag = el("span", "tn-pt-tag muted", FUSED_TAG);
-      lab.append(el("span", "tn-pt-ratio", "Point " + (no === null ? "?" : no) + " \u00b7 " + ratio + "\u00d7"), tag);
+      const pname = el("span", "tn-pt-ratio", "Point " + (no === null ? "?" : no) + " \u00b7 " + ratio + "\u00d7");
+      lab.append(pname, tag);
       const sel = el("select", "tn-sel tn-sel-s");
       sel.setAttribute("aria-label", r.def.label + ": offset at point " + (no === null ? "?" : no) + ", " + ratio + "x");
       const cur = pointOf(r.def.units, ratio, false);
@@ -3087,7 +3139,7 @@
       const reach = el("span", "tn-pt-reach", "");
       reach.hidden = true;
       lab.append(sel, eff, badge, reach);
-      r.ptSels[ratio] = { sel: sel, lab: lab, eff: eff, badge: badge, reach: reach, tag: tag };
+      r.ptSels[ratio] = { sel: sel, lab: lab, eff: eff, badge: badge, reach: reach, tag: tag, name: pname, base: pname.textContent };
       return lab;
     });
     if (!cells.length) cells.push(el("p", "na", "n/a: the read returned no V/F points for this unit."));
@@ -3097,8 +3149,13 @@
     const head = el("span", "tn-pt-ratio", ocHeadText(r.def.units));
     const tag = el("span", "tn-pt-tag muted", "ratio + voltage");
     const rText = el("span", "tn-oc-line", ""), vText = el("span", "tn-oc-line", "");
-    box.append(head, tag, rText, vText);
-    r.oc = { box: box, ratio: rText, vt: vText };
+    // G-150: the OC ratio's voltage as an offset from the fused top point's voltage (shown while a ratio above the fused top is in play)
+    const offWrap = el("div", "tn-oc-off"), offLbl = el("span", "tn-oc-line", ""), offSel = el("select", "tn-sel tn-sel-s"), offHint = el("span", "tn-pt-tag muted", "");
+    offSel.addEventListener("change", () => { setOcOffset(r.def.units, offSel.value === "__p6" ? null : Number(offSel.value)); refreshRows(); });
+    offWrap.append(offLbl, offSel, offHint);
+    offWrap.hidden = true;
+    box.append(head, tag, rText, vText, offWrap);
+    r.oc = { box: box, ratio: rText, vt: vText, off: { wrap: offWrap, lbl: offLbl, sel: offSel, hint: offHint, key: "" } };
     cells.push(box);
     r.eNote = null;   // E: the one V/F fact about the ratios above the top point (eVfFact)
     if (r.def.kind === "E") { r.eNote = el("p", "tn-points-note muted", ""); cells.push(r.eNote); }
@@ -3191,7 +3248,56 @@
     r.oc.box.classList.toggle("changed", chR || chV);
     r.oc.box.classList.toggle("unset", info.cls === "none");
     const known = units.map(fusedOf).filter(Boolean);
+    refreshOcOffset(r);
     r.oc.box.title = (known.length ? "Fused top point (0x09): " + known[0].ratio + "\u00d7, " + fmtVRange(known.map((f) => f.v), 4) + ". " : "Fused top point: not read. ") + OC_TIP;
+  }
+
+  // G-150: options, selection and hints of the "48x offset" dropdown of an OC box. The options are rebuilt only when they change, so an open dropdown is not disturbed.
+  function refreshOcOffset(r) {
+    const o = r.oc.off, units = r.def.units, lim = limitsOf(r.def.kind), cs = units.map(ocOffUnit);
+    o.wrap.hidden = !(cs.length && cs.every(Boolean));
+    if (o.wrap.hidden) return;
+    const ratios = Array.from(new Set(cs.map((c) => c.ratio))), what = ratios.length === 1 ? ratios[0] + "\u00d7" : "OC ratio", step = GRID.offsetStep;
+    const p6 = cs.map((c) => c.p6), p6same = p6.every((x) => same(x, p6[0], MV_TOL)), p6txt = p6same ? fmtMv(p6[0]) : "mixed";
+    const no = pointNo(units, cs[0].ft), pn = no === null ? "?" : String(no);
+    const vtMax = lim && isNum(lim.vtMax) ? lim.vtMax : null;
+    const readOc = cs.map((c) => ocClass(c.u, curRatio(c.u)) === "oc" && isNum(curVt(c.u)) && curVt(c.u) > 0);
+    // offsets above point 6's (the first one on the grid strictly above the highest), up to the policy's target ceiling
+    const xs = [];
+    if (vtMax !== null) {
+      const hiX = Math.min(...cs.map((c) => Math.floor(((vtMax - c.f.v) * 1000) / step + 1e-9) * step));
+      for (let x = Math.floor(Math.max(...p6) / step + 1e-9) * step + step; x <= hiX + 1e-9; x += step) xs.push(Math.round(x * 100) / 100);
+    }
+    // where each unit's target sits: "__p6" (its voltage = point 6's, or no OC point), an option's offset, or an offset between the grid steps ("edit")
+    const place = (c, t) => {
+      if (!isNum(t) || t <= 0) return "__p6";
+      if (Math.abs(t - ocOffTarget(c, c.p6)) < 1e-6) return "__p6";
+      const x = xs.find((q) => Math.abs(ocOffTarget(c, q) - t) < 1e-6);
+      return x !== undefined ? String(x) : "e" + String(Math.round((t - c.f.v) * 100000) / 100);
+    };
+    const effKeys = cs.map((c) => (ocClass(c.u, effRatio(c.u)) === "oc" ? place(c, effVt(c.u)) : "__p6"));
+    const nowKeys = cs.map((c, i) => (readOc[i] ? place(c, curVt(c.u)) : "__p6"));
+    const eff = effKeys.every((k) => k === effKeys[0]) ? effKeys[0] : "__mixed";
+    const now = readOc.every(Boolean) && nowKeys.every((k) => k === nowKeys[0]) ? nowKeys[0] : null;
+    const noneRead = !readOc.some(Boolean);
+    const opts = [["__p6", "same as point " + pn + " (" + p6txt + ")" + (noneRead ? " \u00b7 no OC point" : "") + (now === "__p6" ? "  \u00b7 now" : "")]];
+    for (const x of xs) opts.push([String(x), fmtMv(x) + (now === String(x) ? "  \u00b7 now" : "")]);
+    for (const k of new Set([eff, now])) if (k && k[0] === "e") opts.push([k, fmtMv(Number(k.slice(1))) + "  \u00b7 " + (k === now ? "now" : "edit")]);
+    opts.push(["__mixed", "mixed"]);
+    const key = JSON.stringify(opts);
+    if (o.key !== key) {
+      o.key = key;
+      fill(o.sel, opts.map((q) => Object.assign(el("option", "", q[1]), { value: q[0], hidden: q[0] === "__mixed", disabled: q[0] === "__mixed" })));
+    }
+    o.sel.value = eff;
+    o.lbl.textContent = what + " offset";
+    o.sel.setAttribute("aria-label", r.def.label + ": " + what + " offset");
+    const lowerX = Array.from(new Set(cs.map((c) => c.ft))).length === 1 ? cs[0].ft + "\u2013" + Math.max(...ratios) + "\u00d7 share" : "they share";
+    o.hint.textContent = "Lower than point " + pn + ": lower point " + pn + " (" + lowerX + " its voltage).";
+    const why = !lim ? NO_LIMITS : vtMax === null ? "your policy states no v_target_max_mv (/etc/arltuner/policy.toml)"
+      : cs.some((c) => !isNum(lim.ratioMax) || lim.ratioMax < c.ratio) ? "your policy’s ratio_max is below " + what + ": an OC point there is not allowed (/etc/arltuner/policy.toml)" : "";
+    o.sel.disabled = why !== "";
+    o.sel.title = why || "The voltage of the " + what + " OC point as an offset from the fused top point’s voltage (0x09). " + limitLine(r.def.kind, "vt");
   }
 
   // The one V/F fact about E ratios above the top fused point: with no OC point they run on that point's voltage (the turbo table decides how far they go). Empty for a group that differs.
@@ -3201,7 +3307,9 @@
       if (!pts.length || up === null || ocClass(u, effRatio(u)) === "oc") return "";
       const top = pts.reduce((x, y) => (y.ratio > x.ratio ? y : x));
       if (up <= top.ratio) return "";
-      return up === top.ratio + 1 ? up + "\u00d7 runs on point " + top.point + "\u2019s voltage (no OC point)" : (top.ratio + 1) + "\u2013" + up + "\u00d7 run on point " + top.point + "\u2019s voltage (no OC point)";
+      // G-150: and how to change it
+      return (up === top.ratio + 1 ? up + "\u00d7 runs on point " + top.point + "\u2019s voltage (no OC point). Point " + top.point + "\u2019s offset sets it" : (top.ratio + 1) + "\u2013" + up + "\u00d7 run on point " + top.point + "\u2019s voltage (no OC point). Point " + top.point + "\u2019s offset sets them") +
+        ". For a voltage of its own, set the " + up + "\u00d7 offset above.";
     });
     return facts.every((f) => f === facts[0]) ? facts[0] : "";
   }
@@ -3212,6 +3320,17 @@
     const list = (us) => us.join(", ");
     const pos = def.units.filter((u) => curPts(u).some((p) => effPointMv(u, p) > 0.049));
     if (pos.length) msgs.push(["warn", list(pos) + ": a positive offset raises the voltage above the fused curve."]);
+    // G-150: a target under point 6's voltage is raised to it by the CPU; an OC point is not removable at runtime
+    const raised = [];
+    for (const u of def.units) {
+      const c = ocOffUnit(u), t = effVt(u);
+      if (c && ocClass(u, effRatio(u)) === "oc" && isNum(t) && t > 0 && t < c.f.v + c.p6 / 1000 - GRID.vtStep / 2 - 1e-9) raised.push(c);
+    }
+    if (raised.length) {
+      const no = pointNo([raised[0].u], raised[0].ft);
+      msgs.push(["warn", list(raised.map((c) => c.u)) + ": " + Array.from(new Set(raised.map((c) => c.ratio))).join("/") + "\u00d7 is raised to point " + (no === null ? "?" : no) + "\u2019s voltage by the CPU."]);
+    }
+    if (def.units.some((u) => ocClass(u, effRatio(u)) === "oc" && ocClass(u, curRatio(u)) !== "oc")) msgs.push(["warn", "An OC point stays until a cold boot; Restore accepted then reports it EQUIVALENT (G-147)."]);
     fill(r.warn, msgs.map((m) => el("li", m[0], m[1])));
     r.warn.hidden = msgs.length === 0;
   }
@@ -3241,9 +3360,12 @@
     const num = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
     const lo = Math.round(Math.min(...offs)), hi = Math.round(Math.max(...offs));
     const off = !offs.length ? "offsets n/a" : lo === hi ? "offset " + num(lo) + " mV" : "offsets " + num(lo) + "…" + num(hi) + " mV";
-    const info = ocInfo(def.units, false);
-    const oc = info.cls === "none" ? "none" : info.cls === "unknown" ? "n/a" : info.cls === "mixed" || !isNum(info.ratio) ? "mixed" : info.ratio + "×";
+    const info = ocInfo(def.units, false), ab = aboveTopOf(def.units, false);
     const runs = runsText(def.units);
+    // G-150: a ratio above the fused top with no OC point is still an OC ratio; with an OC point, the point is named
+    if (ab) return off + " · OC ratio: " + ab.max + "× (fused top " + ab.ft + "×) · no OC point" + (runs ? " · runs up to " + runs : "");
+    if (info.cls === "oc" && isNum(info.ratio)) return off + " · OC ratio: " + info.ratio + "× · OC point " + ocPointNo(def.units) + (runs && runs !== info.ratio + "×" ? " · runs up to " + runs : "");
+    const oc = info.cls === "none" ? "none" : info.cls === "unknown" ? "n/a" : info.cls === "mixed" || !isNum(info.ratio) ? "mixed" : info.ratio + "×";
     return off + " · OC ratio: " + oc + (runs ? " · runs up to " + runs : "");
   }
 
@@ -3274,6 +3396,9 @@
         const p = r.ptSels[ratio];
         const e = pointOf(def.units, Number(ratio), true), c = pointOf(def.units, Number(ratio), false);
         setSel(p.sel, e, MV_TOL, (v) => fmtMv(v));
+        // G-150: the top fused point also carries the ratios above it while no OC point gives them a voltage of their own
+        const ab = aboveTopOf(def.units, true);
+        p.name.textContent = p.base + (ab && ab.ft === Number(ratio) ? " (also " + (ab.ft + 1 === ab.max ? "" : ab.ft + 1 + "\u2013") + ab.max + "\u00d7)" : "");
         const ch = !(e === c || (isNum(e) && isNum(c) && same(e, c, MV_TOL)));
         p.lab.classList.toggle("changed", ch);
         if (ch) nPtChanged++;

@@ -60,7 +60,7 @@ def browser(test):
 
 class TestBrowser(unittest.TestCase):
     @contextlib.contextmanager
-    def session(self, *, ratio_max=None, limits=True, fixture=True, seed=True, interpolate=True, offset_window=None, hw_limits=None):
+    def session(self, *, ratio_max=None, limits=True, fixture=True, seed=True, interpolate=True, offset_window=None, hw_limits=None, mutate=None):
         from tests.web import v3_harness as h
 
         srv, fake, stop = h.start(seed=False)
@@ -71,6 +71,8 @@ class TestBrowser(unittest.TestCase):
             fake.ratio_max = dict(ratio_max)
         if fixture:
             fake.fixture_result = json.loads(json.dumps(FIXTURE))
+            if mutate:
+                mutate(fake.fixture_result)
             fake.seed_last_read(time.time() - 120)
         if seed:
             self.baseline = fake.seed_curve("Stock baseline", baseline=True, offset_mv=0.0, created="2026-10-07T20:41:09Z", units=["P0", "P1", "EC0", "EC1"])
@@ -117,11 +119,11 @@ class TestBrowser(unittest.TestCase):
             for unit in ("P0", "P3"):   # stock 57x = the policy's 57x: nothing above it is allowed
                 sel = self.ratio_sel(page, unit)
                 self.assertTrue(sel.is_disabled(), unit)
-                self.assertEqual(sel.evaluate(VISIBLE), ["No OC ratio"], unit)
+                self.assertEqual(sel.evaluate(VISIBLE), ["No OC point"], unit)
                 self.assertIn("OC ratios above 57× are not allowed by your policy (/etc/arltuner/policy.toml ratio_max)", self.row(page, unit).inner_text())
             sel = self.ratio_sel(page, "P1")   # stock 55x: 56x and 57x are the middle band (fused points 7 and 8, offset only)
             self.assertFalse(sel.is_disabled())
-            self.assertEqual(sel.evaluate(VISIBLE), ["No OC ratio", "56×", "57×"])
+            self.assertEqual(sel.evaluate(VISIBLE), ["No OC point", "56×", "57×"])
             self.assertNotIn("not allowed by your policy", self.row(page, "P1").inner_text())
 
     @browser
@@ -130,15 +132,15 @@ class TestBrowser(unittest.TestCase):
             for unit in ("P0", "P3"):
                 sel = self.ratio_sel(page, unit)
                 self.assertFalse(sel.is_disabled(), unit)
-                self.assertEqual(sel.evaluate(VISIBLE), ["No OC ratio", "58×", "59×", "60×"], unit)
-            self.assertEqual(self.ratio_sel(page, "P1").evaluate(VISIBLE), ["No OC ratio", "56×", "57×", "58×", "59×", "60×"])   # 56-57x: the middle band, on the non-favored core only
+                self.assertEqual(sel.evaluate(VISIBLE), ["No OC point", "58×", "59×", "60×"], unit)
+            self.assertEqual(self.ratio_sel(page, "P1").evaluate(VISIBLE), ["No OC point", "56×", "57×", "58×", "59×", "60×"])   # 56-57x: the middle band, on the non-favored core only
 
     @browser
     def test_the_e_clusters_offer_47_to_the_live_max_and_an_oc_ratio_cannot_be_cleared(self):
         with self.session() as (page, fake):
-            self.assertEqual(self.ratio_sel(page, "EC0").evaluate(VISIBLE), ["No OC ratio", "47×", "48×", "49×"])
-            ec1 = self.ratio_sel(page, "EC1")   # holds 48x: "No OC ratio" is shown but cannot be chosen
-            self.assertEqual(ec1.evaluate(VISIBLE), ["No OC ratio", "47×", "48×  · now", "49×"])
+            self.assertEqual(self.ratio_sel(page, "EC0").evaluate(VISIBLE), ["No OC point", "47×  · lowers the max from 48×", "48×", "49×"])   # G-150: 47x would lower the max the BIOS set
+            ec1 = self.ratio_sel(page, "EC1")   # holds 48x: "No OC point" is shown but cannot be chosen
+            self.assertEqual(ec1.evaluate(VISIBLE), ["No OC point", "47×  · lowers the max from 48×", "48×  · now", "49×"])
             self.assertTrue(ec1.locator("option[value=__none]").is_disabled())
             self.assertIn("cannot be cleared at runtime", ec1.locator("option[value=__none]").get_attribute("title"))
             self.assertEqual(ec1.input_value(), "48")
@@ -161,7 +163,7 @@ class TestBrowser(unittest.TestCase):
             self.assertIn("No OC ratio configured", self.row(page, "P0").inner_text())    # word 57x = its stock ratio
             self.assertIn("No OC ratio configured", self.row(page, "P1").inner_text())    # word 0
             self.assertIn("OC point 7 · 48× · adaptive V", self.row(page, "EC1").inner_text())
-            self.assertIn("No OC ratio configured", self.row(page, "EC2").inner_text())   # word 46x + 1.1367 V = the fused top: no OC point
+            self.assertIn("48× (OC ratio set at boot) · no OC point", self.row(page, "EC2").inner_text())   # word 46x + 1.1367 V = the fused top: no OC point (G-150: it still runs 48x)
             self.assertNotIn("inactive", self.row(page, "EC2").inner_text())              # the retained word is shown in the raw view only
             page.click("#btn-tn-hex")
             self.assertIn("(word holds 46× + 1.137 V, inactive)", self.row(page, "EC2").inner_text())
@@ -199,7 +201,7 @@ class TestBrowser(unittest.TestCase):
             page.click("#tn-scope button:has-text('All-Core')")
             rows = page.locator(".tn-rowwrap")
             p, e = rows.nth(0), rows.nth(1)
-            self.assertEqual(p.locator("select.tn-sel").nth(1).evaluate(VISIBLE), ["No OC ratio"])   # the group starts above its highest stock ratio (57x)
+            self.assertEqual(p.locator("select.tn-sel").nth(1).evaluate(VISIBLE), ["No OC point"])   # the group starts above its highest stock ratio (57x)
             self.assertTrue(p.locator("select.tn-sel").nth(1).is_disabled())
             self.assertIn("mixed", e.inner_text())   # EC1 has an OC point, the others none: shown, never chosen
             self.assertTrue(e.locator("select.tn-sel").nth(2).is_disabled())
@@ -210,16 +212,16 @@ class TestBrowser(unittest.TestCase):
     def test_the_unit_header_says_offsets_oc_ratio_and_how_far_it_runs(self):
         with self.session() as (page, fake):
             ec0 = self.row(page, "EC0").locator(".tn-now")
-            self.assertEqual(ec0.inner_text(), "offsets −35…0 mV · OC ratio: none · runs up to 48×")
+            self.assertEqual(ec0.inner_text(), "offsets −35…0 mV · OC ratio: 48× (fused top 46×) · no OC point · runs up to 48×")   # G-150
             self.assertIn("0x650", ec0.get_attribute("title"))
-            self.assertEqual(self.row(page, "EC1").locator(".tn-now").inner_text(), "offsets −25…0 mV · OC ratio: 48× · runs up to 48×")
-            self.assertEqual(self.row(page, "EC2").locator(".tn-now").inner_text(), "offsets −25…0 mV · OC ratio: none · runs up to 48×")   # the retained 46x word does nothing
+            self.assertEqual(self.row(page, "EC1").locator(".tn-now").inner_text(), "offsets −25…0 mV · OC ratio: 48× · OC point 7")
+            self.assertEqual(self.row(page, "EC2").locator(".tn-now").inner_text(), "offsets −25…0 mV · OC ratio: 48× (fused top 46×) · no OC point · runs up to 48×")   # the retained 46x word does nothing
             self.assertIn("runs up to 57×", self.row(page, "P0").locator(".tn-now").inner_text())
             p1 = self.row(page, "P1").locator(".tn-now").inner_text()
             self.assertEqual(p1, "offsets −50…0 mV · OC ratio: none · runs up to 55×")   # the table says 57x, the core's own 0x1C ratio 55x
             for unit in ROW:
                 text = self.row(page, unit).locator(".tn-now").inner_text()
-                for old in ("target n/a", "ratio n/a", "fused top"):
+                for old in ("target n/a", "ratio n/a"):   # G-150: "(fused top 46×)" now names the ratio the unit runs above
                     self.assertNotIn(old, text)
 
     @browser

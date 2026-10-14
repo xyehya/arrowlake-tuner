@@ -67,7 +67,7 @@ class TestStatic(unittest.TestCase):
         self.assertIn('"Point " + (no === null ? "?" : no) + " \\u00b7 " + ratio', JS)   # Point 1 . 8x ... Point 8 . 57x
         self.assertIn('"Point " + ocPointNo(units) + " \\u00b7 OC"', JS)                  # Point 9 . OC (P) / Point 7 . OC (E)
         self.assertIn("fused \\u00b7 offset only", JS)
-        self.assertIn("An OC ratio is a ratio above what the unit runs at stock. The OC point (ratio + adaptive voltage) exists once that ratio is above the top fused ratio", JS)
+        self.assertIn("An OC ratio is any ratio a unit runs above its fused top ratio, however it got there (set at boot or by an OC point). The OC point (ratio + adaptive voltage, written through the P2=0 word)", JS)
         self.assertIn("E turbo table: up to ", body_of("eTurboNote"))   # D-036: derived from the E turbo table that was read, not a fixed "47-48x"
         self.assertNotIn("47\\u201348", JS)
 
