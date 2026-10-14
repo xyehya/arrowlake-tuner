@@ -23,6 +23,24 @@ def reference_e(result):
             c["points"] = [p for p in c["points"] if p["ratio"] != 48]
 
 
+def read_oc_point(unit, fused_v_point6_mv, target):
+    """EC0 / EC1 with an OC point read back at 48x (target quantised by the CPU) and point 6 at the given offset."""
+    def mutate(result):
+        for p in result["tune"][unit]["cpus"][0]["points"]:
+            if p["point"] == 0:
+                p.update(ratio=48, v_target_v=target)
+            elif p["point"] == 6:
+                p["offset_mv"] = fused_v_point6_mv
+        for u in result["units"]:
+            if u["id"] == unit:
+                c = u["cpus"][0]
+                c["oc"] = dict(c["oc"], ratio=48, v_target_v=target)
+                for p in c["points"]:
+                    if p["point"] == 6:
+                        p["offset_mv"] = fused_v_point6_mv
+    return mutate
+
+
 class TestStatic(unittest.TestCase):
     def test_wording_constants(self):
         self.assertIn('"No OC point"', JS)
@@ -90,9 +108,9 @@ class TestBrowser(unittest.TestCase):
         with self.session(mutate=reference_e) as (page, fake):
             self.points(page, "EC1")
             self.off_sel(page, "EC1").select_option(label="−20 mV")
-            # fused V of EC1 1.1367 - 20 mV = 1.1167 -> the 5 mV target grid -> 1.115
+            # fused V of EC1 1.1367 - 20 mV = 1.1167 V exactly (not snapped to the 5 mV target grid)
             self.assertEqual(self.ratio_sel(page, "EC1").input_value(), "48")
-            self.assertEqual(self.row(page, "EC1").locator("select.tn-sel").nth(2).input_value(), "1.115")   # the absolute target dropdown shows the same draft
+            self.assertEqual(self.row(page, "EC1").locator("select.tn-sel").nth(2).input_value(), "1.1167")   # the absolute target dropdown shows the same draft (as an off-grid value)
             self.assertEqual(self.off_sel(page, "EC1").evaluate("s => s.selectedOptions[0].textContent.trim()"), "−20 mV")
             self.assertIn("An OC point stays until a cold boot; Restore accepted then reports it EQUIVALENT (G-147).", self.row(page, "EC1").inner_text())
             self.assertIn("Point 7 · OC", self.points(page, "EC1").inner_text())
@@ -100,7 +118,7 @@ class TestBrowser(unittest.TestCase):
             page.click("#btn-tn-plan")
             page.wait_for_selector("#dlg-plan[open]")
             rows = self.intent(fake)["rows"]
-            self.assertEqual([(r["target"], r["ratio"], r["v_target_v"]) for r in rows], [("EC1", 48, 1.115)])
+            self.assertEqual([(r["target"], r["ratio"], r["v_target_v"]) for r in rows], [("EC1", 48, 1.1167)])
             self.assertIsNone(rows[0]["offset"])
 
     @browser
@@ -127,8 +145,21 @@ class TestBrowser(unittest.TestCase):
             self.assertNotIn("no OC point", sel.evaluate(VISIBLE)[0])
             sel.select_option(index=0)   # point 6's voltage: the target moves there, the OC point stays
             self.assertEqual(self.ratio_sel(page, "EC1").evaluate("s => s.selectedOptions[0].textContent.trim()"), "48×  · now")
-            self.assertEqual(self.row(page, "EC1").locator("select.tn-sel").nth(2).input_value(), "1.11")
+            self.assertEqual(self.row(page, "EC1").locator("select.tn-sel").nth(2).input_value(), "1.1113")   # fused V + point 6 offset, exact
             self.assertNotIn("An OC point stays", self.row(page, "EC1").inner_text())   # it was already there
+
+    @browser
+    def test_a_read_target_off_the_grid_is_the_current_value_and_point_6_is_not_raised(self):
+        # live: EC0 fused 1.1563 V, point 6 -49.805 mV, OC point 48x read at 1.1230 V
+        with self.session(mutate=read_oc_point("EC0", -49.805, 1.1230)) as (page, fake):
+            self.points(page, "EC0")
+            self.assertEqual(self.off_sel(page, "EC0").evaluate("s => s.selectedOptions[0].textContent.trim()"), "−33.3 mV  · now")
+            self.assertNotIn("is raised to point 6", self.row(page, "EC0").inner_text())
+        # live: fused 1.1367 V, point 6 -40.039 mV, target 1.1123 V
+        with self.session(mutate=read_oc_point("EC1", -40.039, 1.1123)) as (page, fake):
+            self.points(page, "EC1")
+            self.assertEqual(self.off_sel(page, "EC1").evaluate("s => s.selectedOptions[0].textContent.trim()"), "−24.4 mV  · now")
+            self.assertNotIn("is raised to point 6", self.row(page, "EC1").inner_text())
 
     @browser
     def test_a_group_row_gives_every_cluster_its_own_target(self):
@@ -143,7 +174,7 @@ class TestBrowser(unittest.TestCase):
             page.click("#btn-tn-plan")
             page.wait_for_selector("#dlg-plan[open]")
             rows = {r["target"]: r for r in self.intent(fake)["rows"]}
-            self.assertEqual({u: (r["ratio"], r["v_target_v"]) for u, r in rows.items()}, {"EC0": (48, 1.135), "EC1": (48, 1.115), "EC2": (48, 1.115), "EC3": (48, 1.115)})   # fused V - 20 mV, per cluster
+            self.assertEqual({u: (r["ratio"], r["v_target_v"]) for u, r in rows.items()}, {"EC0": (48, 1.1363), "EC1": (48, 1.1167), "EC2": (48, 1.1167), "EC3": (48, 1.1167)})   # fused V - 20 mV, per cluster
 
     @browser
     def test_the_highest_vid_prediction_uses_the_oc_point_target(self):
@@ -153,8 +184,8 @@ class TestBrowser(unittest.TestCase):
             before = e_vid()
             self.assertLess(before, 1.2)   # point 6 (fused 1.1367 V on the baseline) carries 48x
             self.points(page, "EC1")
-            self.off_sel(page, "EC1").select_option(label="+100 mV")   # target 1.1367 + 0.100 -> 1.235 V
-            self.assertAlmostEqual(e_vid(), 1.235, places=3)
+            self.off_sel(page, "EC1").select_option(label="+100 mV")   # target 1.1367 + 0.100 = 1.2367 V
+            self.assertAlmostEqual(e_vid(), 1.237, places=3)
 
     @browser
     def test_p_cores_at_their_fused_top_have_no_offset_control_and_no_new_wording(self):

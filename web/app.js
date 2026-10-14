@@ -2812,8 +2812,11 @@
   function predAt(u, ratio) {
     const v = predFlat(u, ratio);
     // G-150: from the OC point's ratio up the unit asks for its target (never below the top fused point's voltage: the CPU raises a lower target to it)
-    const t = effVt(u);
-    return v !== null && ocClass(u, effRatio(u)) === "oc" && isNum(t) && t > 0 && ratio >= effRatio(u) ? Math.max(v, t) : v;
+    const t = effVt(u), r0 = effRatio(u), ft = fusedTopOf(u);
+    if (v === null || ocClass(u, r0) !== "oc" || !isNum(t) || t <= 0 || !isNum(ft) || ratio <= ft) return v;
+    // between the fused top and the OC ratio the voltage is linear between the top point and the target [MEASURED lnx 2026-10-12: 47x = midpoint of 46x and the 48x OC point]
+    const top = predFlat(u, ft), hi = Math.max(top, t);
+    return ratio >= r0 ? hi : top + ((hi - top) * (ratio - ft)) / (r0 - ft);
   }
   function predFlat(u, ratio) {
     const pts = Object.keys(predictUnit(u).byRatio).map(Number).filter((r) => predictUnit(u).byRatio[r]).sort((a, b) => a - b).map((r) => ({ r: r, v: predictUnit(u).byRatio[r].v }));
@@ -2912,9 +2915,12 @@
     const ratio = ocClass(u, effRatio(u)) === "oc" ? effRatio(u) : ab ? ab.max : null;
     return f && isNum(f.v) && top && isNum(ratio) ? { u: u, f: f, ft: ft, top: top, ratio: ratio, p6: effPointMv(u, top) } : null;
   }
-  function ocOffTarget(c, x) {   // the target for offset x: on the target grid, inside [vtMin, the policy's v_target_max]
+  // The target for offset x is exact (fused V + x, 4 decimals as the intent carries it; the hardware takes 1/1024 V), inside [vtMin, the policy's v_target_max]. A target read back is quantised to 1/1024 V,
+  // so two targets are the same when they are within half of that.
+  const VT_LSB2 = 0.5 / 1024;
+  function ocOffTarget(c, x) {
     const lim = limitsOf(unitKind(c.u));
-    return Math.min(Math.max(snapGrid(c.f.v + x / 1000), GRID.vtMin), lim && isNum(lim.vtMax) ? lim.vtMax : Infinity);
+    return Math.min(Math.max(Math.round((c.f.v + x / 1000) * 10000) / 10000, GRID.vtMin), lim && isNum(lim.vtMax) ? lim.vtMax : Infinity);
   }
   // x = null: the same voltage as point 6. Where the unit has no OC point read that is no OC point (drop the draft); where it has one, its target goes to point 6's voltage (it cannot be removed).
   function setOcOffset(units, x) {
@@ -3271,8 +3277,8 @@
     // where each unit's target sits: "__p6" (its voltage = point 6's, or no OC point), an option's offset, or an offset between the grid steps ("edit")
     const place = (c, t) => {
       if (!isNum(t) || t <= 0) return "__p6";
-      if (Math.abs(t - ocOffTarget(c, c.p6)) < 1e-6) return "__p6";
-      const x = xs.find((q) => Math.abs(ocOffTarget(c, q) - t) < 1e-6);
+      if (Math.abs(t - ocOffTarget(c, c.p6)) < VT_LSB2) return "__p6";
+      const x = xs.find((q) => Math.abs(ocOffTarget(c, q) - t) < VT_LSB2);
       return x !== undefined ? String(x) : "e" + String(Math.round((t - c.f.v) * 100000) / 100);
     };
     const effKeys = cs.map((c) => (ocClass(c.u, effRatio(c.u)) === "oc" ? place(c, effVt(c.u)) : "__p6"));
@@ -3324,7 +3330,7 @@
     const raised = [];
     for (const u of def.units) {
       const c = ocOffUnit(u), t = effVt(u);
-      if (c && ocClass(u, effRatio(u)) === "oc" && isNum(t) && t > 0 && t < c.f.v + c.p6 / 1000 - GRID.vtStep / 2 - 1e-9) raised.push(c);
+      if (c && ocClass(u, effRatio(u)) === "oc" && isNum(t) && t > 0 && t < c.f.v + c.p6 / 1000 - VT_LSB2) raised.push(c);
     }
     if (raised.length) {
       const no = pointNo([raised[0].u], raised[0].ft);
