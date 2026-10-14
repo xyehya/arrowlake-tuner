@@ -1,6 +1,6 @@
 # G-153 — Plan preview lists the apply's real write order (G-151); the GUI reconnects to a restarted helper
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-14)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake helper only)
 - **Branch/worktree:** `task/G-153-preview-order`

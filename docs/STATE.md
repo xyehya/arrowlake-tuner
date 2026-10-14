@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-14 · lnx · G-150..G-152 merged + installed; E 46x/48x split applied live and screened (not accepted yet). Suite **2933 tests OK**
+_Updated: 2026-10-14 · lnx · G-150..G-153 merged + installed; E 46x/48x split applied live and screened (not accepted yet). Suite **2941 tests OK**
 (`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
 
 ## Where we are
@@ -53,8 +53,8 @@ G-141 review fixes · G-142 security (D-042) · polish.
   impossible); the OC point's slot (E point 7) never written as a fused point, a missing slot before the OC word is not a separate failure. So a
   cold-boot restore of the split writes the OC word before point 6. **G-152** merged + installed: Stress caps whole E clusters at the kernel's map
   (E 46x = 4.7 GHz), "cap held at Nx" / "ran Mx (cap Nx)". Gate 2933 OK. `install.sh` 21/21 self-checks.
-- In flight: **G-153** (plan preview still lists the static order, not G-151's: the apply is right, the Review list is not; GUI does not reconnect
-  to a restarted helper - restart the GUI after `install.sh`). Guide updated for G-150/151/152 (merged).
+- **G-153** merged + installed: the Review list shows the apply's real order (live: EC1 OC triple before point 6); the GUI reconnects to a
+  restarted helper (live: `systemctl restart arltuner-helper` -> next call OK). Guide updated for G-150..G-152. Gate 2941 OK.
 - **Next:** operator's own longer E test at 46x (caps on all 16 E-cores, 4.7 GHz); then Tune -> Read -> "Set the current state as accepted".
 
 ## Operator to-do
