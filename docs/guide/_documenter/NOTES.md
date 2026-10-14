@@ -7,11 +7,11 @@
 | 01-requirements.md | complete; no polkit, systemd recommended | 2026-10-12 (G-146) |
 | 02-install.md | complete; helper units, allowlist, `--add-user`, without systemd | 2026-10-12 (G-146) |
 | 03-first-run.md | complete; Profiles tab row reworded | 2026-10-13 (G-147/148) |
-| 04-arrow-lake-vf-primer.md | complete; §6 notes the left-over OC point + restore | 2026-10-13 (G-147/148) |
+| 04-arrow-lake-vf-primer.md | complete; §6 defines OC ratio vs OC point (G-150) and notes the left-over OC point + restore | 2026-10-14 (G-150) |
 | 05-measuring-curves.md | complete | 2026-10-12 (update) |
-| 06-undervolting.md | complete; G-133 labels are now real | 2026-10-12 (update) |
-| 07-overclocking.md | complete; cpufreq follow rule, "After an OC test", live restore count replaces the 172-operation line | 2026-10-13 (G-147/148) |
-| 08-stability-testing.md | complete; decision table says apply, read, then accept | 2026-10-13 (G-147/148) |
+| 06-undervolting.md | complete; G-133 labels are now real; top-point row points to the 07 how-to | 2026-10-14 (G-150) |
+| 07-overclocking.md | complete; section 1 rewritten for G-150 (OC ratio vs OC point, header/box texts, "48x offset" control, warnings), how-to "keep the OC ratio, lower the top point", E-cluster cap bullet | 2026-10-14 (G-150) |
+| 08-stability-testing.md | complete; decision table says apply, read, then accept; cap-all-four-E-cores bullet | 2026-10-14 (G-150) |
 | 09-profiles-and-restore.md | complete; D-044 model (complete profiles, one accepted profile, one-shot restore with rounds, accepted-migrate), new "A left-over OC point: equivalent" section (G-147); Windows still "untested" | 2026-10-13 (G-147/148) |
 | 10-cli-reference.md | complete (flags from `--help`); apply `--neutralize-residual`, compare-accepted, accepted-migrate, exit codes; `--accepted-before` gone | 2026-10-13 (G-147/148) |
 | 11-troubleshooting-faq.md | complete; rows for STEP_LIMIT (two kinds), SESSION/BOOT_LIMIT, ACCEPTED_CHAIN, PROFILE_TOPOLOGY, NO_READ/STALE_READ on save, NOT_REPRESENTABLE, EXISTS, EQUIVALENT FAQ | 2026-10-13 (G-147/148) |
@@ -49,6 +49,8 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 - Limits: `policies/default.toml` header (D-039), ARCHITECTURE G-133/G-137/G-141 addenda, `registers.md` "Limits in the tool"; `System > Tuning limits` card `web/app.js renderSysLimits`.
 - tune.read cost about 140 on 8P+16E (112 V/F + 12 fused + 8 favored + 4 limits + 4 E 0x1C) -> ARCHITECTURE G-137 addendum; the page computes it from the unit list (G-139).
 - GUI connect errors (exit status 2) -> `src/arltuner/web/helperlink.py` `HelperConnectError` texts and `tools/arltuner-gui.py`; helper start/units -> `install.sh -h`, `uninstall.sh -h`, `packaging/arltuner-helper.{socket,service}`; allowlist file keys `allow_taint_bits`, `idle_exit_s`, `[access] users|group` -> `helper/settings.py`; preflight `helper_service` -> `platform/preflight.py`.
+- G-150 Tune texts (`web/app.js` ocInfo ~2734, nowText ~3364, refreshOcOffset ~3262, eVfFact ~3310, refreshRowWarn ~3324, fillRatioSelect ~3086, OC_TIP ~2696): header `OC ratio: 48× (fused top 46×) · no OC point · runs up to 48×` or `OC ratio: 48× · OC point 7`; OC box `48× (OC ratio set at boot) · no OC point`; point label `Point 6 · 46× (also 47–48×)`; ratio dropdown "No OC point", "· lowers the max from 48×"; "48× offset" options = offsets strictly above the edited point-6 offset on a 5 mV grid up to `v_target_max_mv`, target = fused 0x09 V + offset; disabled without `v_target_max_mv` or when `ratio_max` < the OC ratio; warnings quoted. Task: `docs/tasks/G-150-*.md`.
+- Planner order in one plan: point writes, then per-core (OC) words (`planner.py` docstring ~line 51), so lowering point 6 and creating the OC point in one draft briefly runs 48x on the lowered voltage; the reference run used two plans (`tuning-history.md` §5). E-cluster cap-all-four -> `platform-arl-s.md` §3.
 - Everything from the first run (V/F word, points, clamp, interpolation, turbo tables, cold/warm boot, silent failures) still stands: `registers.md`, `platform-arl-s.md`, `tuning-results.md`.
 
 ## Open questions for the orchestrator
@@ -74,6 +76,8 @@ Also owned now: `docs/USER-GUIDE.md` (a pointer to `docs/guide/README.md`).
 
 13. (G-147/148) Code vs task files: (a) `residual.py` docstring says the default step limit is 20 mV but `policies/default.toml` has `max_v_step_mv = 200` (the built-in M1 policy may differ); guide quotes no default. (b) G-147 suggested "fused top - 100 mV" for the target; code uses -25 mV with a floor of one step limit (documented in `residual.py`; guide follows the code). (c) A neutralised target limited by the floor (tight step limit) is written but still above the accepted top point, so compare says BAD until a further restore; the guide says "moved as far as one step allows ... real difference" (not observed). (d) `docs/knowledge/platform-arl-s.md` says "no 0x1D is sent" for neutralising, broader than `planner.py` (~1042-1051: not sent only when the ratio is at/below the top fused ratio and below `0x1C[7:0]`). (e) G-148 decision 4 names only `--dry-run`; the CLI also has `--dir` and `--sim` (documented). (f) `web/app.js:161/166` has a duplicate `NO_READ` key and the `STEP_LIMIT` text there ("change fewer units at once") predates the rounds model; the helper's own message is quoted in the guide.
 14. (G-148) The first-run Windows scripts' EQUIVALENT handling and chain refusal are static-checked only (no pwsh); guide 09 section 4 stays "untested".
+15. (G-150) Order of a combined draft (point 6 lowered + 48x offset): one plan writes points before the OC word, so 48x briefly sits on the lowered point-6 voltage. The "keep 48x, lower 46x" how-to documents the one-draft flow and states the ordering. Can the GUI create the OC point at the old voltage first (a two-apply flow)? The 48x offset list starts above point 6's edited offset, so with point 6 unchanged the old voltage is the "same as point 6" option (no draft); the ratio dropdown + absolute target (5 mV grid) may not hit it. Not verified; guide says nothing about a GUI two-step.
+    Also: `docs/STATE.md` says the split was "applied live, not accepted"; guide says so. "Unverified" whether the Stress tab's cap covers all four cores of an E-cluster (guide 08 says to check "cap held").
 
 ## Recheck after merges (all done 2026-10-12 against main c5eba92)
 - Tune labels All-Core/Per-Core, Whole Curve Offset/Per V/F point Offsets, OC box texts (with `·` and `×`), "No OC ratio" dropdown rules, "above 55× limit" tag, header "runs up to N×", live limits: verified in `web/app.js`.
@@ -88,6 +92,7 @@ Next time: re-grep button names in `web/index.html`, `--help` of every CLI comma
 - After the operator's next cold boot + restore: compare the real script output with the EQUIVALENT/OK example in 09 §3 (the example there is illustrative), and add the real operation count of a cold-boot one-shot restore if the orchestrator records one.
 
 ## Log (newest first)
+- 2026-10-14 (G-150 run, worktree branch): 07 section 1 rewritten (two terms, box table, header examples, "48x offset" control table and warnings, "Point 6 ... (also 47-48x)"), new how-to with the reference example, 3 step-3 pointer, cap-all-four bullet; 04 §6 terms; 06 table row; 08 cap bullet. Read app.js, task file, planner docstring; no hardware, no commands run except link checks.
 - 2026-10-13 (G-147/G-148 run, branch docs/guide-g147-g148 from main e73819d): the G-148 worker had already rewritten 09/10 (commit c799ddb); I audited them against the code and fixed/extended:
   09 (rounds bound of 16, new section "A left-over OC point: equivalent" with the target rule, EQUIVALENT output, favored-ratio and cpufreq rules, Save refusals, live restore count replaces unsourced op counts, no "ramp" wording),
   10 (apply/compare-accepted/accepted-migrate exit codes, `--accepted-before` gone, restore script rows), 11 (new refusal rows, EQUIVALENT rows and FAQ, partial (legacy) FAQ), 04 §6, 07 (follow rule, "After an OC test", old 172-op chain line replaced), 03, 08.

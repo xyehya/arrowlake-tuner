@@ -54,6 +54,7 @@ Earlier screens are listed under **Earlier screens** (up to 50 shown, 200 kept i
   selected. Nothing starts until you press Start.
 - Use a ratio cap to test a specific point: cap the unit at the ratio of the point you changed (for example 53x) so the screen runs that point. Check
   "cap held".
+- When you cap an E-cluster, cap **all four** of its cores: they run one ratio, and a cap on one core alone did not hold it below its neighbours' on the reference chip [MEASURED lnx 2026-10-14, platform-arl-s.md §3]. Whether the Stress tab's cap does this for a whole cluster is not stated in the repo's docs; check "cap held".
 - Run a **vector-math** screen as well as integer: different loads exercise different parts of the core, and single-thread failures show up under different
   workloads [favored-cores.md §4].
 - The reference-chip experience is that quick screens are good for ruling out an obvious failure within minutes, and useless for declaring success.

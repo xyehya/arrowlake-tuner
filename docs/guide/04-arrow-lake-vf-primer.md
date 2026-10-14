@@ -100,7 +100,9 @@ examples/reference-285k/notes/tuning-history.md §5]. It is additive to per-poin
 a unit with no OC ratio is written with target 0 (D-035) [MEASURED lnx 2026-10-11]. A target kept in such a word is not reliable [MEASURED lnx 2026-10-12].
 
 ## 6. The OC point
-Setting an **OC ratio** above the top fused ratio of a unit adds one extra point: on the E-cluster the table gained `P2 = 7` (at the OC ratio),
+Two terms (G-150). An **OC ratio** is any ratio a unit runs above its top fused ratio, however it got there: the BIOS can set it at boot (on the reference chip the E-cores run 48x while their fused curve ends at 46x), or you can set it. An **OC point** is the OC ratio plus an adaptive voltage in the `P2 = 0` word; it is the only way such a ratio gets a voltage of its own. Without an OC point the ratios above the top fused point run on that point's voltage.
+
+Setting an **OC ratio** above the top fused ratio of a unit through the tool adds one extra point: on the E-cluster the table gained `P2 = 7` (at the OC ratio),
 "OC point 7" [MEASURED lnx 2026-10-11]. For P-cores the community numbering is "P point 9"; on the reference chip a P OC point was not shown to appear as
 a readable point 9 [UNVERIFIED for P; the ring's ninth point is MEASURED, platform-arl-s.md §3].
 
