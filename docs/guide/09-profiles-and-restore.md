@@ -108,7 +108,7 @@ with 48x held at its old voltage and point 6 lowered), the OC word is written be
 
 **The OC point's table slot.** Once an OC point exists the CPU also shows a table slot for it (on the reference E-clusters: point 7, ratio 48, offset 0). It is never written as a
 fused point. The compare treats a missing slot, on a unit whose OC word has not been written yet, as part of the OC word's difference, not as a separate failure; after the OC word
-it must read the OC ratio with offset 0 (task G-151, `controls/order.py`).
+it must read the OC ratio with offset 0 (task G-151, `controls/residual.py` `oc_slot_pending`).
 
 Operation count: the plan reserves the worst case (every word read, every word written and read back, plus two reads per unit that has no OC point in the accepted
 state, to look for a left-over OC point). For the reference layout (8 P-cores, 4 E-clusters of 4 CPUs) the simulator reserves 651 operations for a one-round plan
