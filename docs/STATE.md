@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-14 · lnx · G-150 merged; E 46x/48x split applied live and screened (not accepted yet). Suite **2912 tests OK**
+_Updated: 2026-10-14 · lnx · G-150..G-152 merged + installed; E 46x/48x split applied live and screened (not accepted yet). Suite **2933 tests OK**
 (`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
 
 ## Where we are
@@ -49,8 +49,13 @@ G-141 review fixes · G-142 security (D-042) · polish.
 - **E 46x/48x split** applied (two plans: OC point first, then point 6). VID 46x -15 mV (1.1075 / 1.0975 V), 47x midpoint, 48x same (EC0 +2.4 mV).
   Screen PASS: all-E 46x 5 min / 47x 3 / 48x 2, bursty 46x, per-core sweep 44-48x, 46x single-thread per core with the cluster capped; MCE 0.
   `captures/lnx/esplit-tests-20261014.txt`. E clusters share one ratio: cap all four cores (`platform-arl-s.md`).
-- **Next:** operator's own longer E test (OCCT); if it holds, Tune -> Read -> "Set the current state as accepted". Then the documenter updates
-  the guide's Tune/OC page for G-150.
+- **G-151** merged + installed: every apply/restore writes per unit in a transition-safe order (raising first; refused by name `write_order` when
+  impossible); the OC point's slot (E point 7) never written as a fused point, a missing slot before the OC word is not a separate failure. So a
+  cold-boot restore of the split writes the OC word before point 6. **G-152** merged + installed: Stress caps whole E clusters at the kernel's map
+  (E 46x = 4.7 GHz), "cap held at Nx" / "ran Mx (cap Nx)". Gate 2933 OK. `install.sh` 21/21 self-checks.
+- In flight: **G-153** (plan preview still lists the static order, not G-151's: the apply is right, the Review list is not; GUI does not reconnect
+  to a restarted helper - restart the GUI after `install.sh`). Guide update for G-150/151/152 (documenter, worktree, not merged yet).
+- **Next:** operator's own longer E test at 46x (caps on all 16 E-cores, 4.7 GHz); then Tune -> Read -> "Set the current state as accepted".
 
 ## Operator to-do
 1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).
