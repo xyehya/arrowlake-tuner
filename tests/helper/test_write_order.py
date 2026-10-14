@@ -19,7 +19,7 @@ from arltuner.profiles import complete_from_words
 from arltuner.profiles.serialize import dump_profile
 from arltuner.topology import arl_s_285k
 
-from .test_tune import REPO, TuneCase
+from .test_tune import REPO, TuneCase, row, rows
 
 EXAMPLE = REPO / "examples/reference-285k/profiles"
 REF = _parse_expected((EXAMPLE / "EXPECTED-words.txt").read_text())
@@ -172,3 +172,33 @@ class Policy(SplitCase):
         self.read(h)
         self.restore(h)
         self.assertEqual(self.policy.read_text() if self.policy.exists() else "", before)
+
+
+class PreviewOrder(SplitCase):
+    """G-153: the Review dialog lists the order the apply sends (the same ``reorder_writes``), from the last read."""
+
+    INTENT = rows(row("EC1", points={"46": -45}, v=1.115, ratio=48))
+
+    def preview_vf(self, plan: dict[str, Any], cpu: int) -> list[int]:
+        return [s["point"] for s in plan["steps"] if s["kind"] == "write_vf_point" and s["cpu"] == cpu or s["kind"] == "write_vf" and s["cpu"] == cpu]
+
+    def test_the_split_live_lists_the_oc_word_before_point_6_and_the_apply_sends_that_order(self) -> None:
+        h = self.boot(warm_config(), accepted_dir=accepted_dir(self.tmp, split_words()))
+        self.read(h)
+        plan = self.plan(h, self.INTENT)
+        self.assertNotIn("the apply orders the writes", " ".join(w["text"] for w in plan["warnings"]))
+        self.assertEqual(self.preview_vf(plan, 12), [0, 6])
+        self.apply_ok(h, plan)
+        self.assertEqual([p2 for p2, _ in self.vf_log(12)][:2], self.preview_vf(plan, 12))
+
+    def test_a_pure_undervolt_keeps_the_points_first(self) -> None:
+        h = self.boot(warm_config(), accepted_dir=accepted_dir(self.tmp, split_words()))
+        self.read(h)
+        plan = self.plan(h, rows(row("EC1", points={"46": -45})))
+        self.assertEqual(self.preview_vf(plan, 12), [6])
+
+    def test_without_a_read_the_static_order_stays_with_a_note(self) -> None:
+        h = self.boot(warm_config(), accepted_dir=accepted_dir(self.tmp, split_words()))
+        plan = self.plan(h, rows(row("EC1", curve=-10)))
+        self.assertEqual(self.preview_vf(plan, 12), [0])
+        self.assertTrue(any(w["text"].startswith("the apply orders the writes so that no ratio's voltage dips (G-151)") for w in plan["warnings"]), plan["warnings"])
