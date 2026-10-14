@@ -28,7 +28,7 @@ cpufreq, which is restored when the screen ends. Nothing is sent to the mailbox.
 | **CPU load** | **Integer** (integer arithmetic, stress-ng `int64`), **Vector math** (matrix products, `matrixprod`; heavier on the vector units), **Cache** (cache thrashing) |
 | **Memory to test** | Automatic (3/4 of free memory) or 1, 2, 4, 8, 16, 32 GB; the helper refuses a size that does not leave 2 GB free |
 | **Length** | 1, 5, 15 or 60 minutes, or **Custom** (30 s to 60 min in 30 s steps) |
-| **Ratio cap** | No cap, or 8x ... 60x. The cap is applied to the units that run |
+| **Ratio cap** | No cap, or 8x ... 60x. The cap is applied to the units that run. E-cores run one ratio per cluster, so every core of each loaded E-cluster is capped (the load still runs only on the units you picked). The cap value comes from the kernel's own frequency map, not from ratio x 100 MHz: on the reference chip an E 46x cap is 4.7 GHz [MEASURED lnx 2026-10-14]; a P-core cap is ratio x 100 MHz |
 | **Units to load** | a mini core map (P-cores and E-clusters, favored cores starred); quick buttons All / P-cores / E-clusters / None |
 
 Press **Start**; **Stop** cancels. While it runs, the card shows elapsed time, errors so far and clocks. The tool runs the stress program as **your
@@ -44,7 +44,7 @@ screen ended with a tool error. Alongside it:
 | Hottest / Peak package power | from the telemetry sampler during the run |
 | health clean / changed | a before-and-after check of the kernel taint word, PCI devices and loaded modules; "changed" means look at the lines below |
 | new machine-check events | machine-check lines in the kernel log during the run |
-| cap held / not held | with a ratio cap: every loaded unit ran within one ratio of the cap; "not held" means the screen did not test the capped ratio |
+| cap held / cap held within one ratio / cap not held | with a ratio cap. "cap held": every loaded unit ran within one ratio of the cap. "cap held within one ratio" (warning): valid, but at least one unit was one bin off the cap; the unit list says "ran M× (cap N×)" for it, and "cap held at N×" for a unit exactly at the cap. "cap not held": a unit ran more than one ratio away, so the screen did not test the capped ratio |
 | Clock each unit held | mean clock and most common ratio per unit |
 
 Earlier screens are listed under **Earlier screens** (up to 50 shown, 200 kept in `/var/lib/arltuner/stress/`, root-owned).
@@ -53,7 +53,9 @@ Earlier screens are listed under **Earlier screens** (up to 50 shown, 200 kept i
 - Test the units you changed: after **Apply**, the review dialog offers **Validate with a stress screen**, which opens Stress with the changed units
   selected. Nothing starts until you press Start.
 - Use a ratio cap to test a specific point: cap the unit at the ratio of the point you changed (for example 53x) so the screen runs that point. Check
-  "cap held".
+  "cap held". For a precise ratio test, read the per-unit lines: "cap held at N×" is exact; "ran M× (cap N×)" means the unit was one bin off.
+- E-cores: the four cores of a cluster run one ratio, and a cap on one core alone did not hold it below its neighbours' on the reference chip [MEASURED lnx 2026-10-14, platform-arl-s.md §3].
+  The Stress tab therefore caps all four (G-152). If the units' maximum ratios are not known (no turbo tables read), the helper falls back to ratio x 100 MHz and says so in the result notes; that may not hold an E-cluster.
 - Run a **vector-math** screen as well as integer: different loads exercise different parts of the core, and single-thread failures show up under different
   workloads [favored-cores.md §4].
 - The reference-chip experience is that quick screens are good for ruling out an obvious failure within minutes, and useless for declaring success.

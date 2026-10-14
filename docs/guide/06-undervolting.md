@@ -72,7 +72,7 @@ turbo tables alone. **Discard changes** drops unapplied choices. A **cold boot**
 | Monotonic clamp | the hardware raises a too-deep point to the previous point's voltage ([04 §7](04-arrow-lake-vf-primer.md)) |
 | Whole-curve offset on a unit with no OC point | written with a zero target voltage, because the hardware drops a target there (D-035) [MEASURED lnx 2026-10-11] |
 | Interpolation | ratios between points follow the neighbours: lowering the 55x point also lowers 54x [MEASURED lnx 2026-10-11] |
-| Everything above the top point | ratios above the last point ride on it (E 47x and 48x follow the 46x point) [MEASURED lnx 2026-10-11] |
+| Everything above the top point | ratios above the last point ride on it (E 47x and 48x follow the 46x point) [MEASURED lnx 2026-10-11]. In Tune the top point's label says so ("Point 6 · 46× (also 47–48×)"). To keep the OC ratio at its old voltage while you lower the top point, see [07 how-to](07-overclocking.md) |
 | Read-back | every written word is read back; a mismatch stops the plan |
 
 ## 5. Strategy facts from the reference chip
