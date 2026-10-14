@@ -53,5 +53,6 @@
 | G-148 | complete, independent profiles; accepted = one profile restored in one shot; chain migration (D-044) | lnx | T0 (+T2 live) | **merged** 2026-10-13 (migrated live; one-shot restore 0 writes, 10 OK + 2 EQUIVALENT) | G-147 |
 | G-149 | repo docs in line with G-147/G-148 (README, SPEC, ARCHITECTURE, SAFETY, runbooks, ROADMAP, knowledge, example) + guide update (documenter) | lnx | T0 | **merged** 2026-10-13 | G-148 |
 | G-150 | Tune: name a boot-time OC ratio (E 48× above fused 46×) as one; 48× offset control (OC point target as offset from the fused top, floor = point 6) | lnx | T0 | **merged** 2026-10-14 | — |
+| G-151 | write order: raising writes before lowering ones (no ratio dips during apply/restore); restore of an accepted state with an OC point + its 7th point slot | lnx | T0 | ready 2026-10-14 | G-150 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).
