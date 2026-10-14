@@ -1,6 +1,6 @@
 # G-151 — Write order: no ratio's voltage dips during an apply/restore; restore of an accepted state that holds an OC point
 
-- **Status:** ready
+- **Status:** done (merged 2026-10-14)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake sysfs only)
 - **Branch/worktree:** `task/G-151-write-order`
