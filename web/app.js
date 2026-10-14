@@ -4719,7 +4719,10 @@
     pills.append(pill(r.stopped_by === "time" ? "ran to the end" : r.stopped_by === "cancel" ? "stopped by you" : "tool error", r.stopped_by === "error" ? "s-bad" : "s-neutral"));
     pills.append(pill(r.health === "clean" ? "health clean" : "health changed", r.health === "clean" ? "s-ok" : "s-bad"));
     if (isNum(r.mce_new) && r.mce_new > 0) pills.append(pill(r.mce_new + " new machine-check " + (r.mce_new === 1 ? "event" : "events"), "s-bad"));
-    if (r.cap_valid === true) { const p = pill("cap held", "s-ok"); p.title = "Every loaded unit ran within one ratio of the cap."; pills.append(p); }
+    const achAll = isObj(r.achieved) ? Object.values(r.achieved).filter(isObj) : [];
+    const offBin = achAll.some((a) => a.cap_held === false);   // G-152: valid (within one ratio) but not exactly at the cap
+    if (r.cap_valid === true && offBin) { const p = pill("cap held within one ratio", "s-warn"); p.title = "Every loaded unit ran within one ratio of the cap, but not all exactly at it. See the units below."; pills.append(p); }
+    else if (r.cap_valid === true) { const p = pill("cap held", "s-ok"); p.title = "Every loaded unit ran within one ratio of the cap."; pills.append(p); }
     else if (r.cap_valid === false) { const p = pill("cap not held", "s-bad"); p.title = "A loaded unit ran more than one ratio away from the cap, so the screen did not test the capped ratio."; pills.append(p); }
     head.append(h, pills);
     const sum = el("p", "st-sum" + (bad ? " bad" : ""), stSummary(r));
@@ -4737,7 +4740,7 @@
       const tile = (u) => {
         const a = ach[u], d = el("div", "mm-tile static u-" + u);
         d.title = unitLabel(u) + ": mean clock and the ratio most often seen under load" + (isFav(u) ? " (" + favTitle(u) + ")" : "");
-        d.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", isNum(a.ratio_mode) ? a.ratio_mode + "× mostly" : "ratio n/a"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
+        d.append(el("span", "mm-name", u + favMark(u)), el("span", "mm-cpus", !isNum(a.ratio_mode) ? "ratio n/a" : a.cap_held === false && isNum(a.cap_ratio) ? "ran " + a.ratio_mode + "× (cap " + a.cap_ratio + "×)" : a.cap_held === true ? "cap held at " + a.cap_ratio + "×" : a.ratio_mode + "× mostly"), el("span", "mm-mhz", isNum(a.mhz_mean) ? a.mhz_mean.toFixed(0) + " MHz" : "n/a"));
         return d;
       };
       const p = el("div", "mm-p"), e = el("div", "mm-e");

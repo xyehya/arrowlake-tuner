@@ -38,7 +38,9 @@ from arltuner.stress import (
 from arltuner.stress.parse import MAX_ERROR_LINES
 
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only, helper_topology
-from .ops_measure import CAP_ATTR, EPP_ATTR, _cpus_text, _remove_journal, _restore, _write_journal, epp_pinned_cpus, recover_journal
+from .ops_measure import (
+    CAP_ATTR, EPP_ATTR, _cpus_text, _remove_journal, _restore, _turbo_tables, _unit_maxima, _write_journal, epp_pinned_cpus, recover_journal,
+)
 from .protocol import BAD_REQUEST, INTERNAL, REFUSED, OpError
 from .state import State
 from .trust import TrustError, check_trusted_path
@@ -526,6 +528,54 @@ def _cap_valid(cap: int | None, achieved: dict[str, dict[str, Any]], unit_max: d
     return all(abs(mode - min(cap, unit_max.get(u, cap))) <= 1 for u, mode in seen)
 
 
+def _cap_report(cap: int | None, achieved: dict[str, dict[str, Any]], unit_max: dict[str, int]) -> None:
+    """G-152: per unit, the ratio the cap asks for (the cap, or what the unit can reach when lower) and whether the unit ran exactly that (``cap_held``); one bin off is
+    "ran M x (cap N x)", a warning that does not change :func:`_cap_valid`."""
+    if cap is None:
+        return
+    for unit, a in achieved.items():
+        target = min(cap, unit_max.get(unit, cap))
+        a["cap_ratio"] = target
+        a["cap_held"] = None if a.get("ratio_mode") is None else a["ratio_mode"] == target
+
+
+def _cap_khz(cap: int, max_ratio: int | None, cpuinfo_khz: int | None) -> int:
+    """G-152: the ``scaling_max_freq`` that holds ratio ``cap`` by the kernel's own map: ``cap x cpuinfo_max_freq / max_ratio`` rounded to 100 MHz (E 46x on a 4.9 GHz / 48x
+    cluster: 4.7 GHz ``[MEASURED lnx 2026-10-14]``; a P-core gives ``cap x 100 MHz``). Without the unit's maximum ratio: ``cap x 100 MHz``."""
+    if not max_ratio or not cpuinfo_khz:
+        return cap * 100_000
+    return (cap * cpuinfo_khz * 2 + max_ratio * 100_000) // (max_ratio * 200_000) * 100_000
+
+
+def _unit_limits(helper: Any, mw: Any, topo: Topology, units: list[str]) -> tuple[dict[str, int], dict[str, int], bool]:
+    """``(max ratio per unit, cpuinfo_max_freq kHz per unit, max ratios known)``: the maxima the way the measurement derives them (turbo tables, ``0x1C`` favored ratio;
+    read-only), else ``cpuinfo_max_freq`` and not known."""
+    cpuinfo: dict[str, int] = {}
+    for u in units:
+        raw = mw.cpufreq.read(topo.unit_cpus(u)[0], "cpuinfo_max_freq")
+        if raw and raw.isdigit():
+            cpuinfo[u] = int(raw)
+    top = {u: k // 100_000 for u, k in cpuinfo.items()}
+    known = False
+    try:
+        run = mw.make_run()
+    except Exception:
+        return top, cpuinfo, known
+    try:
+        tables, favored = _turbo_tables(helper, run, topo, [])
+        if tables is not None:
+            known = True
+            top = {**top, **_unit_maxima(run.io, topo, [u for u in units if u in cpuinfo], tables, favored)}
+    except Exception:
+        known, top = False, {u: k // 100_000 for u, k in cpuinfo.items()}
+    finally:
+        try:
+            run.close()
+        except Exception:
+            pass
+    return top, cpuinfo, known
+
+
 # =============================================================================================================================================
 # stress.start
 # =============================================================================================================================================
@@ -599,6 +649,9 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if unknown:
         raise OpError(BAD_REQUEST, f"'units' names {', '.join(unknown)}, which this system does not have (units: {', '.join(all_units)})")
     cpus = sorted({c for u in units for c in topo.unit_cpus(u)})
+    # G-152: the four E-cores of a cluster run one ratio, so a cap on some of them does not hold: every CPU of each E-cluster the run touches is capped (the load stays on ``cpus``)
+    clusters = {topo.by_cpu(c).cluster for c in cpus} - {None}
+    cap_cpus = sorted(set(cpus).union(*(topo.cluster_cpus(k) for k in clusters)))
     # ---- everything that can refuse, before anything is changed
     try:
         w.prepare()
@@ -625,11 +678,10 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
         if Path(mw.journal_path).exists():
             raise OpError(REFUSED, "a stale cpufreq journal could not be restored; fix cpufreq by hand (see the helper log) before a capped run", {"check": "STALE_JOURNAL"})
     unit_max: dict[str, int] = {}
+    cpuinfo_khz: dict[str, int] = {}
+    max_known = False
     if cap is not None:
-        for u in units:
-            raw = mw.cpufreq.read(topo.unit_cpus(u)[0], "cpuinfo_max_freq")
-            if raw and raw.isdigit():
-                unit_max[u] = int(raw) // 100_000
+        unit_max, cpuinfo_khz, max_known = _unit_limits(helper, mw, topo, units)
     scanner = StressNgScanner() if kind == "cpu" else StressappScanner()
     tail: deque[str] = deque(maxlen=TAIL_LINES)  # the child's last non-empty output lines
     collector = _Collector(units, topo)
@@ -656,13 +708,14 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 boot = helper.cfg.boot_id_fn()
             except Exception:
                 boot = None
-            pinned = epp_pinned_cpus(mw, cpus)  # G-132: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
-            entries = _write_journal(mw, cpus, boot.strip() if isinstance(boot, str) and boot.strip() else None, pinned)  # before the first change
+            pinned = epp_pinned_cpus(mw, cap_cpus)  # G-132: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
+            entries = _write_journal(mw, cap_cpus, boot.strip() if isinstance(boot, str) and boot.strip() else None, pinned)  # before the first change
             journaled = True
             epp_failed: dict[str, list[int]] = {}
-            for cpu in cpus:
+            for cpu in cap_cpus:
+                unit = topo.unit_of_cpu(cpu)
                 try:
-                    mw.cpufreq.write(cpu, CAP_ATTR, str(cap * 100_000))
+                    mw.cpufreq.write(cpu, CAP_ATTR, str(_cap_khz(cap, unit_max.get(unit) if max_known else None, cpuinfo_khz.get(unit))))
                 except OSError as exc:
                     raise OpError(REFUSED, f"cannot cap cpu {cpu} (scaling_max_freq): {exc.strerror or exc}", {"check": "CAP_WRITE"}) from None
                 if any(e["cpu"] == cpu and e["attr"] == EPP_ATTR for e in entries):
@@ -670,6 +723,8 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                         mw.cpufreq.write(cpu, EPP_ATTR, STRESS_EPP)
                     except OSError as exc:
                         epp_failed.setdefault(str(exc.strerror or exc), []).append(cpu)
+            if cap is not None and not max_known:
+                notes.append("helper: the maximum ratio of each unit is not known (no turbo tables): the cap is written as ratio x 100 MHz, which may not hold an E-cluster")
             if pinned:
                 notes.append("helper: governor performance: EPP already at performance")
             for why, bad in epp_failed.items():  # one note per distinct error, the CPUs as ranges
@@ -791,6 +846,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
             notes.append(f"helper: health compare failed: {type(exc).__name__}: {exc}")
 
     achieved = collector.achieved()
+    _cap_report(cap, achieved, unit_max)
     stopped_by = "cancel" if cancelled else ("error" if (verdict.errors or not verdict.ok or timed_out) else "time")
     result: dict[str, Any] = {
         "kind": kind, "started": stamp, "ended": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ended_wall)), "duration_s": duration,

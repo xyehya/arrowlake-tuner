@@ -18,7 +18,7 @@ from typing import Any
 
 from arltuner.health import HealthSnapshot
 from arltuner.helper.ops_measure import CAP_ATTR, EPP_ATTR
-from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _stop_child, default_invoker, helper_invoker, invoker_for_uid, prepare_workdir
+from arltuner.helper.ops_stress import Invoker, InvokerError, StressWiring, _cap_khz, _stop_child, default_invoker, helper_invoker, invoker_for_uid, prepare_workdir
 from arltuner.helper.trust import TrustError
 from arltuner.stress import CHILD_ENV, KernelLogWatch
 
@@ -684,6 +684,45 @@ class CapTests(StressCase):
         r2 = self.run_stress(h, {"units": ["EC0"], "ratio_cap": 20}, rid="e")["result"]
         self.assertEqual((r2["cap_valid"], r2["achieved"]["EC0"]["ratio_mode"]), (True, 19))
         self.assert_cpufreq_pristine()
+
+    def test_g152_an_e_cap_uses_the_kernel_map_and_covers_the_whole_cluster(self) -> None:
+        """EC0 (cpus 8..11, cpuinfo 4.9 GHz, table maximum 48x) at 46x: 4.7 GHz on all four, journaled and restored; a P-core at 55x: 5.5 GHz."""
+        tool = self.fake("stress-ng", "stress-ng-ok", hang=True)
+        h = self.start_stress(self.swiring(stress_ng=tool))
+        self.begin(h, {**START, "duration_s": 600, "units": ["EC0", "P2"], "ratio_cap": 46})
+        self.wait_pid(tool)
+        self.assertEqual([self.read(c, CAP_ATTR) for c in (8, 9, 10, 11)], ["4700000"] * 4)
+        self.assertEqual(self.read(12, CAP_ATTR), str(self.model.max_khz(12)), "another cluster is not touched")
+        doc = json.loads(self.journal.read_text())
+        self.assertEqual({e["cpu"] for e in doc["entries"] if e["attr"] == CAP_ATTR}, {2, 8, 9, 10, 11})
+        h.call("stop", "stress.stop")
+        self.assertEqual(h.response("s", 30)["result"]["stopped_by"], "cancel")
+        self.assert_cpufreq_pristine()
+        tool2 = self.fake("stress-ng", "stress-ng-ok", hang=True)
+        h2 = self.start_stress(self.swiring(stress_ng=tool2))
+        self.begin(h2, {**START, "duration_s": 600, "units": ["P2"], "ratio_cap": 55}, rid="p")
+        self.wait_pid(tool2)
+        self.assertEqual(self.read(2, CAP_ATTR), "5500000")
+        h2.call("stop2", "stress.stop")
+        h2.response("p", 30)
+        self.assert_cpufreq_pristine()
+
+    def test_g152_cap_khz_follows_the_unit_maximum(self) -> None:
+        self.assertEqual([_cap_khz(r, 48, 4_900_000) for r in (46, 47, 48)], [4_700_000, 4_800_000, 4_900_000])
+        self.assertEqual(_cap_khz(55, 55, 5_500_000), 5_500_000)
+        self.assertEqual(_cap_khz(46, None, 4_900_000), 4_600_000, "unknown maximum: ratio x 100 MHz")
+
+    def test_g152_held_exactly_versus_one_bin_off(self) -> None:
+        h = self.start_stress(self.swiring(sample_fn=sim_sampler(self.cpufreq, self.model, lambda cpu: 46 if 8 <= cpu <= 11 else None)))  # the sim's E landing is not the 285K's map
+        r = self.run_stress(h, {"units": ["P2", "EC0"], "ratio_cap": 46})["result"]
+        a = r["achieved"]
+        self.assertEqual((a["P2"]["cap_ratio"], a["P2"]["cap_held"], a["EC0"]["cap_ratio"], a["EC0"]["cap_held"], a["EC0"]["ratio_mode"]), (46, True, 46, True, 46))
+        self.assertIs(r["cap_valid"], True)
+        low = self.start_stress(self.swiring(sample_fn=sim_sampler(self.cpufreq, self.model, lambda cpu: 45 if 8 <= cpu <= 11 else None)))
+        r2 = self.run_stress(low, {"units": ["EC0"], "ratio_cap": 46})["result"]
+        e = r2["achieved"]["EC0"]
+        self.assertEqual((e["ratio_mode"], e["cap_ratio"], e["cap_held"], r2["cap_valid"]), (45, 46, False, True), "one bin off: valid by SPEC 9.2, but not held")
+        self.assertNotIn("cap_ratio", self.run_stress(low, {"units": ["P2"]}, rid="u")["result"]["achieved"]["P2"])
 
     def test_cap_invalid_when_the_unit_settles_more_than_a_bin_away(self) -> None:
         low = self.start_stress(self.swiring(sample_fn=sim_sampler(self.cpufreq, self.model, lambda cpu: 36 if cpu == 2 else None)))
