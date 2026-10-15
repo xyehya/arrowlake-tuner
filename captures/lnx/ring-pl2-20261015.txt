@@ -1,0 +1,38 @@
+# Ring 39x/40x -25 mV request + PL2 275 W — 2026-10-15 lnx (orchestrator, operator's request; boot 12:00 cold, kernel 7.2.10)
+
+## PL2 (powercap intel-rapl:0 constraint_1 295000000 -> 275000000 uW)
+0x610 before 0x428938002387d0 (PL1 250 W, PL2 295 W, lock 0) -> after 0x428898002387d0 (PL2 275 W; only [46:32] changed). intel-rapl-mmio:0 disabled (limits 0).
+
+## Ring words before (cmd 0x10 P1=2, CPU 0)
+== P2=0
+  raw word : 0x00000028
+== P2=1
+  raw word : 0x00000008
+== P2=2
+  raw word : 0x0000000e
+== P2=3
+  raw word : 0x00000014
+== P2=4
+  raw word : 0x0000001c
+== P2=5
+  raw word : 0x00000022
+== P2=6
+  raw word : 0x00000025
+== P2=7
+  raw word : 0x00000026
+== P2=8
+  raw word : 0x00000027
+== P2=9
+  raw word : 0x00000028
+
+## Write: ring point 8 (39x) -25 mV
+  before : 0x00000027   ratio 39x, offset +0.00 mV (raw 0)
+  after  : 0xfcc00027   ratio 39x, offset -25.39 mV (raw -26)
+  readback: 0xfcc00027   verified: True
+  revert : cmd 0x11 P1=2 P2=8 data 0x00000027 (a reboot also restores the BIOS value)
+After the write: P2=0 0x00000028, P2=9 0x00000028 (unchanged).
+
+## Requested ring VID = MSR 0x621 [31:16] / 8192 (50 samples at 10 Hz, stress-ng --cpu 4 on CPUs 4-7, ring capped to 39x via intel_uncore_frequency max_freq_khz 3900000, restored 4000000)
+before: 40x 1.2162 V (all samples) | 39x 1.2162 V
+after : 40x 1.2162 V (all samples) | 39x 1.1912 V  -> 40x does not follow point 8: the ring OC point (BIOS ring 40x, V target 0) holds its own voltage
+MCE/hardware-error lines: 0

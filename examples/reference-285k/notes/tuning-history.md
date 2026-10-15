@@ -95,6 +95,10 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
   48x 1.1250 / 1.1125 (EC0 +2.4 mV: target rounded up one 1/1024 V step); 43x -5..-8 mV. Screen: all 16 E 46x 300 s, 47x 180 s, 48x 120 s, bursty 25 %
   46x 180 s (stress-ng --verify, 0 failed), per-core sweep 44..48x 80 steps PASS, 46x single-thread per core with the cluster capped 16/16 PASS; MCE 0
   (`captures/lnx/esplit-tests-20261014.txt`). Live, not accepted (operator's own longer test first).
+- Ring + PL2 (2026-10-15, cold boot, operator's request "-25 mV to ring 40x and 39x, PL2 275 W"): ring point 8 (39x) `0x27` -> `0xFCC00027`
+  (-25.39 mV), read back; requested ring VID (`0x621`) 39x 1.2162 -> 1.1912 V, 40x stays 1.2162 V (the ring OC point does not follow point 8).
+  PL2 295 -> 275 W via powercap (`0x610` `0x428898002387d0`). Both runtime only, outside the accepted profile (lost at reboot); MCE 0
+  (`captures/lnx/ring-pl2-20261015.txt`).
 - BIOS "TVB Voltage Optimizations" (2026-10-13, ASRock Z890, accepted tuning): no change in `0x18` (`0x1E`) or `0x24` (set 1: 70 C, -0 bin 1C /
   -1 bin 2-8C; set 2 all 0); requested VID identical within +-2 mV, stock and tuned, all units (curves `fikh`/`d53n`, `yfjh`/`q9x7`); with TVB disabled
   (bit 2) the 70 C down-bin is not applied (all-core 80 C: P0/P1 55x flat). siomon (`sio sensors --direct-io -f json`) used as a 1 Hz logger.

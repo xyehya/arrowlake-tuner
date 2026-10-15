@@ -36,6 +36,10 @@ numbers do not. Ratios marked "285K" are that SKU's values (other SKUs have othe
 - **Target without an OC point:** with OC ratio <= top fused ratio a written V target is not reliably retained (dropped on one write, kept on another);
   write such words with target 0 (D-035, G-124) [MEASURED lnx 2026-10-11/12].
 - **OC target below the top fused point** is clamped up to it [MEASURED lnx 2026-10-11].
+- **Ring OC point (BIOS ring 40x, OC word `0x28`, V target 0 = auto) holds its own voltage:** stock V(40x) = V(39x) = 1.2162 V; ring point 8
+  (39x) -25 mV moved 39x to 1.1912 V and left 40x at 1.2162 V (requested ring VID = MSR `0x621` [31:16] / 8192) [MEASURED lnx 2026-10-15,
+  `captures/lnx/ring-pl2-20261015.txt`]. So lowering the top fused ring point does not lower an auto-target ring OC point (contrast E: 48x without an
+  OC point runs on point 6).
 - **An OC ratio cannot be written back to 0** at runtime; a cold boot clears it [MEASURED lnx 2026-10-11].
 - **E-cluster clock and cpufreq caps:** the four E-cores of a cluster run one ratio: a `scaling_max_freq` cap on one E-core alone did not hold it below its
   neighbours' (one core capped at 4.7 GHz ran 48x), capping all four did (46x); on the 285K an E cap of (ratio + 1) x 100 MHz holds that ratio [MEASURED lnx 2026-10-14].

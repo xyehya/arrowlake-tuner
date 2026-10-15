@@ -49,7 +49,7 @@ Read kind = RDMSR only, any CPU, no mailbox involvement.
 | Favored cores | `acpi_cppc/highest_perf`, mailbox `0x1C` (`favored-cores.md` §2) | [MEASURED lnx 2026-09-29] |
 | Turbo tables, ring ratio, PL1/PL2 | MSR 0x1AD/0x1AE/0x650/0x651, 0x620/0x621, 0x610 + 0x606 (registers.md); powercap sysfs | [MEASURED lnx 2026-09-29] |
 | Design current | MSR 0x601 (not IccMax; IccMax = mailbox cmd 0x16); PL4 via 0x601 vs MMIO 0x59B0 open (C-2) | [MEASURED] |
-| Ring voltage request | "UncVID" (read by the operator's own monitor; source register not recorded here) | [MEASURED lnx 2026-10-03] |
+| Ring voltage request | MSR `0x621` (MSR_UNCORE_PERF_STATUS) [31:16] / 8192 V ("UncVID"; [6:0] = current ring ratio); `0x621` = `0x26EB0028` -> 40x 1.2162 V | [MEASURED lnx 2026-10-15]; field [COMMUNITY turbostat CoreVID/UncVID proposal, as used by siomon] |
 | DDR5 frequency / timings | MCHBAR, `memory-mchbar.md` | [DOC Intel 835538] |
 | GPU | `nvidia-smi dmon` (PCIe rx/tx, SM, power) | [MEASURED lnx 2026-10-03] |
 Settled negatives: no ARL-S PMT telemetry schema; no delivered (post-DLVR) voltage telemetry; no PL3. Tools contending for the Super-I/O (HWiNFO-style):
