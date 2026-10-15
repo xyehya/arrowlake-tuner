@@ -97,7 +97,9 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
   (`captures/lnx/esplit-tests-20261014.txt`). Live, not accepted (operator's own longer test first).
 - Ring + PL2 (2026-10-15, cold boot, operator's request "-25 mV to ring 40x and 39x, PL2 275 W"): ring point 8 (39x) `0x27` -> `0xFCC00027`
   (-25.39 mV), read back; requested ring VID (`0x621`) 39x 1.2162 -> 1.1912 V, 40x stays 1.2162 V (the ring OC point does not follow point 8).
-  PL2 295 -> 275 W via powercap (`0x610` `0x428898002387d0`). Both runtime only, outside the accepted profile (lost at reboot); MCE 0
+  Then (operator's yes, policy ring write P2 1..8 -> 1..9) ring point 9 (40x, the OC point's slot) `0x28` -> `0xFCC00028`: 40x 1.2162 -> 1.1912 V;
+  stressapptest 45 s PASS.
+  PL2 295 -> 275 W via powercap (`0x610` `0x428898002387d0`). All runtime only, outside the accepted profile (lost at reboot); MCE 0
   (`captures/lnx/ring-pl2-20261015.txt`).
 - BIOS "TVB Voltage Optimizations" (2026-10-13, ASRock Z890, accepted tuning): no change in `0x18` (`0x1E`) or `0x24` (set 1: 70 C, -0 bin 1C /
   -1 bin 2-8C; set 2 all 0); requested VID identical within +-2 mV, stock and tuned, all units (curves `fikh`/`d53n`, `yfjh`/`q9x7`); with TVB disabled

@@ -17,9 +17,12 @@ G-133/G-139 Tune model · G-134/G-137 live limits (D-038/D-039) · G-136 screens
 G-141 review fixes · G-142 security (D-042) · polish.
 
 ## Machine state (reference 285K)
-- Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV.
+- Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV; ring writes P2 1..9
+  (operator yes 2026-10-15, backup `policy.toml.bak-2026-10-15`).
 - Boot 2026-10-15 12:00 (cold, kernel 7.2.10). Accepted = `read-20261013-145635`. Restore accepted in one shot: 36 writes, 36/36 read back, MCE 0;
   then the E split as ONE plan (G-151 order live: each cluster's OC triples before its point 6): 64 writes, words = 2026-10-14 split, MCE 0.
+  Runtime only (not in any profile, lost at reboot): **PL2 275 W** (powercap; was 295), **ring 39x/40x -25 mV** (P2 8/9 via CLI point-offset;
+  ring VID 1.2162 -> 1.1912 V; the ring OC point does not follow point 8). `captures/lnx/ring-pl2-20261015.txt`.
 - **Live now differs from accepted on the E-clusters (2026-10-14, operator's test):** OC point 48x (EC0 1.1230 V, EC1-3 1.1123 V = the old 48x
   voltage) + point 6 EC0 -49.8 / EC1-3 -40.0 mV (was -35.2 / -25.4). P-cores = accepted. The OC points stay until a cold boot; Restore accepted
   would put point 6 back and report E as EQUIVALENT.

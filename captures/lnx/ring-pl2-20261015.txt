@@ -36,3 +36,12 @@ After the write: P2=0 0x00000028, P2=9 0x00000028 (unchanged).
 before: 40x 1.2162 V (all samples) | 39x 1.2162 V
 after : 40x 1.2162 V (all samples) | 39x 1.1912 V  -> 40x does not follow point 8: the ring OC point (BIOS ring 40x, V target 0) holds its own voltage
 MCE/hardware-error lines: 0
+
+## Operator's yes: allow ring P2 9 (policy ring_point_write p2 1..8 -> 1..9; backup /etc/arltuner/policy.toml.bak-2026-10-15), write ring point 9 (40x) -25 mV
+  before : 0x00000028   ratio 40x, offset +0.00 mV (raw 0)
+  after  : 0xfcc00028   ratio 40x, offset -25.39 mV (raw -26)
+  readback: 0xfcc00028   verified: True
+  revert : cmd 0x11 P1=2 P2=9 data 0x00000028 (a reboot also restores the BIOS value)
+Re-read: P2=0 0x00000028 (OC word unchanged), P2=8 0xfcc00027, P2=9 0xfcc00028.
+Ring VID after: 40x 1.1912 V (all samples) | 39x 1.1912 V -> an offset on the ring OC point's slot (P2 = 9) moves 40x by the offset.
+Screen: stressapptest -s 45 -M 4096 -W: PASS; MCE/hardware-error lines 0.
