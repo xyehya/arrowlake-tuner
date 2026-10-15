@@ -10,6 +10,8 @@ from .schema import (
     PointSetting,
     Profile,
     ProfileError,
+    RingPoint,
+    RingSetting,
     TurboTables,
     load_profile,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "PointSetting",
     "Profile",
     "ProfileError",
+    "RingPoint",
+    "RingSetting",
     "TurboTables",
     "load_profile",
 ]

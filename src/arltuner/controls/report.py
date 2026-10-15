@@ -17,7 +17,7 @@ from arltuner.guard.policy import fused_top_ratio, hw_v_max_raw, turbo_bytes
 from arltuner.mailbox import Cmd, VfWord
 from arltuner.profiles import TurboTables
 
-from .model import REVERT_NOTE, ApplyPlan, PlanStep, PointTarget, StepKind, Target
+from .model import REVERT_NOTE, ApplyPlan, PlanStep, PointTarget, RingTarget, StepKind, Target
 from .planner import count_operations, oc_cap_kinds
 
 __all__ = [
@@ -115,6 +115,11 @@ class ApplyReport:
     residual: tuple[str, ...] = ()  # G-147: one line per unit whose residual OC point this run rewrote (``residual.ResidualUnit.describe``)
 
     @property
+    def ring_refused(self) -> tuple[str, ...]:
+        """G-154 (D-045): why the ring unit alone was not written by this run (``ring_oc_differs``, ``expect_ratio``, a guard/policy refusal ...); empty when it was, or the profile has no ring."""
+        return () if self.plan is None else self.plan.ring_refused
+
+    @property
     def zero_baseline_cpus(self) -> tuple[int, ...]:
         """CPUs whose 0x10 baseline word read back with a zero ratio, or a zero V target next to an OC ratio (above the top fused ratio): no write restores such
         a word. G-124: a zero V target at or below the top fused ratio is the word the hardware keeps without an OC point (e.g. the cold ``0x39``) and is restorable."""
@@ -172,6 +177,9 @@ _SHORT_OF_CORE = {
     StepKind.WRITE_VF: "write V/F word of",
     StepKind.READ_VF_POINT: "read V/F point baseline of",
     StepKind.WRITE_VF_POINT: "write V/F point offset of",
+    StepKind.READ_RING_OC: "read the ring OC word (P1=2 P2=0) of",
+    StepKind.READ_RING_POINT: "read ring point baseline of",
+    StepKind.WRITE_RING_POINT: "write ring point offset of",
     StepKind.WRITE_FAVORED: "write favored-core word of",
     StepKind.WRITE_GRANULAR: "write granular-ratio word of",
 }
@@ -206,9 +214,9 @@ def _step_summary(step: PlanStep, bios: Mapping[str, int] | None = None) -> str:
     if step.kind is StepKind.WRITE_GRANULAR and step.data is not None:
         return f"write granular-ratio word of {step.label}: data {step.data:#x} (= the 0x26 word read)"
     before, after = step.before, step.after
-    if step.kind is StepKind.WRITE_VF_POINT and before is not None and after is not None:
+    if step.kind in (StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) and before is not None and after is not None:
         text = (
-            f"write V/F point {step.p2} offset of {step.label.split(' point ')[0]}: ratio {before.ratio} (kept), V target raw {before.v_target_raw:#x} (kept), "
+            f"write {'ring point' if step.kind is StepKind.WRITE_RING_POINT else 'V/F point'} {step.p2} offset of {step.label.split(' point ')[0]}: ratio {before.ratio} (kept), V target raw {before.v_target_raw:#x} (kept), "
             f"offset {before.offset_mv:+.2f} -> {after.offset_mv:+.2f} mV (raw {before.offset_raw} -> {after.offset_raw}), data {step.data:#010x}"
         )
         return f"{text}; {effective_offset_text(after.offset_mv, step.core_kind, bios or {})}"
@@ -235,6 +243,10 @@ def format_plan(plan: ApplyPlan) -> str:
         lines.append(f"  {t.label} (cpu {t.cpu}): {t.describe()}")
     for pt in plan.point_targets:
         lines.append(f"  {pt.label} (cpu {pt.cpu}): {pt.describe()}")
+    for rt in plan.ring_targets:
+        lines.append(f"  {rt.label} (via cpu {rt.cpu}): {rt.describe()}")
+    for why in plan.ring_refused:
+        lines.append(f"  RING NOT WRITTEN: {why}")
     lines.append("Steps (every request is a WRMSR to MSR 0x150, reads included; reads first, then writes):")
     if any(s.kind.is_msr for s in plan.steps):
         lines.append("  (a step with 'msr' is a plain rdmsr / wrmsr of a turbo ratio table, not a mailbox request: its reads are not WRMSRs, its writes are counted)")
@@ -280,18 +292,26 @@ def format_preview(
     policy: Policy,
     turbo: TurboTables | None = None,
     points: Sequence[PointTarget] = (),
+    ring: Sequence[RingTarget] = (),
 ) -> str:
     """What ``apply`` will do when the baseline is not known yet (real hardware: reads need the confirmation first). ``turbo`` (T-023): the
     profile's ``[turbo]`` tables. ``points`` (T-025): the profile's V/F point offset targets (one per CPU and point)."""
     n = len(targets)
     n_cpus = len({t.cpu for t in (*targets, *points)})
     tables = [] if turbo is None else [(k, getattr(turbo, k)) for k in ("e", "p") if getattr(turbo, k) is not None]
-    worst = count_operations(tuple(targets), None, len(tables), len(points), len(oc_cap_kinds(policy, targets, [k.upper() for k, _ in tables])))
+    worst = count_operations(tuple(targets), None, len(tables), len(points), len(oc_cap_kinds(policy, targets, [k.upper() for k, _ in tables])), ring_points=len(ring))
     lines = [f"Plan for profile {profile_name!r}: {n_cpus} CPU(s); baseline words are read through the guard after confirmation"]
     for t in targets:
         lines.append(f"  {t.label} (cpu {t.cpu}): {t.describe()}")
     for pt in points:
         lines.append(f"  {pt.label} (cpu {pt.cpu}): {pt.describe()}")
+    for rt in ring:
+        lines.append(f"  {rt.label} (via cpu {rt.cpu}): {rt.describe()}")
+    if ring:
+        lines.append(
+            "  ring (cache, P1=2): read 0x10 P1=2 P2=0 (the ring OC word: BIOS-owned, compared with the profile's, never written) and P2=<point>, then write 0x11 P1=2 P2=<point> "
+            "for the points that differ (only the offset replaced); a ring the live state contradicts is refused as a unit, the P/E units are still restored;"
+        )
     if points:
         lines.append(
             "  V/F points: per CPU and point read 0x10 P2=<point>, then write 0x11 P2=<point> (the word read with only the offset replaced; no 0x1D / 0x27); "
@@ -325,8 +345,10 @@ def format_preview(
 # Apply report
 # --------------------------------------------------------------------------------------------------------------
 def _read_word_text(kind: StepKind, data: int) -> str:
-    if kind is StepKind.READ_VF_POINT:
+    if kind in (StepKind.READ_VF_POINT, StepKind.READ_RING_POINT):
         return f"word {data:#010x}: point {describe_word(VfWord.from_u32(data))}"
+    if kind is StepKind.READ_RING_OC:
+        return f"word {data:#010x}: ring OC word {describe_word(VfWord.from_u32(data))}"
     if kind is StepKind.READ_FAVORED:
         return f"word {data:#06x}: favored ratio {data & 0xFF}, fused ratio {(data >> 8) & 0xFF}"
     if kind is StepKind.READ_FUSED:
@@ -367,7 +389,12 @@ def _result_line(r: StepResult) -> str:
         parts.append(f"word {r.response_data:#010x}, PerCore Voltage Enable {'set' if r.response_data & 0x8 else 'clear'}")
     elif s.kind is StepKind.READ_VF and r.after is not None:
         parts.append(describe_word(r.after))
-    elif s.kind in (StepKind.READ_FAVORED, StepKind.READ_FUSED, StepKind.READ_GRANULAR, StepKind.READ_VMAX, StepKind.READ_VF_POINT, StepKind.READ_OC_CAP) and r.response_data is not None:
+    elif s.kind is StepKind.READ_RING_POINT and r.rc == 0x11:
+        parts.append("no such ring point")
+    elif s.kind in (
+        StepKind.READ_FAVORED, StepKind.READ_FUSED, StepKind.READ_GRANULAR, StepKind.READ_VMAX, StepKind.READ_VF_POINT, StepKind.READ_OC_CAP,
+        StepKind.READ_RING_OC, StepKind.READ_RING_POINT,
+    ) and r.response_data is not None:
         parts.append(_read_word_text(s.kind, r.response_data))
     elif s.kind.is_write:
         parts.append(f"read-back {'equal' if r.verified else 'DIFFERS' if r.verified is False else 'not done'}")
@@ -414,7 +441,7 @@ def _format_report(rep: ApplyReport) -> str:
     lines.append("Steps:")
     for r in rep.steps:
         lines.append("  " + _result_line(r))
-    written = [r for r in rep.steps if r.step.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT) and r.after is not None]
+    written = [r for r in rep.steps if r.step.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) and r.after is not None]
     if written:
         lines.append("Values as read back (integer mV snaps to 1/1024 V):")
         for r in written:

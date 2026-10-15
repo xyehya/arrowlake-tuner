@@ -21,6 +21,11 @@
   Steps: checks (admin, XtuService stopped, no OCCT/XTU, admin-only directories) -> one CONFIRM -> ts_driver.py start (service created for this run) -> [-Before: vf-dump] ->
   apply the CURRENT profile -> vf-dump -> compare every V/F word with DIR\EXPECTED-words.txt -> ts_driver.py remove (stop + delete the service). Stops at the first
   failure; nothing is retried. Revert = cold boot.
+  G-154 (D-045): the ring (cache, mailbox domain P1 = 2) is part of the accepted state and is restored and compared here the same way as on Linux, by the shared Python: EXPECTED-words.txt
+  has one "ring  <OC word> <point 1> ... <point n>" line (parsed below like a core line, key "ring"), the profile a [ring] section, the one apply writes the ring points that differ, vf-dump
+  reads the ring back and compare-accepted judges it. The ring OC word is BIOS-owned and never written; if it differs from the accepted one, only the ring is refused ("RING NOT RESTORED ...")
+  and the verdict is BAD for the ring. The ring is addressed through the Windows logical processor of Linux CPU 0. [UNVERIFIED win]: that the ThrottleStop driver answers cmd 0x10/0x11 P1=2 on
+  this machine; written on Linux, static checks only (no PowerShell here), the first Windows run is the bring-up test. An accepted state without a ring line compares nothing about the ring.
   Works from stock (cold boot) and from a warm reboot (offsets kept on CPUs 1-7/E, CPU 0 reset by the BIOS): the planner steps from what it reads.
   Captures: captures\win\restore-<ts>-*.txt (logs for reading, not evidence). Audit: %ProgramData%\arltuner\audit.jsonl.
   Not yet run on Windows with these changes (written on Linux): the first run is the bring-up test; read the ts_driver.py output carefully.
@@ -38,6 +43,7 @@ $audit = Join-Path $lm 'audit.jsonl'
 $ts = Get-Date -Format 'yyyyMMddTHHmmss'
 
 # The accepted words come from DIR\EXPECTED-words.txt, one line per core / E-cluster: "<cpu> <OC word P2=0> <point 1> ... <point n>" (hex, no 0x).
+# G-154: plus (optionally) one line "ring <OC word> <point 1> ... <point n>": the key is the string 'ring' (the dictionary keys are strings).
 # String keys: an [ordered] dictionary indexed with an int is positional.
 function Fail([string]$msg) { Write-Host "STOP: $msg" -ForegroundColor Red; exit 1 }
 
@@ -105,7 +111,7 @@ function Run-Lm([string]$tag, [string[]]$LmArgs) {
     $cmd = @($py[1..9] | Where-Object { $_ }) + @('tools\arltuner.py') + $LmArgs + @('--device-win', '--fingerprint', $fingerprint, '--policy', $policy, '--audit', $audit)
     & $py[0] @($py[1..9] | Where-Object { $_ }) 'tools\lnx\orchestrator_confirm.py' $py[0] @cmd *> $f
     $rc = $LASTEXITCODE
-    Get-Content $f | Select-String 'identity check passed|Result:|refus|REFUS|mismatch|WHEA' | ForEach-Object { '  ' + $_.Line.Trim() }
+    Get-Content $f | Select-String 'identity check passed|Result:|refus|REFUS|mismatch|WHEA|RING NOT RESTORED' | ForEach-Object { '  ' + $_.Line.Trim() }
     if ($rc -ne 0) { Fail "$tag failed (exit $rc), see $f" }
 }
 
@@ -139,7 +145,9 @@ try {
     $cmpRc = $LASTEXITCODE
     $cmp | ForEach-Object { Write-Host "$_" }
     if ($cmpRc -ne 0) { Fail 'the read-back differs from the accepted state (or the compare could not run) - report; cold boot = stock' }
-    Write-Host "restore verified against $wordsFile ($($Expected.Count) cores/clusters)." -ForegroundColor Green
+    $ringWord = if ($Expected.Contains('ring')) { ' + the ring' } else { '' }
+    $unitCount = if ($Expected.Contains('ring')) { $Expected.Count - 1 } else { $Expected.Count }
+    Write-Host "restore verified against $wordsFile ($unitCount cores/clusters$ringWord)." -ForegroundColor Green
 }
 finally {
     Ts-Driver remove | Out-Null   # stop + delete the per-run service

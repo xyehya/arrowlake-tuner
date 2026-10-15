@@ -423,6 +423,8 @@ def _parse_expected(text: str) -> dict[int, list[int]]:
         if not line or line.startswith("#"):
             continue
         parts = line.split()
+        if parts[0] == "ring":  # G-154 (D-045): the ring line (``ring <OC word> <point 1> ...``) is compared by ops_tune.accepted_match, not here
+            continue
         try:
             cpu = int(parts[0])
             words = [int(w, 16) for w in parts[1:]]

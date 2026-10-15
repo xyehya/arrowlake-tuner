@@ -7,6 +7,7 @@ by a mock that must never be called (``device_port_factory`` is left at its defa
 """
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import re
@@ -19,6 +20,7 @@ from arltuner import cli
 from arltuner.guard import ENV_FLAG, WriteGuard, read_all
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort, SimRequest, measured_baseline
+from arltuner.msr.sim import RING_POINT_OFFSETS_BIOS_OLD_ARL_S
 from arltuner.topology import TopologyMismatch, arl_s_285k
 
 from arltuner.controls import XTU_SHAPE_CAVEAT
@@ -1150,7 +1152,8 @@ class PointOffset(CliCase):
         self.ring_policy = self.write("ring.toml", POINT_POLICY_TOML % "0, 2")
         self.core_only_policy = self.write("core.toml", POINT_POLICY_TOML % "0")
         self.step_policy = self.write("step.toml", POINT_POLICY_TOML.replace("max_offset_step_mv = 20", "max_offset_step_mv = 2") % "0, 2")
-        self.sim = SimMsrPort(SimConfig.measured(per_point=True))
+        # G-154 (D-045): the reference ring now starts at runtime offsets 0 (the operator removed the BIOS ring offset); these T-028 tests keep the old BIOS word explicitly
+        self.sim = SimMsrPort(SimConfig.measured(per_point=True, ring_point_offsets=dict(RING_POINT_OFFSETS_BIOS_OLD_ARL_S)))
 
     def po(self, *extra: object, policy=None, stdin: str | None = None, **kw):
         args = ["point-offset", "--cpu", 0, "--p1", 2, "--p2", 8, "--sim", "--policy", policy or self.ring_policy,
@@ -1201,7 +1204,12 @@ class PointOffset(CliCase):
         self.nothing_sent()
 
     def test_sim_ring_table_ends_with_rc_0x11(self) -> None:
-        sim = SimMsrPort(SimConfig.measured(per_point=True))
+        sim = SimMsrPort(SimConfig.measured(per_point=True, ring_point_offsets=dict(RING_POINT_OFFSETS_BIOS_OLD_ARL_S)))
         self.assertEqual([sim.vf(0, 2, n).ratio for n in range(1, 9)], [8, 14, 20, 28, 34, 37, 38, 39])
-        self.assertEqual(sim._cmd_vf_read(0, 2, 9, 0)[0], 0x11)  # past ring point 8
+        self.assertEqual(sim._cmd_vf_read(0, 2, 9, 0), (0, 0x28))  # G-154 [MEASURED lnx 2026-10-15]: P2 = 9 is the 40x slot the BIOS ring OC ratio 40 creates
+        self.assertEqual(sim._cmd_vf_read(0, 2, 10, 0)[0], 0x11)  # past the ring table
         self.assertEqual(sim._cmd_vf_read(0, 2, 8, 0), (0, 0xF6600027))
+        cfg = SimConfig.measured(per_point=True)
+        cold = SimMsrPort(dataclasses.replace(cfg, initial_domain_vf={**cfg.initial_domain_vf, 2: VfWord.from_u32(0x27)}))  # the BIOS ring ratio is 39: no 40x slot
+        self.assertEqual(cold._cmd_vf_read(0, 2, 9, 0)[0], 0x11)
+        self.assertEqual(SimMsrPort(SimConfig.measured(per_point=True)).vf(0, 2, 8).offset_raw, 0)  # cold boot: runtime ring offsets 0

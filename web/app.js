@@ -3934,10 +3934,11 @@
   }
 
   // ---- the review dialog -------------------------------------------------------------------------------------------------------------------------
+  const RING_UNIT = "ring";   // G-154 (D-045): the cache ring, read and written through CPU 0; not a P-core or E cluster, so not in UNIT_IDS, but a plan's before/after and a restore's read-back list it
   function normState(x) {
     const out = {};
     const put = (u, e, i) => {
-      if (UNIT_IDS.indexOf(u) < 0) return;
+      if (UNIT_IDS.indexOf(u) < 0 && u !== RING_UNIT) return;   // G-154: the ring (cache) is one more unit of a plan's before/after
       if (e === null) { (out[u] || (out[u] = {}))[i] = { unread: true, point: i, ratio: null, offset_mv: null, v_target_v: null }; return; }
       if (!isObj(e)) return;
       const pt = e.oc === true ? 0 : isNum(e.point) ? e.point : i;
@@ -3959,7 +3960,7 @@
   function planDiff(res) {
     const b = normState(res.before), a = normState(res.after);
     const units = [];
-    for (const u of UNIT_IDS) {
+    for (const u of UNIT_IDS.concat([RING_UNIT])) {
       if (!a[u] && !b[u]) continue;
       const pts = Array.from(new Set(Object.keys(a[u] || {}).concat(Object.keys(b[u] || {})).map(Number))).sort((x, y) => x - y);
       const rows = pts.map((pt) => {

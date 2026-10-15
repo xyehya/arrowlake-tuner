@@ -55,6 +55,14 @@ order (points, then the OC word) is kept wherever it is already safe, and a unit
 read-back. The hardware's V(n) >= V(n-1) rule across points is not checked here (fused-point voltages are not readable). A point whose word reads a ratio above the top fused
 ratio is the OC point's slot (``P2 = n + 1``): never written as a fused point (``oc_point_slot``).
 
+G-154 (D-045): the ring (cache, ``P1 = 2``, read and written through one CPU) is **one more unit**, planned apart from the cores: a profile's ``[ring]`` adds, after the per-core reads,
+``0x10 P1=2 P2=0`` (the ring OC word) and ``0x10 P1=2 P2=k`` per ring point, and after the per-core writes one ``0x11 P1=2 P2=k`` per ring point that differs (the word read with only
+``[31:21]`` replaced, read back by the guard) -- every ring point, the slot the BIOS ring OC ratio creates (``P2 = 9``) included; unlike a core's OC slot it is not derived from the OC word,
+because the ring OC word is BIOS-owned: recorded and compared, **never written**. The ring is judged as a unit: when the live ring OC word is not the profile's (``ring_oc_differs``), a
+point's ratio is not its ``expect_ratio``, a point does not exist (rc ``0x11``) or the policy/guard refuses a ring write, **no ring step is planned** and the reasons are in
+``ApplyPlan.ring_refused`` (the P/E steps stand; nothing is skipped silently). Ring steps are ordered by the same transition-safe rule as a core's (``controls.order``), on the
+ring's own curve; they never share a dictionary key with a core (``ring_words``: point -> word, key 0 = the OC word).
+
 Pre-flight mirrors the guard: ``Policy.cpu_allowed``, ``Policy.match`` and the entry's named predicate from ``guard.CHECKS``, with the same
 session facts (``guard.build_context``: the ``0x1C`` / ``0x09`` / ``0x28`` words, the planned ``0x11`` word, the D-015 / D-016 bounds), so a
 predicted refusal is exactly what the guard would answer (the guard stays authoritative).
@@ -90,11 +98,13 @@ from .model import (
     PlanStep,
     PointTarget,
     PredictedRefusal,
+    RingTarget,
     StepKind,
     Target,
     Verdict,
 )
 from .order import reorder_writes
+from .ring import RING_P1, ring_cpu
 
 __all__ = [
     "PLATFORM_INFO_MSR",
@@ -108,6 +118,7 @@ __all__ = [
     "plan_warnings",
     "predict",
     "ramp_rounds",
+    "resolve_ring_targets",
     "check_rounds",
     "MAX_RAMP_ROUNDS",
     "predict_msr",
@@ -204,7 +215,7 @@ def resolve_targets(profile: Profile, topology: Topology) -> tuple[Target, ...]:
                     fused_top_ratio=setting.fused_top_ratio,
                 )
             )
-    if not targets and not profile.points and profile.turbo is None:  # G-117: a [turbo]-only plan has no mailbox target
+    if not targets and not profile.points and profile.turbo is None and profile.ring is None:  # G-117: a [turbo]-only plan has no mailbox target
         raise PlanError("the profile has no targets")
     return tuple(targets)
 
@@ -226,6 +237,15 @@ def resolve_point_targets(profile: Profile, topology: Topology) -> tuple[PointTa
     return tuple(out)
 
 
+def resolve_ring_targets(profile: Profile, topology: Topology) -> tuple[RingTarget, ...]:
+    """G-154: the ring points of the profile's ``[ring]`` (profile order), each with the CPU the ring is addressed through and the ring OC word the profile was made with. Empty
+    without a ``[ring]``."""
+    if profile.ring is None:
+        return ()
+    cpu = ring_cpu(topology)
+    return tuple(RingTarget(cpu, p.point, p.offset_mv, p.expect_ratio, profile.ring.oc_word) for p in profile.ring.points)
+
+
 def _reads_of(target: Target) -> int:
     """Reads of one target: the four of XTU's sequence, plus 0x28 when the profile sets an OC-point voltage."""
     return READS_PER_CPU + (VMAX_EXTRA_READS if target.oc_voltage_mv is not None else 0)
@@ -238,7 +258,9 @@ def _max_writes_of(target: Target) -> int:
     return (WRITES_PER_CPU if target.ratio is not None else OFFSET_ONLY_WRITES) + (SPLIT_EXTRA_WRITES if both else 0)
 
 
-def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0, oc_cap_reads: int = 0) -> int:
+def count_operations(
+    targets: int | Sequence[Target], per_core_enabled: bool | None, msr_writes: int = 0, n_points: int = 0, oc_cap_reads: int = 0, ring_points: int = 0
+) -> int:
     """Mailbox WRMSRs of a plan (worst case for the targets given): the 0x14 read, per target its reads (0x10, 0x1C, 0x09, 0x26, and 0x28 with an
     OC-point voltage) and writes (0x11, 0x1D, 0x27, and a second 0x11 when ratio and OC-point voltage are both set), plus the 0x15 write unless
     PerCore Voltage Enable is known to be set -- and **one read-back per write** (the guard reads every write back through the same transport;
@@ -255,7 +277,12 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
 
     ``oc_cap_reads`` (G-137, D-039): the ``0x01`` reads of the plan (one per core kind whose ratio ceiling needs the CPU's own limit; see ``oc_cap_kinds``).
 
+    ``ring_points`` (G-154): ring points of the profile's ``[ring]``; the ring adds the OC word read and one ``0x10 P1=2`` read per point, one ``0x11 P1=2`` write per point and its
+    read-back (``2n + 1 + n`` WRMSRs, worst case). A ring-only profile (no cores, no points) has no ``0x14`` read and no ``0x15`` write.
+
     ``targets`` is a number of plain (offset-only) targets or the ``Target`` objects themselves. G-122: a target that sets no OC ratio writes the 0x11 alone (no 0x1D / 0x27)."""
+    if ring_points and n_points == 0 and not isinstance(targets, int) and not tuple(targets):  # G-154: a ring-only profile: no 0x14, no 0x15
+        return (ring_points + 1) + 2 * ring_points + msr_writes + oc_cap_reads
     if isinstance(msr_writes, int) and not isinstance(msr_writes, bool) and msr_writes > 0 and n_points == 0 and not isinstance(targets, int):
         try:
             if not tuple(targets):
@@ -278,8 +305,8 @@ def count_operations(targets: int | Sequence[Target], per_core_enabled: bool | N
             raise ValueError(f"count_operations needs a number of targets >= 1 or Target objects, got {targets!r}")
         reads = 1 + sum(_reads_of(t) for t in listed)
         writes = sum(_max_writes_of(t) for t in listed)
-    reads += n_points + oc_cap_reads
-    writes += n_points + (0 if per_core_enabled is True else 1)
+    reads += n_points + oc_cap_reads + ((ring_points + 1) if ring_points else 0)
+    writes += n_points + ring_points + (0 if per_core_enabled is True else 1)
     return reads + writes + writes + msr_writes
 
 
@@ -441,6 +468,18 @@ def read_steps(
         return tuple(steps)
 
     points = resolve_point_targets(profile, topology) if profile is not None and topology is not None else ()
+    ring_targets = resolve_ring_targets(profile, topology) if profile is not None and topology is not None else ()
+
+    def ring_reads() -> None:
+        """G-154: the ring OC word (``P2 = 0``) and each ring point of the profile, read through the ring CPU (all P1 = 2)."""
+        for p2 in (0, *(t.point for t in ring_targets)):
+            req = Request(ring_targets[0].cpu, int(Cmd.VOLTAGE_FREQ_READ), RING_P1, p2, 0,
+                          f"apply: read ring {'OC word' if p2 == 0 else f'point {p2}'} (0x10 P1=2 P2={p2}) before any write")
+            steps.append(
+                PlanStep(len(steps) + 1, StepKind.READ_RING_OC if p2 == 0 else StepKind.READ_RING_POINT, req.cpu, req.cmd, RING_P1, p2, 0, req.purpose,
+                         "Ring" if p2 == 0 else f"Ring point {p2}", verdict=predict(policy, req, None))
+            )
+
     wants = _msr_read_wants(profile, targets, topology, policy)
     if wants:
         assert topology is not None
@@ -453,7 +492,9 @@ def read_steps(
                     len(steps) + 1, StepKind.READ_MSR, write_cpu, 0, 0, 0, 0, mreq.purpose, what, verdict=predict_msr(policy, mreq, None), msr=msr
                 )
             )
-    if not points and not targets:  # G-117: a turbo-table-only plan reads the plain MSRs only (and, G-137, the CPU's ratio limit); no 0x14
+    if not points and not targets:  # G-117: a turbo-table-only plan reads the plain MSRs only (and, G-137, the CPU's ratio limit); no 0x14 (G-154: a ring-only plan reads the ring)
+        if ring_targets:
+            ring_reads()
         return with_oc_cap_reads()
     number = len(steps) + 1
     first_cpu = points[0].cpu if points else targets[0].cpu  # 0x14 is package-wide: read it on the first CPU the plan touches
@@ -475,6 +516,8 @@ def read_steps(
             number += 1
             req = Request(t.cpu, cmd, p1, 0, 0, f"apply: read {text} of {t.label}")
             steps.append(PlanStep(number, kind, t.cpu, cmd, p1, 0, 0, req.purpose, t.label, verdict=predict(policy, req, None), core_kind=t.kind))
+    if ring_targets:
+        ring_reads()
     return with_oc_cap_reads()
 
 
@@ -653,6 +696,8 @@ def _next_profile_text(
     ramps: Mapping[int, _Ramp],
     point_targets: tuple[PointTarget, ...] = (),
     point_ramps: Mapping[tuple[int, int], int] | None = None,
+    ring_targets: tuple[RingTarget, ...] = (),
+    ring_ramps: Mapping[int, int] | None = None,
 ) -> str:
     """TOML text of the next step: one ``[[core]]`` per target (an E cluster once), the ramped values for the targets that needed one, the
     requested values for the others; T-025: likewise one ``[[point]]`` per (core, point) with the ramped ``offset_mv`` (``point_ramps``:
@@ -685,6 +730,11 @@ def _next_profile_text(
         lines += ["", "[[point]]", f'kind = "{pt.kind}"', f"index = {pt.index}", f"point = {pt.point}", f"offset_mv = {pt.offset_mv if mv is None else mv}"]
         if pt.expect_ratio is not None:
             lines.append(f"expect_ratio = {pt.expect_ratio}")
+    if ring_targets:  # G-154: the ring points, the ramped value where a step limit stops the point
+        lines += ["", "[ring]", f"oc_word = {ring_targets[0].oc_word}"]
+        for rt in ring_targets:
+            mv = (ring_ramps or {}).get(rt.point)
+            lines += ["", "[[ring.point]]", f"point = {rt.point}", f"offset_mv = {rt.offset_mv if mv is None else mv}", f"expect_ratio = {rt.expect_ratio}"]
     return "\n".join(lines) + "\n"
 
 
@@ -723,6 +773,7 @@ def ramp_rounds(
     policy: Policy,
     *,
     only_changed: bool = False,
+    ring_words: Mapping[int, int] | None = None,
 ) -> tuple[int, str | None]:
     """G-148 (D-044, decision 5): how many guarded rounds (read, write every word at most one step limit closer, read back) bring the CPU from ``baseline`` /
     ``point_words`` to ``profile``, and which unit / field needs the most (``None`` when one round does it). The step limits are measured as the guard measures them
@@ -772,6 +823,16 @@ def ramp_rounds(
         except ValueError:
             continue
         note(_rounds_for(goal_raw - base_w.offset_raw, off_limit, False), f"{pt.label} point {pt.point} offset {base_w.offset_mv:+.1f} -> {pt.offset_mv:+d} mV, step limit {policy.max_offset_step_mv} mV")
+    for rt in resolve_ring_targets(profile, topology):  # G-154: the ring points move by the same step limit
+        word = (ring_words or {}).get(rt.point)
+        if word is None:
+            continue
+        base_w = VfWord.from_u32(word)
+        try:
+            goal_raw = VfWord.mv_to_offset_raw(rt.offset_mv)
+        except ValueError:
+            continue
+        note(_rounds_for(goal_raw - base_w.offset_raw, off_limit, False), f"ring point {rt.point} offset {base_w.offset_mv:+.1f} -> {rt.offset_mv:+d} mV, step limit {policy.max_offset_step_mv} mV")
     return rounds, worst
 
 
@@ -803,6 +864,88 @@ def _kind_top_ratio(policy: Policy, baseline: Mapping[int, CoreReadings], cpu: i
     return next((fused_top_ratio(r.fused) for c, r in baseline.items() if policy.core_kind(c) == kind), None)
 
 
+def _ring_unread(policy: Policy, cpu: int, p2: int) -> str:
+    """Why a ring word is missing from the readings: the guard would refuse the read (its own reason), or the point does not exist (rc ``0x11``)."""
+    req = Request(cpu, int(Cmd.VOLTAGE_FREQ_READ), RING_P1, p2, 0, "preflight")
+    verdict = predict(policy, req, None)
+    what = "the ring OC word (P2 = 0)" if p2 == 0 else f"ring point {p2}"
+    if not verdict.allowed:
+        return f"{what} was not read: the guard refuses the read ({verdict.reason}: {verdict.detail})"
+    if p2 == 0:
+        return f"{what} was not read"
+    return f"{what} does not exist now (cmd 0x10 P1=2 P2={p2} answered rc 0x11), but the accepted state has it"
+
+
+def _ring_steps(
+    ring_targets: tuple[RingTarget, ...],
+    ring_words: Mapping[int, int],
+    policy: Policy,
+    topology: Topology,
+    only_changed: bool,
+    favored_of_kind: Callable[[int], list[int | None] | None],
+) -> tuple[list[PlanStep], list[str], dict[int, int], set[int]]:
+    """G-154 (D-045): the ring's write steps (``number`` 0; the caller numbers them), the reasons the ring unit alone is refused, the ramped value (mV) of every point a step
+    limit stops, and the points whose only obstacle is a step limit. The ring is judged as one unit: any reason other than a step limit drops every ring step (the P/E steps of
+    the plan stand), and the reasons are returned, never swallowed. The ring OC word is BIOS-owned: it is compared with the profile's and **never written**."""
+    if not ring_targets:
+        return [], [], {}, set()
+    cpu = ring_targets[0].cpu
+    refused: list[str] = []
+    live_oc = ring_words.get(0)
+    if live_oc is None:
+        refused.append(f"ring_oc_unread (planner): {_ring_unread(policy, cpu, 0)}; the ring is not restored")
+    elif live_oc != ring_targets[0].oc_word:
+        refused.append(
+            f"ring_oc_differs (planner): the ring OC word reads {live_oc:#010x}, the accepted state has {ring_targets[0].oc_word:#010x}; it is BIOS-owned and never written, so the "
+            f"ring is not restored (a BIOS ring ratio change needs a new accepted state)"
+        )
+    steps: list[PlanStep] = []
+    ramps: dict[int, int] = {}
+    step_only: set[int] = set()
+    for t in ring_targets:
+        word = ring_words.get(t.point)
+        if word is None:
+            refused.append(f"ring point {t.point}: {_ring_unread(policy, cpu, t.point)}")
+            continue
+        base = VfWord.from_u32(word)
+        try:
+            goal_raw = VfWord.mv_to_offset_raw(t.offset_mv)
+            new = base.with_(offset_raw=goal_raw)
+        except ValueError as exc:
+            raise PlanError(f"ring point {t.point}: requested offset does not fit the V/F word: {exc}") from exc
+        ctx = build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None, favored_words_of_kind=favored_of_kind(cpu))
+        purpose = f"apply: write ring point {t.point} offset (0x11 P1=2 P2={t.point}): {t.describe()}"
+        req = Request(cpu, int(Cmd.VOLTAGE_FREQ_WRITE), RING_P1, t.point, new.to_u32(), purpose)
+        verdict = predict(policy, req, word, ctx)
+        mismatch = base.ratio != t.expect_ratio
+        if only_changed and not mismatch and new.to_u32() == word:
+            continue  # the ring point already holds this offset
+        if mismatch and verdict.reason in (OK_VERDICT.reason, Refusal.CHECK_FAILED.value):
+            verdict = Verdict(
+                False,
+                Refusal.CHECK_FAILED.value,
+                f"expect_ratio (planner): the ratio field read for ring point {t.point} is {base.ratio} (word {word:#010x}), the profile expects {t.expect_ratio}; nothing is sent",
+            )
+        elif not verdict.allowed and verdict.reason == Refusal.CHECK_FAILED.value and predict(policy, req, word, ctx.unlimited_steps()).allowed:
+            offset_raw = _step_toward(base.offset_raw, goal_raw, ctx.max_offset_step_raw)
+            ramps[t.point] = t.offset_mv if offset_raw == goal_raw else _mv_toward(offset_raw, base.offset_raw, VfWord.mv_to_offset_raw)
+            step_only.add(t.point)
+        steps.append(
+            PlanStep(0, StepKind.WRITE_RING_POINT, cpu, req.cmd, RING_P1, t.point, req.data, purpose, f"Ring point {t.point}", before=base, after=new, verdict=verdict)
+        )
+    if not refused and steps:
+        numbered = [replace(st, number=i) for i, st in enumerate(steps, start=1)]
+        ordered, notes = reorder_writes(numbered, topology, {}, {}, ring_words)  # the same transition-safe rule as a core, on the ring's own curve
+        steps = [replace(st, number=0) for st in ordered]
+        refused.extend(f"{n}" for n in notes)
+    for st in steps:
+        if not st.verdict.allowed and st.p2 not in step_only:
+            refused.append(f"ring point {st.p2}: {st.verdict.reason}: {st.verdict.detail}")
+    if refused:
+        return [], refused, {}, set()
+    return steps, [], ramps, step_only
+
+
 def build_plan(
     profile: Profile,
     topology: Topology,
@@ -817,6 +960,7 @@ def build_plan(
     oc_cap_words: Mapping[int, int] | None = None,
     residual_cpus: Collection[int] = (),
     only_changed: bool = False,
+    ring_words: Mapping[int, int] | None = None,
 ) -> ApplyPlan:
     """Build the full plan from the profile and the **actual** words read. Pure: no I/O, nothing is sent.
 
@@ -839,6 +983,9 @@ def build_plan(
     same state, ``_same_state``), and without any mailbox write the ``0x15`` step is dropped too. A target whose ``fused_top_ratio`` (a complete profile's record of the
     unit) differs from the top fused ratio of the ``0x09`` word read is refused (``CHECK_FAILED``): the profile was made on another CPU.
 
+    ``ring_words`` (G-154): the ring words read for the profile's ``[ring]``, point -> word, key 0 = the ring OC word (never keyed by a CPU: the ring is read through CPU 0 but is not
+    P-core 0). A ring word missing from it (the read was refused, or rc ``0x11``) refuses the ring unit with a named reason; the P/E plan is unaffected.
+
     ``baseline`` maps every target CPU to its ``CoreReadings`` (0x10, 0x1C, 0x09, 0x26 and, for a profile with an OC-point voltage, 0x28).
     ``per_core_enabled``: ``True`` -> no 0x15 step, ``False`` -> a 0x15 step, ``None`` -> unknown: a conditional 0x15 step is included (worst
     case). ``misc_word`` (optional) is the 0x14 word read earlier; it fixes the 0x15 data (``old | 0x8``) and must agree with
@@ -857,6 +1004,8 @@ def build_plan(
             raise ValueError(f"per_core_enabled={per_core_enabled} contradicts misc_word {misc_word:#010x} (bit 3 = {int(derived)})")
     targets = resolve_targets(profile, topology)
     point_targets = resolve_point_targets(profile, topology)
+    ring_targets = resolve_ring_targets(profile, topology)
+    ring_words = {} if ring_words is None else dict(ring_words)
     point_words = {} if point_words is None else dict(point_words)
     missing_points = [(t.cpu, t.point) for t in point_targets if (t.cpu, t.point) not in point_words]
     if missing_points:
@@ -1116,13 +1265,26 @@ def build_plan(
     steps[segment:] = [replace(st, number=new_numbers[st.number]) for st in ordered]
     step_only = {new_numbers[n] for n in step_only}
     oc_notes.extend(order_notes)
+    ring_steps, ring_refused, ring_ramps, ring_step_only = _ring_steps(ring_targets, ring_words, policy, topology, only_changed, favored_of_kind)
+    number = len(steps)
+    for st in ring_steps:  # G-154: the ring unit after the per-core words, ordered inside itself
+        number += 1
+        steps.append(replace(st, number=number))
+        if st.p2 in ring_step_only:
+            step_only.add(number)
     append_turbo(raising)
     if only_changed and not any(s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) for s in steps):
-        # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; the step-limit set is empty without a mailbox write)
-        steps = [replace(s, number=i) for i, s in enumerate((s for s in steps if s.kind is not StepKind.WRITE_PERCORE_ENABLE), start=1)]
+        # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; G-154: the ring writes need no 0x15, and keep their step-limit marks)
+        kept = [s for s in steps if s.kind is not StepKind.WRITE_PERCORE_ENABLE]
+        remap = {s.number: i for i, s in enumerate(kept, start=1)}
+        steps = [replace(s, number=remap[s.number]) for s in kept]
+        step_only = {remap[n] for n in step_only if n in remap}
     warnings = list(plan_warnings(targets, policy, point_targets))
     warnings.extend(turbo_notes)
     warnings.extend(oc_notes)
+    warnings.extend(f"ring not written: {why}" for why in ring_refused)
+    if ring_steps and any(st.after is not None and st.before is not None and st.after.offset_raw > st.before.offset_raw for st in ring_steps):
+        raises = True
     if raising:
         warnings.append(TURBO_RAISE_CAVEAT)
     if profile.turbo is None or profile.turbo.e is None:
@@ -1142,7 +1304,7 @@ def build_plan(
         warnings.append(RAISE_CAVEAT)
     # A next step is only offered when the step limits are the ONLY obstacle: with any other predicted refusal (a ceiling, the allowlist, ...)
     # walking the steps would end in a refusal after several sessions, so the plain refusals are reported instead.
-    hard = any(not st.verdict.allowed and st.number not in step_only for st in steps)
+    hard = any(not st.verdict.allowed and st.number not in step_only and not st.kind.is_ring_read for st in steps)  # G-154: a refused ring read is the ring unit's refusal alone
     return ApplyPlan(
         profile_name=profile.name,
         per_core_enabled=per_core_enabled,
@@ -1154,9 +1316,11 @@ def build_plan(
         assumed_bios_offset_mv=policy.assumed_bios_offset_mv,
         effective_offset_floor_mv=policy.effective_offset_floor_mv,
         next_profile_text=(
-            _next_profile_text(profile.name, targets, ramps, point_targets, point_ramps) if (ramps or point_ramps) and not hard else None
+            _next_profile_text(profile.name, targets, ramps, point_targets, point_ramps, ring_targets, ring_ramps) if (ramps or point_ramps or ring_ramps) and not hard else None
         ),
         point_targets=point_targets,
+        ring_targets=ring_targets,
+        ring_refused=tuple(ring_refused),
     )
 
 
@@ -1203,10 +1367,11 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
     targets = resolve_targets(profile, topology)
     point_targets = resolve_point_targets(profile, topology)
     tables = _turbo_tables(profile)
+    ring_targets = resolve_ring_targets(profile, topology)
     n_oc = len(oc_cap_kinds(policy, targets, [MSR_TURBO_KIND[msr] for msr, _ in tables]))
     if isinstance(extra_ops, bool) or not isinstance(extra_ops, int) or extra_ops < 0:
         raise ValueError(f"extra_ops must be a non-negative int, got {extra_ops!r}")
-    required = count_operations(targets, None, len(tables), len(point_targets), n_oc) + extra_ops
+    required = count_operations(targets, None, len(tables), len(point_targets), n_oc, ring_points=len(ring_targets)) + extra_ops
     if required > policy.max_operations_per_session:
         raise NeedsHigherLimit(required, policy.max_operations_per_session)
     remaining = max(policy.max_operations_per_boot - boot_ops_used, 0)
@@ -1214,10 +1379,12 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
         raise NeedsBootBudget(required, remaining, boot_ops_used, policy.max_operations_per_boot)
     refusals: list[PredictedRefusal] = []
     for step in read_steps(targets, policy, profile, topology):
+        if step.kind.is_ring:
+            continue  # G-154: a ring read the policy refuses refuses the ring unit alone (build_plan names it); it never stops the P/E restore
         if not step.verdict.allowed:
             refusals.append(PredictedRefusal(step.number, step.cpu, step.cmd, step.verdict.reason, step.verdict.detail, step.msr))
     mailbox = bool(targets or point_targets)  # G-117: a turbo-table-only plan has no 0x14 read and no 0x15 write
-    number = (2 if mailbox else 0) + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy)) + n_oc  # reads are 1..N; the worst case puts the 0x15 write right after
+    number = (2 if mailbox else 0) + len(point_targets) + sum(_reads_of(t) for t in targets) + len(_msr_read_wants(profile, targets, topology, policy)) + n_oc + (len(ring_targets) + 1 if ring_targets else 0)  # reads are 1..N; the worst case puts the 0x15 write right after
     for pt in point_targets:  # T-025: the point writes come first; the address checks and the offset window are decidable before the words are read
         number += 1
         _, verdict = _address_verdict(policy, Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, 0, "preflight"))

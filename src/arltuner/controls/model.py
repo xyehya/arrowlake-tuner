@@ -53,6 +53,7 @@ __all__ = [
     "PointTarget",
     "PredictedRefusal",
     "PreflightError",
+    "RingTarget",
     "StepKind",
     "Target",
     "Verdict",
@@ -200,6 +201,8 @@ class StepKind(str, Enum):
     READ_GRANULAR = "read_granular"  # cmd 0x26, P1=0 P2=0
     READ_VF_POINT = "read_vf_point"  # T-025: cmd 0x10, P1=0, P2=point (1..): baseline word of one V/F point of one CPU
     READ_MSR = "read_msr"  # T-023: plain rdmsr (0xCE, a turbo table); not a WRMSR, not counted in the budget
+    READ_RING_OC = "read_ring_oc"  # G-154 (D-045): cmd 0x10, P1=2, P2=0: the ring OC word of the ring unit (BIOS-owned: read and compared, never written)
+    READ_RING_POINT = "read_ring_point"  # G-154: cmd 0x10, P1=2, P2=point: baseline word of one ring point (rc 0x11 = no such point: tolerated, the ring is then refused)
     READ_OC_CAP = "read_oc_cap"  # G-137 (D-039): cmd 0x01, P1=0 P2=0 on one CPU of a core kind: [7:0] fused max OC ratio, the CPU's own ratio limit
     READ_VMAX = "read_vmax"  # cmd 0x28, P1=0 P2=0: hardware maximum voltage (D-016; only when the profile sets an OC-point voltage)
     WRITE_PERCORE_ENABLE = "write_percore_enable"  # cmd 0x15 with old|8
@@ -207,6 +210,7 @@ class StepKind(str, Enum):
     WRITE_FAVORED = "write_favored"  # cmd 0x1D, data = the ratio of the 0x11 word
     WRITE_GRANULAR = "write_granular"  # cmd 0x27, data = the 0x26 word read
     WRITE_VF_POINT = "write_vf_point"  # T-025: cmd 0x11, P1=0, P2=point: the point's word with only the offset replaced; no 0x1D / 0x27
+    WRITE_RING_POINT = "write_ring_point"  # G-154: cmd 0x11, P1=2, P2=point: the ring point's word with only the offset replaced (every ring point, the OC-created slot included)
     WRITE_MSR = "write_msr"  # T-023: plain wrmsr of a turbo ratio table (0x650 E / 0x1AD P); counts as one operation, read back by rdmsr x2
 
     @property
@@ -215,10 +219,20 @@ class StepKind(str, Enum):
             StepKind.WRITE_PERCORE_ENABLE,
             StepKind.WRITE_VF,
             StepKind.WRITE_VF_POINT,
+            StepKind.WRITE_RING_POINT,
             StepKind.WRITE_FAVORED,
             StepKind.WRITE_GRANULAR,
             StepKind.WRITE_MSR,
         )
+
+    @property
+    def is_ring(self) -> bool:
+        """A ring step (G-154): its words live in the ring channel (``ring_words``), never in the CPU-keyed core dictionaries -- the ring is read through CPU 0 but is not P-core 0."""
+        return self in (StepKind.READ_RING_OC, StepKind.READ_RING_POINT, StepKind.WRITE_RING_POINT)
+
+    @property
+    def is_ring_read(self) -> bool:
+        return self in (StepKind.READ_RING_OC, StepKind.READ_RING_POINT)
 
     @property
     def is_msr(self) -> bool:
@@ -318,6 +332,22 @@ class PointTarget:
 
 
 @dataclass(frozen=True)
+class RingTarget:
+    """One ring point whose offset will be written (G-154, D-045). ``cpu`` is the CPU the ring is addressed through; ``expect_ratio`` guards the write; ``oc_word`` is the
+    ring OC word the profile was made with (the plan refuses the whole ring when the live word differs: it is BIOS-owned, never written)."""
+
+    cpu: int
+    point: int
+    offset_mv: int
+    expect_ratio: int
+    oc_word: int
+    label: str = "Ring"
+
+    def describe(self) -> str:
+        return f"ring point {self.point} offset {self.offset_mv:+d} mV (expects ratio {self.expect_ratio})"
+
+
+@dataclass(frozen=True)
 class PlanStep:
     """One mailbox request of the plan. ``data`` is ``None`` only for a 0x15 write whose word (old|0x8) is not known yet."""
 
@@ -378,6 +408,8 @@ class ApplyPlan:
     effective_offset_floor_mv: int | None = None
     next_profile_text: str | None = None
     point_targets: tuple[PointTarget, ...] = ()  # T-025: the V/F point offsets of the profile (one per CPU and point)
+    ring_targets: tuple[RingTarget, ...] = ()  # G-154: the ring points of the profile
+    ring_refused: tuple[str, ...] = ()  # G-154 (D-045): why the ring unit alone is not written by this plan (ring_oc_differs, expect_ratio, a guard/policy refusal ...); the P/E steps stand
 
     @property
     def guard_operations(self) -> int:
@@ -416,7 +448,7 @@ class ApplyPlan:
         return tuple(
             PredictedRefusal(s.number, s.cpu, s.cmd, s.verdict.reason, s.verdict.detail)
             for s in self.steps
-            if not s.verdict.allowed
+            if not s.verdict.allowed and not s.kind.is_ring_read  # G-154: a ring read the policy refuses refuses the ring unit alone (``ring_refused``), never the plan
         )
 
     @property

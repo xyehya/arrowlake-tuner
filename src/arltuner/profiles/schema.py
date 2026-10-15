@@ -57,6 +57,18 @@ A complete profile carries both turbo tables or neither (``[turbo]`` absent = th
 writes only the words that differ from what the CPU holds (``controls.planner``). Whether every unit of the CPU is present is judged where the profile
 meets a topology (:meth:`Profile.check_complete`); the rest is checked here.
 
+The ring (G-154, D-045; optional): the cache ring (mailbox domain P1 = 2, package-level) is one more unit, in its own table::
+
+    [ring]
+    oc_word = 0x00000028   # the ring OC word as read (BIOS-owned: recorded and compared, NEVER written; a restore refuses the ring when the live word differs)
+
+    [[ring.point]]         # every ring point 1..n of a complete profile, the OC-created slot (P2 = 9, 40x) included: all are plain offset-only points
+    point = 8
+    offset_mv = -25        # whole mV, -1000..999
+    expect_ratio = 39      # required: the planner refuses the ring if the point's ratio field read differs
+
+A profile without a [ring] table never reads or writes the ring (every state saved before G-154). Planning a complete profile writes only the ring points that differ.
+
 E-cluster rule: the hardware regulator is per cluster of four E-cores (docs/knowledge/platform-arl-s.md section 2;
 whether a per-E-core write is cluster-wide is ``[UNVERIFIED]``), so two entries in the same cluster must carry
 identical ``ratio/oc_voltage_mv/offset_mv`` and ``Profile.expand`` reports every E entry as cluster-wide.
@@ -82,6 +94,8 @@ __all__ = [
     "PointCpuSetting",
     "PointSetting",
     "Profile",
+    "RingPoint",
+    "RingSetting",
     "ProfileError",
     "load_profile",
 ]
@@ -103,7 +117,9 @@ TURBO_BUCKETS = 8  # buckets of MSR 0x1AD / 0x650, bucket 0 (LSB) = one active c
 POINT_RANGE = (1, 15)
 EXPECT_RATIO_RANGE = RATIO_RANGE
 
-_TOP_KEYS = ("meta", "core", "point", "turbo")
+_TOP_KEYS = ("meta", "core", "point", "turbo", "ring")
+_RING_KEYS = ("oc_word", "point")
+_RING_POINT_KEYS = ("point", "offset_mv", "expect_ratio")
 _TURBO_KEYS = ("e", "p")
 _META_KEYS = ("name", "platform", "complete")
 _META_REQUIRED = ("name", "platform")
@@ -181,6 +197,44 @@ class TurboTables:
 
 
 @dataclass(frozen=True)
+class RingPoint:
+    """One ``[[ring.point]]``: the offset of one ring V/F point (``P2 = point`` of ``0x10`` / ``0x11`` with ``P1 = 2``). ``expect_ratio`` is required: the ring's points are told apart by
+    their ratio, and the planner refuses the write when the ratio field read differs."""
+
+    point: int
+    offset_mv: int
+    expect_ratio: int
+
+    def __post_init__(self) -> None:
+        where = "RingPoint"
+        _check_int(where, "point", self.point, *POINT_RANGE)
+        _check_int(where, "offset_mv", self.offset_mv, *OFFSET_MV_RANGE)
+        _check_int(where, "expect_ratio", self.expect_ratio, *EXPECT_RATIO_RANGE, f" ({RATIO_SOURCE})")
+
+
+@dataclass(frozen=True)
+class RingSetting:
+    """The ``[ring]`` table (G-154, D-045): the ring OC word as read (``oc_word``, compared with the live word, never written) and the ring points' offsets."""
+
+    oc_word: int
+    points: tuple[RingPoint, ...]
+
+    def __post_init__(self) -> None:
+        _check_int("RingSetting", "oc_word", self.oc_word, 0, 0xFFFFFFFF)
+        object.__setattr__(self, "points", tuple(self.points))
+        seen: set[int] = set()
+        for i, p in enumerate(self.points):
+            if not isinstance(p, RingPoint):
+                raise ProfileError(f"ring.point[{i}]: expected a RingPoint, got {type(p).__name__}")
+            if p.point in seen:
+                raise ProfileError(f"ring.point[{i}]: duplicate ring point {p.point}")
+            seen.add(p.point)
+        ordered = sorted(self.points, key=lambda p: p.point)
+        if any(b.expect_ratio <= a.expect_ratio for a, b in zip(ordered, ordered[1:])):
+            raise ProfileError(f"ring: point ratios {[p.expect_ratio for p in ordered]} do not rise")
+
+
+@dataclass(frozen=True)
 class CpuSetting:
     """One entry expanded against a topology.
 
@@ -226,6 +280,7 @@ class Profile:
     turbo: TurboTables | None = None
     points: tuple[PointSetting, ...] = ()
     complete: bool = False
+    ring: RingSetting | None = None  # G-154 (D-045): the ring unit; None = the ring is not part of this profile (never read for a write, never written)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -234,7 +289,9 @@ class Profile:
             raise ProfileError(f"meta.complete: expected true or false, got {self.complete!r}")
         object.__setattr__(self, "entries", tuple(self.entries))
         object.__setattr__(self, "points", tuple(self.points))
-        _check_entries(self.entries, "entries", self.points, turbo_only_ok=self.turbo is not None)
+        if self.ring is not None and not isinstance(self.ring, RingSetting):
+            raise ProfileError(f"ring: expected a RingSetting, got {type(self.ring).__name__}")
+        _check_entries(self.entries, "entries", self.points, turbo_only_ok=self.turbo is not None or self.ring is not None)
         _check_points(self.points, "points")
         if self.turbo is not None and not isinstance(self.turbo, TurboTables):
             raise ProfileError(f"turbo: expected a TurboTables, got {type(self.turbo).__name__}")
@@ -417,6 +474,10 @@ def _check_complete_shape(profile: Profile) -> None:
             raise ProfileError(f"{where}: the last point is at ratio {ratios[-1]}, not at the top fused ratio {e.fused_top_ratio} (a fused point is missing)")
     if profile.turbo is not None and (profile.turbo.e is None) != (profile.turbo.p is None):
         raise ProfileError("complete profile: [turbo] has one table; a complete profile carries both (e and p) or neither")
+    if profile.ring is not None:
+        numbers = sorted(p.point for p in profile.ring.points)
+        if not numbers or numbers != list(range(1, len(numbers) + 1)):
+            raise ProfileError(f"complete profile: ring points {numbers} are not 1..{len(numbers)} (a complete profile lists every ring point)")
 
 
 def _check_points(points: tuple[PointSetting, ...], label: str) -> None:
@@ -491,6 +552,36 @@ def _parse_point(i: int, table: object) -> PointSetting:
         raise ProfileError(str(exc).replace("PointSetting", where, 1)) from None
 
 
+def _parse_ring(table: object) -> RingSetting | None:
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise ProfileError(f"ring: expected a table, got {type(table).__name__}")
+    _reject_unknown("ring", table, _RING_KEYS)
+    if "oc_word" not in table:
+        raise ProfileError("ring: missing required key 'oc_word' (the ring OC word as read: compared, never written)")
+    raw = table.get("point", [])
+    if not isinstance(raw, list):
+        raise ProfileError("ring.point: expected an array of tables ([[ring.point]]), got a single table")
+    points: list[RingPoint] = []
+    for i, entry in enumerate(raw):
+        where = f"ring.point[{i}]"
+        if not isinstance(entry, dict):
+            raise ProfileError(f"{where}: expected a table, got {type(entry).__name__}")
+        _reject_unknown(where, entry, _RING_POINT_KEYS)
+        for key in _RING_POINT_KEYS:
+            if key not in entry:
+                raise ProfileError(f"{where}: missing required key {key!r}")
+        try:
+            points.append(RingPoint(entry["point"], entry["offset_mv"], entry["expect_ratio"]))
+        except ProfileError as exc:
+            raise ProfileError(str(exc).replace("RingPoint", where, 1)) from None
+    try:
+        return RingSetting(table["oc_word"], tuple(points))
+    except ProfileError as exc:
+        raise ProfileError(str(exc).replace("RingSetting", "ring", 1)) from None
+
+
 def _parse_turbo(table: object) -> TurboTables | None:
     if table is None:
         return None
@@ -528,7 +619,7 @@ def _parse(text: str, topology: Topology | None = None) -> Profile:
     raw_points = doc.get("point")
     if raw_points is not None and not isinstance(raw_points, list):
         raise ProfileError("point: expected an array of tables ([[point]]), got a single table")
-    if (cores is None or cores == []) and not raw_points and doc.get("turbo") is None:
+    if (cores is None or cores == []) and not raw_points and doc.get("turbo") is None and doc.get("ring") is None:
         raise ProfileError("profile is empty: at least one [[core]] or [[point]] entry is required")
     if cores is None:
         cores = []
@@ -537,12 +628,13 @@ def _parse(text: str, topology: Topology | None = None) -> Profile:
     entries = tuple(_parse_core(i, table) for i, table in enumerate(cores))
     points = tuple(_parse_point(i, table) for i, table in enumerate(raw_points or []))
     turbo = _parse_turbo(doc.get("turbo"))
+    ring = _parse_ring(doc.get("ring"))
     complete = meta.get("complete", False)
     if not isinstance(complete, bool):
         raise ProfileError(f"meta.complete: expected true or false, got {complete!r}")
-    _check_entries(entries, "core", points, turbo_only_ok=turbo is not None)
+    _check_entries(entries, "core", points, turbo_only_ok=turbo is not None or ring is not None)
     _check_points(points, "point")
-    profile = Profile(name=name, entries=entries, turbo=turbo, points=points, complete=complete)
+    profile = Profile(name=name, entries=entries, turbo=turbo, points=points, complete=complete, ring=ring)
     if topology is not None:
         profile.check_clusters(topology)
         profile.check_complete(topology)

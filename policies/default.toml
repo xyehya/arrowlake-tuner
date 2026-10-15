@@ -154,17 +154,17 @@ kind = "write"
 check = "vf_point_offset_bounded"
 
 [[allow]]
-name = "ring_point_read"   # ring (domain P1=2) V/F point words, read-only (ring has 8 fused + OC per SkatterBencher)
+name = "ring_point_read"   # ring (domain P1=2) V/F point words, read-only: 8 fused points + the 40x slot the BIOS ring OC ratio creates (P2 9); P2 10 answers rc 0x11 (the end of the table)
 cmd = 0x10
 p1 = [2]
 p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 kind = "read"
 
 [[allow]]
-name = "ring_point_write"   # T-028: ring (P1 2) V/F point offsets, operator-authorized runtime ring tuning (CLI point-offset only)
-cmd = 0x11
+name = "ring_point_write"   # T-028 / G-154 (D-045): ring (P1 2) V/F point offsets P2 1..9 (the 8 fused points + the OC-created 40x slot, operator yes 2026-10-15): the CLI point-offset, the accepted-state restore and tune.apply
+cmd = 0x11                  # (the ring OC word, P2 = 0, is BIOS-owned and has no write entry: it is read and compared, never written)
 p1 = [2]
-p2 = [1, 2, 3, 4, 5, 6, 7, 8]
+p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 kind = "write"
 check = "vf_point_offset_bounded"
 
