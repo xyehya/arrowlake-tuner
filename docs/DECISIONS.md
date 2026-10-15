@@ -214,3 +214,9 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   OK / EQUIVALENT / BAD compare). Saved profiles are the last read + the editor's edits. Older partial profiles stay usable as deltas ("partial
   (legacy)"); an older multi-line chain is migrated from its `EXPECTED-words.txt` (never from a read, which may hold neutralised residual OC words)
   with a backup. Task G-148.
+- **D-045 · 2026-10-15 · The ring (P1 = 2) is part of the accepted state.** Operator: "set the cache state also as accepted in the profile" and
+  "make sure the direct restore tuning script ... is also updated for the last state so a restore is always a command away". The ring is one
+  more unit (`ring`, CPU 0): every ring point 1..n is an offset-only point (the OC slot P2 = 9 included: an offset there moves 40x, an offset on
+  point 8 does not, MEASURED 2026-10-15); the ring OC word is BIOS-owned, recorded and compared, never written. A changed ring OC word refuses the
+  ring unit alone. `EXPECTED-words.txt` gets a `ring` line; older states without it stay valid. The operator policy allows ring writes P2 1..9
+  (operator yes 2026-10-15, backup `policy.toml.bak-2026-10-15`). Task G-154.

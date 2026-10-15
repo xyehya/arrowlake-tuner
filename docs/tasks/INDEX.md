@@ -56,5 +56,6 @@
 | G-151 | write order: raising writes before lowering ones (no ratio dips during apply/restore); restore of an accepted state with an OC point + its 7th point slot | lnx | T0 | **merged** 2026-10-14 | G-150 |
 | G-152 | Stress: E caps per whole cluster + kernel frequency map (E 46× = 4.7 GHz), exact "cap held" report | lnx | T0 | **merged** 2026-10-14 | — |
 | G-153 | plan preview lists the apply's real (G-151) write order; GUI reconnects to a restarted helper | lnx | T0 | **merged** 2026-10-14 (live: preview OC first; reconnect after helper restart) | G-151 |
+| G-154 | the ring (P1 = 2) in tune.read, the complete/accepted profile, EXPECTED-words, restore (helper, CLI, both scripts) | lnx | T0 | open | G-151, D-045 |
 
 Tiers: T0 = no hardware; T1 = privileged read-only on the real machine (orchestrator); T2/T3 = writes (human + orchestrator, SAFETY.md).

@@ -12,7 +12,7 @@ Tags: `[MEASURED host date]` = read on this machine; `[USER]` = reported by the 
 | CPU | Core Ultra 9 285K (Arrow Lake-S), 8P + 16E, no SMT, 24 threads, CPUID 0xC0662 | [MEASURED win 2026-09-30] |
 | Board / BIOS | ASRock Z890 Steel Legend WiFi, AMI BIOS 3.40 (2026-09-15) | same |
 | BIOS gates | Undervolt Protection OFF, OC Lock OFF (why runtime mailbox writes work); Secure Boot OFF | [USER 2026-09-30] |
-| BIOS OC (state the accepted tuning was validated on) | VccIA offset -100 mV, LLC Level 6, ring 40x with -16 mV on its 39x/40x points, DDR5-7200, NGU/D2D 32x, VccSA 1.185 V fixed, TVB voltage optimizations OFF, Intel default power profile | [USER] |
+| BIOS OC (state the accepted tuning was validated on) | VccIA offset -100 mV, LLC Level 6, ring 40x (its BIOS -16 mV on 39x/40x removed by the operator 2026-10-15; ring 39x/40x -25 mV at runtime instead, D-045), DDR5-7200, NGU/D2D 32x, VccSA 1.185 V fixed, TVB voltage optimizations OFF, Intel default power profile | [USER] |
 | BIOS P-core V/F offset | the per-core mode programs ONE list onto P-core 0 only; cores 1-7 stay stock; all-core scope had no effect. Cleared since 2026-10-02 | [MEASURED lnx 2026-10-02] |
 | E-cores in BIOS | no voltage / V/F options | [USER] |
 | Power limits | PL1 = PL2 = 250 W (D-024; `0x610` = `0x004287d000df87d0`: PL1 250 W, clamp, tau 56 s, PL2 250 W, lock 0) [MEASURED lnx 2026-10-08]. Earlier records said 295/295 W (`0x610` = `0x0042893800e38938` on 2026-09-29) | |
