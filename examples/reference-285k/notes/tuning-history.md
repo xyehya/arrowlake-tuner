@@ -101,6 +101,9 @@ Per-core view (stock 53x/55x VIDs from `platform.md` §6; headroom = 55x offset 
   stressapptest 45 s PASS.
   PL2 295 -> 275 W via powercap (`0x610` `0x428898002387d0`). All runtime only, outside the accepted profile (lost at reboot); MCE 0
   (`captures/lnx/ring-pl2-20261015.txt`).
+- Accepted 2026-10-15: `read-20261015-093649` (E split) then, after G-154, `read-20261015-103442` = P as before + E split + ring 39x/40x -25 mV (the
+  `ring` line of EXPECTED-words). Proof: ring P2 8/9 set back to 0 by hand, `restore_tuning.sh --orchestrated` wrote both back (steps 289-290), all 12 units
+  + ring OK, ring 40x 1.2162 -> 1.1912 V, MCE 0 (`captures/lnx/restore-20261015T133522-*`). PL2 275 W stays runtime only (not in the profile).
 - BIOS "TVB Voltage Optimizations" (2026-10-13, ASRock Z890, accepted tuning): no change in `0x18` (`0x1E`) or `0x24` (set 1: 70 C, -0 bin 1C /
   -1 bin 2-8C; set 2 all 0); requested VID identical within +-2 mV, stock and tuned, all units (curves `fikh`/`d53n`, `yfjh`/`q9x7`); with TVB disabled
   (bit 2) the 70 C down-bin is not applied (all-core 80 C: P0/P1 55x flat). siomon (`sio sensors --direct-io -f json`) used as a 1 Hz logger.

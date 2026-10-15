@@ -378,3 +378,11 @@ Transport: the protocol of Contract 8 is unchanged (JSON lines, 64 KiB cap, ids,
   uid per 10 s (with a count of the suppressed ones).
 - **GUI:** `arltuner.web.helperlink.connect_helper()` checks the node (socket, root-owned), connects, and uses `preflight` as the handshake; a framed refusal or EOF becomes a
   `HelperConnectError` whose text names the fix. After connecting it also checks, with `SO_PEERCRED` on its own end, that the listener is root (a look-alike gets no request) (EACCES on `connect` = the node's mode is wrong, reinstall; the allowlist answer is the helper's framed `ACCESS_DENIED`). `--helper CMD …` (simulator/dev) is unchanged. Preflight check `helper_service` replaces `pkexec`/`polkit`/`polkit_agent`.
+
+## Addendum G-154 (D-045, 2026-10-15) — the ring as one more unit
+- `controls/ring.py`: walker (`0x10 P1=2` P2 0..10 on CPU 0, ends at rc `0x11`), `UNIT = "ring"`. Profiles: `[ring] oc_word` + `[[ring.point]] point/offset_mv/expect_ratio`
+  (every point 1..n, the OC-created P2 = 9 included); `profiles/expected.py` parses the `ring <OC word> <points...>` line of `EXPECTED-words.txt`.
+- Planner: steps `READ_RING_OC` / `READ_RING_POINT` / `WRITE_RING_POINT` after the per-core words, ordered by `controls.order` on the ring's own curve; the ring OC word is
+  never written; a contradicted ring is refused as a unit (`ApplyPlan.ring_refused`, P/E steps stand).
+- Contract 9 additions: `tune.read` -> `ring {cpu, oc, points, end}` + `ops_ring`; `accepted_match` entry `cpu: "ring"`; `tune.plan` warning `RING_NOT_RESTORED`;
+  `tune.apply` -> `ring_refused` (list of reasons); `profiles.accept` -> `ring_points`. CLI `vf-dump` dumps the ring unless `--cpus` / `--no-ring`; `compare-accepted` judges it.

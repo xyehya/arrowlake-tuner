@@ -1,6 +1,6 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-14 · lnx · G-150..G-153 merged + installed; E 46x/48x split applied live and screened (not accepted yet). Suite **2941 tests OK**
+_Updated: 2026-10-15 · lnx · G-154 merged + installed (ring in the accepted state, D-045); accepted = P + E split + ring. Suite **3017 tests OK**
 (`ARLTUNER_BROWSER_TESTS=1 python3 tools/run_tests.py`)._
 
 ## Where we are
@@ -19,14 +19,13 @@ G-141 review fixes · G-142 security (D-042) · polish.
 ## Machine state (reference 285K)
 - Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV; ring writes P2 1..9
   (operator yes 2026-10-15, backup `policy.toml.bak-2026-10-15`).
-- Boot 2026-10-15 12:00 (cold, kernel 7.2.10). Accepted = `read-20261013-145635`. Restore accepted in one shot: 36 writes, 36/36 read back, MCE 0;
-  then the E split as ONE plan (G-151 order live: each cluster's OC triples before its point 6): 64 writes, words = 2026-10-14 split, MCE 0.
-  Runtime only (not in any profile, lost at reboot): **PL2 275 W** (powercap; was 295), **ring 39x/40x -25 mV** (P2 8/9 via CLI point-offset;
-  ring VID 1.2162 -> 1.1912 V; the ring OC point does not follow point 8). `captures/lnx/ring-pl2-20261015.txt`.
-- **Live now differs from accepted on the E-clusters (2026-10-14, operator's test):** OC point 48x (EC0 1.1230 V, EC1-3 1.1123 V = the old 48x
-  voltage) + point 6 EC0 -49.8 / EC1-3 -40.0 mV (was -35.2 / -25.4). P-cores = accepted. The OC points stay until a cold boot; Restore accepted
-  would put point 6 back and report E as EQUIVALENT.
-- Headless GUI restarted 2026-10-14 (serves G-150); port in `~/.local/share/arltuner-dev/port` (assets are loaded at server start: restart after web/ merges).
+- Boot 2026-10-15 12:00 (cold, kernel 7.2.10). Old accepted restored in one shot (36 writes OK), then the E split as ONE plan (G-151 order live).
+- **Accepted = `read-20261015-103442`** (operator 2026-10-15): P as before + **E split** (OC 48x EC0 1.1230 / EC1-3 1.1123 V; point 6 EC0 -49.8,
+  EC1-3 -40.0 mV) + **ring 39x/40x -25 mV** (P2 8/9 `0xFCC00027`/`0xFCC00028`, ring VID 1.2162 -> 1.1912 V; BIOS ring offset removed by the operator).
+  `restore_tuning.sh` proven live for the ring (P2 8/9 reset by hand -> rewritten, all OK, MCE 0). Live = accepted.
+  The first real cold-boot restore of this state (OC words + ring in one run) is still the hardware check for G-151/G-154.
+- Runtime only (not in the profile, BIOS restores 295 W at boot): **PL2 275 W** (powercap). `captures/lnx/ring-pl2-20261015.txt`.
+- Headless GUI restarted 2026-10-15 (serves G-154); port in `~/.local/share/arltuner-dev/port` (assets are loaded at server start: restart after web/ merges).
 - **No polkit (G-144, D-043), live-verified 2026-10-12:** `arltuner-helper.socket` (systemd, `/run/arltuner/helper.sock` 0666) starts the root
   helper on connect; SO_PEERCRED allowlist `[access] users = ["yk"]` in `/etc/arltuner/helper.toml`; second client and root refused; stress child runs
   as `yk`; audit operator `gui:uid1000`. The temporary polkit rule was removed (nothing uses polkit any more).
@@ -59,7 +58,7 @@ G-141 review fixes · G-142 security (D-042) · polish.
   (E 46x = 4.7 GHz), "cap held at Nx" / "ran Mx (cap Nx)". Gate 2933 OK. `install.sh` 21/21 self-checks.
 - **G-153** merged + installed: the Review list shows the apply's real order (live: EC1 OC triple before point 6); the GUI reconnects to a
   restarted helper (live: `systemctl restart arltuner-helper` -> next call OK). Guide updated for G-150..G-152. Gate 2941 OK.
-- **Next (split re-applied 2026-10-15 for the operator's OCCT run):** operator's own longer E test at 46x (caps on all 16 E-cores, 4.7 GHz); then Tune -> Read -> "Set the current state as accepted".
+- **G-154** merged + installed 2026-10-15: ring (P1 = 2) in read / profile / EXPECTED-words / every restore path (D-045). Guide not yet updated for it.
 
 ## Operator to-do
 1. The pre-D-041 dev audit log (old directory name) is no longer read; Windows: re-carve the driver (`ts_driver.py init-dir`, `carve`).

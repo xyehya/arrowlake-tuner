@@ -1,6 +1,6 @@
 # G-154 — The ring (cache, P1 = 2) is part of the read, the accepted state and the restore
 
-- **Status:** open
+- **Status:** done (merged 2026-10-15)
 - **Host:** lnx
 - **Safety tier:** T0 (worker: simulator + fake sysfs only)
 - **Branch/worktree:** `task/G-154-ring-accepted`
