@@ -4,7 +4,9 @@ Layout (the same the restore scripts and the helper's ``accepted_match`` / ``_ac
 
     accepted/CURRENT                  ``profile = profiles/<name>.toml``  (G-148, D-044: exactly one line -- the accepted state is one complete profile; an older
                                       chain of several lines is refused by the restore until ``arltuner accepted-migrate`` turns it into one)
-    accepted/EXPECTED-words.txt       ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x), one line per core / E-cluster
+    accepted/EXPECTED-words.txt       ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x), one line per core / E-cluster, and (G-154, D-045) at most one
+                                      ``ring  <OC word> <point 1> ... <point n>`` line for the ring (cache, P1 = 2); no ring line = no ring in the accepted state
+                                      (every reader: :mod:`arltuner.profiles.expected`)
     accepted/fingerprint.json         G-138: per Linux CPU its kind / cluster / fused 0x09 word + the CPU's family / model / brand, for the Windows restore
                                       (:mod:`arltuner.profiles.fingerprint`); absent in a state accepted before G-138
     accepted/profiles/<name>.toml     the profile (complete, ``[meta] complete = true``: derived from the same words as EXPECTED-words.txt)

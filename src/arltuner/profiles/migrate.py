@@ -28,11 +28,12 @@ from arltuner.topology import Topology
 
 from .accepted import AcceptedError, AcceptedStore
 from .complete import BuildError, complete_from_words
+from .expected import parse_expected as _parse_expected_with_ring
 from .fingerprint import FINGERPRINT_FILE, FingerprintError, parse_fingerprint
 from .schema import CoreSetting, PointSetting, Profile, ProfileError, TurboTables, load_profile
 from .serialize import dump_profile
 
-__all__ = ["MigrateError", "Migration", "apply_migration", "current_profile_lines", "parse_expected", "plan_migration", "summary_lines"]
+__all__ = ["MigrateError", "Migration", "apply_migration", "current_profile_lines", "parse_expected", "parse_expected_with_ring", "plan_migration", "summary_lines"]
 
 _PROFILE_LINE = re.compile(r"\s*profile\s*=\s*\"?([^\"#\s]+)\"?\s*(#.*)?")
 _PATH_RE = re.compile(r"profiles/[A-Za-z0-9._-]{1,80}\.toml\Z")
@@ -53,24 +54,17 @@ def current_profile_lines(text: str) -> list[str]:
     return out
 
 
+def parse_expected_with_ring(text: str) -> tuple[dict[int, list[int]], list[int] | None]:
+    """``EXPECTED-words.txt``: ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x) per line, plus (G-154) the optional ``ring`` line; ``#`` lines and blanks ignored."""
+    try:
+        return _parse_expected_with_ring(text)
+    except ValueError as exc:
+        raise MigrateError(f"EXPECTED-words.txt {exc}") from None
+
+
 def parse_expected(text: str) -> dict[int, list[int]]:
-    """``EXPECTED-words.txt``: ``<cpu> <OC word> <point 1> ... <point n>`` (hex, no 0x) per line; ``#`` lines and blanks ignored."""
-    table: dict[int, list[int]] = {}
-    for number, line in enumerate(text.splitlines(), 1):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        try:
-            cpu, words = int(parts[0]), [int(w, 16) for w in parts[1:]]
-        except ValueError:
-            raise MigrateError(f"EXPECTED-words.txt line {number}: not '<cpu> <hex words>'") from None
-        if len(words) < 2 or cpu in table:
-            raise MigrateError(f"EXPECTED-words.txt line {number}: needs a cpu, the OC word and at least one point, once per cpu")
-        table[cpu] = words
-    if not table:
-        raise MigrateError("EXPECTED-words.txt holds no words")
-    return table
+    """The core lines of ``EXPECTED-words.txt`` (a ``ring`` line, G-154, is accepted and left out; see :func:`parse_expected_with_ring`)."""
+    return parse_expected_with_ring(text)[0]
 
 
 def _merge_profiles(name: str, chain: Sequence[Profile]) -> Profile:
@@ -162,7 +156,7 @@ def plan_migration(directory: Path | str, topology: Topology, stamp: str) -> Mig
         except ProfileError as exc:
             raise MigrateError(f"{rel} is not a valid profile: {exc}") from None
     expected_text = _read(directory / "EXPECTED-words.txt")
-    expected = parse_expected(expected_text)
+    expected, expected_ring = parse_expected_with_ring(expected_text)
     notes: list[str] = []
     fingerprint_text: str | None = None
     tops: dict[int, int | None] = {}
@@ -199,7 +193,7 @@ def plan_migration(directory: Path | str, topology: Topology, stamp: str) -> Mig
         f"(never from a read). Old directory: accepted.bak-{stamp}. Replace it with Profiles > Set as accepted, never by hand."
     )
     try:
-        profile = complete_from_words(topology, name, expected, tops, tables)
+        profile = complete_from_words(topology, name, expected, tops, tables, expected_ring)
     except BuildError as exc:
         raise MigrateError(f"EXPECTED-words.txt does not describe a complete state of this CPU: {exc.message}") from None
     except ProfileError as exc:

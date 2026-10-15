@@ -13,6 +13,12 @@ G-148 (D-044): profiles are complete and independent. ``profiles.save`` stores t
 the accepted state is exactly one profile (``accepted/CURRENT`` has one ``profile =`` line; an older chain is refused with a pointer to ``accepted-migrate``);
 Restore accepted, and the apply of any complete profile, writes only the words that differ from what the CPU holds, keeps the G-147 residual rule, and
 splits a change larger than the policy's step limits into guarded rounds within the one apply (``controls.executor``), judged before the first write.
+
+G-154 (D-045): the ring (cache, mailbox domain P1 = 2) is one more unit, ``ring``. ``tune.read`` reads it (``ring_words``: its OC word and points, one guarded read per word, in
+its own session of at most ``RING_WALK_CAP + 1`` operations) and returns ``ring: {cpu, oc, points, end}`` in the shape of a ``cpus[]`` entry; ``helper.last_ring`` keeps
+``[OC word, point 1, ...]`` beside ``helper.last_words`` and the last-read record stores it as ``ring_words``. ``accepted_match`` gets a ``ring`` entry when the accepted state has a
+``ring`` line; ``profiles.save`` / ``profiles.accept`` record it; a plan of a profile with a ``[ring]`` reads and writes the ring points that differ and refuses the ring unit alone,
+with the reason, when the live ring OC word is not the profile's (it is BIOS-owned and never written).
 """
 from __future__ import annotations
 
@@ -58,6 +64,7 @@ from arltuner.controls import (
     ramp_rounds,
     resolve_point_targets,
     resolve_targets,
+    resolve_ring_targets,
     CoreReadings,
 )
 from arltuner.guard import (
@@ -78,6 +85,7 @@ from arltuner.guard import (
 )
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
+from arltuner.controls import ring as ringmod
 from arltuner.controls.planner import POINT_CAVEAT, build_plan, _same_state, _goal_word, current_word, kept_word, oc_cap_reads_of
 from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
 from arltuner.mailbox import Cmd, VfWord, rc_name
@@ -86,6 +94,7 @@ from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
 from arltuner.profiles import BuildError, CoreSetting, PointSetting, Profile, ProfileError, TurboTables, complete_from_words, load_profile, overlay
 from arltuner.profiles.contents import intent_contents, profile_contents, summarize
+from arltuner.profiles.expected import parse_expected
 from arltuner.profiles.migrate import current_profile_lines
 from arltuner.profiles.serialize import dump_profile
 from arltuner.profiles.lastread import LastReadError, LastReadStore
@@ -103,7 +112,7 @@ from .ops import (
     _trust,
     _trust_refusal,
     NO_ACCEPTED_NOTE,
-    accepted_match,
+    accepted_match as _core_accepted_match,
     helper_topology,
     op_vf_dump,
     sim_clocks,
@@ -166,6 +175,9 @@ def unit_of_cpu(topology: Topology, cpu: int) -> str:
 
 def _kind_of(unit: str) -> str:
     return "P" if unit.startswith("P") else "E"
+
+
+_RING_STEP_KINDS = (StepKind.READ_RING_OC, StepKind.READ_RING_POINT, StepKind.WRITE_RING_POINT)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -260,6 +272,56 @@ def _last_words(helper: Helper) -> dict[int, list[int]] | None:
 
 def _set_last_words(helper: Helper, words: Mapping[int, Sequence[int]]) -> None:
     helper.last_words = {int(cpu): [int(w) for w in ws] for cpu, ws in words.items()}  # a new dict each time: readers never see a half-built one
+
+
+def _last_ring(helper: Helper) -> list[int] | None:
+    """G-154: ``[OC word, point 1, ...]`` of the ring as this boot's last read (and the verified read-backs of the applies since) found it, or ``None`` (not read)."""
+    if not getattr(helper, "_last_restored", False):
+        _restore_last(helper)
+    words = getattr(helper, "last_ring", None)
+    return list(words) if isinstance(words, list) and len(words) >= 2 else None
+
+
+def _set_last_ring(helper: Helper, words: Sequence[int] | None) -> None:
+    helper.last_ring = None if not words else [int(w) for w in words]  # type: ignore[attr-defined]
+
+
+def _ring_word_map(ring: Sequence[int] | None) -> dict[int, int] | None:
+    """The ring channel of the planner: ``{0: OC word, k: point k}``; ``None`` without a read."""
+    return None if not ring else {n: int(w) for n, w in enumerate(ring)}
+
+
+def _accepted_ring(helper: Helper) -> list[int] | None:
+    """The ``ring`` line of the accepted ``EXPECTED-words.txt`` (G-154), or ``None`` when the accepted state has none (or cannot be read: the compare then has its own note)."""
+    try:
+        return parse_expected(_read_accepted_text(helper, "EXPECTED-words.txt"))[1]
+    except (OpError, ValueError):
+        return None
+
+
+def _hexw(word: int | None) -> str | None:
+    return None if word is None else f"{word:#010x}"
+
+
+def accepted_match(
+    helper: Helper, document: dict[str, Any], fused: Mapping[int, int] | None = None
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """``helper.ops.accepted_match`` plus (G-154) the ring: when the accepted state has a ``ring`` line, one more entry ``{cpu: "ring", unit: "ring", match, diffs}`` compares the
+    ring of ``document["ring"]`` (a ``tune.read`` result; a ``vf.dump`` has none, so the ring then differs as "not read") word for word -- the OC word as point 0 -- with no
+    equivalence rules: a ring that differs is a difference. An accepted state without a ``ring`` line gets no entry (nothing about the ring is compared)."""
+    matched, note = _core_accepted_match(helper, document, fused)
+    if matched is None:
+        return matched, note
+    want = _accepted_ring(helper)
+    if want is None:
+        return matched, note
+    got = ringmod.from_json(document.get("ring"))
+    diffs = [
+        {"point": n, "expected": _hexw(want[n] if n < len(want) else None), "actual": _hexw(got[n] if got is not None and n < len(got) else None)}
+        for n in range(max(len(want), len(got or [])))
+        if (want[n] if n < len(want) else None) != (got[n] if got is not None and n < len(got) else None)
+    ]
+    return [*matched, {"cpu": ringmod.UNIT, "unit": ringmod.UNIT, "match": not diffs, "diffs": diffs}], note
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -760,6 +822,42 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
     return out
 
 
+def _read_ring(helper: Helper, ctx: OpContext, policy: Policy, topology: Topology) -> tuple[dict[str, Any] | None, str | None, int]:
+    """G-154 (D-045): the ring unit of ``tune.read``, in ITS OWN guarded session of at most ``RING_WALK_CAP + 1`` mailbox reads (``cmd 0x10 P1=2``, ``P2 = 0`` then the points until the first
+    rc ``0x11``; one at a time, paced like the other reads). ``(ring document, note, operations executed)``: a ring the policy cannot read, a refusal or a stop leaves ``None`` and a note --
+    the cores' read stands. A cancel raises ``CANCELLED``. The ring is package-level: it is read through the first CPU."""
+    cap = ringmod.walk_cap(policy)
+    if cap is None:
+        return None, "ring not read: the policy has no read entry for cmd 0x10 P1=2 (the ring is left out; the cores' read stands)", 0
+    cpu = ringmod.ring_cpu(topology)
+    needed = ringmod.requests_worst(cap)
+    ops = 0
+    try:
+        with _guarded_session(helper, ctx, policy, needed, "the ring read") as session:
+            pacer = vfdump.Pacer(policy.min_dwell_s, session.clock, session.sleep)
+            if not helper.cfg.simulator:
+                pacer.mark()  # the reads that just ended were mailbox traffic too; the simulator's session already waited the dwell out (virtual clock)
+
+            def execute(req: Any) -> Any:
+                if ctx.cancel.is_set():
+                    raise KeyboardInterrupt  # ringmod.walk turns it into a Stop; the cancel is raised below
+                return session.guard.execute(req, session.confirm)
+
+            curve, stop = ringmod.walk(cpu, execute, pacer, lambda exc: _refused_text(exc), cap)
+            ops = session.guard.operations
+    except OpError as exc:
+        if exc.code == CANCELLED:
+            raise
+        return None, f"ring not read: {exc.message}", ops
+    if ctx.cancel.is_set():
+        raise OpError(CANCELLED, "tune.read was cancelled between transactions")
+    if stop is not None:
+        return None, f"ring not read: {stop.text}", ops
+    if curve.oc is None:
+        return None, "ring not read: the OC word was not read", ops
+    return ringmod.to_json(curve), None, ops
+
+
 def _refused_text(exc: GuardRefused, no_entry: str = "the policy has no allow entry for it") -> str:
     """What a guard refusal of a ``tune.read`` extra says, by its reason (G-141): only ``NOT_ALLOWLISTED`` is "no allow entry"; a ``DWELL``, a ``CHECK_FAILED`` ... says itself."""
     head = f"the guard refused ({exc.reason.value})"
@@ -835,6 +933,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result = dict(doc)
     result["units"] = [dict(u) for u in doc.get("units", [])]
     st = _state(helper)
+    policy: Policy | None = None
     try:
         policy = _load_policy(helper)
         extras = _read_extras(helper, ctx, policy, topology)
@@ -843,6 +942,17 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
             raise
         extras = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "ops": 0, "notes": {k: f"{_LABEL[k]} not read: {exc.message}" for k in _LABEL}}
     notes = extras["notes"]
+    partial = args.get("cpus") is not None  # a read of some CPUs only is not a read of the tuning state: it leaves the ring (and its kept words) alone
+    if partial:
+        ring_doc, ring_note, ring_ops = None, "ring not read: this read named CPUs", 0
+    elif policy is not None:  # G-154: the ring, in its own session after the cores' extras
+        ring_doc, ring_note, ring_ops = _read_ring(helper, ctx, policy, topology)
+    else:
+        ring_doc, ring_note, ring_ops = None, "ring not read: the policy could not be loaded", 0
+    if ring_note:
+        notes["ring"] = ring_note
+    if not partial:
+        _set_last_ring(helper, ringmod.from_json(ring_doc))
     tables = extras["tables"]
     note = notes.get("turbo")
     with st.lock:
@@ -855,6 +965,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if fused_words:
         helper.fused_words = fused_words
     result["tune"] = _decode_document(result, topology, helper.fused_words)
+    result["ring"] = ring_doc  # G-154: {unit, cpu, oc, points, end} in the shape of a cpus[] entry; None = not read (see extras_notes.ring); before the compare, which judges it
     matched, accepted_note = accepted_match(helper, result, helper.fused_words)  # redone with the fused words just read (the dump's own compare ran before them)
     result["accepted_match"], result["accepted_note"] = matched, accepted_note
     result["tables"] = None if tables is None else {k: list(v) for k, v in tables.items()}
@@ -865,8 +976,8 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result["hw_limits"] = hw_limits  # G-137 (D-039): {P|E: {ratio_max_oc, v_target_max_mv, offset_mv: [-1000, 999]}}, the CPU's own limits; None = not read
     result["extras_notes"] = notes
     # G-141: ops_done = every mailbox operation of this read (the page shows "N mailbox operations used"): the vf.dump words plus the guarded extras (0x09 / 0x1C / 0x01 / 0x28).
-    result["ops_words"], result["ops_extras"] = int(doc.get("ops_done", 0)), int(extras.get("ops", 0))
-    result["ops_done"] = result["ops_words"] + result["ops_extras"]
+    result["ops_words"], result["ops_extras"], result["ops_ring"] = int(doc.get("ops_done", 0)), int(extras.get("ops", 0)), int(ring_ops)
+    result["ops_done"] = result["ops_words"] + result["ops_extras"] + result["ops_ring"]
     cross = _favored_crosscheck(topology, turbo)
     if cross:
         result["problems"] = [*result.get("problems", []), cross]
@@ -918,6 +1029,9 @@ def _save_last_read(helper: Helper, result: dict[str, Any], topology: Topology) 
             "version": 1, "boot_id": boot, "at": helper.cfg.wall_clock(), "applied_at": None,
             "words": {str(cpu): [f"{w:#010x}" for w in ws] for cpu, ws in words.items()}, "result": result,
         }
+        ring_words = ringmod.from_json(result.get("ring"))
+        if ring_words:
+            record["ring_words"] = [f"{w:#010x}" for w in ring_words]  # G-154: authoritative like "words"; an apply updates it
         st = _state(helper)
         with st.lock:
             favored = dict(st.favored_words or {})
@@ -1000,6 +1114,13 @@ def _restore_last_locked(helper: Helper) -> None:
             if st.audit_mark is None and isinstance(mark, int) and not isinstance(mark, bool) and mark >= 0:
                 st.audit_mark = mark
         _set_last_words(helper, words)
+        stored = record.get("ring_words")  # G-154
+        try:
+            ring_words = [int(w, 16) for w in stored] if isinstance(stored, list) and stored else ringmod.from_json(result.get("ring"))
+        except (TypeError, ValueError):
+            ring_words = None
+        if getattr(helper, "last_ring", None) is None:
+            _set_last_ring(helper, ring_words)
     except Exception as exc:  # noqa: BLE001 - a bad stored record must never break a tune op
         _log(helper, f"last-read not restored: {type(exc).__name__}: {exc}")
 
@@ -1014,6 +1135,9 @@ def _persist_applied_words(helper: Helper) -> None:
         for cpu in list(record["words"]):
             if int(cpu) in last:
                 record["words"][cpu] = [f"{w:#010x}" for w in last[int(cpu)]]
+        ring = _last_ring(helper)
+        if ring:  # G-154
+            record["ring_words"] = [f"{w:#010x}" for w in ring]
         st = _state(helper)
         with st.lock:
             tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
@@ -1055,6 +1179,13 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                         p.update(_word_json(ws[p["point"]]))
         result["differences"] = []
         result["differences_stale"] = True
+        stored = record.get("ring_words")  # G-154: the ring follows the verified read-backs too
+        if isinstance(result.get("ring"), dict) and isinstance(stored, list) and stored:
+            try:
+                ring_words = [int(w, 16) for w in stored]
+                result["ring"] = {**result["ring"], "oc": ringmod.word_json(ring_words[0]), "points": [{"point": n, **ringmod.word_json(w)} for n, w in enumerate(ring_words[1:], start=1)]}
+            except (TypeError, ValueError):
+                pass
     matched, note = accepted_match(helper, result, helper.fused_words)  # G-129: always redone (a file read, no hardware): the accepted state can change after the read (profiles.accept)
     result["accepted_match"], result["accepted_note"] = matched, note
     result["tune"] = _decode_document(result, topology, helper.fused_words)
@@ -1523,6 +1654,8 @@ def _profile_resolved(helper: Helper, profile: Profile, topology: Topology, warn
         u = unit_of_cpu(topology, p.cpu)
         if u not in units:
             units.append(u)
+    if resolve_ring_targets(profile, topology):  # G-154
+        units.append(ringmod.UNIT)
     if _last_words(helper) is None:
         warnings.append("no tune.read this boot: 'before' is unknown; the apply re-reads every word and the points' expect_ratio guards the writes")
     return Resolved(profile, {}, warnings, units)
@@ -1591,9 +1724,11 @@ def _before_after(
     last: Mapping[int, Sequence[int]] | None,
     fused: Mapping[int, int] | None = None,
     turbo: Mapping[str, Any] | None = None,
+    last_ring: Sequence[int] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """``{unit: {point: {ratio, offset_mv, v_target_v}}}`` for the words the plan writes; point ``"0"`` is the OC word. ``before`` is ``null`` for a
-    word that was not read; a field that reads 0 (unset) is ``null``."""
+    word that was not read; a field that reads 0 (unset) is ``null``. G-154: the ring points of the profile are the unit ``"ring"`` (its OC word is compared, never written: no
+    entry for point ``"0"``), ``last_ring`` = ``[OC word, point 1, ...]`` of the last read."""
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
 
@@ -1632,6 +1767,12 @@ def _before_after(
         goal = (cur or VfWord(setting.expect_ratio or 0, 0, False, 0)).with_(offset_raw=VfWord.mv_to_offset_raw(setting.offset_mv))
         before.setdefault(unit, {})[str(setting.point)] = None if cur is None else show(cur)
         after.setdefault(unit, {})[str(setting.point)] = show(goal)
+    if profile.ring is not None:
+        for rp in profile.ring.points:
+            cur = VfWord.from_u32(last_ring[rp.point]) if last_ring and len(last_ring) > rp.point else None
+            goal = (cur or VfWord(rp.expect_ratio, 0, False, 0)).with_(offset_raw=VfWord.mv_to_offset_raw(rp.offset_mv))
+            before.setdefault(ringmod.UNIT, {})[str(rp.point)] = None if cur is None else show(cur)
+            after.setdefault(ringmod.UNIT, {})[str(rp.point)] = show(goal)
     return before, after
 
 
@@ -1892,9 +2033,13 @@ def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[Curv
     }
 
 
-def _last_baseline(helper: Helper, profile: Profile, topology: Topology) -> tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None:
+_Known = tuple[dict[int, CoreReadings], dict[tuple[int, int], int], "dict[int, int] | None"]
+
+
+def _last_baseline(helper: Helper, profile: Profile, topology: Topology) -> _Known | None:
     """G-148: the planner's inputs as this boot's last read gives them (an E cluster read on one CPU stands for all four; ``0x26`` / ``0x28`` are not kept: 0 / unknown),
-    for the round estimate and the preview of a complete profile. ``None`` without a read."""
+    for the round estimate and the preview of a complete profile. ``None`` without a read. G-154: the third item is the ring channel (``{0: OC word, k: point k}``, ``None`` when
+    the ring was not read)."""
     last = _last_words(helper)
     if not last:
         return None
@@ -1917,7 +2062,7 @@ def _last_baseline(helper: Helper, profile: Profile, topology: Topology) -> tupl
         baseline[cpu] = CoreReadings(vf=VfWord.from_u32(words[0]), favored=favored.get(cpu, favored.get(ref_cpu, 0)), fused=fused_word, granular=0, vmax=None)
         for n, w in enumerate(words[1:], start=1):
             point_words[(cpu, n)] = w
-    return baseline, point_words
+    return baseline, point_words, _ring_word_map(_last_ring(helper))
 
 
 def _rounds_from_last(helper: Helper, profile: Profile, topology: Topology, policy: Policy) -> tuple[int, str | None]:
@@ -1925,26 +2070,27 @@ def _rounds_from_last(helper: Helper, profile: Profile, topology: Topology, poli
     known = _last_baseline(helper, profile, topology)
     if known is None:
         return 1, None
-    return ramp_rounds(profile, topology, known[0], known[1], policy, only_changed=profile.complete)
+    return ramp_rounds(profile, topology, known[0], known[1], policy, only_changed=profile.complete, ring_words=known[2])
 
 
 _ORDER_NOTE = "the apply orders the writes so that no ratio's voltage dips (G-151); the order is decided from its own reads"
 
 
 def _apply_order(
-    profile: Profile, topology: Topology, policy: Policy, known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None
-) -> dict[tuple[str, int, int], int] | None:
+    profile: Profile, topology: Topology, policy: Policy, known: _Known | None
+) -> tuple[dict[tuple[str, int, int], int] | None, tuple[str, ...]]:
     """G-153: the place of every point / per-core write in the order the apply will send them, from the planner itself (``build_plan`` on the last read's words, so
     ``reorder_writes`` is the one ordering rule) -- ``{(kind, cpu, point): place}``; ``None`` without a read that covers every unit (the static order stays). A unit the order model
     refuses (``write_order``) raises the apply's own refusal. The turbo tables are left out (their MSR words are not in the last read; they are listed last)."""
     if known is None:
-        return None
+        return None, ()
     try:
         plan = build_plan(
-            dataclasses.replace(profile, turbo=None), topology, known[0], per_core_enabled=None, policy=policy, point_words=known[1], only_changed=profile.complete
+            dataclasses.replace(profile, turbo=None), topology, known[0], per_core_enabled=None, policy=policy, point_words=known[1], only_changed=profile.complete,
+            ring_words=known[2],
         )
     except (PlanError, ProfileError, ValueError):  # a word the last read does not hold: the apply decides from its own reads
-        return None
+        return None, ()
     refused = tuple(r for r in plan.refusals if r.reason == "CHECK_FAILED" and r.detail.startswith("write_order"))
     if refused:
         raise _preflight_error(PlanRefused(refused, plan))
@@ -1952,14 +2098,15 @@ def _apply_order(
     for st in plan.steps:
         if st.kind.is_write and st.msr is None and st.kind is not StepKind.WRITE_PERCORE_ENABLE:
             place.setdefault((st.kind.value, st.cpu, st.p2), len(place))
-    return place
+    return place, (plan.ring_refused if known[2] is not None else ())
 
 
 def _predicted_steps(
     profile: Profile,
     topology: Topology,
-    known: tuple[dict[int, CoreReadings], dict[tuple[int, int], int]] | None = None,
+    known: _Known | None = None,
     order: Mapping[tuple[str, int, int], int] | None = None,
+    ring_refused: bool = False,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
     words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``. G-148: for a complete
@@ -1967,9 +2114,10 @@ def _predicted_steps(
     (``_apply_order``) puts the point and per-core steps in the apply's own order."""
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
-    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts)  # every word is read, also the unchanged ones
+    rings = resolve_ring_targets(profile, topology)
+    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts) + (len(rings) + 1 if rings else 0)  # every word is read, also the unchanged ones
     if profile.complete and known is not None:
-        baseline, words = known
+        baseline, words, ring_known = known
 
         def unchanged_point(p: Any) -> bool:
             w = words.get((p.cpu, p.point))
@@ -1988,6 +2136,15 @@ def _predicted_steps(
 
         pts = tuple(p for p in pts if not unchanged_point(p))
         targets = tuple(t for t in targets if not unchanged_core(t))
+        if ring_known is not None:  # G-154: a ring point the CPU already holds is not listed
+
+            def unchanged_ring(r: Any) -> bool:
+                w = ring_known.get(r.point)
+                return w is not None and VfWord.from_u32(w).offset_raw == VfWord.mv_to_offset_raw(r.offset_mv) and VfWord.from_u32(w).ratio == r.expect_ratio
+
+            rings = tuple(r for r in rings if not unchanged_ring(r))
+    if ring_refused:  # G-154: the plan refuses the ring unit alone: no ring step is listed (the reason is a plan warning)
+        rings = ()
     steps: list[dict[str, Any]] = [{"kind": StepKind.WRITE_PERCORE_ENABLE.value, "conditional": True}] if (targets or pts) else []  # G-117 / G-148: none without a mailbox write
     for p in pts:
         steps.append({"kind": StepKind.WRITE_VF_POINT.value, "unit": unit_of_cpu(topology, p.cpu), "cpu": p.cpu, "point": p.point, "offset_mv": p.offset_mv})
@@ -1997,6 +2154,8 @@ def _predicted_steps(
         kinds = (StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) if t.ratio is not None else (StepKind.WRITE_VF,)
         for kind in kinds:
             steps.append({"kind": kind.value, "unit": u, "cpu": t.cpu, "point": 0})
+    for r in rings:  # G-154: one ring-point write each (the ring OC word is never written)
+        steps.append({"kind": StepKind.WRITE_RING_POINT.value, "unit": ringmod.UNIT, "cpu": r.cpu, "point": r.point, "offset_mv": r.offset_mv})
     if order is not None:  # the 0x15 (first) and the tables (last) keep their places; the writes between them follow the apply
         first = 1 if steps and steps[0]["kind"] == StepKind.WRITE_PERCORE_ENABLE.value else 0
         steps[first:] = sorted(steps[first:], key=lambda s: order.get((s["kind"], s["cpu"], s.get("point", 0)), len(order)))
@@ -2119,8 +2278,9 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except (PlanError, ProfileError) as exc:
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
+    rings = resolve_ring_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    ops_needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile)) if (targets or points or tables) else 0  # G-117: a table-only plan is plain-MSR writes only
+    ops_needed = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile), ring_points=len(rings)) if (targets or points or tables or rings) else 0  # G-117: a table-only plan is plain-MSR writes only
     found_residual = _residual_found(helper, profile, topology, policy) if restore else None
     rounds, worst = _rounds_from_last(helper, profile, topology, policy) if restore else (1, None)
     try:  # G-148 (decision 5): the rounds the step limits need, reserved up front; refused here (STEP_LIMIT) when they do not fit, never half-way
@@ -2128,13 +2288,14 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except PreflightError as exc:
         raise _preflight_error(exc) from None
     last = _last_words(helper)
-    before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo)
+    before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo, _last_ring(helper))
     known = _last_baseline(helper, profile, topology)
-    order = _apply_order(profile, topology, policy, known)  # G-153: the Review dialog lists the order the apply sends (G-151)
-    steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order)
+    order, ring_refused = _apply_order(profile, topology, policy, known)  # G-153: the Review dialog lists the order the apply sends (G-151)
+    steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order, bool(ring_refused))
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
-    if order is None and (targets or points):
+    warnings.extend(Warn("RING_NOT_RESTORED", f"the ring (cache) will NOT be written by this plan: {why}") for why in ring_refused)  # G-154 (D-045): the ring unit alone is refused, the rest stands
+    if order is None and (targets or points or rings):
         warnings.append(_ORDER_NOTE)
     if restore:
         warnings.extend(_residual_preview(found_residual))
@@ -2189,6 +2350,7 @@ def _profile_canon(profile: Profile) -> dict[str, Any]:
         "point": [dataclasses.asdict(p) for p in profile.points],
         "turbo": None if profile.turbo is None else dataclasses.asdict(profile.turbo),
         "complete": profile.complete,
+        **({} if profile.ring is None else {"ring": dataclasses.asdict(profile.ring)}),
     }
 
 
@@ -2230,6 +2392,8 @@ def _stale_check(plan: StoredPlan, topology: Topology):  # type: ignore[no-untyp
 
 
 def _step_unit(topology: Topology, step: Any) -> str:
+    if step.kind in _RING_STEP_KINDS:  # G-154: the ring is read and written through CPU 0 but is not P-core 0
+        return ringmod.UNIT
     return unit_of_cpu(topology, step.cpu)
 
 
@@ -2244,7 +2408,7 @@ def _report_rows(report: Any, topology: Topology) -> tuple[list[dict[str, Any]],
         r = done.get(s.number)
         status = "not_sent" if r is None else r.status.value
         entry: dict[str, Any] = {"n": s.number, "kind": s.kind.value, "cpu": s.cpu, "status": status}
-        if s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT):
+        if s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT):
             entry["unit"] = _step_unit(topology, s)
             entry["point"] = s.p2
             expected = s.data
@@ -2300,6 +2464,13 @@ def _merge_applied_words(helper: Helper, report: Any) -> None:
     """The words verified (or seen differing) by the read-backs of this apply update ``helper.last_words`` if there was a complete read; the OC word is
     index 0, point n index n. Nothing is invented for a CPU that was not read."""
     _fold_applied_tables(helper, report)
+    ring = _last_ring(helper)
+    if ring:  # G-154: the ring channel follows its own verified read-backs (never the CPU-keyed words: the ring is read through CPU 0 but is not P-core 0)
+        for r in report.steps:
+            s = r.step
+            if s.kind is StepKind.WRITE_RING_POINT and r.readback_data is not None and s.p2 < len(ring):
+                ring[s.p2] = r.readback_data
+        _set_last_ring(helper, ring)
     last = _last_words(helper)
     if last is None:
         return
@@ -2359,7 +2530,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
-    per_round = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile))
+    per_round = count_operations(targets, None, tables, len(points), oc_cap_reads_of(policy, targets, profile), ring_points=len(resolve_ring_targets(profile, topology)))
     needed = per_round + scan_ops
     if plan.restore:  # the guard's session cap is exactly `needed`: reserve the rows the last read says the scan will add (an unforeseen one is dropped by the executor, with a warning)
         # G-148: and the rounds the plan reserved (the executor re-judges them from its own reads before the first write: STEP_LIMIT when they do not fit)
@@ -2423,6 +2594,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         "cpufreq": cpufreq,  # G-126: [{cpu, before_khz, after_khz}] of scaling_max_freq for the CPUs whose OC ratio changed
         "revert_plan": len(report.revert_plan),
         "residual": list(report.residual),  # G-147: the units whose residual OC point this restore rewrote (additive)
+        "ring_refused": list(report.ring_refused),  # G-154 (additive): why the ring unit alone was not written (the P/E units were); [] = written or no ring
     }
     if report.ok:
         return result
@@ -2503,7 +2675,7 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     with st.lock:
         tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
     try:
-        base = complete_from_words(topology, name, last, {c: fused_top_ratio(w) for c, w in fused.items()}, tables)
+        base = complete_from_words(topology, name, last, {c: fused_top_ratio(w) for c, w in fused.items()}, tables, _last_ring(helper))
     except BuildError as exc:
         raise OpError(REFUSED, f"{exc.message} Nothing was saved.", {"check": exc.code}) from None
     profile = base
@@ -2523,7 +2695,7 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     except ProfileStoreError as exc:
         raise OpError(REFUSED if exc.code in ("EXISTS", "UNTRUSTED") else BAD_REQUEST if exc.code in ("BAD_NAME", "TOO_BIG") else INTERNAL, exc.message, {"check": exc.code}) from None
     return {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
-            "turbo": profile.turbo is not None}
+            "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
 
 
 def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:

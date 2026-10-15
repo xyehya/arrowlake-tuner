@@ -36,6 +36,10 @@ def dump_profile(profile: Profile, header: str = "") -> str:
         if p.expect_ratio is not None:
             lines.append(f"expect_ratio = {int(p.expect_ratio)}")
         lines.append("")
+    if profile.ring is not None:
+        lines += ["[ring]", f"oc_word = 0x{int(profile.ring.oc_word):08X}  # G-154: the ring OC word as read (BIOS-owned: compared on a restore, never written)", ""]
+        for rp in profile.ring.points:
+            lines += ["[[ring.point]]", f"point = {rp.point}", f"offset_mv = {int(rp.offset_mv)}", f"expect_ratio = {int(rp.expect_ratio)}", ""]
     if profile.turbo is not None:
         lines.append("[turbo]")
         for key in ("e", "p"):

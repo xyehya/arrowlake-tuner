@@ -10,6 +10,10 @@ cluster) the OC word's fields and the offset of every fused V/F point, plus both
 * Points: every point whose ratio is non-zero and at most the top fused ratio, with ``expect_ratio``; the point above it is the one the OC ratio created.
   G-151: the profile **derives** that slot (``P2 = n + 1``, ratio = the OC ratio, offset 0) from the OC word and does not store it: it is never written as a fused point
   and never planned; ``EXPECTED-words.txt`` keeps it as read, and the compare (``controls.residual.oc_slot_pending``) holds it to those words once the OC word is written.
+* G-154 (D-045): the ring (``ring_words`` = ``[OC word, point 1, ..., point n]``, read through any CPU with ``P1 = 2``) is one more unit: the OC word as read (compared by a
+  restore, never written) and **every** ring point with a ratio -- the slot the BIOS ring OC ratio creates (``P2 = 9``, 40x) included -- as an offset-only point with ``expect_ratio``.
+  This differs from the core OC slot above on purpose: a core's OC slot is the OC word's own consequence, but the ring OC word is BIOS-owned and cannot be written, so the
+  ring's 40x voltage is only reachable through the P2 = 9 point offset. No ring words (or no point) = no ring section.
 * A value the profile format cannot hold exactly (whole millivolts) is refused (``NOT_REPRESENTABLE``) rather than rounded: the restore would write a
   different word than the one recorded.
 
@@ -23,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from arltuner.mailbox import VfWord
 from arltuner.topology import Topology
 
-from .schema import CoreSetting, PointSetting, Profile, ProfileError, TurboTables
+from .schema import CoreSetting, PointSetting, Profile, ProfileError, RingPoint, RingSetting, TurboTables
 
 __all__ = ["BuildError", "complete_from_words", "overlay", "tables_of"]
 
@@ -57,6 +61,7 @@ def complete_from_words(
     words: Mapping[int, Sequence[int]],
     fused_tops: Mapping[int, int | None],
     tables: Mapping[str, Sequence[int]] | None = None,
+    ring_words: Sequence[int] | None = None,
 ) -> Profile:
     """The complete profile that puts back ``words`` (cpu -> ``[OC word, point 1, ...]``; a unit is taken from the first of its CPUs that has words) on a CPU whose
     top fused ratio per CPU is ``fused_tops``; ``tables`` (both or the profile has none) become its ``[turbo]``. ``BuildError`` names what is missing or not
@@ -88,10 +93,32 @@ def complete_from_words(
             if w.ratio == 0 or w.ratio > top:
                 continue  # an empty word, or the point the OC ratio created (above the top fused ratio): not a fused point
             points.append(PointSetting(core.kind, core.index, n, _whole_mv(w.offset_mv, w.offset_raw, f"{unit} point {n} offset"), w.ratio))
+    ring = _ring_of(ring_words)
     try:
-        return Profile(name, tuple(entries), tables_of(tables), tuple(points), complete=True)
+        return Profile(name, tuple(entries), tables_of(tables), tuple(points), complete=True, ring=ring)
     except ProfileError as exc:
         raise BuildError("NOT_REPRESENTABLE", f"the words are not a complete tuning state ({exc}).") from None
+
+
+def _ring_of(ring_words: Sequence[int] | None) -> RingSetting | None:
+    """The ``[ring]`` of the ring words ``[OC word, point 1, ...]`` (G-154); ``None`` without words or without a point. ``BuildError`` for a word the format cannot hold."""
+    if not ring_words or len(ring_words) < 2:
+        return None
+    oc = VfWord.from_u32(int(ring_words[0]))
+    if oc.static:
+        raise BuildError("NOT_REPRESENTABLE", "the ring is in static (override) voltage mode; only adaptive words are recorded.")
+    points: list[RingPoint] = []
+    for n, word in enumerate(ring_words[1:], start=1):
+        w = VfWord.from_u32(int(word))
+        if w.ratio == 0:
+            continue  # an empty word: no such point
+        points.append(RingPoint(n, _whole_mv(w.offset_mv, w.offset_raw, f"ring point {n} offset"), w.ratio))
+    if not points:
+        return None
+    try:
+        return RingSetting(int(ring_words[0]), tuple(points))
+    except ProfileError as exc:
+        raise BuildError("NOT_REPRESENTABLE", f"the ring words are not a complete ring state ({exc}).") from None
 
 
 def overlay(base: Profile, edits: Profile, topology: Topology, name: str | None = None) -> Profile:
@@ -122,4 +149,14 @@ def overlay(base: Profile, edits: Profile, topology: Topology, name: str | None 
         e_tab = edits.turbo.e if edits.turbo.e is not None else (None if turbo is None else turbo.e)
         p_tab = edits.turbo.p if edits.turbo.p is not None else (None if turbo is None else turbo.p)
         turbo = TurboTables(e=e_tab, p=p_tab)
-    return Profile(name or base.name, tuple(cores.values()), turbo, tuple(pts.values()), complete=True)
+    ring = base.ring
+    if edits.ring is not None:
+        if ring is None:
+            raise ProfileError("overlay: the base profile has no ring")
+        have = {p.point: p for p in ring.points}
+        for p in edits.ring.points:
+            if p.point not in have:
+                raise ProfileError(f"overlay: the ring has no point {p.point} in the base profile")
+            have[p.point] = dataclasses.replace(have[p.point], offset_mv=p.offset_mv)
+        ring = RingSetting(ring.oc_word, tuple(have[n] for n in sorted(have)))
+    return Profile(name or base.name, tuple(cores.values()), turbo, tuple(pts.values()), complete=True, ring=ring)

@@ -36,6 +36,7 @@ from typing import Any, NoReturn, TextIO
 from arltuner import vfdump
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
+from arltuner.controls import ring as ringmod
 from arltuner.controls import (
     ApplyPlan,
     ApplyReport,
@@ -56,6 +57,7 @@ from arltuner.controls import (
     preflight,
     read_steps,
     resolve_point_targets,
+    resolve_ring_targets,
     resolve_targets,
 )
 from arltuner.guard import (
@@ -93,6 +95,7 @@ from arltuner.msr import (
     windows_boot_id,
 )
 from arltuner.profiles import Profile, ProfileError, load_profile
+from arltuner.profiles.expected import parse_expected
 from arltuner.profiles.fingerprint import FINGERPRINT_FILE, Fingerprint, FingerprintError, load_fingerprint
 from arltuner.topology import Topology, TopologyError, TopologyMismatch, UnknownCore, detect
 from arltuner.topology.reference import arl_s_285k
@@ -423,6 +426,11 @@ def _build_parser(out: TextIO, err: TextIO) -> _Parser:
         action="store_true",
         help="also measure the requested VID of every point ratio per P-core / E-cluster: caps cpufreq scaling_max_freq (always restored), runs stress-ng, "
         "reads MSR 0x198 through the guard (needs --device and a policy msr_allow entry for 0x198)",
+    )
+    p_dump.add_argument(
+        "--no-ring",
+        action="store_true",
+        help="leave the ring (cache, cmd 0x10 P1=2, G-154) out of the dump; it is read by default unless --cpus is given, so the restore scripts' read-back and compare-accepted see it",
     )
     p_dump.add_argument("--json", metavar="FILE", help="also write the same data as JSON")
     mode = p_dump.add_mutually_exclusive_group()
@@ -817,7 +825,11 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
         (pt.cpu, pt.point): sim.vf(pt.cpu, 0, pt.point).to_u32() for pt in resolve_point_targets(profile, topology)
     }
     oc_cap_words: dict[int, int] = {}  # G-137: the 0x01 reads of the plan, as the simulator would answer them
+    ring_words: dict[int, int] = {}  # G-154: the ring words, as the simulator holds them (a peek, not a mailbox request); a point the simulator has no such point for stays missing
     for step in read_steps(resolve_targets(profile, topology), policy, profile, topology):
+        if step.kind.is_ring:
+            if sim._vf_address_rc(step.cpu, ringmod.RING_P1, step.p2) is None:
+                ring_words[step.p2] = sim.vf(step.cpu, ringmod.RING_P1, step.p2).to_u32()
         if step.kind is StepKind.READ_OC_CAP:
             oc_cap_words[step.cpu] = sim.capability_word(step.cpu)
         if step.kind is StepKind.READ_MSR and step.msr is not None:
@@ -836,6 +848,7 @@ def _sim_plan(ctx: _Ctx, sim: MsrPort, profile: Profile, topology: Topology, pol
         point_words=point_words,
         oc_cap_words=oc_cap_words,
         only_changed=profile.complete,
+        ring_words=ring_words,
     )
 
 
@@ -919,7 +932,7 @@ def _cmd_apply(ctx: _Ctx, args: argparse.Namespace) -> int:
     try:
         if device:
             targets = resolve_targets(profile, topology)
-            ctx.say(format_preview(profile.name, targets, policy, profile.turbo, resolve_point_targets(profile, topology)))
+            ctx.say(format_preview(profile.name, targets, policy, profile.turbo, resolve_point_targets(profile, topology), resolve_ring_targets(profile, topology)))
             if scan:
                 ctx.say(f"restore: {len(scan)} extra reads first look for a residual OC point in the {len(scan) // residual.SCAN_READS_PER_UNIT} units the accepted state gives no OC ratio.")
         else:
@@ -1030,14 +1043,9 @@ def _follow_caps(ctx: _Ctx, caps: _CapView, before: Mapping[int, tuple[int | Non
         ctx.warn(f"warning: {text}")
 
 
-def _read_expected(path: Path) -> dict[int, list[int]]:
-    out: dict[int, list[int]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        cpu, *words = line.split()
-        out[int(cpu)] = [int(w, 16) for w in words]
-    return out
+def _read_expected(path: Path) -> tuple[dict[int, list[int]], list[int] | None]:
+    """``(cpu -> words, ring words | None)`` of ``EXPECTED-words.txt`` (G-154: the optional ``ring`` line; one parser for every reader, ``profiles.expected``)."""
+    return parse_expected(path.read_text(encoding="utf-8"))
 
 
 def _cmd_compare_accepted(ctx: _Ctx, args: argparse.Namespace) -> int:
@@ -1045,11 +1053,12 @@ def _cmd_compare_accepted(ctx: _Ctx, args: argparse.Namespace) -> int:
     sends nothing. Exit 0 when no unit is BAD (an EQUIVALENT unit is a success), 2 otherwise, 1 on unreadable input."""
     try:
         doc = json.loads(Path(args.readback).read_text(encoding="utf-8"))
-        expected = _read_expected(Path(args.expected))
+        expected, expected_ring = _read_expected(Path(args.expected))
         got: dict[int, list[int]] = {}
         for unit in doc["units"]:
             cpu = unit["cpus"][0]
             got[int(cpu["cpu"])] = [int(w, 16) for w in [cpu["oc"]["word"]] + [p["word"] for p in cpu["points"]]]
+        got_ring = ringmod.from_json(doc.get("ring"))  # G-154: None when the dump has no ring (older dump, --cpus, --no-ring, a policy that cannot read it)
     except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
         ctx.fail(EXIT_USAGE, f"cannot read the inputs: {type(exc).__name__}: {exc}")
     if not expected:
@@ -1082,11 +1091,29 @@ def _cmd_compare_accepted(ctx: _Ctx, args: argparse.Namespace) -> int:
             bad += 1
             ctx.say(f"  cpu{cpu:<3}BAD {text}")
             ctx.say(f"         want {' '.join(f'{w:X}' for w in want)}")
-    if bad:
-        ctx.say(f"STOP: {bad} core(s)/cluster(s) differ - report; cold boot = stock")
+    ring_bad = 0
+    if expected_ring is not None:  # G-154 (D-045): the ring line is compared word for word (the OC word first); no equivalence rules, a ring that differs is BAD
+        if got_ring is None:
+            ring_bad = 1
+            ctx.say("  ring   BAD <missing: the read-back has no ring (vf-dump --no-ring / --cpus, a policy that cannot read it, or the read stopped)>")
+            ctx.say(f"         want {' '.join(f'{w:X}' for w in expected_ring)}")
+        elif got_ring != expected_ring:
+            ring_bad = 1
+            ctx.say(f"  ring   BAD {' '.join(f'{w:X}' for w in got_ring)}")
+            ctx.say(f"         want {' '.join(f'{w:X}' for w in expected_ring)}")
+            if got_ring[:1] != expected_ring[:1]:
+                ctx.say("         the ring OC word differs: it is BIOS-owned and never written, so a restore cannot fix it (accept the new state, or change the BIOS ring ratio back)")
+        else:
+            ctx.say(f"  ring   OK  {' '.join(f'{w:X}' for w in got_ring)}")
+    if bad or ring_bad:
+        if bad:
+            ctx.say(f"STOP: {bad} core(s)/cluster(s){' and the ring' if ring_bad else ''} differ - report; cold boot = stock")
+        else:
+            ctx.say("STOP: the ring differs - report; the cores/clusters match; cold boot = stock")
         return EXIT_REFUSED
     extra = f" ({equivalent} equivalent: {residual.RESIDUAL_NOTE})" if equivalent else ""
-    ctx.say(f"RESTORED: all {len(expected)} cores/clusters match the accepted state{extra}.")
+    ring_text = " and the ring" if expected_ring is not None else ""
+    ctx.say(f"RESTORED: all {len(expected)} cores/clusters{ring_text} match the accepted state{extra}.")
     return EXIT_OK
 
 
@@ -1390,9 +1417,16 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         verdict = predict(policy, req, None)
         if not verdict.allowed:
             ctx.refuse(f"{verdict.reason}: {verdict.detail} (cpu {req.cpu}, {shape}). Nothing was sent.")
+    ring_cap: int | None = None  # G-154 (D-045): the ring (cache, P1 = 2) is part of the dump unless --cpus / --no-ring; a policy that cannot read it leaves it out with a note
+    ring_note: str | None = None
+    ring_cpu = ringmod.ring_cpu(topology)
+    if args.cpus is None and not args.no_ring:
+        ring_cap = ringmod.walk_cap(policy)
+        if ring_cap is None:
+            ring_note = "ring not dumped: the policy has no read entry for cmd 0x10 P1=2 (P2 0 and 1); the cores' dump stands"
     if ctx.win:
         _identity_policy_check(ctx, policy)
-    needed = len(requests) + _identity_ops(ctx)  # --device-win: + the identity reads
+    needed = len(requests) + (ringmod.requests_worst(ring_cap) if ring_cap is not None else 0) + _identity_ops(ctx)  # --device-win: + the identity reads
     # The guard refuses a plain rdmsr (SESSION_LIMIT / BOOT_LIMIT) once the caps are *full*, although a plain read does not count: --measure needs one spare.
     spare = 1 if measure else 0
     why = " (+1 spare: the guard refuses even a plain 0x198 read once the cap is full)" if measure else ""
@@ -1439,7 +1473,8 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         )
     token, typed = _confirm(
         ctx,
-        f"vf-dump: up to {needed} guard-mediated mailbox READ requests on {where}, CPUs {', '.join(str(c.cpu) for c in cores)} (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11), "
+        f"vf-dump: up to {needed} guard-mediated mailbox READ requests on {where}, CPUs {', '.join(str(c.cpu) for c in cores)} (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11)"
+        f"{f' and the ring (cmd 0x10 P1=2 via cpu {ring_cpu}, P2 = 0 and each point until the first rc 0x11, at most {ring_cap + 1} reads)' if ring_cap is not None else ''}, "
         f"one at a time, {policy.min_dwell_s:g} s apart; normally one per point of each CPU (the budget is the worst case: P2 <= {cap}, as far as the policy allows).\nA mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.{extra}" + (f"\n{_identity_note(ctx)}" if ctx.win else ""),
     )
     audit = _open_audit(ctx, args.audit)
@@ -1447,6 +1482,7 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
     port = _device_port(ctx) if device else ctx.sim_factory()  # every refusal is above
     policy = dataclasses.replace(policy, max_operations_per_session=needed + spare)  # exactly the budget (+ the spare a --measure needs); a policy can only lower it
     curves: list[vfdump.CpuCurve] = []
+    ring_curve: ringmod.RingCurve | None = None
     stop: vfdump.Stop | None = None
     measured: dict[str, list[vfdump.RatioMeasurement]] | None = None
     problems: list[str] = []
@@ -1461,6 +1497,8 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         pacer = vfdump.Pacer(policy.min_dwell_s, clock, sleep)
         curves, stop = vfdump.walk(cores, topology, lambda req: guard.execute(req, confirm), pacer, lambda exc: _refusal_text(exc, audit.path), cap)
         units = vfdump.units_of(curves, topology)
+        if stop is None and ring_cap is not None:  # G-154: the ring, after the cores, through the same guard (one request at a time)
+            ring_curve, stop = ringmod.walk(ring_cpu, lambda req: guard.execute(req, confirm), pacer, lambda exc: _refusal_text(exc, audit.path), ring_cap)
         if stop is None and measure_io is not None:
             measured = {}
 
@@ -1484,14 +1522,28 @@ def _cmd_vf_dump(ctx: _Ctx, args: argparse.Namespace) -> int:
         _close(port)
     flags = vfdump.find_flags(units)
     sent = sum(1 + len(c.points) + (1 if c.end.startswith("rc 0x11") else 0) for c in curves)
-    ctx.say(f"vf-dump{'' if device else '  [simulator: no hardware was accessed]'}: {sent} mailbox reads, {sum(1 + len(c.points) for c in curves)} words, {len(curves)} CPU(s)")
+    words = sum(1 + len(c.points) for c in curves)
+    if ring_curve is not None:
+        sent += (1 if ring_curve.oc is not None else 0) + len(ring_curve.points) + (1 if ring_curve.end.startswith(("rc 0x11", "empty word")) else 0)
+        words += len(ring_curve.words)
+    ctx.say(f"vf-dump{'' if device else '  [simulator: no hardware was accessed]'}: {sent} mailbox reads, {words} words, {len(curves)} CPU(s){' + the ring' if ring_curve is not None and ring_curve.oc is not None else ''}")
     for line in vfdump.format_dump(units, flags, measured, stop):
         ctx.say(line)
+    if ring_curve is not None:
+        for line in ringmod.format_lines(ring_curve):
+            ctx.say(line)
+    elif ring_note is not None:
+        ctx.say(f"note: {ring_note}")
     for text in problems:
         ctx.warn(f"WARNING: {text}")
     if args.json is not None:
         try:
-            Path(args.json).write_text(json.dumps(vfdump.to_json(units, flags, measured, stop, sim=not device, problems=problems), indent=2) + "\n", encoding="utf-8", newline="\n")
+            document = vfdump.to_json(units, flags, measured, stop, sim=not device, problems=problems)
+            if ring_curve is not None and ring_curve.oc is not None:
+                document["ring"] = ringmod.to_json(ring_curve)  # G-154: {unit, cpu, oc, points, end}, the shape of a cpus[] entry
+            elif ring_note is not None:
+                document["ring_note"] = ring_note
+            Path(args.json).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
         except OSError as exc:
             ctx.warn(f"cannot write {args.json}: {exc}")
             return EXIT_HARDWARE if stop is None else stop.code

@@ -26,10 +26,23 @@ from arltuner.guard import Confirmation, GuardRefused, MsrResult, Policy, Refusa
 from arltuner.mailbox import VfWord, rc_name
 from arltuner.profiles import Profile, ProfileError, load_profile
 from arltuner.topology import Topology
+from arltuner.vfdump import RC_NO_SUCH_POINT
 
 from . import residual
 from .model import PERCORE_ENABLE_BIT, ApplyPlan, CoreReadings, PlanError, PlanStep, PreflightError, StepKind
-from .planner import _turbo_tables, build_plan, check_rounds, count_operations, oc_cap_reads_of, plan_warnings, preflight, ramp_rounds, read_steps, resolve_point_targets
+from .planner import (
+    _turbo_tables,
+    build_plan,
+    check_rounds,
+    count_operations,
+    oc_cap_reads_of,
+    plan_warnings,
+    preflight,
+    ramp_rounds,
+    read_steps,
+    resolve_point_targets,
+    resolve_ring_targets,
+)
 from .report import ApplyReport, StepResult, StepStatus, StopKind, v_mv
 
 __all__ = ["apply_profile"]
@@ -123,9 +136,9 @@ def _run_step(
     name = rc_name(resp.rc)
     before: VfWord | None = None
     after: VfWord | None = None
-    if step.kind in (StepKind.READ_VF, StepKind.READ_VF_POINT):
+    if step.kind in (StepKind.READ_VF, StepKind.READ_VF_POINT, StepKind.READ_RING_OC, StepKind.READ_RING_POINT):
         after = VfWord.from_u32(resp.data)
-    elif step.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT):
+    elif step.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT):
         before = step.before
         if res.readback is not None:
             after = VfWord.from_u32(res.readback.data)
@@ -138,10 +151,13 @@ def _run_step(
         readback_data=None if res.readback is None else res.readback.data,
         before=before,
         after=after,
-        applied_v_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT) else v_mv(after),
-        applied_offset_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT) else after.offset_mv,
+        applied_v_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) else v_mv(after),
+        applied_offset_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) else after.offset_mv,
         verified=res.verified,
     )
+    if step.kind is StepKind.READ_RING_POINT and resp.rc == RC_NO_SUCH_POINT:
+        # G-154: a ring point that does not exist (rc 0x11) is an answer, not an error: the plan refuses the ring unit by name and the P/E restore goes on
+        return replace(result, detail="no such ring point (rc 0x11)"), resp.data
     if resp.rc != 0:
         result = _with_status(result, StepStatus.RC_ERROR, f"completion code {resp.rc} ({name})")
         raise _Stop(result, StopKind.RC, f"step {step.number}: mailbox completion code {resp.rc} ({name}) on cmd {step.cmd:#04x}, cpu {step.cpu}")
@@ -191,6 +207,8 @@ def _report(
 ) -> ApplyReport:
     if stop is not None:
         results = [*results, stop.result]
+    if plan is not None and plan.ring_refused:  # G-154 (D-045): the ring unit alone was refused; the report says why, by name
+        warnings = (*warnings, *(f"RING NOT RESTORED (the P/E units were): {why}" for why in plan.ring_refused))
     return ApplyReport(
         profile_name=profile.name,
         plan=plan,
@@ -314,7 +332,7 @@ def apply_profile(
             per_core_enabled=None if rd.misc_word is None else bool(rd.misc_word & PERCORE_ENABLE_BIT),
             policy=policy, misc_word=rd.misc_word, msr_words=rd.msr_words, point_words=rd.point_words,
             favored_words=getattr(guard, "favored_words", lambda: None)(), oc_cap_words=rd.oc_cap_words,
-            residual_cpus=residual_rows, only_changed=only_changed,
+            residual_cpus=residual_rows, only_changed=only_changed, ring_words=rd.ring_words,
         )
 
     plan = plan_of(profile, readings, residual_cpus)
@@ -337,10 +355,12 @@ def apply_profile(
                     exc2.report = _report(profile, guard, results, plan, warnings, None, policy, residual_lines)
                     raise
     if auto_ramp and plan.next_profile_text is not None:  # G-148: rounds within the step limits, judged here, before the first write
-        rounds, worst = ramp_rounds(profile, topology, readings.baseline, readings.point_words, policy, only_changed=only_changed)
+        rounds, worst = ramp_rounds(profile, topology, readings.baseline, readings.point_words, policy, only_changed=only_changed, ring_words=readings.ring_words)
         rounds = max(rounds, 2)  # the plan needs a step: at least one ramp round before the plan itself
         tables = len(_turbo_tables(profile))
-        per_round = count_operations(targets, None, tables, len(resolve_point_targets(profile, topology)), oc_cap_reads_of(policy, targets, profile))
+        per_round = count_operations(
+            targets, None, tables, len(resolve_point_targets(profile, topology)), oc_cap_reads_of(policy, targets, profile), ring_points=len(resolve_ring_targets(profile, topology))
+        )
         try:
             check_rounds(rounds, worst, per_round, scan_ops, policy, boot_ops_used)
         except PreflightError as exc:
@@ -407,6 +427,7 @@ class _Readings:
         self.misc_word: int | None = None
         self.words: dict[int, dict[StepKind, int]] = {}
         self.point_words: dict[tuple[int, int], int] = {}  # T-025: (cpu, point) -> the 0x10 P2=point word
+        self.ring_words: dict[int, int] = {}  # G-154: ring point -> the 0x10 P1=2 P2=point word, key 0 = the ring OC word (never keyed by a CPU)
         self.msr_words: dict[int, int] = {}
         self.oc_cap_words: dict[int, int] = {}  # G-137 (D-039): cpu -> the 0x01 word read in this run
 
@@ -439,9 +460,14 @@ def _read_all(
     """Every read step of ``profile``'s plan through the guard (raises ``_Stop``); each successful read is the session baseline the guard measures the next write from."""
     rd = _Readings()
     for step in read_steps(targets, policy, profile, topology):
+        if step.kind.is_ring and not step.verdict.allowed:
+            continue  # G-154: a ring read the policy would refuse is not sent; build_plan refuses the ring unit with the guard's own reason, the P/E restore goes on
         result, word = _run_step(guard, confirm, step, pacer, progress, cancelled)
         results.append(result)
-        if step.kind is StepKind.READ_MSR:
+        if step.kind.is_ring:
+            if result.rc == 0:  # rc 0x11 (no such point): the word stays missing
+                rd.ring_words[step.p2] = word
+        elif step.kind is StepKind.READ_MSR:
             assert step.msr is not None
             rd.msr_words[step.msr] = word
         elif step.kind is StepKind.READ_PERCORE_ENABLE:
@@ -452,6 +478,6 @@ def _read_all(
             rd.oc_cap_words[step.cpu] = word
         else:
             rd.words.setdefault(step.cpu, {})[step.kind] = word
-    mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14
+    mailbox = bool(targets or resolve_point_targets(profile, topology))  # G-117: a turbo-table-only plan reads no 0x14 (G-154: nor does a ring-only one)
     assert rd.misc_word is not None or not mailbox
     return rd

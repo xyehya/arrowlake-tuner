@@ -67,8 +67,14 @@ POINT_RATIOS_P_NONFAVORED_SIM: tuple[int, ...] = (8, 20, 30, 45, 50, 52, 54, 55)
 SPLIT_E_OC_WORDS: dict[int, int] = {8: 0x00047E30, 12: 0x00047330, 16: 0x00047330, 20: 0x00047330}  # first CPU of EC0..EC3 -> OC word
 SPLIT_E_POINT6_WORDS: dict[int, int] = {8: 0xF9A0002E, 12: 0xFAE0002E, 16: 0xFAE0002E, 20: 0xFAE0002E}
 
+#: G-154 (D-045) ``[MEASURED lnx 2026-10-15]`` (captures/lnx/ring-pl2-20261015.txt): the ring after a cold boot -- OC word ``0x28`` (ratio 40, V target 0, offset 0, set by the BIOS),
+#: ``P2 = 1..8`` = 8,14,20,28,34,37,38,39x with offsets 0, ``P2 = 9`` = 40x while the OC ratio is 40 (``oc_adds_point``; offset 0), ``P2 = 10`` -> rc ``0x11``. The BIOS ring offset the
+#: operator removed (point 8 = ``0xF6600027``, raw -77, T-028) is gone from the reference model; ``RING_POINT_OFFSETS_BIOS_OLD_ARL_S`` keeps it for a test that needs it explicitly
+#: (``SimConfig.measured(ring_point_offsets=dict(RING_POINT_OFFSETS_BIOS_OLD_ARL_S))``).
 RING_POINT_RATIOS_ARL_S: dict[int, int] = dict(enumerate(_REF_POINTS["ring"], start=1))
-RING_POINT_OFFSETS_ARL_S: dict[int, int] = {8: -77}
+RING_POINT_OFFSETS_ARL_S: dict[int, int] = {}
+RING_POINT_OFFSETS_BIOS_OLD_ARL_S: dict[int, int] = {8: -77}
+RING_OC_WORD_ARL_S = 0x28
 _ZERO_VF = VfWord(ratio=0, v_target_raw=0, static=False, offset_raw=0)
 _SILENT_CMDS = (
     int(Cmd.VOLTAGE_FREQ_WRITE),
@@ -462,6 +468,8 @@ class SimMsrPort(MsrPort):
             return stored
         if domain == Domain.RING and p2 != 0 and p2 in self.config.ring_point_ratios:  # T-028
             return VfWord(ratio=self.config.ring_point_ratios[p2], v_target_raw=0, static=False, offset_raw=self.config.ring_point_offsets.get(p2, 0))
+        if domain == Domain.RING and p2 != 0 and p2 == self._ring_extra_point():  # G-154: the slot the ring OC ratio creates (40x), an ordinary point
+            return VfWord(ratio=self._vf[(int(Domain.RING), -1, 0)].ratio, v_target_raw=0, static=False, offset_raw=self.config.ring_point_offsets.get(p2, 0))
         if domain == Domain.CORE and p2 != 0:
             kind = self._kind(cpu)
             ratio = self._point_ratio(cpu, p2)
@@ -470,6 +478,15 @@ class SimMsrPort(MsrPort):
             offset = self.config.cpu_point_offsets.get((cpu, p2), self.config.point_offsets.get((kind, p2), 0))
             return VfWord(ratio=ratio, v_target_raw=0, static=False, offset_raw=offset)
         return _ZERO_VF
+
+    def _ring_extra_point(self) -> int | None:
+        """G-154 (``oc_adds_point``) ``[MEASURED lnx 2026-10-15]``: the P2 of the extra ring point the ring OC ratio creates -- the point after the last fused one, at the OC ratio -- while
+        the stored ring OC ratio is above the top fused ring point (40x vs 39x), else ``None`` (the slot answers rc 0x11 when the BIOS ring ratio is 39 or less)."""
+        ratios = self.config.ring_point_ratios
+        if not self.config.oc_adds_point or not ratios:
+            return None
+        oc = self._vf.get((int(Domain.RING), -1, 0), _ZERO_VF)
+        return max(ratios) + 1 if oc.ratio > max(ratios.values()) else None
 
     def _point_ratio(self, cpu: int, p2: int) -> int:
         return self.config.cpu_point_ratios.get((cpu, p2), self.config.point_ratios.get((self._kind(cpu), p2), 0))
@@ -766,8 +783,8 @@ class SimMsrPort(MsrPort):
         extra = self._extra_point(cpu) if p1 == Domain.CORE else None
         if p2 != 0 and p1 == Domain.CORE and counts is not None and p2 > counts.get(self._kind(cpu), _MAX_POINT) and p2 != extra:
             return RC_NO_SUCH_POINT  # T-025: past the last fused point of this core kind
-        if p2 != 0 and p1 == Domain.RING and self.config.ring_point_ratios and p2 not in self.config.ring_point_ratios:
-            return RC_NO_SUCH_POINT  # T-028: past the last ring point
+        if p2 != 0 and p1 == Domain.RING and self.config.ring_point_ratios and p2 not in self.config.ring_point_ratios and p2 != self._ring_extra_point():
+            return RC_NO_SUCH_POINT  # T-028: past the last ring point (G-154: the OC-created slot counts while the ring OC ratio is above the top fused point)
         return None
 
     def _cmd_vf_read(self, cpu: int, p1: int, p2: int, data: int) -> tuple[int, int]:

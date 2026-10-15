@@ -16,6 +16,11 @@
 # offsets that lower the curve under it), and the compare treats the OC point's table slot (P2 = n+1, 7 for an E cluster) as the OC word's: a unit whose OC word is not written
 # yet is not also reported for the missing slot; once it is, the slot must read exactly the accepted word. One confirmation per run (operator 2026-10-08, D-020 extended to Linux): after CONFIRM, the guard's per-command tokens are
 # answered by tools/lnx/orchestrator_confirm.py; every guard check (policy limits, per-write read-back, word compare) is unchanged.
+# G-154 (D-045): the ring (cache, mailbox domain P1 = 2) is part of the accepted state: EXPECTED-words.txt has one "ring  <OC word> <point 1> ... <point n>" line and the profile a
+# [ring] section. The same one apply writes the ring points that differ (every ring point, the 40x slot the BIOS ring OC ratio creates included: 0x11 P1=2 P2=k, read back); the ring OC
+# word is BIOS-owned and never written. If the live ring OC word is not the accepted one (the BIOS ring ratio changed) or a ring point is not what the profile expects, ONLY the ring is
+# refused ("RING NOT RESTORED ..." below), the P/E units are still restored, and the verdict reports the ring BAD (exit non-zero). vf-dump reads the ring back; the verdict compares it.
+# An accepted state without a ring line restores and compares nothing about the ring.
 # Stops at the first failure. Revert = cold boot. The first MSR write of a boot sets taint bit 2 (CPU_OUT_OF_SPEC): expected.
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$repo"
@@ -60,7 +65,7 @@ lm() {  # one guarded arltuner command (run confirmed above / in chat); full out
   local tag="$1"; shift; local f="captures/lnx/restore-$ts-$tag.txt"
   sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" HOME="$HOME" python3 -I tools/lnx/orchestrator_confirm.py python3 -I tools/arltuner.py "$@" --device --policy "$policy" --allow-taint-bit 2 > "$f" 2>&1 \
     || { echo "STOP: $tag failed (see $f)"; tail -5 "$f"; exit 1; }
-  grep -E '^Result|REFUSED|refused' "$f" | sed 's/^/  /' || true
+  grep -E '^Result|REFUSED|refused|RING NOT RESTORED' "$f" | sed 's/^/  /' || true
 }
 
 bash tools/lnx/health_snapshot.sh "restore-$ts-before" > "captures/lnx/health-restore-$ts-before.txt" 2>&1

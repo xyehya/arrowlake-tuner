@@ -28,6 +28,11 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
 * G-141 ``profiles.fingerprint``: writes ``fingerprint.json`` alone into the existing accepted directory from this boot's fused ``0x09`` words (the same file ``accept``
   records), for an accepted state made before G-138; ``CURRENT``, the profiles and ``EXPECTED-words.txt`` are not touched. See :func:`op_profiles_fingerprint`.
 
+* G-154 (D-045): the ring (cache, mailbox domain P1 = 2) is one more unit of the accepted state: ``{from: "read"}`` / a saved profile records the ring of this boot's last
+  ``tune.read`` -- ``EXPECTED-words.txt`` gets one ``ring  <OC word> <point 1> ... <point n>`` line and the profile a ``[ring]`` section (the OC word as read: compared by the
+  restore, never written; every ring point's offset with ``expect_ratio``). A read without a ring (the policy cannot read it, an older helper) records none, and an accepted state
+  without a ring line compares and restores nothing about the ring.
+
 No mailbox traffic, no MSR. A root file write under the helper's trust rules, like ``profiles.save``.
 """
 from __future__ import annotations
@@ -40,6 +45,7 @@ from arltuner.guard import AuditLog
 from arltuner.guard.policy import fused_top_ratio
 from arltuner.profiles import BuildError, Profile, ProfileError, complete_from_words
 from arltuner.profiles.accepted import SAFE_PROFILE_NAME, AcceptedError, AcceptedStore
+from arltuner.profiles.expected import format_ring_line
 from arltuner.profiles.fingerprint import CpuId, FingerprintError, build_fingerprint, cpu_id_from_cpuinfo
 from arltuner.profiles.serialize import dump_profile
 from arltuner.profiles.store import ProfileStoreError
@@ -78,9 +84,11 @@ def _refused(text: str, check: str) -> OpError:
     return OpError(REFUSED, f"{text} Nothing was changed.", {"check": check})
 
 
-def _held_difference(profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None, turbo: Mapping[str, Any] | None) -> str | None:
+def _held_difference(
+    profile: Profile, topology: Topology, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None, turbo: Mapping[str, Any] | None, ring: Sequence[int] | None = None
+) -> str | None:
     """``None`` when every word the profile writes already reads as the profile resolves it (the plan's ``before`` equals its ``after``), else a short text."""
-    before, after = T._before_after(profile, topology, last, fused, turbo)
+    before, after = T._before_after(profile, topology, last, fused, turbo, ring)
     for unit, items in after.items():
         for point, now in items.items():
             was = (before.get(unit) or {}).get(point)
@@ -97,22 +105,30 @@ def _held_difference(profile: Profile, topology: Topology, last: Mapping[int, Se
 
 
 def _profile_from_words(
-    topology: Topology, name: str, last: Mapping[int, Sequence[int]], fused: Mapping[int, int] | None, tables: Mapping[str, Sequence[int]] | None = None
+    topology: Topology,
+    name: str,
+    last: Mapping[int, Sequence[int]],
+    fused: Mapping[int, int] | None,
+    tables: Mapping[str, Sequence[int]] | None = None,
+    ring: Sequence[int] | None = None,
 ) -> Profile:
     """G-148: the complete profile of the words of ``last`` (cpu -> words) with the top fused ratio of each unit from ``fused`` (cpu -> live ``0x09`` word) and, when the
     read had both, the turbo tables ``tables`` (``{"e": 8 buckets, "p": 8 buckets}``)."""
     tops = {cpu: fused_top_ratio(word) for cpu, word in (fused or {}).items()}
     try:
-        return complete_from_words(topology, name, last, tops, tables)
+        return complete_from_words(topology, name, last, tops, tables, ring)
     except BuildError as exc:
         raise _refused(exc.message, exc.code) from None
 
 
-def _expected_text(last: Mapping[int, Sequence[int]], header: str) -> str:
+def _expected_text(last: Mapping[int, Sequence[int]], header: str, ring: Sequence[int] | None = None) -> str:
     lines = [f"# {line}".rstrip() for line in header.splitlines()]
     lines.append("# <linux cpu> <OC word P2=0> <point 1> ... <point n>   (hex, no 0x), one line per core / E-cluster that the last read covered.")
     for cpu in sorted(last):
         lines.append(f"{cpu}  " + " ".join(f"{int(w):X}" for w in last[cpu]))
+    if ring:  # G-154 (D-045): the ring (cache) line, same shape; absent = no ring in the accepted state
+        lines.append("# ring: the ring (cache, mailbox domain P1=2) as the last read found it: <OC word (BIOS-owned, compared, never written)> <point 1> ... <point n>")
+        lines.append(format_ring_line(ring))
     return "\n".join(lines) + "\n"
 
 
@@ -189,20 +205,21 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
             source = f"saved profile {name} (partial, legacy: the state it left on the CPU is recorded, not the file)"
         else:
             source = f"saved profile {name}"
-        difference = _held_difference(saved, topology, last, fused, T._state(helper).turbo)
+        difference = _held_difference(saved, topology, last, fused, T._state(helper).turbo, T._last_ring(helper))
         if difference is not None:
             raise _refused(f"{name!r} is not what the CPU holds now ({difference}). Apply it first (Profiles > Review and apply), then set it as accepted.", "NOT_APPLIED")
     st = T._state(helper)
     with st.lock:
         tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
-    profile = _profile_from_words(topology, name, last, fused, tables)  # D-044 decision 2: the profile and EXPECTED-words.txt are the same words
+    ring = T._last_ring(helper)  # G-154: the ring of this boot's last read, or None (not read: no ring is recorded)
+    profile = _profile_from_words(topology, name, last, fused, tables, ring)  # D-044 decision 2: the profile and EXPECTED-words.txt are the same words
     replaced = T._accepted_names(helper)
     header = f"Accepted {stamp} from {source}. Written by arltuner (profiles.accept); replace it the same way, never by hand."
     try:
         profile_toml = dump_profile(profile, header)
     except ProfileError as exc:
         raise _refused(f"the profile cannot be written: {exc}.", "NOT_REPRESENTABLE") from None
-    words_text = _expected_text(last, header)
+    words_text = _expected_text(last, header, ring if profile.ring is not None else None)
     fingerprint = build_fingerprint(topology, fused, _cpu_id(cfg))
     try:
         fingerprint.require_restorable()
@@ -220,7 +237,7 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
         raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code}) from None
     return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced, "cpus": len(last),
             "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None, "complete": profile.complete,
-            "fingerprint": fingerprint_note}
+            "ring_points": 0 if profile.ring is None else len(profile.ring.points), "fingerprint": fingerprint_note}
 
 
 def op_profiles_fingerprint(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:

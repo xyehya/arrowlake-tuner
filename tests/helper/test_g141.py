@@ -374,8 +374,9 @@ class Item14OpsDone(TuneCase):
         h = self.boot()
         res = self.read(h)
         self.assertEqual(res["ops_done"], len(self.sim.requests))
-        self.assertEqual(res["ops_words"] + res["ops_extras"], res["ops_done"])
+        self.assertEqual(res["ops_words"] + res["ops_extras"] + res["ops_ring"], res["ops_done"])
+        self.assertEqual(res["ops_ring"], 11)  # G-154: the ring walk (P1 = 2): the OC word, 9 points (the OC-created 40x slot included) and the rc 0x11 at P2 = 10
         self.assertGreater(res["ops_extras"], 0)
-        self.assertEqual(res["ops_words"], sum(1 for q in self.sim.requests if q.cmd == 0x10))
+        self.assertEqual(res["ops_words"], sum(1 for q in self.sim.requests if q.cmd == 0x10 and q.p1 == 0))
         counted = sum(1 for line in self.audit.read_text().splitlines() if json.loads(line).get("event") == "attempt")
         self.assertEqual(res["ops_done"], counted)  # what the per-boot counter counted

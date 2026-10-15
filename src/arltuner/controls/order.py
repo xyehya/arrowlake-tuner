@@ -14,7 +14,11 @@ a ratio at or below the top fused ratio sits on the linear interpolation of the 
 runs at ``max(OC target, top point's voltage)`` (the CPU raises a lower target to the top point). Absolute voltages of the lower fused points are not readable and not needed:
 only the offsets change. [UNVERIFIED]: whether the OC word's offset field also shifts the OC target (the model leaves the target alone).
 
-Pure functions, no I/O. ``reorder_writes`` is called by ``planner.build_plan`` on the point and per-core write steps.
+G-154 (D-045): the ring is its own unit (``"ring"``), ordered by the same rule on its own curve: a ring point's level is the linear interpolation of the ring point offsets
+(no OC point: the ring OC word is BIOS-owned and never written, and the slot it creates, ``P2 = 9``, is an ordinary point), modelled from the ring words read, never from the
+``CoreReadings`` of the CPU the ring is addressed through.
+
+Pure functions, no I/O. ``reorder_writes`` is called by ``planner.build_plan`` on the point and per-core write steps (and, separately, on the ring's).
 """
 from __future__ import annotations
 
@@ -29,13 +33,17 @@ from arltuner.topology import Topology
 
 from .model import CoreReadings, PlanStep, StepKind, Verdict
 
-__all__ = ["CHECK_NAME", "level", "reorder_writes"]
+__all__ = ["CHECK_NAME", "RING_UNIT", "level", "reorder_writes"]
+
+#: The unit id of the ring in the write order (G-154).
+RING_UNIT = "ring"
 
 #: The check name of a refusal for a unit with no transition-safe order.
 CHECK_NAME = "write_order"
 _SEARCH_LIMIT = 50_000  # states the search may visit per unit; a unit has a handful of write groups, so this is never reached by a real plan
 
 _Key = tuple[str, int]  # ("pt", point) | ("oc", 0)
+_POINT_KINDS = (StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT)  # a point word: a fused point of a core, or a ring point (G-154)
 
 
 def level(points: Mapping[int, int], oc: VfWord | None, ratio: int, top: int | None, fused_raw: int) -> Fraction:
@@ -87,7 +95,7 @@ class _Cpu:
     def apply(self, step: PlanStep) -> None:
         if step.after is None:
             return
-        if step.kind is StepKind.WRITE_VF_POINT:
+        if step.kind in _POINT_KINDS:
             if self.top is None or step.after.ratio <= self.top:  # the slot past the top point is the OC point, never a fused one
                 self.points[step.after.ratio] = step.after.offset_raw
         elif step.kind is StepKind.WRITE_VF:
@@ -111,7 +119,7 @@ def _model(cpu: int, steps: Sequence[PlanStep], baseline: Mapping[int, CoreReadi
         if c == cpu and w.ratio and (top is None or w.ratio <= top):
             points[w.ratio] = w.offset_raw
     for st in steps:
-        if st.kind is StepKind.WRITE_VF_POINT and st.before is not None and st.before.ratio and (top is None or st.before.ratio <= top):
+        if st.kind in _POINT_KINDS and st.before is not None and st.before.ratio and (top is None or st.before.ratio <= top):
             points.setdefault(st.before.ratio, st.before.offset_raw)
     oc = None if readings is None else readings.vf
     model = _Cpu(dict(points), oc, top, fused_raw, (), {}, {}, {})
@@ -134,7 +142,7 @@ def _groups(steps: Sequence[PlanStep]) -> list[tuple[int, _Key, list[PlanStep]]]
     """The write groups of a segment, in order: ``(cpu, key, steps)``. A point word is one group; the OC word of a CPU with its ``0x11`` stages, ``0x1D`` and ``0x27`` is one."""
     out: dict[tuple[int, _Key], list[PlanStep]] = {}
     for st in steps:
-        key: _Key = ("pt", st.p2) if st.kind is StepKind.WRITE_VF_POINT else ("oc", 0)
+        key: _Key = ("pt", st.p2) if st.kind in _POINT_KINDS else ("oc", 0)
         out.setdefault((st.cpu, key), []).append(st)
     return [(cpu, key, group) for (cpu, key), group in out.items()]
 
@@ -203,16 +211,18 @@ def reorder_writes(
     topology: Topology,
     baseline: Mapping[int, CoreReadings],
     point_words: Mapping[tuple[int, int], int],
+    ring_words: Mapping[int, int] | None = None,
 ) -> tuple[list[PlanStep], list[str]]:
     """``steps`` (the point and per-core write steps of a plan, in the order the planner built them) in a transition-safe order, with the numbers unchanged
     (the caller renumbers): per unit, the steps are placed in the unit's own slots, raising writes before lowering ones and otherwise in the planner's order, a different
     order being searched when the preferred one would dip a ratio. A unit with no safe order keeps its order and every allowed step of it is marked ``CHECK_FAILED``
-    (``write_order``). Returns ``(steps, notes)``; ``notes`` names every unit that was refused."""
+    (``write_order``). Returns ``(steps, notes)``; ``notes`` names every unit that was refused. G-154: ``WRITE_RING_POINT`` steps form the unit ``"ring"``, modelled from
+    ``ring_words`` (point -> word) alone."""
     out = list(steps)
     notes: list[str] = []
     by_unit: dict[str, list[int]] = {}
     for i, st in enumerate(steps):
-        by_unit.setdefault(topology.unit_of_cpu(st.cpu), []).append(i)
+        by_unit.setdefault(RING_UNIT if st.kind is StepKind.WRITE_RING_POINT else topology.unit_of_cpu(st.cpu), []).append(i)
     for unit, slots in by_unit.items():
         unit_steps = [steps[i] for i in slots]
         groups = _groups(unit_steps)
@@ -225,7 +235,11 @@ def reorder_writes(
             members[key].append((cpu, group))
         cpus: dict[int, _Cpu] = {}
         for cpu in dict.fromkeys(c for c, _, _ in groups):
-            model = _model(cpu, [st for c, _, g in groups if c == cpu for st in g], baseline, point_words)
+            unit_steps_of_cpu = [st for c, _, g in groups if c == cpu for st in g]
+            if unit == RING_UNIT:
+                model = _model(cpu, unit_steps_of_cpu, {}, {(cpu, n): w for n, w in (ring_words or {}).items() if n >= 1})
+            else:
+                model = _model(cpu, unit_steps_of_cpu, baseline, point_words)
             if model is not None:
                 cpus[cpu] = model
         ranks = {k: _rank(cpus, members[k]) for k in keys}
