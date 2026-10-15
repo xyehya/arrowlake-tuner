@@ -21,9 +21,11 @@ from arltuner.profiles.serialize import dump_profile
 
 from .test_complete_profiles import COLD, EXPECTED, CompleteCase
 from .test_accept import AcceptCase
+from .test_tune import row, rows
 
 #: [MEASURED lnx 2026-10-15] ring words now: OC word, points 1..8 (point 8 = 39x with -25.39 mV), P2 = 9 (40x, -25.39 mV).
 RING_ACCEPTED = [0x28, 0x08, 0x0E, 0x14, 0x1C, 0x22, 0x25, 0x26, 0xFCC00027, 0xFCC00028]
+RING_ACCEPTED_LIVE = list(RING_ACCEPTED)
 WARM_RING_OC_27 = dataclasses.replace(COLD, initial_domain_vf={**COLD.initial_domain_vf, 2: VfWord.from_u32(0x27)})  # the BIOS ring ratio is 39 again: no P2 = 9
 
 
@@ -204,3 +206,57 @@ class AcceptFromRead(AcceptCase):
         self.assertTrue(all(c["match"] for c in after["accepted_match"]), after["accepted_match"])
         self.assertEqual(next(c for c in after["accepted_match"] if c["cpu"] == "ring")["diffs"], [])
         self.assertEqual(sorted(table), [*range(8), 8, 12, 16, 20])
+
+
+class Persistence(RingCase):
+    def test_the_ring_follows_an_apply_and_survives_a_helper_restart(self) -> None:
+        acc = self.accepted_with_ring()
+        h = self.boot(COLD, accepted_dir=acc)
+        self.read(h)
+        self.restore(h)
+        h.stop()
+        h2 = self.start(self.config(accepted_dir=acc))
+        got = h2.call("last", "tune.last", {})["result"]
+        self.assertTrue(got["available"])
+        ring = got["result"]["ring"]
+        self.assertEqual([p["word"] for p in ring["points"]][-2:], ["0xfcc00027", "0xfcc00028"])  # the verified read-backs, not the pre-apply read
+        self.assertEqual(next(c for c in got["result"]["accepted_match"] if c["cpu"] == "ring")["match"], True)
+        self.assertEqual(h2.helper.last_ring, RING_ACCEPTED_LIVE)  # the first tune.* call restored this boot's words, the post-apply ones
+        plan = self.plan(h2, {"restore": "accepted"})
+        self.assertEqual([s for s in plan["steps"] if s["kind"] == "write_ring_point"], [])  # the restored words say the ring already holds the accepted state
+
+    def test_a_partial_read_leaves_the_kept_ring_alone(self) -> None:
+        h = self.boot(COLD, accepted_dir=self.accepted_with_ring())
+        self.read(h)
+        kept = list(h.helper.last_ring)
+        res = self.read(h, cpus=[0])
+        self.assertIsNone(res["ring"])
+        self.assertIn("ring", res["extras_notes"])
+        self.assertEqual(h.helper.last_ring, kept)
+
+
+class Rounds(RingCase):
+    def test_a_small_step_limit_splits_the_ring_into_rounds_like_a_core(self) -> None:
+        self.policy_steps(max_offset_step_mv=10)  # -25 mV (raw -26) from 0 on the ring: three steps; the cores need rounds too
+        h = self.boot(COLD, accepted_dir=self.accepted_with_ring())
+        self.read(h)
+        plan, result = self.restore(h)
+        self.assertGreater(plan["rounds"], 1)
+        self.assertEqual(self.sim.vf(0, 2, 8).to_u32(), 0xFCC00027)
+        self.assertEqual(self.sim.vf(0, 2, 9).to_u32(), 0xFCC00028)
+        self.assertGreaterEqual(len([r for r in ring_requests(self.sim, 0x11) if r.p2 == 9]), 3)
+        self.assert_expected_words()
+        self.assertEqual(result["ring_refused"], [])
+
+
+class Saved(AcceptCase):
+    def test_a_saved_profile_carries_the_ring_and_profiles_get_still_works(self) -> None:
+        h = self.boot_accepting()
+        self.sim._vf[(2, -1, 8)] = VfWord.from_u32(0xFCC00027)
+        self.read(h)
+        r = h.call("s", "profiles.save", {"name": "mine", "intent": rows(row("P3", curve=0))})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["result"]["ring_points"], 9)
+        got = h.call("g", "profiles.get", {"name": "mine"})
+        self.assertTrue(got["ok"], got)
+        self.assertTrue(got["result"]["complete"])

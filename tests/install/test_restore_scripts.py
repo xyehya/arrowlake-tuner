@@ -99,6 +99,48 @@ class OneProfile(unittest.TestCase):
         self.assertIn('exec bash "$(cd "$(dirname "$0")" && pwd)/restore_tuning.sh" "$@"', text)
 
 
+class RingInTheRestore(unittest.TestCase):
+    """G-154 (D-045): the ring (cache, P1 = 2) is part of the accepted state; both scripts restore and compare it through the shared Python (the one apply, vf-dump's read-back and
+    the CLI's verdict); the scripts only parse the ``ring`` line (Windows) and show the ring refusal. Static checks only for the PowerShell script (no PowerShell here)."""
+
+    def test_the_linux_script_names_the_ring_and_shows_its_refusal(self) -> None:
+        text = (REPO / "tools/lnx/restore_tuning.sh").read_text()
+        self.assertIn("G-154", text)
+        self.assertIn("ring  <OC word> <point 1> ... <point n>", text)
+        self.assertIn("RING NOT RESTORED", text)  # the apply's ring refusal reaches the console (the full capture has it anyway)
+        self.assertEqual(text.count(' apply "$from/$prof"'), 1)  # still ONE apply: the ring is in the profile, not a second command
+        self.assertEqual(text.count("compare-accepted --readback"), 1)
+        self.assertNotIn("--no-ring", text)  # the read-back dumps the ring (vf-dump without --cpus)
+
+    def test_the_windows_script_parses_the_ring_line_without_failing_and_restores_it_the_same_way(self) -> None:
+        text = (REPO / "tools/win/restore_tuning.ps1").read_text()
+        self.assertIn("G-154", text)
+        self.assertIn("Contains('ring')", text)
+        self.assertIn("RING NOT RESTORED", text)
+        self.assertNotIn("ring not restored on Windows", text)  # the ring IS restored there (shared Python); no fallback line
+        self.assertEqual(text.count("@('apply', $prof"), 1)
+        self.assertEqual(text.count("'compare-accepted'"), 1)
+        self.assertNotIn("--no-ring", text)
+        # the EXPECTED-words parser keys by the first token as a STRING, so 'ring' is a key like '0' or '8'
+        self.assertIn("$Expected[$parts[0]] =", text)
+        self.assertIn("String keys", text)
+
+    def test_the_windows_expected_words_parser_handles_a_ring_line_like_the_python_one(self) -> None:
+        """The script's loop, ported line by line: split on whitespace, key = first token, words converted from hex; the Python parser agrees on the keys."""
+        from arltuner.profiles.expected import parse_expected
+
+        text = "# c\n0  39 8 14\n8  0 8 F\nring  28 8 E FCC00027\n"
+        expected: dict[str, str] = {}
+        for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.strip().split()
+            expected[parts[0]] = " ".join(format(int(w, 16), "X") for w in parts[1:])
+        self.assertEqual(list(expected), ["0", "8", "ring"])
+        table, ring = parse_expected(text)
+        self.assertEqual((sorted(table), ring is not None), ([0, 8], True))
+
+
 class Stops(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()

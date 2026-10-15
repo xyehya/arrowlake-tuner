@@ -231,6 +231,10 @@ class StepKind(str, Enum):
         return self in (StepKind.READ_RING_OC, StepKind.READ_RING_POINT, StepKind.WRITE_RING_POINT)
 
     @property
+    def is_ring_read(self) -> bool:
+        return self in (StepKind.READ_RING_OC, StepKind.READ_RING_POINT)
+
+    @property
     def is_msr(self) -> bool:
         """A plain-MSR step (T-023): goes through ``MsrRequest``; its read-back is an ``rdmsr``, not an extra WRMSR."""
         return self in (StepKind.READ_MSR, StepKind.WRITE_MSR)
@@ -444,7 +448,7 @@ class ApplyPlan:
         return tuple(
             PredictedRefusal(s.number, s.cpu, s.cmd, s.verdict.reason, s.verdict.detail)
             for s in self.steps
-            if not s.verdict.allowed
+            if not s.verdict.allowed and not s.kind.is_ring_read  # G-154: a ring read the policy refuses refuses the ring unit alone (``ring_refused``), never the plan
         )
 
     @property

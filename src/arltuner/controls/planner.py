@@ -1304,7 +1304,7 @@ def build_plan(
         warnings.append(RAISE_CAVEAT)
     # A next step is only offered when the step limits are the ONLY obstacle: with any other predicted refusal (a ceiling, the allowlist, ...)
     # walking the steps would end in a refusal after several sessions, so the plain refusals are reported instead.
-    hard = any(not st.verdict.allowed and st.number not in step_only for st in steps)
+    hard = any(not st.verdict.allowed and st.number not in step_only and not st.kind.is_ring_read for st in steps)  # G-154: a refused ring read is the ring unit's refusal alone
     return ApplyPlan(
         profile_name=profile.name,
         per_core_enabled=per_core_enabled,
