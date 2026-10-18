@@ -2,9 +2,9 @@
 refusal. Pure apart from the files it is given. (Core parking is held out of G-216: a parked CPU renumbers the live topology, see ``helper/cpu_online.py``.)
 
 Facts (``[MEASURED lnx 2026-10-18]``): intel_pstate is active (HWP); ``cpu<N>/cpufreq/cpuinfo_max_freq`` of cpu0 is 5700000 kHz; ``scaling_max_freq`` is the user's cap. The XTU
-analogue is a per-core max-ratio: effective ratio = min(turbo table, cap). A P-core cap is ratio x 100000 kHz. An E-core ratio goes through the caller's ``khz_of`` (the kernel's own
-perf map, ``ops_stress._cap_khz`` fed with the unit's fused top ratio, G-152: E 46x needs 4.7 GHz, not 4.6 ``[MEASURED lnx 2026-10-14]``); the kernel rounds an E cap to a perf step, so an E
-read-back is judged within ``E_TOLERANCE_KHZ`` of the value written.
+analogue is a per-core max-ratio: effective ratio = min(turbo table, cap). A cap means "never above ratio R": :func:`cap_choice` picks the 100 MHz bin by the measured kHz -> perf -> ratio
+model of ``docs/knowledge/power-profile-capping.md`` section 6 (``[MEASURED lnx 2026-10-12]``; E 46x needs 4.7 GHz, not 4.6 -- G-152) and the plan reports the ratio the cap will actually give.
+The kernel rounds an E cap to a perf step, so an E read-back is judged within ``E_TOLERANCE_KHZ`` of the value written.
 
 The four E-cores of a cluster run one ratio, so a cap on one of them does not hold: a cap on an E CPU is written to all CPUs of its cluster (topology from the live read,
 never hard-coded; the G-152 rule). Nothing here has a default floor: ``policy.runtime.cap_ratio_min`` says how low a cap may go and an absent key refuses naming itself; the
@@ -13,7 +13,7 @@ ceiling is always the CPU's own ``cpuinfo_max_freq``.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,11 +29,13 @@ __all__ = [
     "KHZ_PER_RATIO",
     "MAX_ATTR",
     "MIN_ATTR",
+    "CapChoice",
     "CpuFreq",
     "Refused",
     "RuntimeFiles",
     "RuntimeStep",
     "SysfsError",
+    "cap_choice",
     "plan",
     "plan_revert",
     "read_state",
@@ -117,7 +119,8 @@ class RuntimeFiles:
 @dataclass(frozen=True)
 class RuntimeStep:
     """One sysfs file write. ``domain`` is ``caps`` / ``uncore``; ``key`` the intent item (``cpu8``, ``min_ratio``); ``file`` the name relative to the root; ``before`` /
-    ``value`` in the file's unit (kHz); ``expect`` the ``(low, high)`` a read-back may show -- both ends equal ``value``: exact."""
+    ``value`` in the file's unit (kHz); ``expect`` the ``(low, high)`` a read-back may show -- both ends equal ``value``: exact. A cap step also carries ``ratio`` (the ratio the cap will
+    actually give, ``None`` = not known) and ``note`` (set when that is not the ratio asked)."""
 
     number: int
     domain: str
@@ -126,9 +129,16 @@ class RuntimeStep:
     before: int
     value: int
     expect: tuple[int, int]
+    ratio: int | None = None
+    note: str | None = None
 
     def as_json(self) -> dict[str, Any]:
-        return {"n": self.number, "domain": self.domain, "key": self.key, "file": self.file, "before": self.before, "value": self.value, "expect": list(self.expect)}
+        out: dict[str, Any] = {"n": self.number, "domain": self.domain, "key": self.key, "file": self.file, "before": self.before, "value": self.value, "expect": list(self.expect)}
+        if self.ratio is not None:
+            out["ratio"] = self.ratio
+        if self.note is not None:
+            out["note"] = self.note
+        return out
 
 
 def require_runtime_key(policy: Policy, key: str) -> Any:
@@ -181,6 +191,51 @@ def read_state(files: RuntimeFiles, cpus: Sequence[int]) -> dict[int, CpuFreq | 
 
 
 # --------------------------------------------------------------------------------------------------------------
+# the cap -> ratio map (docs/knowledge/power-profile-capping.md section 6, [MEASURED lnx 2026-10-12])
+# --------------------------------------------------------------------------------------------------------------
+_MODEL_MIN_BIN = 8
+#: by cpuinfo_max_freq: (perf units per bin x 1000, ratio divisor x 10): p = ceil(a x N), achieved ratio = floor(p x 10 / divisor)
+_E_MODEL = {4_900_000: (1377, 14)}
+_P_MODEL = {5_500_000: (1595, 16), 5_700_000: (1595, 16)}
+#: P cpu 0 (cpuinfo max 5.7 GHz) measured at N = 55, 56, 57 -> p = 88, 90, 92 (its scale differs slightly from cpu 1's)
+_P0_PERF = {55: 88, 56: 90, 57: 92}
+
+
+@dataclass(frozen=True)
+class CapChoice:
+    """The ``scaling_max_freq`` chosen for a ratio asked: ``khz``, and the ratio that cap gives (``ratio``; ``None`` = the model is not known for this CPU, the cap is ratio x 100 MHz)."""
+
+    khz: int
+    ratio: int | None
+
+
+def _perf_ratio(kind: str, max_khz: int, n: int) -> int | None:
+    """The ratio a cap in 100 MHz bin ``n`` gives, by the measured model; ``None`` where the model is not known."""
+    model = (_E_MODEL if kind == "E" else _P_MODEL).get(max_khz)
+    if model is None:
+        return None
+    a, div = model
+    p = _P0_PERF[n] if kind == "P" and max_khz == 5_700_000 and n in _P0_PERF else -(-a * n // 1000)
+    return p * 10 // div
+
+
+def cap_choice(kind: str, ratio: int, max_khz: int) -> CapChoice:
+    """The cap for "never above ``ratio``" on a CPU of ``kind`` ("E" / "P") whose ``cpuinfo_max_freq`` is ``max_khz``: the model gives the ratio each 100 MHz bin N (8 <= N <= max / 100 MHz)
+    achieves; the answer is the lowest bin that achieves the highest ratio <= ``ratio``. A ratio no bin reaches (E 23, P 42) gets the next lower one, and the choice says which. A CPU the model does
+    not cover (another ``cpuinfo_max_freq``, or a ratio below the bins measured) gets bin N = ratio, which cannot overshoot (the model gains < 1 ratio per bin)."""
+    best: tuple[int, int] | None = None  # (achieved ratio, lowest bin giving it)
+    for n in range(_MODEL_MIN_BIN, max_khz // KHZ_PER_RATIO + 1):
+        got = _perf_ratio(kind, max_khz, n)
+        if got is None:
+            break
+        if got <= ratio and (best is None or got > best[0]):
+            best = (got, n)
+    if best is None:
+        return CapChoice(ratio * KHZ_PER_RATIO, None)
+    return CapChoice(best[1] * KHZ_PER_RATIO, best[0])
+
+
+# --------------------------------------------------------------------------------------------------------------
 # the plan
 # --------------------------------------------------------------------------------------------------------------
 def _ratio(key: object, value: object) -> int:
@@ -214,7 +269,9 @@ def expand(intent: Mapping[int, int], topology: Topology) -> dict[int, int]:
     return out
 
 
-def _tolerance(topology: Topology, cpu: int) -> int:
+def _tolerance(topology: Topology | None, cpu: int) -> int:
+    if topology is None:  # a revert with no usable topology: exact compare
+        return 0
     try:
         return E_TOLERANCE_KHZ if topology.by_cpu(cpu).kind == "E" else 0
     except UnknownCore:
@@ -225,21 +282,17 @@ def _same(a: int, b: int, tolerance: int) -> bool:
     return a == b if tolerance == 0 else abs(a - b) < tolerance
 
 
-def _step(number: int, cpu: int, before: int, value: int, tolerance: int) -> RuntimeStep:
-    return RuntimeStep(number, "caps", f"cpu{cpu}", cap_file(cpu), before, value, (value - tolerance, value + tolerance))
+def _step(number: int, cpu: int, before: int, value: int, tolerance: int, ratio: int | None = None, note: str | None = None) -> RuntimeStep:
+    return RuntimeStep(number, "caps", f"cpu{cpu}", cap_file(cpu), before, value, (value - tolerance, value + tolerance), ratio, note)
 
 
-def plan(
-    intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, held: str | None = None,
-    unit_top: Mapping[str, int] | None = None, khz_of: Callable[[int, int | None, int | None], int] | None = None,
-) -> list[RuntimeStep]:
+def plan(intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, held: str | None = None) -> list[RuntimeStep]:
     """The write steps for ``intent`` (``{cpu: ratio}``) over the caps in force, or :class:`Refused` -- nothing is written by planning.
 
     Checks, in order (each refusal names its check): the policy key ``cap_ratio_min`` (``RUNTIME_POLICY_MISSING``), a measure / stress run or journal that owns the caps (``CAPS_CONFLICT``:
     ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``), no cpufreq
-    directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling (``CAPS_RANGE``), the CPU's own ``scaling_min_freq`` (``CAPS_BELOW_MIN``).
-    The ceiling is the CPU's own ``cpuinfo_max_freq`` and, for an E CPU whose unit's fused top ratio is in ``unit_top``, that ratio. ``khz_of(ratio, top, cpuinfo_khz)`` is the E-core kHz
-    (``ops_stress._cap_khz``); without it, or a P CPU, a ratio is ratio x 100 MHz. Steps that change nothing are dropped.
+    directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling, the CPU's own ``cpuinfo_max_freq`` (``CAPS_RANGE``), the CPU's own ``scaling_min_freq``
+    (``CAPS_BELOW_MIN``). The kHz is :func:`cap_choice`'s; a step carries the ratio the cap will give and, when that is not the ratio asked, a note. Steps that change nothing are dropped.
     """
     if not intent:
         raise Refused("NOTHING_TO_DO", "the caps intent changes nothing (set caps {cpu: ratio})")
@@ -256,23 +309,23 @@ def plan(
         freq = state.get(cpu)
         if freq is None:
             raise Refused("CAPS_NO_FILE", f"cpu {cpu} has no cpufreq directory (is it offline?)", key)
-        tol = _tolerance(topology, cpu)
-        top = unit_top.get(topology.unit_of_cpu(cpu)) if tol and unit_top else None
-        khz = khz_of(ratio, top, freq.max_khz) if tol and khz_of is not None else ratio * KHZ_PER_RATIO
         if ratio < floor:
             raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is below [runtime] cap_ratio_min = {floor} ({policy.where})", key)
-        if top is not None and ratio > top:
-            raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is above the maximum ratio of its unit ({top})", key)
-        if khz > freq.max_khz:
+        if ratio * KHZ_PER_RATIO > freq.max_khz:
             raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is above the CPU's own maximum (cpuinfo_max_freq {freq.max_khz} kHz = ratio {freq.max_khz / KHZ_PER_RATIO:g})", key)
-        if freq.min_khz is not None and khz < freq.min_khz:
+        tol = _tolerance(topology, cpu)
+        choice = cap_choice("E" if tol else "P", ratio, freq.max_khz)
+        note = None
+        if choice.ratio is not None and choice.ratio != ratio:
+            note = f"ratio {ratio} is unreachable by a cpufreq cap: capped at {choice.ratio}"
+        if freq.min_khz is not None and choice.khz < freq.min_khz:
             raise Refused("CAPS_BELOW_MIN", f"cpu {cpu}: ratio {ratio} is below the CPU's scaling_min_freq ({freq.min_khz} kHz): the kernel would refuse it", key)
-        if not _same(khz, freq.cap_khz, tol):
-            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, khz, tol))
+        if not _same(choice.khz, freq.cap_khz, tol):
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, choice.khz, tol, choice.ratio, note))
     return steps
 
 
-def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], topology: Topology) -> tuple[list[RuntimeStep], list[str]]:
+def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], topology: Topology | None) -> tuple[list[RuntimeStep], list[str]]:
     """The writes that put the journaled caps back (``values`` = ``{cpu: kHz}``): ``(steps, notes)``. The policy does not apply (this restores a recorded state); a CPU without a
     cpufreq directory (offline now) is skipped with a note -- a note means something was *not* restored, and the caller keeps the journal's in-flight mark; a value above the CPU's
     maximum is :class:`Refused`."""

@@ -186,25 +186,31 @@ class Caps(RuntimeCase):
         self.assertTrue(revert["complete"], revert)
         self.assertEqual([self.cap(c) for c in (8, 9, 10, 11)], [e_max()] * 4)
 
-    def test_e_caps_map_through_the_kernels_perf_map_and_the_fused_top(self) -> None:
+    def test_a_cap_never_overshoots_and_an_unreachable_ratio_is_flagged_in_the_plan(self) -> None:
         h = self.boot()
-        for ratio, khz in ((46, 4_700_000), (47, 4_800_000), (40, 4_100_000)):  # 4.1 GHz still lands E 40x (power-profile-capping.md: any kHz inside the bin)
-            self.assertEqual({s["value"] for s in self.plan(h, caps={"8": ratio})["steps"]}, {khz}, ratio)
-        e = self.refused(h, "runtime.plan", {"caps": {"8": 49}}, "CAPS_RANGE")  # cpuinfo_max_freq says 49x; the cluster's fused top is 48x
-        self.assertIn("maximum ratio of its unit (48)", e["message"])
+        for ratio, khz in ((46, 4_700_000), (47, 4_800_000), (40, 4_000_000), (24, 2_400_000), (28, 2_900_000)):
+            steps = self.plan(h, caps={"8": ratio})["steps"]
+            self.assertEqual(({s["value"] for s in steps}, {s["ratio"] for s in steps}), ({khz}, {ratio}), ratio)
+        plan = self.plan(h, caps={"8": 23})
+        self.assertEqual(({s["value"] for s in plan["steps"]}, {s["ratio"] for s in plan["steps"]}), ({2_200_000}, {22}))
+        self.assertTrue(any("cpu 8, 9, 10, 11: ratio 23 is unreachable by a cpufreq cap: capped at 22" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertIn("unreachable", plan["steps"][0]["note"])
+        plan = self.plan(h, caps={"3": 42})
+        self.assertEqual((plan["steps"][0]["value"], plan["steps"][0]["ratio"]), (4_100_000, 41))
+        self.assertTrue(any("ratio 42 is unreachable" in w and "capped at 41" in w for w in plan["warnings"]), plan["warnings"])
+        self.refused(h, "runtime.plan", {"caps": {"8": 50}}, "CAPS_RANGE")  # cpuinfo_max_freq says 49x
         self.assertEqual(self.files.writes, [])
 
-    def test_unknown_unit_maxima_is_a_plan_warning_not_a_silent_fallback(self) -> None:
+    def test_a_cap_needs_no_turbo_tables(self) -> None:
         h = self.boot()
 
         def no_msr() -> None:
             raise OSError("no msr")
 
-        h.helper.measure_wiring.make_run = no_msr  # no turbo tables
+        h.helper.measure_wiring.make_run = no_msr
         plan = self.plan(h, caps={"8": 46})
-        self.assertEqual({s["value"] for s in plan["steps"]}, {4_600_000})
-        self.assertTrue(any("maximum ratio of each E unit is not known" in w for w in plan["warnings"]), plan["warnings"])
-        self.assertFalse(any("not known" in w for w in self.plan(h, caps={"3": 45})["warnings"]))  # a P cap needs no table
+        self.assertEqual({s["value"] for s in plan["steps"]}, {4_700_000})
+        self.assertFalse(any("not known" in w for w in plan["warnings"]), plan["warnings"])
 
     def test_a_later_apply_keeps_the_first_journaled_value(self) -> None:
         h = self.boot()
@@ -301,6 +307,16 @@ class OfflineGuard(RuntimeCase):
         self.assertFalse(msg.get("ok"), msg)
         self.assertEqual((msg["error"]["code"], msg["error"]["detail"]["check"], msg["error"]["detail"]["cpus"]), ("REFUSED", "CPU_OFFLINE", [cpu]), msg)
         self.assertIn(f"cpu {cpu} is offline", msg["error"]["message"])
+
+    def test_a_revert_is_not_blocked_by_an_offline_cpu(self) -> None:
+        h = self.boot()
+        self.go(h, caps={"3": 45, "10": 40}, uncore={"max_ratio": 30})
+        self.files.online[10] = 0  # taken offline behind our back
+        self.check(self.call(h, "runtime.plan", {"caps": {"3": 44}}), 10)  # a forward plan is
+        plan = self.plan(h, revert=True)  # a revert restores per-CPU files by number from the journal
+        self.assertTrue(plan["steps"], plan)
+        self.apply(h, plan)
+        self.assertEqual((self.cap(3), self.files.uncore["max_freq_khz"]), (P_MAX, 4_000_000))
 
     def test_runtime_plan_and_apply_refuse(self) -> None:
         h = self.offline_boot()
@@ -500,13 +516,27 @@ class Revert(RuntimeCase):
         self.assertTrue(any("cap_ratio_min" in w for w in warnings), warnings)
         self.assertTrue(any("max_ratio" in w and "uncore_ratio" in w for w in warnings), warnings)
 
-    def test_a_cpu_that_is_offline_at_revert_is_a_named_refusal(self) -> None:
-        h = self.boot()
-        self.go(h, caps={"3": 45})
-        self.files.online[3] = 0  # taken offline behind our back
-        e = self.refused(h, "runtime.plan", {"revert": True}, "CPU_OFFLINE")
-        self.assertIn("cpu 3 is offline", e["message"])
-        self.assertEqual(self.cap(3), 4_500_000)
+    def test_a_cpu_that_is_offline_at_revert_is_skipped_and_the_revert_is_not_complete(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        make_runtime_sysfs(root)
+        h = self.boot(files=cp.RuntimeFiles(root))  # type: ignore[arg-type]
+        self.files.write_int("cpu3/cpufreq/scaling_max_freq", 4_500_000)
+        self.files.write_int("cpu9/cpufreq/scaling_max_freq", 4_500_000)
+        self.files.write_int("intel_uncore_frequency/package_00_die_00/max_freq_khz", 3_000_000)
+        Journal.put(self, {"in_flight": False, "caps": {"3": P_MAX, "9": 4_900_000}, "uncore": {"max_ratio": 4_000_000}})
+        shutil.rmtree(root / "cpu9" / "cpufreq")  # cpu 9 goes offline: no cpufreq directory, online reads 0
+        (root / "cpu9" / "online").write_text("0\n")
+        plan = self.plan(h, revert=True)  # not blocked by CPU_OFFLINE
+        self.assertTrue(any("cpu 9 has no cpufreq directory" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertEqual({s["domain"] for s in plan["steps"]}, {"caps", "uncore"})
+        res = self.apply(h, plan)
+        self.assertFalse(res["complete"], res)
+        self.assertIsNone(res.get("stop"))
+        self.assertTrue(any("cpu 9" in w and "journal is kept" in w for w in res["warnings"]), res["warnings"])
+        self.assertEqual(self.files.read_int("cpu3/cpufreq/scaling_max_freq"), P_MAX)
+        self.assertEqual(self.files.read_int("intel_uncore_frequency/package_00_die_00/max_freq_khz"), 4_000_000)  # the uncore restored normally
+        self.refused(h, "runtime.plan", {"caps": {"5": 45}}, "CPU_OFFLINE")  # forward plans stay blocked
 
     def test_a_revert_that_skipped_a_cap_keeps_the_in_flight_mark(self) -> None:
         root = Path(tempfile.mkdtemp())

@@ -11,7 +11,6 @@ from arltuner.controls import caps as cp
 from arltuner.controls import uncore as un
 from arltuner.guard import load_policy
 from arltuner.topology import arl_s_285k, synthetic
-from arltuner.helper.ops_stress import _cap_khz
 
 from tests.fakesys import make_runtime_sysfs
 
@@ -148,27 +147,56 @@ class Caps(Case):
         self.assertEqual((e.check, e.key), ("CAPS_CPU_NOT_ALLOWED", "cpu9"))
         self.assertEqual(self.refusal(self.plan, {12: 40}, narrow).check, "CAPS_CPU_NOT_ALLOWED")
 
-    def test_an_e_cap_goes_through_the_kernels_perf_map_with_the_units_fused_top(self) -> None:
-        top = {"EC0": 48, "EC1": 48}
-        for ratio, khz in ((46, 4_700_000), (47, 4_800_000), (40, 4_100_000)):  # E 46 needs 4.7 GHz, not 4.6 [MEASURED lnx 2026-10-14]; 4.1 GHz still lands E 40x
-            steps = self.plan({8: ratio}, unit_top=top, khz_of=_cap_khz)
-            self.assertEqual({s.value for s in steps}, {khz}, ratio)
-            self.assertEqual(steps[0].expect, (khz - cp.E_TOLERANCE_KHZ, khz + cp.E_TOLERANCE_KHZ))
-        (p,) = self.plan({3: 46}, unit_top=top, khz_of=_cap_khz)  # a P core: ratio x 100 MHz, exact
-        self.assertEqual((p.value, p.expect), (4_600_000, (4_600_000, 4_600_000)))
+    def test_a_cap_never_overshoots_the_ratio_asked(self) -> None:
+        # docs/knowledge/power-profile-capping.md section 6 [MEASURED lnx 2026-10-12]: (kind, cpuinfo max, ratio asked) -> (kHz, ratio the cap gives)
+        for (kind, top, ask), want in {
+            ("E", 4_900_000, 46): (4_700_000, 46),  # E 46x needs 4.7 GHz, not 4.6 (4.6 GHz gives 45x)
+            ("E", 4_900_000, 40): (4_000_000, 40),
+            ("E", 4_900_000, 24): (2_400_000, 24),  # not 2.5 GHz: 25x
+            ("E", 4_900_000, 23): (2_200_000, 22),  # 23x is never produced: the lowest bin that gives 22x
+            ("E", 4_900_000, 28): (2_900_000, 28),
+            ("E", 4_900_000, 48): (4_900_000, 48),
+            ("P", 5_500_000, 55): (5_500_000, 55),
+            ("P", 5_500_000, 42): (4_100_000, 41),  # P 42x is unreachable on cpu 1
+            ("P", 5_700_000, 57): (5_700_000, 57),  # cpu 0: N = 55, 56, 57 -> p = 88, 90, 92
+            ("P", 5_700_000, 56): (5_600_000, 56),
+        }.items():
+            got = cp.cap_choice(kind, ask, top)
+            self.assertEqual((got.khz, got.ratio), want, (kind, top, ask))
+        for kind, top in (("E", 4_900_000), ("P", 5_500_000), ("P", 5_700_000)):  # whatever is asked, the cap gives at most that
+            for ask in range(8, top // 100_000 + 1):
+                got = cp.cap_choice(kind, ask, top)
+                self.assertLessEqual(got.ratio, ask, (kind, top, ask))
+                self.assertGreaterEqual(got.ratio, ask - 1 if ask not in (13, 18, 21, 23, 26, 29, 31, 34, 39) else ask - 2, (kind, top, ask))
+        odd = cp.cap_choice("E", 46, 4_800_000)  # no model for this cpuinfo_max_freq: bin N = ratio, which cannot overshoot, and no claim about the result
+        self.assertEqual((odd.khz, odd.ratio), (4_600_000, None))
 
-    def test_the_e_ceiling_is_the_units_fused_top_ratio(self) -> None:
-        e = self.refusal(self.plan, {8: 49}, unit_top={"EC0": 48}, khz_of=_cap_khz)  # cpuinfo_max_freq says 49x, the cluster only reaches 48x
-        self.assertEqual(e.check, "CAPS_RANGE")
-        self.assertIn("maximum ratio of its unit (48)", str(e))
-        self.assertEqual(self.plan({8: 49}), [])  # without the fused top, 49x is cpuinfo_max_freq itself: already in force
+    def test_the_plan_reports_the_ratio_the_cap_gives_and_flags_an_unreachable_one(self) -> None:
+        steps = self.plan({8: 46})
+        self.assertEqual(({s.value for s in steps}, {s.ratio for s in steps}, {s.note for s in steps}), ({4_700_000}, {46}, {None}))
+        self.assertEqual(steps[0].as_json()["ratio"], 46)
+        self.assertNotIn("note", steps[0].as_json())
+        steps = self.plan({8: 23})
+        self.assertEqual(({s.value for s in steps}, {s.ratio for s in steps}), ({2_200_000}, {22}))
+        self.assertIn("ratio 23 is unreachable by a cpufreq cap: capped at 22", steps[0].note)
+        (p,) = self.plan({3: 42})
+        self.assertEqual((p.value, p.ratio, p.expect), (4_100_000, 41, (4_100_000, 4_100_000)))  # P is exact, and 42x is unreachable by a cap
+        self.assertIn("ratio 42 is unreachable by a cpufreq cap: capped at 41", p.note)
+
+    def test_the_e_tolerance_applies_to_the_chosen_value(self) -> None:
+        steps = self.plan({8: 46})
+        self.assertEqual(steps[0].expect, (4_700_000 - cp.E_TOLERANCE_KHZ, 4_700_000 + cp.E_TOLERANCE_KHZ))
+
+    def test_the_ceiling_is_the_cpus_own_cpuinfo_max(self) -> None:
+        self.assertEqual(self.refusal(self.plan, {8: 50}).check, "CAPS_RANGE")
+        self.assertEqual(self.plan({8: 49}), [])  # 4.9 GHz is cpuinfo_max_freq: allowed, and already in force
+        self.assertEqual(cp.cap_choice("E", 49, 4_900_000).ratio, 48)  # the cluster's top
 
     def test_an_e_cap_within_a_perf_step_of_the_value_in_force_is_already_in_force(self) -> None:
-        top = {"EC0": 48}
         for cpu in (8, 9, 10, 11):
             self.files.write_int(f"cpu{cpu}/cpufreq/scaling_max_freq", 4_686_957)  # what the kernel reads back after a 4.7 GHz write
-        self.assertEqual(self.plan({8: 46}, unit_top=top, khz_of=_cap_khz), [])
-        self.assertEqual(len(self.plan({8: 45}, unit_top=top, khz_of=_cap_khz)), 4)
+        self.assertEqual(self.plan({8: 46}), [])
+        self.assertEqual(len(self.plan({8: 45})), 4)
 
     def test_revert_restores_journaled_caps_and_skips_offline_cpus(self) -> None:
         self.files.write_int("cpu3/cpufreq/scaling_max_freq", 4_500_000)

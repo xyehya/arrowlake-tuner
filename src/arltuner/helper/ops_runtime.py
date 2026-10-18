@@ -6,8 +6,10 @@
 * ``runtime.read``: caps, online state, uncore limits, the ``[runtime]`` policy keys, what holds the caps (a stress / measure run or its journal) and the journal. No write; allowed in every state.
 * ``runtime.plan``: ``{caps?: {cpu: ratio}, uncore?: {min_ratio?, max_ratio?}}`` or ``{revert: true}`` (the values of the journal) -> the file writes in a safe order, the nonce, nothing
   written. Same plan-id / ``CONFIRM <nonce>`` / 600 s / single-use semantics as ``tune.plan`` (:class:`~arltuner.helper.ops_tune.PlanStore`, this module's own store).
-  The rules live in :mod:`arltuner.controls.caps` and ``uncore``; an absent ``[runtime]`` key refuses the control and names itself (a revert needs no key). An E-core cap goes through the
-  kernel's perf map (``ops_stress._cap_khz`` fed with the unit's fused top ratio): E 46 -> 4.7 GHz.
+  The rules live in :mod:`arltuner.controls.caps` and ``uncore``; an absent ``[runtime]`` key refuses the control and names itself (a revert needs no key). A cap means "never above ratio R":
+  the bin comes from the measured kHz -> perf -> ratio model (:func:`~arltuner.controls.caps.cap_choice`, E 46 -> 4.7 GHz) and a ratio no cap reaches is flagged in the plan with the one it gives.
+  A forward plan / apply refuses while a CPU is offline (``CPU_OFFLINE``); a **revert** does not: it restores per-CPU files by number from the journal, an offline CPU's cap is skipped
+  (reported; the revert is then not ``complete``) and the uncore is restored normally.
 * ``runtime.apply``: one sysfs file per transaction, planned again from the values now in force (any difference is ``PLAN_STALE``). Before the first write the values being replaced are
   journaled (``runtime-journal.json``, root 0600, boot-id bound, bounded; a key is journaled the first time it is written in a boot and never overwritten) with ``in_flight`` set; each write is audited
   (``runtime_attempt``, fsync'd) before it is sent, under the guard's cross-process lock, read back from the file, and a mismatch stops the apply (no retry, no auto-revert). When the apply ends --
@@ -28,7 +30,7 @@ import os
 import re
 import secrets
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,7 +44,6 @@ from arltuner.topology import Topology
 from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _no_args, _only, _trust, _trust_refusal, helper_topology
 from .ops_power import _boot_id, _NotSent, _open_audit, _release_lock, _take_lock
-from .ops_stress import _cap_khz, _unit_limits
 from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _load_policy, _validate_tune_apply
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, PLAN_STALE, REFUSED, OpError
 from .state import State
@@ -146,11 +147,19 @@ def _wiring(helper: Helper) -> RuntimeWiring:
         return w
 
 
-def _plans(helper: Helper) -> PlanStore:
+class _RuntimePlanStore(PlanStore):
+    def is_revert(self, plan_id: str) -> bool:
+        """Whether ``plan_id`` names a stored revert plan (no claim, no state change): the offline-CPU guard lets a revert through."""
+        with self._lock:
+            plan = self._plans.get(plan_id)
+            return plan is not None and bool(getattr(plan, "revert", False))
+
+
+def _plans(helper: Helper) -> _RuntimePlanStore:
     with _LOCK:
         store = getattr(helper, "_runtime_plans", None)
         if store is None:
-            store = PlanStore(helper.cfg.monotonic)
+            store = _RuntimePlanStore(helper.cfg.monotonic)
             helper._runtime_plans = store  # type: ignore[attr-defined]
         return store
 
@@ -436,30 +445,32 @@ def _order(steps: list[cp.RuntimeStep]) -> list[cp.RuntimeStep]:
     return [dataclasses.replace(s, number=i) for i, s in enumerate(ordered, 1)]
 
 
-def _cap_limits(helper: Helper, topo: Topology, cpus: Sequence[int]) -> tuple[dict[str, int], Callable[[int, int | None, int | None], int] | None, list[str]]:
-    """``(fused top ratio per E unit, the kHz map, notes)`` for the E units of ``cpus``: the way ``stress.start`` derives them (``ops_stress._unit_limits``: turbo tables, read-only).
-    Without the maxima (no measure wiring / no tables) a cap is ratio x 100 MHz, which may not hold an E-cluster: say so."""
-    units = sorted({topo.unit_of_cpu(c) for c in cpus if topo.by_cpu(c).kind == "E"})
-    if not units:
-        return {}, None, []
-    mw = getattr(helper, "measure_wiring", None)
-    known = False
-    top: dict[str, int] = {}
-    if mw is not None:
-        top, _cpuinfo, known = _unit_limits(helper, mw, topo, units)
-    if known:
-        return top, _cap_khz, []
-    return {}, None, ["the maximum ratio of each E unit is not known (no turbo tables): the E cap is written as ratio x 100 MHz, which may not hold the cluster at that ratio"]
+def _revert_topology(helper: Helper) -> Topology | None:
+    """The live topology for a revert, or ``None``: a revert restores per-CPU files by number and must not be stopped by a topology an offline CPU has made unusable."""
+    try:
+        return helper_topology(helper)
+    except OpError:
+        return None
+
+
+def _unreachable(steps: Sequence[cp.RuntimeStep]) -> list[str]:
+    """One plan note per distinct cap note, naming its CPUs (an E cluster's four share one)."""
+    by_note: dict[str, list[int]] = {}
+    for s in steps:
+        if s.note:
+            by_note.setdefault(s.note, []).append(int(s.key[3:]))
+    return [f"cpu {', '.join(map(str, sorted(cpus)))}: {note}" for note, cpus in by_note.items()]
 
 
 def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: dict[str, Any]) -> tuple[list[cp.RuntimeStep], list[str], Journal | None]:
     """``(steps, notes, journal of this boot or None)`` for a plan-shaped ``args``; raises the refusal. ``policy`` is not needed for a revert. For a revert a note means a journaled value was
     **not** restored (the caller then keeps the in-flight mark)."""
-    topo = helper_topology(helper)
+    revert = bool(args.get("revert"))
+    topo = _revert_topology(helper) if revert else helper_topology(helper)
     journal = _read_journal(helper, w)
     notes: list[str] = []
     try:
-        if args.get("revert"):
+        if revert:
             if journal is None or journal.empty():
                 raise OpError(REFUSED, "there is nothing to revert to: no runtime value was written in this boot (no journal for this boot). Nothing was written.", {"check": "NO_JOURNAL"})
             steps, notes = cp.plan_revert(journal.caps, cp.read_state(w.files, sorted(journal.caps)), topo)
@@ -479,14 +490,11 @@ def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: di
         steps = []
         if "caps" in args:
             intent = {int(k): v for k, v in args["caps"].items()}
-            known = {c.cpu for c in topo.cores}
-            unit_top, khz_of, limit_notes = _cap_limits(helper, topo, [c for c in intent if c in known])
-            cap_steps = cp.plan(intent, policy, cp.read_state(w.files, _cpus(w, topo)), topo, held=held, unit_top=unit_top, khz_of=khz_of)
+            cap_steps = cp.plan(intent, policy, cp.read_state(w.files, _cpus(w, topo)), topo, held=held)
             wrote = {int(s.key[3:]) for s in cap_steps}
             if wrote - set(intent):
                 notes.append(f"an E-cluster runs one ratio: the cap was also set on cpu {', '.join(map(str, sorted(wrote - set(intent))))} of the same cluster(s)")
-            if any(topo.by_cpu(c).kind == "E" for c in wrote):
-                notes += limit_notes
+            notes += _unreachable(cap_steps)
             steps += cap_steps
         if "uncore" in args:
             steps += un.plan(args["uncore"], policy, un.read_state(w.files))
@@ -521,7 +529,8 @@ def _journal_policy_warnings(policy: Policy, journal: Journal) -> list[str]:
 
 
 def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    refuse_if_cpu_offline(helper, "runtime.plan")
+    if not args.get("revert"):  # a revert restores per-CPU files by number: an offline CPU is skipped and reported, not a refusal
+        refuse_if_cpu_offline(helper, "runtime.plan")
     w = _wiring(helper)
     steps, notes, journal, policy = _planned(helper, w, args)
     revert = bool(args.get("revert"))
@@ -647,7 +656,8 @@ def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.R
 # runtime.apply
 # --------------------------------------------------------------------------------------------------------------
 def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    refuse_if_cpu_offline(helper, "runtime.apply")
+    if not _plans(helper).is_revert(str(args.get("plan_id"))):
+        refuse_if_cpu_offline(helper, "runtime.apply")
     plan = _plans(helper).claim(args["plan_id"], args["typed"])
     w = _wiring(helper)
     boot_id = _boot_id(helper)
@@ -677,14 +687,14 @@ def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     run.warnings.extend(f"{n}. The journal is kept." for n in notes if plan.revert)
     if not plan.revert or (run.stop is None and journal.in_flight and not skipped):  # a complete revert also settles a journal left in flight by a dead helper
         _end_in_flight(helper, w, journal, boot_id, run.warnings)
-    complete = run.stop is None
+    complete = run.stop is None and not skipped  # a revert that skipped a journaled value is not complete (its warning says which)
     out: dict[str, Any] = {
         "plan_id": plan.plan_id, "revert": plan.revert, "steps": run.table, "readback": run.readback, "complete": complete, "writes_sent": run.sent, "after": _after(w, steps), "journal": str(w.journal_path),
         "warnings": run.warnings,
     }
     if complete:
         return out
-    if run.sent:
+    if run.stop is None or run.sent:
         out["stop"] = run.stop  # the hardware is partly changed: the table must reach the page, so this is a result, not an error
         return out
     assert run.stop is not None
