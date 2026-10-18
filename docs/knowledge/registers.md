@@ -171,6 +171,26 @@ Boost (via HWiNFO); the SDM calls bits 14–15 reserved → `[UNVERIFIED]`, repo
 CoreFreq notes bit 24 "Other" was "Electrical Design Point" on Haswell. **Interpretation:** a live `max_turbo_limit` (bit 12) means the multi-core turbo
 ratio limit is the cap — normal under load, not a fault. Log bits accumulate until cleared; this app never clears them.
 
+### Power limits — powercap files and MSRs 0x606 / 0x610 / 0x614 (G-214) `host lnx`, code `src/arltuner/controls/power.py`, ops `helper/ops_power.py`
+**Access.** Writes go to the powercap files only, never to MSR 0x610 (`PLAIN_MSR_WRITABLE` has no entry for it; a policy `write` entry for 0x606/0x610/0x614 is a load error). The three MSRs are
+read through the guard (`msr_allow` read entries, package-wide: read on the lowest CPU) to see the lock bit and to check what the kernel wrote.
+**Powercap mapping** `[MEASURED lnx 2026-10-18]`, zone `/sys/class/powercap/intel-rapl:0` (files root 0644): `constraint_0_name` = `long_term` = **PL1**: `constraint_0_power_limit_uw` 250000000,
+`constraint_0_time_window_us` 127926272 (= tau); `constraint_1_name` = `short_term` = **PL2**: `constraint_1_power_limit_uw` 295000000, `constraint_1_time_window_us` 2440 (not written by the app);
+no `constraint_2`; `constraint_0_max_power_uw` 125000000 = the TDP, **not** a ceiling for PL1 (the machine runs 250 W). The code checks the two names and refuses a zone that numbers them otherwise.
+**0x606 RAPL_POWER_UNIT** `[MEASURED lnx 2026-09-29]` 0.125 W (`[3:0]` = 3), energy 2^-14 J (`[12:8]`), time 2^-10 s (`[19:16]` = 10; reference-285k notes platform.md §4: "0.125 W, 2^-14 J, 2^-10 s").
+**0x610 PKG_POWER_LIMIT** layout `[DOC SDM Vol.4]` and `[MEASURED lnx 2026-10-08]` for the fields it decoded (`0x004287d000df87d0` = PL1 250 W, clamp, tau 56 s, PL2 250 W, lock 0):
+PL1 `[14:0]` (x 0.125 W), enable `[15]`, clamp `[16]`, tau `[23:17]` (`Y` = `[21:17]`, `Z` = `[23:22]`; window = 2^Y x (1 + Z/4) x time unit), PL2 `[46:32]`, enable `[47]`, clamp `[48]`,
+**lock `[63]`** (set = read-only until reset; `[DOC SDM]`, XTU's "PL lock = 0x610 b63" `[DECOMPILED mailbox-recon-summary.md]`). Bits `[62:49]` are not decoded.
+**Time window rounding.** The kernel converts with the integer time unit 1000000 / 1024 = **976 us** (`[MEASURED lnx 2026-10-18]`: 127926272 us = 2^17 x 976 us, i.e. Y = 17, Z = 0) and the field is
+`Y = floor(log2(window / unit))`, `Z = floor(4 x (window/unit - 2^Y) / 2^Y)` -- a request is rounded **down** to an encodable window `[UNVERIFIED]` (kernel `intel_rapl_common.c` from memory;
+confirm on the write sitting H4). The read-back rule therefore accepts either of the two windows that bracket the request and then requires the register's `[23:17]`, decoded, to equal the file.
+**0x614 PKG_POWER_INFO**: thermal spec power `[14:0]` (125 W `[MEASURED lnx]` reference-285k notes platform.md §4), minimum `[30:16]`, maximum `[46:32]`, maximum window `[53:48]` -- layout `[DOC SDM]`,
+min / max fields `[UNVERIFIED]` on Arrow Lake. Shown for information; never a bound.
+**Runtime writes** `[MEASURED lnx 2026-10-08]` (platform-arl-s.md §12): PL1/PL2 powercap writes take effect while bit 63 is clear; a PL2 write changed only `0x610[46:32]`; a reboot restores the firmware value
+`[UNVERIFIED]`. Whether a write to a **locked** zone errors or is silently ignored is `[UNVERIFIED]` -- the app does not rely on either: it refuses to write when bit 63 is set or unreadable and checks the read-back.
+**Policy** (`[power]`, `guard/policy.py::PowerPolicy`): `pl1_w`, `pl2_w` (whole watts, 1..4095 = the 15-bit field), `tau_s` (seconds, <= 2^31 x 1.75 / 1024), each `[min, max]`, and `max_step_w`; all optional,
+**absent = refused, naming the key**; nothing is derived from the CPU. PL2 >= PL1 is enforced on the final pair, and the write order keeps it true after every single write.
+
 ## MMIO
 MCHBAR 0x59A0 / 0x59A4 / 0x59B0 = PL1 / PL2 / PL4 (INT340X RAPL `ARL_S_THERMAL`, `processor_thermal_rapl.c`) `doc`, PL4 on ARL-S untested. IPF DSP `decomp`: also 0x59A8/0x59AC (PP0/PP1), 0x5938/0x5930/0x593C; **base = mapped BAR of the processor-thermal PCI device**; PCU mailbox 0x5810/0x5814/0x5818 (not the OC mailbox); ref-clock 0x5F60/0x5F64. Per-core HWP request `0x774` `[15:8]`/`[23:16]` fields are used per CPU ·
 MCHBAR 0x5DA0 / 0x5DA4 = BIOS mailbox (0x37 core-ratio ext; SAGV B2P 0x22), *not* MSR 0x150 `doc` (FSP; Intel EDC 13th-gen datasheet).

@@ -772,4 +772,7 @@ def builtin_ops() -> dict[str, OpSpec]:
     from .ops_stress import stress_ops  # G-116: stress.start / stress.stop / stress.list; imported here because ops_stress imports this module
 
     specs.extend(stress_ops())
+    from .ops_power import power_ops  # G-214: power.read / power.plan / power.apply (powercap PL1 / PL2 / tau); imported here because ops_power imports ops_tune
+
+    specs.extend(power_ops())
     return {s.name: s for s in specs}

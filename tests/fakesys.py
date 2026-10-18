@@ -79,3 +79,33 @@ def add_dmi(root: Path, board_name: str | None, board_vendor: str | None = None)
     if board_vendor is not None:
         (d / "board_vendor").write_text(board_vendor + "\n", encoding="utf-8")
     return root
+
+
+def make_powercap(
+    root: Path,
+    *,
+    pl1_uw: int = 250_000_000,
+    pl2_uw: int | None = 295_000_000,
+    tau_us: int = 127_926_272,
+    names: tuple[str, str] = ("long_term", "short_term"),
+    max_power_uw: int | None = 125_000_000,
+) -> Path:
+    """G-214: ``<root>/intel-rapl:0`` as the kernel shows it on the reference machine ``[MEASURED lnx 2026-10-18]``: constraint_0 long_term (PL1 + window), constraint_1 short_term
+    (PL2, window 2440 us), no constraint_2. ``pl2_uw=None`` leaves constraint_1 out."""
+    zone = root / "intel-rapl:0"
+    zone.mkdir(parents=True, exist_ok=True)
+    (zone / "name").write_text("package-0\n", encoding="ascii")
+
+    def put(name: str, value: object) -> None:
+        (zone / name).write_text(f"{value}\n", encoding="ascii")
+
+    put("constraint_0_name", names[0])
+    put("constraint_0_power_limit_uw", pl1_uw)
+    put("constraint_0_time_window_us", tau_us)
+    if max_power_uw is not None:
+        put("constraint_0_max_power_uw", max_power_uw)
+    if pl2_uw is not None:
+        put("constraint_1_name", names[1])
+        put("constraint_1_power_limit_uw", pl2_uw)
+        put("constraint_1_time_window_us", 2440)
+    return root

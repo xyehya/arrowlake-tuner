@@ -94,6 +94,8 @@ __all__ = [
     "MSR_CHECKS",
     "POINT_P2_MAX",
     "MSR_TURBO_KIND",
+    "ENCODING_PL_MAX_W",
+    "ENCODING_TAU_MAX_S",
     "PLAIN_MSR_READABLE",
     "PLAIN_MSR_WRITABLE",
     "MsrAllowEntry",
@@ -115,6 +117,7 @@ __all__ = [
     "CheckContext",
     "Policy",
     "PolicyError",
+    "PowerPolicy",
     "RequestLike",
     "build_context",
     "default_m1_policy",
@@ -167,7 +170,9 @@ _CPU_MAX = 1023  # far above any real CPU number; rejects garbage, not a hardwar
 
 #: T-023 plain-MSR allowlist universe (``docs/knowledge/registers.md`` "Not the mailbox" + MSR table; facts ``[MEASURED lnx 2026-10-01]``):
 #: only these may ever be read through the guard ...
-PLAIN_MSR_READABLE = frozenset({0x1AD, 0x1AE, 0x650, 0x651, 0xCE, 0x194, 0x198})  # 0x198 PERF_STATUS: running ratio [15:8], requested VID [47:32]/8192 (T-026 --measure)
+#: 0x198 PERF_STATUS: running ratio [15:8], requested VID [47:32]/8192 (T-026 --measure). G-214: 0x606 RAPL_POWER_UNIT, 0x610 PKG_POWER_LIMIT (lock bit 63), 0x614 PKG_POWER_INFO,
+#: read-only (docs/knowledge/registers.md "Power limits"); a write entry for any of them is a load error (``PLAIN_MSR_WRITABLE``).
+PLAIN_MSR_READABLE = frozenset({0x1AD, 0x1AE, 0x650, 0x651, 0xCE, 0x194, 0x198, 0x606, 0x610, 0x614})
 #: ... and only the two ratio tables may be written, each bounded by ``turbo_ratio_bounded``. The bucket-count MSRs ``0x1AE`` / ``0x651``
 #: can never get a write entry (a policy that names one is a load error).
 PLAIN_MSR_WRITABLE = frozenset({0x1AD, 0x650})
@@ -894,6 +899,49 @@ class MsrAllowEntry:
         return self.cpus is None or cpu in self.cpus
 
 
+#: G-214: the field encodings the ``[power]`` ranges are bounded by (the CPU's own limits are never read into a ceiling: ``constraint_0_max_power_uw`` is not a PL1 ceiling).
+#: ``0x610`` PL fields are 15 bits in 1/8 W units (``[DOC SDM]``); the PL1 time window is ``2^Y * (1 + Z/4)`` time units with Y 5 bits (``[DOC SDM]``, time unit 2^-10 s ``[MEASURED lnx 2026-09-29]``).
+ENCODING_PL_MAX_W = 4095
+ENCODING_TAU_MAX_S = (1 << 31) * 1.75 / 1024
+
+
+def _power_range(what: str, value: object, lo: float, hi: float, whole: bool) -> tuple[Any, Any]:
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise PolicyError(f"power.{what} must be [min, max]")
+    out = []
+    for v in value:
+        ok = _is_int(v) if whole else (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v))
+        if not ok:
+            raise PolicyError(f"power.{what} must be {'whole watts' if whole else 'seconds'}, got {v!r}")
+        out.append(int(v) if whole else float(v))
+    if not lo <= out[0] <= out[1] <= hi:
+        raise PolicyError(f"power.{what} = {list(value)!r} must satisfy {lo:g} <= min <= max <= {hi:g} (field encoding)")
+    return out[0], out[1]
+
+
+@dataclass(frozen=True)
+class PowerPolicy:
+    """G-214 ``[power]``: the bounds of the package power limits (powercap writes). **Every key is optional and absent means refused**: with no ``pl1_w`` the helper writes no PL1
+    (the refusal names the key), and the same for ``pl2_w``, ``tau_s`` and ``max_step_w`` (the largest change of a PL per apply, in W). Nothing is derived from the CPU
+    (``constraint_0_max_power_uw`` is not a ceiling for PL1) or defaulted: an operator writes these numbers. ``pl1_w`` / ``pl2_w`` are whole watts (the field is 1/8 W,
+    so a whole watt reads back exactly); ``tau_s`` is the PL1 time window in seconds."""
+
+    pl1_w: tuple[int, int] | None = None
+    pl2_w: tuple[int, int] | None = None
+    tau_s: tuple[float, float] | None = None
+    max_step_w: int | None = None
+
+    def __post_init__(self) -> None:
+        for key in ("pl1_w", "pl2_w"):
+            value = getattr(self, key)
+            if value is not None:
+                object.__setattr__(self, key, _power_range(key, value, 1, ENCODING_PL_MAX_W, True))
+        if self.tau_s is not None:
+            object.__setattr__(self, "tau_s", _power_range("tau_s", self.tau_s, 0.001, ENCODING_TAU_MAX_S, False))
+        if self.max_step_w is not None:
+            _int_in("power.max_step_w", self.max_step_w, 1, ENCODING_PL_MAX_W, "PL field 15 bits in 1/8 W")
+
+
 @dataclass(frozen=True)
 class Policy:
     """The whole policy. ``max_operations_per_session`` counts every executed mailbox request (reads included, because
@@ -938,6 +986,7 @@ class Policy:
     hw_ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own ratio limit per kind (0x01 [7:0]) read by the helper; None = unread
     hw_v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own V target limit per kind (0x28 - 1 LSB), whole mV
     source: str | None = field(default=None, compare=False)  # the policy file this policy was loaded from (named in every refusal that quotes a policy limit)
+    power: PowerPolicy | None = None  # G-214: the ``[power]`` table; ``None`` = absent = no package power limit may be written
 
     @property
     def where(self) -> str:
@@ -1037,6 +1086,8 @@ class Policy:
                 if a.msr == b.msr and a.kind == b.kind:
                     raise PolicyError(f"msr_allow entries {a.name!r} and {b.name!r} overlap (one entry per MSR and kind)")
         object.__setattr__(self, "msr_allow", msr_entries)
+        if self.power is not None and not isinstance(self.power, PowerPolicy):
+            raise PolicyError(f"power must be a PowerPolicy, got {type(self.power).__name__}")
 
     def cpu_allowed(self, cpu: object) -> bool:
         return _is_int(cpu) and cpu in self.cpus
@@ -1155,8 +1206,10 @@ _TOP_KEYS = frozenset(
         "max_ratio_step",
         "max_v_step_mv",
         "max_offset_step_mv",
+        "power",
     }
 )
+_POWER_KEYS = frozenset({"pl1_w", "pl2_w", "tau_s", "max_step_w"})
 _KIND_TABLE_KEYS = ("ratio_max", "v_target_max_mv")
 _SCALAR_KEYS = ("offset_ceiling_mv", "max_ratio_step", "max_v_step_mv", "max_offset_step_mv")
 _ENTRY_KEYS = frozenset({"name", "cmd", "p1", "p2", "kind", "check", "params"})
@@ -1325,4 +1378,11 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
             )
         )
     kwargs["msr_allow"] = tuple(msr_entries)
+    if "power" in doc:
+        table = doc["power"]
+        if not isinstance(table, dict):
+            raise PolicyError(f"power must be a table with the keys {sorted(_POWER_KEYS)}")
+        if set(table) - _POWER_KEYS:
+            raise PolicyError(f"power: unknown key(s) {sorted(set(table) - _POWER_KEYS)} (known: {sorted(_POWER_KEYS)})")
+        kwargs["power"] = PowerPolicy(**table)
     return Policy(**kwargs)
