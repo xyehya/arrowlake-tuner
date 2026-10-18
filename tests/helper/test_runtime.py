@@ -314,9 +314,12 @@ class OfflineGuard(RuntimeCase):
         self.files.online[10] = 0  # taken offline behind our back
         self.check(self.call(h, "runtime.plan", {"caps": {"3": 44}}), 10)  # a forward plan is
         plan = self.plan(h, revert=True)  # a revert restores per-CPU files by number from the journal
-        self.assertTrue(plan["steps"], plan)
-        self.apply(h, plan)
-        self.assertEqual((self.cap(3), self.files.uncore["max_freq_khz"]), (P_MAX, 4_000_000))
+        self.assertTrue(any("cpu 10 has no cpufreq directory" in w for w in plan["warnings"]), plan["warnings"])
+        res = self.apply(h, plan)
+        self.assertFalse(res["complete"], res)  # cpu 10 (offline: no cpufreq files) was skipped
+        self.assertNotIn("stop", res)
+        self.assertEqual((self.cap(3), [self.cap(c) for c in (8, 9, 11)], self.files.uncore["max_freq_khz"]), (P_MAX, [e_max()] * 3, 4_000_000))
+        self.assertEqual(sorted(s["key"] for s in res["steps"]), ["cpu11", "cpu3", "cpu8", "cpu9", "max_ratio"])
 
     def test_runtime_plan_and_apply_refuse(self) -> None:
         h = self.offline_boot()

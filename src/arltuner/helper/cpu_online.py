@@ -1,6 +1,6 @@
 """G-216: the offline-CPU guard. Core parking is held out of this app, but an operator (or a power daemon) can still take a CPU offline: ``cpu<N>/online`` reads 0 and the live topology
 (``cpu_core/cpus``, ``cpu_atom/cpus``) loses it, which renumbers the P indices and can leave the E clusters unequal. Every op that numbers things by that topology (``tune.apply``,
-``vf.measure``, ``stress.start``, ``runtime.plan`` / ``runtime.apply``) refuses, naming the CPUs, while one reads 0. "Cannot tell" (no wiring, an unreadable file) is not a refusal: only a
+``vf.measure``, ``stress.start``, ``runtime.plan`` / ``runtime.apply`` -- a runtime *revert* excepted: it restores per-CPU files by number, skips an offline CPU and says so) refuses, naming the CPUs, while one reads 0. "Cannot tell" (no wiring, an unreadable file) is not a refusal: only a
 definite 0 is. Reads only."""
 from __future__ import annotations
 

@@ -30,7 +30,7 @@ import os
 import re
 import secrets
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -694,8 +694,9 @@ def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
     }
     if complete:
         return out
-    if run.stop is None or run.sent:
-        out["stop"] = run.stop  # the hardware is partly changed: the table must reach the page, so this is a result, not an error
+    if run.stop is None or run.sent:  # no stop = a revert that skipped a journaled value: the hardware is partly changed, so this is a result, not an error
+        if run.stop is not None:
+            out["stop"] = run.stop
         return out
     assert run.stop is not None
     if run.stop["kind"] == "cancelled":
