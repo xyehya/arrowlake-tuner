@@ -92,7 +92,7 @@ from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.msr import MailboxTransport
 from arltuner.curves import is_unit_id
-from arltuner.profiles import BuildError, CoreSetting, PointSetting, Profile, ProfileError, TurboTables, complete_from_words, load_profile, overlay
+from arltuner.profiles import BuildError, CoreSetting, POINT_RANGE, PointSetting, Profile, ProfileError, RingPoint, RingSetting, TurboTables, complete_from_words, load_profile, overlay
 from arltuner.profiles.contents import intent_contents, profile_contents, summarize
 from arltuner.profiles.expected import parse_expected
 from arltuner.profiles.migrate import current_profile_lines
@@ -195,6 +195,7 @@ class StoredPlan:
     mismatches: int = 0
     restore: bool = False  # G-147: the restore of the accepted state (G-148: or any complete profile): the apply scans for a residual OC point and neutralises it
     rounds: int = 1  # G-148: guarded rounds the last read says the apply needs within the step limits (the budget reserves them; the apply re-judges from its own reads)
+    ring_refs: dict[int, int] = field(default_factory=dict)  # G-212: ring point (P2) -> the word the plan assumed; kept apart from ``refs`` (the ring is read through CPU 0 but is not P-core 0)
 
 
 class PlanStore:
@@ -965,6 +966,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if fused_words:
         helper.fused_words = fused_words
     result["tune"] = _decode_document(result, topology, helper.fused_words)
+    result["intent_features"] = list(INTENT_FEATURES)  # G-212 (additive): the optional intent keys tune.plan understands ("ring" = ring points by P2 number); a front-end gates its editor on it
     result["ring"] = ring_doc  # G-154: {unit, cpu, oc, points, end} in the shape of a cpus[] entry; None = not read (see extras_notes.ring); before the compare, which judges it
     matched, accepted_note = accepted_match(helper, result, helper.fused_words)  # redone with the fused words just read (the dump's own compare ran before them)
     result["accepted_match"], result["accepted_note"] = matched, accepted_note
@@ -1186,6 +1188,7 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 result["ring"] = {**result["ring"], "oc": ringmod.word_json(ring_words[0]), "points": [{"point": n, **ringmod.word_json(w)} for n, w in enumerate(ring_words[1:], start=1)]}
             except (TypeError, ValueError):
                 pass
+    result["intent_features"] = list(INTENT_FEATURES)  # G-212: set at response time, so a record stored by an older helper still advertises it
     matched, note = accepted_match(helper, result, helper.fused_words)  # G-129: always redone (a file read, no hardware): the accepted state can change after the read (profiles.accept)
     result["accepted_match"], result["accepted_note"] = matched, note
     result["tune"] = _decode_document(result, topology, helper.fused_words)
@@ -1270,6 +1273,28 @@ def _canonical_turbo(raw: object) -> dict[str, list[int]]:
     return out
 
 
+#: G-212: the intent features this helper understands beyond ``{scope, rows[, turbo]}``; ``tune.read`` / ``tune.last`` carry it as ``intent_features`` so a front-end can detect support.
+INTENT_FEATURES = ("ring",)
+
+
+def _canonical_ring(raw: object) -> dict[str, Any]:
+    """G-212 (D-045, D-046): ``{points: {"<P2>": mV}}`` -- the ring (cache, P1 = 2) points to move, keyed by the **P2 point number** (1..15; ``0`` is the BIOS-owned ring OC word and is
+    never written), offset-only. Nothing else is accepted: the ring has no OC ratio, V target or whole-curve offset to set here."""
+    if not isinstance(raw, dict) or set(raw) != {"points"}:
+        raise _bad("ring must be {points: {P2: mV}}")
+    points = raw["points"]
+    if not isinstance(points, dict) or not points or len(points) > POINT_RANGE[1]:
+        raise _bad("ring.points must be a non-empty object {P2 point number: mV}")
+    out: dict[str, int] = {}
+    for key, value in points.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9]{1,2}", key) or not POINT_RANGE[0] <= int(key) <= POINT_RANGE[1]:
+            raise _bad(f"ring.points key {key[:20]!r} is not a ring point number ({POINT_RANGE[0]}..{POINT_RANGE[1]}; P2 = 0 is the ring OC word, which is never written)" if isinstance(key, str) else "ring.points key is not a string")
+        if str(int(key)) in out:
+            raise _bad(f"ring.points names point {int(key)} more than once")
+        out[str(int(key))] = _int_mv(value, f"ring.points[{key}]")
+    return {"points": dict(sorted(out.items(), key=lambda kv: int(kv[0])))}
+
+
 def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
     """The intent in its canonical form, or ``BAD_REQUEST``. ``rows_only`` (profiles.save): a ``{scope, rows}`` intent is the only savable shape."""
     if not isinstance(raw, dict):
@@ -1280,11 +1305,12 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
     except (TypeError, ValueError):
         raise _bad("intent is not JSON") from None
     keys = set(raw)
-    if keys and keys <= {"scope", "rows", "turbo"} and keys & {"rows", "turbo"} and ("rows" in keys) == ("scope" in keys):
-        if rows_only and "turbo" in keys:
+    if keys and keys <= {"scope", "rows", "turbo", "ring"} and keys & {"rows", "turbo", "ring"} and ("rows" in keys) == ("scope" in keys):
+        if rows_only and keys & {"turbo", "ring"}:
             raise _bad("only a {scope, rows} intent can be saved as a profile")
         out: dict[str, Any] = {}
         turbo = _canonical_turbo(raw["turbo"]) if "turbo" in keys else None
+        ring = _canonical_ring(raw["ring"]) if "ring" in keys else None
         if "rows" in keys:
             scope, rows = raw["scope"], raw["rows"]
             if scope not in ("simple", "unit"):
@@ -1295,12 +1321,14 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
             targets = [r["target"] for r in canon_rows]
             if len(set(targets)) != len(targets):
                 raise _bad("a target appears in two rows")
-            if not canon_rows and turbo is None:
+            if not canon_rows and turbo is None and ring is None:
                 raise OpError(BAD_REQUEST, "the intent changes nothing (every row is empty)", {"check": "NOTHING_TO_DO"})
             if canon_rows:
                 out = {"scope": scope, "rows": canon_rows}
         if turbo is not None:
             out["turbo"] = turbo
+        if ring is not None:
+            out["ring"] = ring
         return out
     if rows_only:
         raise _bad("only a {scope, rows} intent can be saved as a profile")
@@ -1317,7 +1345,7 @@ def canonical_intent(raw: object, *, rows_only: bool = False) -> dict[str, Any]:
         if raw["restore"] != "accepted":
             raise _bad("restore must be 'accepted'")
         return {"restore": "accepted"}
-    raise _bad("intent must be {scope, rows[, turbo]}, {turbo}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
+    raise _bad("intent must be {scope, rows[, turbo][, ring]}, {turbo}, {ring}, {profile}, {reset: 'stock'} or {restore: 'accepted'}")
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1437,6 +1465,7 @@ class Resolved:
     refs: dict[tuple[int, int], int]
     warnings: list[str]
     units: list[str]
+    ring_refs: dict[int, int] = field(default_factory=dict)  # G-212: ring point (P2) -> the word of the last ring read the intent was built from (PLAN_STALE at apply)
 
 
 def _unit_reference(last: Mapping[int, Sequence[int]] | None, cpus: Sequence[int]) -> tuple[int, Sequence[int]] | None:
@@ -1554,12 +1583,62 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
     turbo = _turbo_tables(helper, asked_ratio, warnings)
     if "turbo" in intent:
         turbo = _explicit_turbo(helper, intent["turbo"], turbo, policy, warnings)
+    ring = _ring_setting(helper, intent["ring"], policy, topology) if "ring" in intent else None  # G-212
+    ring_refs: dict[int, int] = {}
+    if ring is not None:
+        units.append(ringmod.UNIT)
+        last_ring = _last_ring(helper) or ()
+        ring_refs = {rp.point: int(last_ring[rp.point]) for rp in ring.points}
     try:
         entries = tuple(CoreSetting(k, i, **v) for (k, i), v in cores.items())  # type: ignore[arg-type]
-        profile = Profile(name, entries, turbo, tuple(points.values()))  # G-119: a turbo-only plan has no entries and no points
+        profile = Profile(name, entries, turbo, tuple(points.values()), ring=ring)  # G-119: a turbo-only plan has no entries and no points; G-212: a ring-only plan has neither
     except ProfileError as exc:
         raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
-    return Resolved(profile, refs, warnings, units)
+    return Resolved(profile, refs, warnings, units, ring_refs)
+
+
+def _check_ring_range(policy: Policy, topology: Topology, points: Mapping[str, int]) -> None:
+    """``REFUSED POLICY_RANGE`` before anything else is computed (G-212): every ring point must have a policy ``0x11 P1=2`` write entry, and its offset must sit in the window the
+    guard evaluates for a point offset write (``_check_vf_point_offset_bounded``: the runtime floor / ceiling of the policy, tightened by the entry's ``offset_raw_min`` / ``_max``)."""
+    cpu = ringmod.ring_cpu(topology)
+    floor_raw = policy.offset_floor_raw(cpu)
+    ceil_raw = VfWord.mv_to_offset_raw(policy.offset_ceiling_mv)
+
+    def refuse(text: str) -> OpError:
+        return OpError(REFUSED, f"{text}. Nothing was sent.", {"check": "POLICY_RANGE"})
+
+    for key, mv in points.items():
+        p2 = int(key)
+        entry = policy.match(int(Cmd.VOLTAGE_FREQ_WRITE), ringmod.RING_P1, p2)
+        if entry is None or entry.kind != "write":
+            raise refuse(f"ring point {p2}: the policy has no write entry for cmd 0x11 P1=2 P2={p2} ({policy.where})")
+        low = max(floor_raw, entry.params.get("offset_raw_min", -1024))
+        high = min(ceil_raw, entry.params.get("offset_raw_max", 1023))
+        raw = VfWord.mv_to_offset_raw(mv)
+        if not low <= raw <= high:
+            raise refuse(
+                f"ring point {p2}: offset {mv:+d} mV (raw {raw}) is outside the policy window {low * 1000 / 1024:+.1f}..{high * 1000 / 1024:+.1f} mV "
+                f"(policy effective_offset_floor_mv = {policy.effective_offset_floor_mv}, offset_ceiling_mv = {policy.offset_ceiling_mv}, entry {entry.name!r}; {policy.where}; "
+                f"the field encoding allows {ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)"
+            )
+
+
+def _ring_setting(helper: Helper, asked: Mapping[str, Any], policy: Policy, topology: Topology) -> RingSetting:
+    """G-212 (D-045): the ``[ring]`` of an intent's ``ring: {points: {P2: mV}}``, from this boot's last ring read: the ring OC word as read (compared by the planner with the live
+    word and **never written**: a changed word refuses the ring unit alone) and, for every asked point, its offset with ``expect_ratio`` = the ratio the read found there. Offset-only; keyed
+    by the P2 point number (not by ratio like a core's points)."""
+    points: Mapping[str, int] = asked["points"]
+    _check_ring_range(policy, topology, points)
+    last = _last_ring(helper)
+    if not last:
+        raise _no_read(ringmod.UNIT, "the ring points are addressed by number and the ring was not read this boot")
+    missing = [k for k in points if int(k) >= len(last)]
+    if missing:
+        raise OpError(BAD_REQUEST, f"the ring has no point {', '.join(missing)} (ring points of the last read: 1..{len(last) - 1})")
+    try:
+        return RingSetting(last[0], tuple(RingPoint(int(k), mv, VfWord.from_u32(last[int(k)]).ratio) for k, mv in points.items()))
+    except ProfileError as exc:
+        raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
 
 
 def _turbo_tables(helper: Helper, asked: Mapping[str, int], warnings: list[str]) -> TurboTables | None:
@@ -1662,7 +1741,7 @@ def _profile_resolved(helper: Helper, profile: Profile, topology: Topology, warn
 
 
 def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topology: Topology) -> Resolved:
-    if "rows" in intent or "turbo" in intent:
+    if "rows" in intent or "turbo" in intent or "ring" in intent:
         digest = hashlib.sha256(json.dumps(intent, sort_keys=True).encode()).hexdigest()[:8]
         return _rows_to_profile(helper, intent, policy, topology, f"tune-{digest}")
     if "reset" in intent:
@@ -2316,7 +2395,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         sort_keys=True,
     )
     plan_id = hashlib.sha256(canon.encode()).hexdigest()
-    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore, rounds=rounds))
+    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore, rounds=rounds, ring_refs=resolved.ring_refs))
     result = {
         "plan_id": plan_id,
         "nonce": nonce,
@@ -2371,18 +2450,26 @@ def _stale_check(plan: StoredPlan, topology: Topology):  # type: ignore[no-untyp
     """The ``plan_check`` hook of the executor: the baselines it just read must be the words the plan assumed (``PLAN_STALE`` before any write)."""
 
     def check(applied: ApplyPlan) -> None:
-        if not plan.refs:
+        if not plan.refs and not plan.ring_refs:
             return
         seen: dict[tuple[int, int], int] = {}
+        ring_seen: dict[int, int] = {}
         for step in applied.steps:
             if step.kind is StepKind.WRITE_VF and step.before is not None:
                 seen[(step.cpu, 0)] = step.before.to_u32()
             elif step.kind is StepKind.WRITE_VF_POINT and step.before is not None:
                 seen[(step.cpu, step.p2)] = step.before.to_u32()
+            elif step.kind is StepKind.WRITE_RING_POINT and step.before is not None:
+                ring_seen[step.p2] = step.before.to_u32()
         diffs = [
             f"{unit_of_cpu(topology, cpu)} cpu {cpu} {'OC word' if point == 0 else 'point ' + str(point)}: planned from {plan.refs[(cpu, point)]:#010x}, now {word:#010x}"
             for (cpu, point), word in sorted(seen.items())
             if (cpu, point) in plan.refs and plan.refs[(cpu, point)] != word
+        ]
+        diffs += [
+            f"ring point {point}: planned from {plan.ring_refs[point]:#010x}, now {word:#010x}"
+            for point, word in sorted(ring_seen.items())
+            if point in plan.ring_refs and plan.ring_refs[point] != word
         ]
         if diffs:
             more = f" (+{len(diffs) - 3} more)" if len(diffs) > 3 else ""
