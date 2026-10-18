@@ -1,0 +1,100 @@
+{
+ "request": {
+  "args": {
+   "intent": {
+    "rows": [
+     {
+      "offset": {
+       "kind": "points",
+       "mv": {
+        "53": -20
+       }
+      },
+      "ratio": null,
+      "target": "P0",
+      "v_target_v": null
+     }
+    ],
+    "scope": "unit"
+   }
+  },
+  "op": "tune.plan"
+ },
+ "response": {
+  "id": "c5",
+  "ok": true,
+  "result": {
+   "after": {
+    "P0": {
+     "5": {
+      "clamped_by": null,
+      "effective_v": null,
+      "offset_mv": -19.531,
+      "ratio": 53,
+      "v_target_v": null
+     }
+    }
+   },
+   "before": {
+    "P0": {
+     "5": {
+      "clamped_by": null,
+      "effective_v": null,
+      "offset_mv": 0.0,
+      "ratio": 53,
+      "v_target_v": null
+     }
+    }
+   },
+   "complete": false,
+   "expires_s": 600,
+   "name": "tune-7c3ceb84",
+   "nonce": "QUXZWT",
+   "ops_left": 99849,
+   "ops_needed": 6,
+   "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
+   "predicted": null,
+   "reads": 2,
+   "rounds": 1,
+   "steps": [
+    {
+     "conditional": true,
+     "kind": "write_percore_enable",
+     "n": 1
+    },
+    {
+     "cpu": 0,
+     "kind": "write_vf_point",
+     "n": 2,
+     "offset_mv": -20,
+     "point": 5,
+     "unit": "P0"
+    }
+   ],
+   "units": [
+    "P0"
+   ],
+   "vccia": null,
+   "warnings": [
+    {
+     "code": "NOTE",
+     "text": "per-point offsets change one V/F point (0x11 with P2 = the point); the hardware keeps V(n) >= V(n-1): arltuner models it (CLAMPED warnings) but cannot read the lower fused voltages"
+    },
+    {
+     "code": "NOTE",
+     "text": "effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV"
+    },
+    {
+     "code": "NO_BASELINE",
+     "text": "measure a stock baseline for predictions (no curve is flagged baseline)"
+    },
+    {
+     "code": "NOTE",
+     "text": "a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio (a zero word cannot be written; only a reboot clears it), while a word without one reverts exactly (G-124; the revert requests put back the previous XTU-shaped word, never one with a zero field, in the reverse of the order they were applied: after a raise the ratio first, then the voltage; a V/F point word is restored exactly as read)"
+    }
+   ],
+   "words_assumed": false,
+   "writes": 2
+  }
+ }
+}

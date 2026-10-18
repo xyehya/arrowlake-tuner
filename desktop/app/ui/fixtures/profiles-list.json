@@ -1,0 +1,9 @@
+{
+ "id": "c7",
+ "ok": true,
+ "result": {
+  "accepted": false,
+  "note": "no accepted state directory is configured. Nothing was sent.",
+  "profiles": []
+ }
+}

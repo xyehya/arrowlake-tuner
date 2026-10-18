@@ -4,9 +4,26 @@
 <meta charset="utf-8">
 <title>arltuner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="styles/tokens.css">
+<link rel="stylesheet" href="styles/base.css">
+<link rel="stylesheet" href="styles/layout.css">
+<link rel="stylesheet" href="styles/components.css">
+<link rel="stylesheet" href="styles/icons.css">
 </head>
 <body>
-<h1>arltuner desktop</h1>
-<p>Scaffold placeholder (G-202). The UI lands in G-205.</p>
+<div id="app" class="app">
+  <header id="status-bar" class="status-bar"></header>
+  <nav id="nav-rail" class="nav-rail"></nav>
+  <div id="stage" class="stage">
+    <main id="screen" class="screen" tabindex="-1"></main>
+    <section id="drawer" class="drawer" inert aria-hidden="true"></section>
+    <div id="toasts" class="toasts"></div>
+  </div>
+  <div id="pending-bar" class="pending-bar" hidden></div>
+  <section id="strip" class="strip"></section>
+</div>
+<noscript>arltuner needs JavaScript (it is a local desktop UI; nothing is loaded from the network).</noscript>
+<script type="module" src="app.js"></script>
 </body>
 </html>

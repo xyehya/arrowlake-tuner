@@ -1,0 +1,53 @@
+/* Design tokens (PLAN §4.5): dark, high-contrast, dense but calm. Three semantic accents only:
+   pending (blue) = edited, not applied · ok (green) = applied / healthy · warn (amber) = warning, refused, read-only. System fonts, tabular numerals. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --surface: #151a21;
+  --surface-2: #1b212a;
+  --surface-3: #232b36;
+  --border: #2b3441;
+  --border-strong: #3a4656;
+
+  --text: #dde4ec;
+  --text-dim: #9aa6b5;
+  --text-faint: #6c7889;
+
+  --pending: #6fa8ff;
+  --pending-bg: rgba(111, 168, 255, 0.14);
+  --ok: #4fc58c;
+  --ok-bg: rgba(79, 197, 140, 0.14);
+  --warn: #f2b24c;
+  --warn-bg: rgba(242, 178, 76, 0.15);
+  --danger: #ef6b5f;
+  --danger-bg: rgba(239, 107, 95, 0.15);
+
+  --focus: #8fbaff;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  --rail-w: 164px;
+  --status-h: 38px;
+  --strip-h: 92px;
+  --strip-collapsed-h: 34px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur: 180ms;
+}

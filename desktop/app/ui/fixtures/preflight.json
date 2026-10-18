@@ -1,0 +1,219 @@
+{
+ "id": "c1",
+ "ok": true,
+ "result": {
+  "board": "Simulated board",
+  "checks": [
+   {
+    "name": "cpuid",
+    "reason": "family 6 model 198 stepping 2 matches platform arl-s on all 24 CPUs",
+    "status": "pass"
+   },
+   {
+    "name": "hypervisor",
+    "reason": "no 'hypervisor' cpuinfo flag",
+    "status": "pass"
+   },
+   {
+    "name": "lockdown",
+    "reason": "lockdown [none]",
+    "status": "pass"
+   },
+   {
+    "name": "topology",
+    "reason": "8 P-cores + 16 E-cores in 4 clusters of 4; favored by acpi_cppc: P0, P3",
+    "status": "pass"
+   },
+   {
+    "name": "msr_device",
+    "reason": "/dev/cpu/<n>/msr present for all 24 CPUs (0..23)",
+    "status": "pass"
+   },
+   {
+    "name": "msr_allow_writes",
+    "reason": "cannot read msr allow_writes (Permission denied; root-only file): the root helper's preflight decides",
+    "status": "unknown"
+   },
+   {
+    "name": "helper_service",
+    "reason": "not applicable: this helper does not serve the socket (simulator or stdio)",
+    "status": "pass"
+   },
+   {
+    "name": "python",
+    "reason": "Python 3.14.8",
+    "status": "pass"
+   },
+   {
+    "name": "tool:stress-ng",
+    "reason": "stress-ng found",
+    "status": "pass"
+   },
+   {
+    "name": "tool:stressapptest",
+    "reason": "stressapptest found",
+    "status": "pass"
+   },
+   {
+    "name": "tool:perf",
+    "reason": "perf found",
+    "status": "pass"
+   },
+   {
+    "name": "tool:turbostat",
+    "reason": "turbostat found",
+    "status": "pass"
+   },
+   {
+    "name": "tool:sensors",
+    "reason": "sensors found",
+    "status": "pass"
+   },
+   {
+    "name": "tool:nvidia-smi",
+    "reason": "nvidia-smi found",
+    "status": "pass"
+   }
+  ],
+  "mode": "write",
+  "platform": "arl-s",
+  "topology": {
+   "favored_source": "acpi_cppc",
+   "units": [
+    {
+     "cpus": [
+      0
+     ],
+     "favored": true,
+     "id": "P0",
+     "kind": "P",
+     "max_ratio": 57,
+     "perf": 92
+    },
+    {
+     "cpus": [
+      1
+     ],
+     "favored": false,
+     "id": "P1",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      2
+     ],
+     "favored": false,
+     "id": "P2",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      3
+     ],
+     "favored": true,
+     "id": "P3",
+     "kind": "P",
+     "max_ratio": 57,
+     "perf": 92
+    },
+    {
+     "cpus": [
+      4
+     ],
+     "favored": false,
+     "id": "P4",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      5
+     ],
+     "favored": false,
+     "id": "P5",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      6
+     ],
+     "favored": false,
+     "id": "P6",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      7
+     ],
+     "favored": false,
+     "id": "P7",
+     "kind": "P",
+     "max_ratio": 55,
+     "perf": 88
+    },
+    {
+     "cpus": [
+      8,
+      9,
+      10,
+      11
+     ],
+     "favored": false,
+     "id": "EC0",
+     "kind": "E",
+     "max_ratio": 49,
+     "perf": 68
+    },
+    {
+     "cpus": [
+      12,
+      13,
+      14,
+      15
+     ],
+     "favored": false,
+     "id": "EC1",
+     "kind": "E",
+     "max_ratio": 49,
+     "perf": 68
+    },
+    {
+     "cpus": [
+      16,
+      17,
+      18,
+      19
+     ],
+     "favored": false,
+     "id": "EC2",
+     "kind": "E",
+     "max_ratio": 49,
+     "perf": 68
+    },
+    {
+     "cpus": [
+      20,
+      21,
+      22,
+      23
+     ],
+     "favored": false,
+     "id": "EC3",
+     "kind": "E",
+     "max_ratio": 49,
+     "perf": 68
+    }
+   ]
+  },
+  "writes_allowed": false
+ }
+}

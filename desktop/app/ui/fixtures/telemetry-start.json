@@ -1,0 +1,11 @@
+{
+ "id": "c2",
+ "ok": true,
+ "result": {
+  "already_running": false,
+  "interval_s": 1.0,
+  "op_id": "c2",
+  "restarted": false,
+  "running": true
+ }
+}

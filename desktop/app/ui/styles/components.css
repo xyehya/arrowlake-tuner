@@ -1,0 +1,345 @@
+/* Shared components of the frame. Semantic colours only through data-state / classes, never inline. */
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin-right: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.chip[data-state="connected"],
+.chip[data-state="ok"] {
+  color: var(--ok);
+  border-color: rgba(79, 197, 140, 0.45);
+  background: var(--ok-bg);
+}
+
+.chip[data-state="connected"]::before,
+.chip[data-state="ok"]::before {
+  background: var(--ok);
+}
+
+.chip[data-state="busy"],
+.chip[data-state="not_installed"],
+.chip[data-state="not_allowed"],
+.chip[data-state="warn"] {
+  color: var(--warn);
+  border-color: rgba(242, 178, 76, 0.5);
+  background: var(--warn-bg);
+}
+
+.chip[data-state="busy"]::before,
+.chip[data-state="not_installed"]::before,
+.chip[data-state="not_allowed"]::before,
+.chip[data-state="warn"]::before {
+  background: var(--warn);
+}
+
+.chip[data-state="error"] {
+  color: var(--danger);
+  border-color: rgba(239, 107, 95, 0.5);
+  background: var(--danger-bg);
+}
+
+.chip[data-state="error"]::before {
+  background: var(--danger);
+}
+
+.chip.toggle {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.chip.toggle::before {
+  display: none;
+}
+
+.chip.toggle[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.fix {
+  padding: 1px 8px;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  user-select: all;
+}
+
+.meta {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--text-faint);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--pending);
+  border-color: var(--pending);
+  color: #08121f;
+  font-weight: 600;
+}
+
+.btn.icon-btn {
+  padding: 3px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.btn.icon-btn:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+/* Nav rail */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px var(--space-3);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  border: 1px solid transparent;
+}
+
+.nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--border-strong);
+  box-shadow: inset 3px 0 0 var(--pending);
+}
+
+.nav-label {
+  flex: 1 1 auto;
+}
+
+.nav-key {
+  opacity: 0.8;
+}
+
+/* Cards (placeholder screens and, later, the views) */
+.card {
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 720px;
+}
+
+/* Pending bar */
+.pending-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--pending);
+}
+
+.pending-text {
+  font-weight: 600;
+}
+
+/* Monitoring strip */
+.strip-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 4px var(--space-3);
+  min-height: var(--strip-collapsed-h);
+}
+
+.strip-title {
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.strip-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.strip.collapsed .strip-chips {
+  display: none;
+}
+
+.strip.collapsed #strip-toggle .icon {
+  transform: rotate(180deg);
+}
+
+.strip-body {
+  display: flex;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+  overflow-x: auto;
+}
+
+.strip-cell {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 150px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.strip-label {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.strip-read {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.strip-value {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.strip-cell.na .strip-value {
+  color: var(--text-faint);
+  font-size: var(--fs-lg);
+}
+
+.strip-unit {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.spark {
+  width: 100%;
+  height: 26px;
+}
+
+.spark.empty {
+  opacity: 0.25;
+}
+
+.spark-line {
+  stroke: var(--pending);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Toasts */
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.toast .toast-text {
+  flex: 1 1 auto;
+  padding-top: 1px;
+}
+
+.toast.info {
+  border-left-color: var(--pending);
+}
+
+.toast.ok {
+  border-left-color: var(--ok);
+}
+
+.toast.warn {
+  border-left-color: var(--warn);
+}
+
+.toast.error {
+  border-left-color: var(--danger);
+}
+
+/* Drawer */
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+.drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.drawer-footer:empty {
+  display: none;
+}

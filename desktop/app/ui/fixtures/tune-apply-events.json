@@ -1,0 +1,31 @@
+[
+ {
+  "event": "state",
+  "op_id": "c6",
+  "state": "applying"
+ },
+ {
+  "event": "progress",
+  "of": 6,
+  "op_id": "c6",
+  "ops_budget": 100000,
+  "ops_used": 152,
+  "step": 1
+ },
+ {
+  "event": "progress",
+  "of": 6,
+  "op_id": "c6",
+  "ops_budget": 100000,
+  "ops_used": 153,
+  "step": 2
+ },
+ {
+  "event": "progress",
+  "of": 6,
+  "op_id": "c6",
+  "ops_budget": 100000,
+  "ops_used": 154,
+  "step": 3
+ }
+]
