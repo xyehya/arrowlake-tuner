@@ -1,0 +1,6 @@
+H1 · 2026-10-18 · lnx · desktop AppImage live read-only connect (D-047)
+AppImage: desktop/dist/arltuner-desktop-0.0.1-x86_64.AppImage sha256 e9b626479c14f90f129d4a888cda371143306eb286bcf4ba8fd91e503f735eff (main 6bea645)
+Launched in the operator's GNOME Wayland session (WAYLAND_DISPLAY=wayland-0); window "arltuner" 1512x867.
+Status bar read via cua-driver screenshot: "helper connected" · "writes allowed" · "accepted: matches".
+Ops used by the app: preflight, telemetry.start, audit.tail, profiles.list, tune.last (no mailbox traffic). Closed with SIGTERM after the check.
+Only stderr noise: libayatana-appindicator deprecation warning (tray library).

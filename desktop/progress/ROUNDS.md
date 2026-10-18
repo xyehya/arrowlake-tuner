@@ -33,3 +33,4 @@
   shell (self-match), so the merge + notes did not happen while G-206/G-207 were already dispatched; both stopped within seconds (no work), worktrees
   removed, redone correctly. dispatch.sh now refuses a missing notes file. Rule: kill by PID (ss/lsof), never pkill -f with a string in the command.
 - G-223 merged (deepseek-flash) + installed; live decode of 0x64F OK (idle: no active limit; sticky log thermal/VR/PL1/PL2/max-turbo). Readings may hold a decoded dict.
+- G-204 merged (Opus fixes; release guard verified). AppImage from main built. **H1 passed** live: helper connected · writes allowed · accepted matches.
