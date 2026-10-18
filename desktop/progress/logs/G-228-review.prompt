@@ -1,0 +1,15 @@
+You are a READ-ONLY adversarial reviewer (Opus) for arltuner, host lnx. Do not edit files. No hardware, no sudo, never connect to /run/arltuner.
+Read AGENTS.md, docs/SAFETY.md, desktop/TASKS.md G-228 and desktop/progress/logs/R9-G-228.notes (the incident: an accidental accept overwrote a known-good
+accepted state with no backup). You are in the task worktree: review `git diff main...HEAD` (branch task/G-228-profile-history). Answer with file:line:
+1. Accept history: is the replaced accepted profile ALWAYS saved before the swap, for both accept forms? Is "save failed -> nothing changed" true (ordering,
+   partial failure between the copy and AcceptedStore.replace — worker says a stray accepted-before-* can remain; any case where the accepted state is lost)?
+2. First-ever accept (no accepted dir contents / no CURRENT) must still work; an EMPTY/corrupt CURRENT now refuses (PREVIOUS_NOT_SAVED): is that the right
+   fail-closed behaviour, and does the refusal message tell the operator exactly how to recover without hand-editing /etc? Recommend.
+3. profiles.save {name, from:"read"}: same trust/staleness checks as accept (NO_READ, STALE_READ), root-owned 0600 store, O_EXCL never overwrite, name regex,
+   the saved text identical to what accept would write (same writer)? save_unique: race-free (O_EXCL loop) and bounded?
+4. Rust ops.rs: exactly {name, intent} or {name, from:"read"}; nothing else accepted.
+5. Audit records for both paths; result shape consistency (previous_saved_as string vs list, previous_saved_names) — recommend one shape.
+6. UI: the confirm diff (JS-built from the Tune model for "current state") — can it show "no differences" when there are some (false negatives are the dangerous
+   direction)? Undo semantics (re-accept only if the CPU holds it; else NOT_APPLIED + "Review and apply").
+7. Tests prove 1-4. Run `python3 tools/run_tests.py` once (count).
+Verdict ≤ 400 words: APPROVE / APPROVE WITH FIXES / REJECT; numbered findings (severity, file:line, concrete fix).
