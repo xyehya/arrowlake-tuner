@@ -37,3 +37,4 @@
 - G-207 merged (tune logic lib; node 88; golden intents == helper canonical_intent). Dispatched G-208 (cores grid + inspector, S) and G-209 (turbo sub-tab, deepseek-flash) on a shared mount(el,ctx) sub-tab contract. Follow-up: tune.read should expose the ring policy window.
 - G-206 merged + wired into app.js by orchestrator (views were not routed: app.js outside Owns). Dashboard verified by screenshot. G-224 follow-ups filed.
 - G-214 done (power.read/plan/apply as separate ops sharing PlanStore nonce semantics — deliberate deviation from 'intent field'; UI drawer applies tune + power plans in sequence). 82 tests, suite 3137. Opus review running (guard bypass for powercap, journal trust, audit cost).
+- G-209 merged (turbo sub-tab, deepseek-flash, 18 tests). Needs <link> styles/turbo.css + tune view wiring at G-208 merge.
