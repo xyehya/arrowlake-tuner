@@ -1,0 +1,12 @@
+FIX ROUND (your work + the orchestrator's wiring commit 532ca7f are on this branch; read `git log main..HEAD`). Opus: APPROVE WITH FIXES (all low). You may
+edit capabilities/default.json, build.rs, src/lib.rs and desktop/tools/build-appimage.sh for these items. Apply, test, commit "G-204: review fixes":
+1. capabilities/default.json: replace core:event:default with core:event:allow-listen + core:event:allow-unlisten; lib.rs test asserts the EXACT permission list.
+2. mod.rs:58 `with_parts`: #[cfg(feature = "dev-socket")] (update helper_dev.rs / helper_sim.rs which already need the feature).
+3. link.rs:253 ids: one process-wide static AtomicU64 counter so ids never repeat across reconnects.
+4. Bind tune.apply to this connection's plans: remember plan_ids from successful tune.plan responses (bounded, last 8), consume on tune.apply, otherwise
+   refuse locally "refused locally: plan not made by this app". Test it.
+5. Refuse to run as effective uid 0 at the top of run() before any GTK/WebKit init (print a clear message, exit 1). Keep the connect-time check.
+6. A must-fail check: `cargo check --release --features dev-socket` must fail — add it to build-appimage.sh preflight (expects failure) and a Rust/cargo
+   test or a run_tests-friendly script; do not edit tools/run_tests.py.
+7. Cap the refusal message from the helper at 500 chars (connect.rs:255).
+Run cargo test (with and without dev-socket) and python3 tools/run_tests.py. Report ≤ 150 words.

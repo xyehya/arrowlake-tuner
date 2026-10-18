@@ -1,0 +1,8 @@
+tune.read ok True intent_features ['ring']
+ring P7 -5 mV: plan writes=1 steps=[('write_ring_point', 'ring', 7, -5)]
+ring P7 -5 mV: apply 0.06s ops=4 writes_sent=1 readback 1/1 ring_refused=[] stop=None
+   ring P2=7 expected=0xff600026 actual=0xff600026 match=True
+revert (restore accepted): plan writes=3 steps=[('write_ring_point', 'ring', 7, 0), ('write_msr', None, None, None), ('write_msr', None, None, None)]
+revert (restore accepted): apply 1.83s ops=301 writes_sent=1 readback 1/1 ring_refused=[] stop=None
+   ring P2=7 expected=0x00000026 actual=0x00000026 match=True
+accepted_match 13 / 13
