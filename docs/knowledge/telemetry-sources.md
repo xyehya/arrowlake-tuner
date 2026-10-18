@@ -69,3 +69,6 @@ Units are MiB (x 1.048576 = MB) [MEASURED lnx 2026-10-03].
 2.002374512,73.57,MiB,uncore_imc_free_running/data_write/,2002306047,100.00,,
 ```
 One row per event per interval (instances `_0`/`_1` already summed by perf); `/sys/bus/event_source/devices/uncore_imc_free_running_{0,1}` exist.
+
+`[MEASURED lnx 2026-10-18]` live via the installed helper (G-223): 0x64F = 0x1DC20000 at idle → status none; sticky log thermal, vr_therm_alert,
+vr_tdc, other, pl1, pl2, max_turbo_limit (since boot; after restores/stress). 0x6B0 (graphics) = 0x01000000 → log other.

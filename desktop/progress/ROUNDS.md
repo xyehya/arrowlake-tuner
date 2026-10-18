@@ -32,3 +32,4 @@
 - G-205 merged (UI shell; node 36, smoke 11; screenshot checked by orchestrator). Orchestrator error: `pkill -f 'http.server 8765'` killed its own
   shell (self-match), so the merge + notes did not happen while G-206/G-207 were already dispatched; both stopped within seconds (no work), worktrees
   removed, redone correctly. dispatch.sh now refuses a missing notes file. Rule: kill by PID (ss/lsof), never pkill -f with a string in the command.
+- G-223 merged (deepseek-flash) + installed; live decode of 0x64F OK (idle: no active limit; sticky log thermal/VR/PL1/PL2/max-turbo). Readings may hold a decoded dict.
