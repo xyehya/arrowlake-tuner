@@ -1,0 +1,147 @@
+{
+ "cancel": {
+  "request": {
+   "args": {},
+   "op": "stress.stop"
+  },
+  "response": {
+   "id": "c16",
+   "ok": true,
+   "result": {
+    "cancelled": true,
+    "op_id": "c15",
+    "state": "stressing"
+   }
+  }
+ },
+ "events": [
+  {
+   "event": "state",
+   "op_id": "c14",
+   "state": "idle"
+  },
+  {
+   "event": "state",
+   "op_id": "c15",
+   "state": "stressing"
+  },
+  {
+   "elapsed_s": 0.0,
+   "errors": 0,
+   "event": "progress",
+   "of_s": 3600,
+   "op_id": "c15"
+  },
+  {
+   "event": "heartbeat",
+   "op_id": "c15",
+   "ops_budget": 100000,
+   "ops_used": 0,
+   "state": "stressing"
+  }
+ ],
+ "request": {
+  "args": {
+   "duration_s": 3600,
+   "kind": "cpu",
+   "method": "vector-math",
+   "ratio_cap": 48
+  },
+  "op": "stress.start"
+ },
+ "response": {
+  "id": "c15",
+  "ok": true,
+  "result": {
+   "achieved": {
+    "EC0": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "EC1": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "EC2": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "EC3": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P0": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P1": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P2": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P3": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P4": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P5": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P6": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    },
+    "P7": {
+     "cap_held": true,
+     "cap_ratio": 48,
+     "mhz_mean": 2800.0,
+     "ratio_mode": 48
+    }
+   },
+   "cap_valid": true,
+   "duration_s": 3600,
+   "elapsed_s": 0.2,
+   "ended": "2026-10-18T10:29:31Z",
+   "error_lines": [],
+   "errors": 0,
+   "health": "clean",
+   "id": "20261018T102931Z-rcid",
+   "kind": "cpu",
+   "max_pkg_w": 148.0,
+   "max_temp_c": 58.5,
+   "mce_new": 0,
+   "record_path": "/var/lib/arltuner/state/stress/20261018T102931Z-rcid.json",
+   "started": "2026-10-18T10:29:31Z",
+   "stopped_by": "cancel"
+  }
+ }
+}

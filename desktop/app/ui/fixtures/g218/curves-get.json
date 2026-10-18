@@ -1,0 +1,368 @@
+{
+ "request": {
+  "args": {
+   "id": "20261018T102855Z-3vza"
+  },
+  "op": "curves.get"
+ },
+ "response": {
+  "id": "c5",
+  "ok": true,
+  "result": {
+   "baseline": false,
+   "boot_id": "00000000-0000-4000-8000-000000000000",
+   "complete": true,
+   "created": "2026-10-18T10:28:55Z",
+   "id": "20261018T102855Z-3vza",
+   "kernel": "sim",
+   "mode": "quick",
+   "name": "stock",
+   "plan": "generic",
+   "temps": {
+    "max_c": 64.2,
+    "min_c": 32.9
+   },
+   "tuning_state": {
+    "kind": "unknown"
+   },
+   "units": {
+    "EC0": {
+     "cpus": [
+      8,
+      9,
+      10,
+      11
+     ],
+     "points": [
+      {
+       "kept": 10,
+       "mhz": 800,
+       "ratio": 8,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7761,
+       "vid_min": 0.7737,
+       "vid_v": 0.775
+      },
+      {
+       "kept": 10,
+       "mhz": 1300,
+       "ratio": 13,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7764,
+       "vid_min": 0.7736,
+       "vid_v": 0.7755
+      },
+      {
+       "kept": 9,
+       "mhz": 1800,
+       "ratio": 18,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7762,
+       "vid_min": 0.7736,
+       "vid_v": 0.775
+      },
+      {
+       "cap_khz": 2343478,
+       "kept": 9,
+       "mhz": 2300,
+       "ratio": 23,
+       "retried": true,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7759,
+       "vid_min": 0.7736,
+       "vid_v": 0.7747
+      },
+      {
+       "kept": 9,
+       "mhz": 2800,
+       "ratio": 28,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7765,
+       "vid_min": 0.7737,
+       "vid_v": 0.7748
+      },
+      {
+       "kept": 9,
+       "mhz": 3300,
+       "ratio": 33,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.8342,
+       "vid_min": 0.832,
+       "vid_v": 0.8333
+      },
+      {
+       "kept": 9,
+       "mhz": 3800,
+       "ratio": 38,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.9323,
+       "vid_min": 0.9294,
+       "vid_v": 0.9306
+      },
+      {
+       "kept": 10,
+       "mhz": 4300,
+       "ratio": 43,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.0645,
+       "vid_min": 1.062,
+       "vid_v": 1.0629
+      },
+      {
+       "kept": 10,
+       "mhz": 4800,
+       "ratio": 48,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.1584,
+       "vid_min": 1.156,
+       "vid_v": 1.157
+      }
+     ]
+    },
+    "P0": {
+     "cpus": [
+      0
+     ],
+     "points": [
+      {
+       "kept": 10,
+       "mhz": 800,
+       "ratio": 8,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.6942,
+       "vid_min": 0.6918,
+       "vid_v": 0.6925
+      },
+      {
+       "kept": 10,
+       "mhz": 1300,
+       "ratio": 13,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7061,
+       "vid_min": 0.7036,
+       "vid_v": 0.7049
+      },
+      {
+       "kept": 10,
+       "mhz": 1800,
+       "ratio": 18,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7178,
+       "vid_min": 0.715,
+       "vid_v": 0.7161
+      },
+      {
+       "kept": 7,
+       "mhz": 2300,
+       "ratio": 23,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7487,
+       "vid_min": 0.7468,
+       "vid_v": 0.748
+      },
+      {
+       "kept": 9,
+       "mhz": 2800,
+       "ratio": 28,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7944,
+       "vid_min": 0.7915,
+       "vid_v": 0.793
+      },
+      {
+       "kept": 10,
+       "mhz": 3300,
+       "ratio": 33,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.8506,
+       "vid_min": 0.8479,
+       "vid_v": 0.8493
+      },
+      {
+       "kept": 9,
+       "mhz": 3800,
+       "ratio": 38,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.9146,
+       "vid_min": 0.912,
+       "vid_v": 0.9132
+      },
+      {
+       "kept": 10,
+       "mhz": 4300,
+       "ratio": 43,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.9785,
+       "vid_min": 0.9758,
+       "vid_v": 0.9772
+      },
+      {
+       "kept": 8,
+       "mhz": 4800,
+       "ratio": 48,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.0424,
+       "vid_min": 1.0403,
+       "vid_v": 1.0416
+      },
+      {
+       "kept": 9,
+       "mhz": 5300,
+       "ratio": 53,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.2174,
+       "vid_min": 1.2147,
+       "vid_v": 1.2159
+      },
+      {
+       "kept": 5,
+       "mhz": 5700,
+       "ratio": 57,
+       "status": "ok",
+       "total": 5,
+       "vid_max": 1.4298,
+       "vid_min": 1.4281,
+       "vid_v": 1.4293
+      }
+     ]
+    },
+    "P1": {
+     "cpus": [
+      1
+     ],
+     "points": [
+      {
+       "kept": 10,
+       "mhz": 800,
+       "ratio": 8,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.6921,
+       "vid_min": 0.6896,
+       "vid_v": 0.6908
+      },
+      {
+       "kept": 8,
+       "mhz": 1300,
+       "ratio": 13,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7054,
+       "vid_min": 0.7032,
+       "vid_v": 0.7041
+      },
+      {
+       "kept": 10,
+       "mhz": 1800,
+       "ratio": 18,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7191,
+       "vid_min": 0.7162,
+       "vid_v": 0.7178
+      },
+      {
+       "kept": 6,
+       "mhz": 2300,
+       "ratio": 23,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.749,
+       "vid_min": 0.7465,
+       "vid_v": 0.7474
+      },
+      {
+       "kept": 8,
+       "mhz": 2800,
+       "ratio": 28,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.7908,
+       "vid_min": 0.7882,
+       "vid_v": 0.7897
+      },
+      {
+       "kept": 9,
+       "mhz": 3300,
+       "ratio": 33,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.8467,
+       "vid_min": 0.8438,
+       "vid_v": 0.8455
+      },
+      {
+       "kept": 9,
+       "mhz": 3800,
+       "ratio": 38,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.9119,
+       "vid_min": 0.9092,
+       "vid_v": 0.91
+      },
+      {
+       "kept": 10,
+       "mhz": 4300,
+       "ratio": 43,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 0.9768,
+       "vid_min": 0.9744,
+       "vid_v": 0.976
+      },
+      {
+       "kept": 10,
+       "mhz": 4800,
+       "ratio": 48,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.0425,
+       "vid_min": 1.0404,
+       "vid_v": 1.0416
+      },
+      {
+       "kept": 8,
+       "mhz": 5300,
+       "ratio": 53,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.2223,
+       "vid_min": 1.2196,
+       "vid_v": 1.2208
+      },
+      {
+       "kept": 9,
+       "mhz": 5500,
+       "ratio": 55,
+       "status": "ok",
+       "total": 10,
+       "vid_max": 1.3075,
+       "vid_min": 1.3049,
+       "vid_v": 1.3063
+      }
+     ]
+    }
+   }
+  }
+ }
+}

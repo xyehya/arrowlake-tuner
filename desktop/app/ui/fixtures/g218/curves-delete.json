@@ -1,0 +1,15 @@
+{
+ "request": {
+  "args": {
+   "id": "20261018T102910Z-7oma"
+  },
+  "op": "curves.delete"
+ },
+ "response": {
+  "id": "c11",
+  "ok": true,
+  "result": {
+   "deleted": "20261018T102910Z-7oma"
+  }
+ }
+}

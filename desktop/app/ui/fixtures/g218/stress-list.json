@@ -1,0 +1,94 @@
+{
+ "id": "c17",
+ "ok": true,
+ "result": {
+  "results": [
+   {
+    "cap_valid": true,
+    "duration_s": 3600,
+    "elapsed_s": 0.2,
+    "ended": "2026-10-18T10:29:31Z",
+    "errors": 0,
+    "health": "clean",
+    "id": "20261018T102931Z-rcid",
+    "kind": "cpu",
+    "max_pkg_w": 148.0,
+    "max_temp_c": 58.5,
+    "mce_new": 0,
+    "memory_mb": null,
+    "method": "vector-math",
+    "ratio_cap": 48,
+    "started": "2026-10-18T10:29:31Z",
+    "stopped_by": "cancel",
+    "units": [
+     "P0",
+     "P1",
+     "P2",
+     "P3",
+     "P4",
+     "P5",
+     "P6",
+     "P7",
+     "EC0",
+     "EC1",
+     "EC2",
+     "EC3"
+    ]
+   },
+   {
+    "cap_valid": null,
+    "duration_s": 30,
+    "elapsed_s": 30.1,
+    "ended": "2026-10-18T10:29:31Z",
+    "errors": 0,
+    "health": "clean",
+    "id": "20261018T102928Z-swfk",
+    "kind": "memory",
+    "max_pkg_w": 176.8,
+    "max_temp_c": 64.0,
+    "mce_new": 0,
+    "memory_mb": 2048,
+    "method": null,
+    "ratio_cap": null,
+    "started": "2026-10-18T10:29:28Z",
+    "stopped_by": "time",
+    "units": [
+     "P0",
+     "P1",
+     "P2",
+     "P3",
+     "P4",
+     "P5",
+     "P6",
+     "P7",
+     "EC0",
+     "EC1",
+     "EC2",
+     "EC3"
+    ]
+   },
+   {
+    "cap_valid": null,
+    "duration_s": 30,
+    "elapsed_s": 30.2,
+    "ended": "2026-10-18T10:29:28Z",
+    "errors": 0,
+    "health": "clean",
+    "id": "20261018T102926Z-9ykd",
+    "kind": "cpu",
+    "max_pkg_w": 176.8,
+    "max_temp_c": 64.0,
+    "mce_new": 0,
+    "memory_mb": null,
+    "method": "integer",
+    "ratio_cap": null,
+    "started": "2026-10-18T10:29:26Z",
+    "stopped_by": "time",
+    "units": [
+     "P0",
+     "EC0"
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,988 @@
+{
+ "events": [
+  {
+   "event": "state",
+   "op_id": "c2",
+   "state": "measuring"
+  },
+  {
+   "eta_s": 40,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": null,
+   "step": 0,
+   "unit": null
+  },
+  {
+   "event": "vf.point",
+   "mhz": 800,
+   "op_id": "c2",
+   "ratio": 8,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.6925
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 8,
+   "step": 1,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1300,
+   "op_id": "c2",
+   "ratio": 13,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7049
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 13,
+   "step": 2,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1800,
+   "op_id": "c2",
+   "ratio": 18,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7161
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 18,
+   "step": 3,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2300,
+   "op_id": "c2",
+   "ratio": 23,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.748
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 23,
+   "step": 4,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2800,
+   "op_id": "c2",
+   "ratio": 28,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.793
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 28,
+   "step": 5,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3300,
+   "op_id": "c2",
+   "ratio": 33,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.8493
+  },
+  {
+   "eta_s": 3,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 33,
+   "step": 6,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3800,
+   "op_id": "c2",
+   "ratio": 38,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.9132
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 38,
+   "step": 7,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4300,
+   "op_id": "c2",
+   "ratio": 43,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.9772
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 43,
+   "step": 8,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4800,
+   "op_id": "c2",
+   "ratio": 48,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 1.0416
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 48,
+   "step": 9,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 5300,
+   "op_id": "c2",
+   "ratio": 53,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 1.2159
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 53,
+   "step": 10,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 5700,
+   "op_id": "c2",
+   "ratio": 57,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 1.4293
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 57,
+   "step": 11,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 800,
+   "op_id": "c2",
+   "ratio": 8,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.6908
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 8,
+   "step": 12,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1300,
+   "op_id": "c2",
+   "ratio": 13,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.7041
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 13,
+   "step": 13,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1800,
+   "op_id": "c2",
+   "ratio": 18,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.7178
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 18,
+   "step": 14,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2300,
+   "op_id": "c2",
+   "ratio": 23,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.7474
+  },
+  {
+   "eta_s": 2,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 23,
+   "step": 15,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2800,
+   "op_id": "c2",
+   "ratio": 28,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.7897
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 28,
+   "step": 16,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3300,
+   "op_id": "c2",
+   "ratio": 33,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.8455
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 33,
+   "step": 17,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3800,
+   "op_id": "c2",
+   "ratio": 38,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.91
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 38,
+   "step": 18,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4300,
+   "op_id": "c2",
+   "ratio": 43,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 0.976
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 43,
+   "step": 19,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4800,
+   "op_id": "c2",
+   "ratio": 48,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 1.0416
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 48,
+   "step": 20,
+   "unit": "P1"
+  },
+  {
+   "event": "heartbeat",
+   "op_id": "c2",
+   "ops_budget": 100000,
+   "ops_used": 0,
+   "state": "measuring"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 5300,
+   "op_id": "c2",
+   "ratio": 53,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 1.2208
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 53,
+   "step": 21,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 5500,
+   "op_id": "c2",
+   "ratio": 55,
+   "status": "ok",
+   "unit": "P1",
+   "vid_v": 1.3063
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 55,
+   "step": 22,
+   "unit": "P1"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 800,
+   "op_id": "c2",
+   "ratio": 8,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.775
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 8,
+   "step": 23,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1300,
+   "op_id": "c2",
+   "ratio": 13,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.7755
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 13,
+   "step": 24,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1800,
+   "op_id": "c2",
+   "ratio": 18,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.775
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 18,
+   "step": 25,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2300,
+   "op_id": "c2",
+   "ratio": 23,
+   "reason": "cap_granularity",
+   "status": "unreachable",
+   "unit": "EC0",
+   "vid_v": null
+  },
+  {
+   "eta_s": 1,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 23,
+   "step": 26,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2800,
+   "op_id": "c2",
+   "ratio": 28,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.7748
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 28,
+   "step": 27,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3300,
+   "op_id": "c2",
+   "ratio": 33,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.8333
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 33,
+   "step": 28,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 3800,
+   "op_id": "c2",
+   "ratio": 38,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.9306
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 38,
+   "step": 29,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4300,
+   "op_id": "c2",
+   "ratio": 43,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 1.0629
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 43,
+   "step": 30,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 4800,
+   "op_id": "c2",
+   "ratio": 48,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 1.157
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 31,
+   "op_id": "c2",
+   "ratio": 48,
+   "step": 31,
+   "unit": "EC0"
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 32,
+   "op_id": "c2",
+   "ratio": 23,
+   "step": 31,
+   "unit": "EC0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 2300,
+   "op_id": "c2",
+   "ratio": 23,
+   "retry": true,
+   "status": "ok",
+   "unit": "EC0",
+   "vid_v": 0.7747
+  },
+  {
+   "eta_s": 0,
+   "event": "progress",
+   "of": 32,
+   "op_id": "c2",
+   "ratio": 23,
+   "step": 32,
+   "unit": "EC0"
+  }
+ ],
+ "request": {
+  "args": {
+   "mode": "quick",
+   "name": "stock",
+   "units": [
+    "P0",
+    "P1",
+    "EC0"
+   ]
+  },
+  "op": "vf.measure"
+ },
+ "response": {
+  "id": "c2",
+  "ok": true,
+  "result": {
+   "curve_id": "20261018T102855Z-3vza",
+   "plan": "generic",
+   "record": {
+    "baseline": false,
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "complete": true,
+    "created": "2026-10-18T10:28:55Z",
+    "id": "20261018T102855Z-3vza",
+    "kernel": "sim",
+    "mode": "quick",
+    "name": "stock",
+    "plan": "generic",
+    "temps": {
+     "max_c": 64.2,
+     "min_c": 32.9
+    },
+    "tuning_state": {
+     "kind": "unknown"
+    },
+    "units": {
+     "EC0": {
+      "cpus": [
+       8,
+       9,
+       10,
+       11
+      ],
+      "points": [
+       {
+        "kept": 10,
+        "mhz": 800,
+        "ratio": 8,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7761,
+        "vid_min": 0.7737,
+        "vid_v": 0.775
+       },
+       {
+        "kept": 10,
+        "mhz": 1300,
+        "ratio": 13,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7764,
+        "vid_min": 0.7736,
+        "vid_v": 0.7755
+       },
+       {
+        "kept": 9,
+        "mhz": 1800,
+        "ratio": 18,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7762,
+        "vid_min": 0.7736,
+        "vid_v": 0.775
+       },
+       {
+        "cap_khz": 2343478,
+        "kept": 9,
+        "mhz": 2300,
+        "ratio": 23,
+        "retried": true,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7759,
+        "vid_min": 0.7736,
+        "vid_v": 0.7747
+       },
+       {
+        "kept": 9,
+        "mhz": 2800,
+        "ratio": 28,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7765,
+        "vid_min": 0.7737,
+        "vid_v": 0.7748
+       },
+       {
+        "kept": 9,
+        "mhz": 3300,
+        "ratio": 33,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.8342,
+        "vid_min": 0.832,
+        "vid_v": 0.8333
+       },
+       {
+        "kept": 9,
+        "mhz": 3800,
+        "ratio": 38,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.9323,
+        "vid_min": 0.9294,
+        "vid_v": 0.9306
+       },
+       {
+        "kept": 10,
+        "mhz": 4300,
+        "ratio": 43,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.0645,
+        "vid_min": 1.062,
+        "vid_v": 1.0629
+       },
+       {
+        "kept": 10,
+        "mhz": 4800,
+        "ratio": 48,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.1584,
+        "vid_min": 1.156,
+        "vid_v": 1.157
+       }
+      ]
+     },
+     "P0": {
+      "cpus": [
+       0
+      ],
+      "points": [
+       {
+        "kept": 10,
+        "mhz": 800,
+        "ratio": 8,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.6942,
+        "vid_min": 0.6918,
+        "vid_v": 0.6925
+       },
+       {
+        "kept": 10,
+        "mhz": 1300,
+        "ratio": 13,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7061,
+        "vid_min": 0.7036,
+        "vid_v": 0.7049
+       },
+       {
+        "kept": 10,
+        "mhz": 1800,
+        "ratio": 18,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7178,
+        "vid_min": 0.715,
+        "vid_v": 0.7161
+       },
+       {
+        "kept": 7,
+        "mhz": 2300,
+        "ratio": 23,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7487,
+        "vid_min": 0.7468,
+        "vid_v": 0.748
+       },
+       {
+        "kept": 9,
+        "mhz": 2800,
+        "ratio": 28,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7944,
+        "vid_min": 0.7915,
+        "vid_v": 0.793
+       },
+       {
+        "kept": 10,
+        "mhz": 3300,
+        "ratio": 33,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.8506,
+        "vid_min": 0.8479,
+        "vid_v": 0.8493
+       },
+       {
+        "kept": 9,
+        "mhz": 3800,
+        "ratio": 38,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.9146,
+        "vid_min": 0.912,
+        "vid_v": 0.9132
+       },
+       {
+        "kept": 10,
+        "mhz": 4300,
+        "ratio": 43,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.9785,
+        "vid_min": 0.9758,
+        "vid_v": 0.9772
+       },
+       {
+        "kept": 8,
+        "mhz": 4800,
+        "ratio": 48,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.0424,
+        "vid_min": 1.0403,
+        "vid_v": 1.0416
+       },
+       {
+        "kept": 9,
+        "mhz": 5300,
+        "ratio": 53,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.2174,
+        "vid_min": 1.2147,
+        "vid_v": 1.2159
+       },
+       {
+        "kept": 5,
+        "mhz": 5700,
+        "ratio": 57,
+        "status": "ok",
+        "total": 5,
+        "vid_max": 1.4298,
+        "vid_min": 1.4281,
+        "vid_v": 1.4293
+       }
+      ]
+     },
+     "P1": {
+      "cpus": [
+       1
+      ],
+      "points": [
+       {
+        "kept": 10,
+        "mhz": 800,
+        "ratio": 8,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.6921,
+        "vid_min": 0.6896,
+        "vid_v": 0.6908
+       },
+       {
+        "kept": 8,
+        "mhz": 1300,
+        "ratio": 13,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7054,
+        "vid_min": 0.7032,
+        "vid_v": 0.7041
+       },
+       {
+        "kept": 10,
+        "mhz": 1800,
+        "ratio": 18,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7191,
+        "vid_min": 0.7162,
+        "vid_v": 0.7178
+       },
+       {
+        "kept": 6,
+        "mhz": 2300,
+        "ratio": 23,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.749,
+        "vid_min": 0.7465,
+        "vid_v": 0.7474
+       },
+       {
+        "kept": 8,
+        "mhz": 2800,
+        "ratio": 28,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.7908,
+        "vid_min": 0.7882,
+        "vid_v": 0.7897
+       },
+       {
+        "kept": 9,
+        "mhz": 3300,
+        "ratio": 33,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.8467,
+        "vid_min": 0.8438,
+        "vid_v": 0.8455
+       },
+       {
+        "kept": 9,
+        "mhz": 3800,
+        "ratio": 38,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.9119,
+        "vid_min": 0.9092,
+        "vid_v": 0.91
+       },
+       {
+        "kept": 10,
+        "mhz": 4300,
+        "ratio": 43,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 0.9768,
+        "vid_min": 0.9744,
+        "vid_v": 0.976
+       },
+       {
+        "kept": 10,
+        "mhz": 4800,
+        "ratio": 48,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.0425,
+        "vid_min": 1.0404,
+        "vid_v": 1.0416
+       },
+       {
+        "kept": 8,
+        "mhz": 5300,
+        "ratio": 53,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.2223,
+        "vid_min": 1.2196,
+        "vid_v": 1.2208
+       },
+       {
+        "kept": 9,
+        "mhz": 5500,
+        "ratio": 55,
+        "status": "ok",
+        "total": 10,
+        "vid_max": 1.3075,
+        "vid_min": 1.3049,
+        "vid_v": 1.3063
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+}

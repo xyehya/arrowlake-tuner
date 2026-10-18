@@ -1,0 +1,28 @@
+{
+ "request": {
+  "args": {
+   "id": "20261018T102858Z-0z2g",
+   "name": "renamed"
+  },
+  "op": "curves.update"
+ },
+ "response": {
+  "id": "c6",
+  "ok": true,
+  "result": {
+   "baseline": false,
+   "complete": true,
+   "created": "2026-10-18T10:28:58Z",
+   "id": "20261018T102858Z-0z2g",
+   "mode": "dense",
+   "name": "renamed",
+   "tuning_state": {
+    "kind": "unknown"
+   },
+   "units": [
+    "P0",
+    "EC0"
+   ]
+  }
+ }
+}
