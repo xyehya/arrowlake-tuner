@@ -1,0 +1,10 @@
+- G-204 merged: helper link in src-tauri/src/helper/. You own new files src-tauri/src/{tray,settings,notify}.rs and ui/views/setup.js; you may edit
+  src-tauri/src/lib.rs only to register modules/commands, build.rs + capabilities/default.json only to grant your new commands (keep the exact-list test
+  in lib.rs updated), and ui/bridge.js only to add settings_get/settings_set/notify passthroughs.
+- Tray: colour/state from helper state (idle / applying / stressing / disconnected) via the link's events; menu Show / Quit (no hardware actions from the tray).
+- Settings: ~/.config/arltuner-desktop/settings.json (0600, atomic write, schema-checked: refresh_s, strip_series[], window, notifications bool); commands settings_get/settings_set.
+- Notifications: Rust-side via tauri-plugin-notification on long-op results when the window is unfocused (no JS notification permission).
+- Setup screen (views/setup.js, export setupView()): shown by the shell when helper_status says missing / not_allowed / busy / untrusted: the named fix
+  text from the link + a copy button for the exact command (e.g. `sudo bash install.sh --add-user <user>`), a Retry button (helper_connect). The app
+  never runs sudo. The orchestrator wires it into app.js at merge.
+- cargo test (with and without dev-socket) + node tests + run_tests.py. You cannot open a window (no display): unit-test the logic.

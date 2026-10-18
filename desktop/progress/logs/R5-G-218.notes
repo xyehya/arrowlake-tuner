@@ -1,0 +1,8 @@
+- Follow G-205/G-206 patterns (store, bridge, components chart/spark from G-206, constructed stylesheet via installStyles like G-206 OR a styles/*.css
+  file you own; note: the orchestrator wires your views into app.js at merge — export `curvesView()` and `stressView()` returning {id, mount, unmount}).
+- Port from web/app.js (cite lines): Curves (measure quick/dense, units chips, cancel, progress, chart/table/library, compare, presets, legend solo,
+  rename/baseline/delete/export) and Stress (D-019 banner always visible "Quick screen — NOT an acceptance gate", cpu/memory, methods, MB, length
+  presets + custom, ratio cap, live ring/clock/errors/temp/power, result card, history). Ops: vf.measure, curves.*, stress.start/stop/list (see the
+  bridge allowlist in desktop/app/src-tauri/src/helper/ops.rs; if an op you need is missing, STOP and report).
+- Record any extra fixtures you need with the simulator (temp paths) into desktop/app/ui/fixtures/ (you own new fixture files only; regenerate fixtures.js).
+- Node 24 glob; Playwright via /usr/bin/python3.

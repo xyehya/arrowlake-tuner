@@ -1,0 +1,13 @@
+- Model it on G-214 (merged): read src/arltuner/controls/power.py + helper/ops_power.py + their tests and the Opus review fixes it went through
+  (desktop/progress/logs/G-214-review.out): separate ops `runtime.read`, `runtime.plan {caps?, parking?, uncore?}` / `{revert:true}`, `runtime.apply
+  {plan_id, typed}` using PlanStore (single use, 600 s, own store), PLAN_STALE re-plan at apply, one sysfs file per step, audit `runtime_attempt`
+  (new EVENTS entry, not counted by read_state; you may edit guard/audit.py ONLY for that) fsync'd before each write, cross-process lock around each
+  write + read-back, one AuditLog per apply, journal /run/arltuner/runtime-journal.json root-owned + boot-id bound + values bounded, revert from journal.
+- Measured live 2026-10-18: intel_pstate active (HWP); cpuinfo_max_freq 5700000 on cpu0; cpu0 has NO `online` file (cannot be parked);
+  /sys/devices/system/cpu/intel_uncore_frequency/package_00_die_00/{min,max,initial_min,initial_max}_freq_khz = 800000/4000000/800000/4000000.
+- caps: `scaling_max_freq` per CPU (kHz = ratio*100000); E-cluster caps written for all 4 CPUs of the cluster (G-152 rule; topology from the live
+  read, never hard-coded); refuse while stress or vf.measure holds a cap journal (name the conflict); never above cpuinfo_max_freq; floor policy.
+- parking: `cpu<N>/online` 0/1; refuse CPU0, the last online CPU of a kind (P or E), and while stress runs; unpark always allowed.
+- uncore: min/max within [initial_min, initial_max] and policy; min <= max always (order writes safely).
+- Policy keys in policies/default.toml COMMENTED OUT: `[runtime] cap_ratio_min`, `uncore_ratio = [min,max]`, `parking = true|false`; absent -> refusal names the key.
+- Opus review before merge. Simulator/fake sysfs only.
