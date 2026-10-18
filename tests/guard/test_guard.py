@@ -60,15 +60,12 @@ class GuardCase(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.wall = FakeClock(1_700_000_000.0)
         self.env: dict[str, str] = {ENV_FLAG: "1"}
-        # the step limits are relaxed to their sanity maxima: only the step tests (test_bounds.py) use the shipped one-step defaults
+        # D-049: no operator value limits; the CPU's own ratio limit (cmd 0x01) is bound as 120x, the voltage limit (cmd 0x28) stays unread
         self.policy = dataclasses.replace(
             default_m1_policy(),
             max_operations_per_session=10,
             min_dwell_s=0.0,
-            max_ratio_step=8,
-            max_v_step_mv=200,
-            max_offset_step_mv=200,
-            assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+            hw_ratio_max={"P": 120, "E": 120},
         )
         self.confirm = Confirmation(self.TOKEN, self.OPERATOR)
         self.gate_calls: list[str] = []

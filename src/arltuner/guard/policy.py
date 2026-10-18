@@ -1043,6 +1043,7 @@ def _read_source(source: str | os.PathLike[str]) -> str:
 
 AUTO = "auto"
 _LOG = logging.getLogger("arltuner.policy")
+_WARNED: set[tuple[str | None, tuple[str, ...]]] = set()  # (file, ignored keys) already warned about in this process
 
 
 def load_policy(source: str | os.PathLike[str], topology: Topology | None = None) -> Policy:
@@ -1100,12 +1101,16 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
             ignored.append(key)
     if ignored:
         kwargs["ignored_keys"] = tuple(ignored)
-        _LOG.warning(
-            "policy %s: ignoring %s -- D-049: the helper enforces only the CPU's own limits (cmd 0x01 ratio, cmd 0x28 voltage, the offset field, MSR 0x610, cpufreq, uncore); "
-            "these operator value limits no longer apply, remove them from the file",
-            named or "(text)",
-            ", ".join(ignored),
-        )
+        seen = (named, tuple(ignored))
+        if named is None or seen not in _WARNED:  # the helper loads the file on every op: one warning line per file and process, not one per load
+            if named is not None:
+                _WARNED.add(seen)
+            _LOG.warning(
+                "policy %s: ignoring %s -- D-049: the helper enforces only the CPU's own limits (cmd 0x01 ratio, cmd 0x28 voltage, the offset field, MSR 0x610, cpufreq, uncore); "
+                "these operator value limits no longer apply, remove them from the file",
+                named or "(text)",
+                ", ".join(ignored),
+            )
     raw_entries = doc.get("allow", [])
     if not isinstance(raw_entries, list) or not all(isinstance(e, dict) for e in raw_entries):
         raise PolicyError("allow must be an array of tables ([[allow]])")

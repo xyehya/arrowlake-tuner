@@ -1,0 +1,1622 @@
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE...EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
+======================================================================
+ERROR: test_allowlisted_cmd_with_p1_or_p2_outside_its_entry_is_refused (tests.guard.test_guard.Allowlist.test_allowlisted_cmd_with_p1_or_p2_outside_its_entry_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_every_allowlisted_read_is_sent_exactly_once_when_allowed (tests.guard.test_guard.Allowlist.test_every_allowlisted_read_is_sent_exactly_once_when_allowed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_every_cmd_not_in_the_allowlist_is_refused (tests.guard.test_guard.Allowlist.test_every_cmd_not_in_the_allowlist_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_every_write_command_except_the_four_allowlisted_is_refused_even_with_data (tests.guard.test_guard.Allowlist.test_every_write_command_except_the_four_allowlisted_is_refused_even_with_data)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_non_int_fields_are_refused (tests.guard.test_guard.Allowlist.test_non_int_fields_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_unnamed_command_ids_are_refused (tests.guard.test_guard.Allowlist.test_unnamed_command_ids_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_audit_failure_while_failing_does_not_mask_the_transport_error (tests.guard.test_guard.AuditTrail.test_audit_failure_while_failing_does_not_mask_the_transport_error)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_every_refusal_is_audited_with_its_request (tests.guard.test_guard.AuditTrail.test_every_refusal_is_audited_with_its_request)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_full_session_records_in_order (tests.guard.test_guard.AuditTrail.test_full_session_records_in_order)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_two_guards_append_to_one_file_and_never_truncate (tests.guard.test_guard.AuditTrail.test_two_guards_append_to_one_file_and_never_truncate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_unwritable_audit_log_blocks_sending (tests.guard.test_guard.AuditTrail.test_unwritable_audit_log_blocks_sending)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_baseline_must_match_cpu_cmd_and_be_successful (tests.guard.test_guard.Baseline.test_baseline_must_match_cpu_cmd_and_be_successful)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_percore_enable_write_after_baseline (tests.guard.test_guard.Baseline.test_percore_enable_write_after_baseline)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_write_after_baseline_read_is_sent (tests.guard.test_guard.Baseline.test_write_after_baseline_read_is_sent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_write_with_no_read_twin_is_refused_even_if_a_policy_lists_it (tests.guard.test_guard.Baseline.test_write_with_no_read_twin_is_refused_even_if_a_policy_lists_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_write_without_baseline_is_refused (tests.guard.test_guard.Baseline.test_write_without_baseline_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lower_ratio_and_voltage_are_accepted_each_in_its_own_word (tests.guard.test_guard.Checks.test_lower_ratio_and_voltage_are_accepted_each_in_its_own_word)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_malformed_request_fields_are_check_failures (tests.guard.test_guard.Checks.test_malformed_request_fields_are_check_failures)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_offset_bounds_on_a_p_core_follow_the_assumed_bios_offset (tests.guard.test_guard.Checks.test_offset_bounds_on_a_p_core_follow_the_assumed_bios_offset)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_offset_bounds_on_an_e_core (tests.guard.test_guard.Checks.test_offset_bounds_on_an_e_core)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_offset_min_comes_from_the_policy_entry (tests.guard.test_guard.Checks.test_offset_min_comes_from_the_policy_entry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_overvolt_refused (tests.guard.test_guard.Checks.test_overvolt_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_percore_enable_changing_other_bits_refused (tests.guard.test_guard.Checks.test_percore_enable_changing_other_bits_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_ratio_above_baseline_refused (tests.guard.test_guard.Checks.test_ratio_above_baseline_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_reads_carry_no_payload (tests.guard.test_guard.Checks.test_reads_carry_no_payload)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_static_mode_refused (tests.guard.test_guard.Checks.test_static_mode_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_bad_confirmations_are_refused (tests.guard.test_guard.Confirmations.test_bad_confirmations_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_token_never_reaches_repr_or_audit_log (tests.guard.test_guard.Confirmations.test_token_never_reaches_repr_or_audit_log)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_cpu_outside_the_policy_set (tests.guard.test_guard.CpuSet.test_cpu_outside_the_policy_set)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_policy_can_narrow_the_cpu_set (tests.guard.test_guard.CpuSet.test_policy_can_narrow_the_cpu_set)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_a_refused_request_does_not_restart_the_window (tests.guard.test_guard.Dwell.test_a_refused_request_does_not_restart_the_window)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_dwell_is_measured_from_the_end_of_the_previous_operation (tests.guard.test_guard.Dwell.test_dwell_is_measured_from_the_end_of_the_previous_operation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_refuses_until_the_clock_has_advanced_and_never_sleeps (tests.guard.test_guard.Dwell.test_refuses_until_the_clock_has_advanced_and_never_sleeps)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_absent_or_not_exactly_one_is_refused (tests.guard.test_guard.EnvFlag.test_absent_or_not_exactly_one_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_broken_env_mapping_fails_closed (tests.guard.test_guard.EnvFlag.test_broken_env_mapping_fails_closed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_default_env_is_the_live_process_environment (tests.guard.test_guard.EnvFlag.test_default_env_is_the_live_process_environment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_absent_gate_is_audited_as_none (tests.guard.test_guard.HealthGate.test_absent_gate_is_audited_as_none)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_after_gate_failure_trips_but_still_returns_the_result (tests.guard.test_guard.HealthGate.test_after_gate_failure_trips_but_still_returns_the_result)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_after_gate_that_raises_trips (tests.guard.test_guard.HealthGate.test_after_gate_that_raises_trips)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_called_before_and_after_around_the_transaction (tests.guard.test_guard.HealthGate.test_called_before_and_after_around_the_transaction)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_false_before_refuses_and_sends_nothing (tests.guard.test_guard.HealthGate.test_false_before_refuses_and_sends_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_gate_that_raises_or_answers_oddly_refuses (tests.guard.test_guard.HealthGate.test_gate_that_raises_or_answers_oddly_refuses)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_present_gate_detail_is_audited (tests.guard.test_guard.HealthGate.test_present_gate_detail_is_audited)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_existing_lock_refuses_and_is_left_alone (tests.guard.test_guard.LockFile.test_existing_lock_refuses_and_is_left_alone)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lock_exists_while_sending_holds_our_pid_and_is_removed_after (tests.guard.test_guard.LockFile.test_lock_exists_while_sending_holds_our_pid_and_is_removed_after)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lock_removed_after_exception (tests.guard.test_guard.LockFile.test_lock_removed_after_exception)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lock_removed_after_health_gate_refusal (tests.guard.test_guard.LockFile.test_lock_removed_after_health_gate_refusal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lock_removed_after_readback_mismatch (tests.guard.test_guard.LockFile.test_lock_removed_after_readback_mismatch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_lock_that_cannot_be_created_refuses (tests.guard.test_guard.LockFile.test_lock_that_cannot_be_created_refuses)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_reentrant_call_is_refused_not_queued (tests.guard.test_guard.LockFile.test_reentrant_call_is_refused_not_queued)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_constructor_fails_closed (tests.guard.test_guard.Ordering.test_constructor_fails_closed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_earliest_failing_check_wins (tests.guard.test_guard.Ordering.test_earliest_failing_check_wins)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_execute_needs_a_request_object (tests.guard.test_guard.Ordering.test_execute_needs_a_request_object)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_refusal_enum_is_exactly_the_spec (tests.guard.test_guard.Ordering.test_refusal_enum_is_exactly_the_spec)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_session_limit_precedes_dwell_precedes_lock_precedes_health (tests.guard.test_guard.Ordering.test_session_limit_precedes_dwell_precedes_lock_precedes_health)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_tripped_beats_everything (tests.guard.test_guard.Ordering.test_tripped_beats_everything)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_baseline_is_the_operator_read_not_the_readback (tests.guard.test_guard.Readback.test_baseline_is_the_operator_read_not_the_readback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_exception_during_readback_is_audited_reraised_and_trips (tests.guard.test_guard.Readback.test_exception_during_readback_is_audited_reraised_and_trips)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_mismatch_is_verified_false_and_trips (tests.guard.test_guard.Readback.test_mismatch_is_verified_false_and_trips)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_readback_with_error_rc_counts_as_not_verified (tests.guard.test_guard.Readback.test_readback_with_error_rc_counts_as_not_verified)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_reads_have_no_readback (tests.guard.test_guard.Readback.test_reads_have_no_readback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_success_is_verified_true (tests.guard.test_guard.Readback.test_success_is_verified_true)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_empty_until_a_write_succeeds (tests.guard.test_guard.RevertPlan.test_empty_until_a_write_succeeds)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_inverse_words_newest_cpu_first_and_not_executed (tests.guard.test_guard.RevertPlan.test_inverse_words_newest_cpu_first_and_not_executed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_plan_requests_go_through_the_same_checks (tests.guard.test_guard.RevertPlan.test_plan_requests_go_through_the_same_checks)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_write_with_unknown_outcome_stays_in_the_plan (tests.guard.test_guard.RevertPlan.test_write_with_unknown_outcome_stays_in_the_plan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_limit_counts_reads_and_writes_but_not_the_readback (tests.guard.test_guard.SessionLimit.test_limit_counts_reads_and_writes_but_not_the_readback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_refusals_do_not_consume_the_limit (tests.guard.test_guard.SessionLimit.test_refusals_do_not_consume_the_limit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_second_operation_refused_with_default_limit (tests.guard.test_guard.SessionLimit.test_second_operation_refused_with_default_limit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_any_exception_trips_not_just_the_named_ones (tests.guard.test_guard.Trip.test_any_exception_trips_not_just_the_named_ones)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_baseline_is_not_usable_after_a_trip (tests.guard.test_guard.Trip.test_baseline_is_not_usable_after_a_trip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_keyboard_interrupt_trips_and_releases_the_lock (tests.guard.test_guard.Trip.test_keyboard_interrupt_trips_and_releases_the_lock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_malformed_responses_trip (tests.guard.test_guard.Trip.test_malformed_responses_trip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_nonzero_rc_is_returned_not_raised_and_does_not_trip (tests.guard.test_guard.Trip.test_nonzero_rc_is_returned_not_raised_and_does_not_trip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_nonzero_rc_on_a_read_returns_and_stores_no_baseline (tests.guard.test_guard.Trip.test_nonzero_rc_on_a_read_returns_and_stores_no_baseline)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_transport_exceptions_are_audited_reraised_and_trip (tests.guard.test_guard.Trip.test_transport_exceptions_are_audited_reraised_and_trip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+======================================================================
+ERROR: test_transport_returning_a_non_response_trips (tests.guard.test_guard.Trip.test_transport_returning_a_non_response_trips)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/guard/test_guard.py", line 64, in setUp
+    self.policy = dataclasses.replace(
+                  ~~~~~~~~~~~~~~~~~~~^
+        default_m1_policy(),
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+        assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib64/python3.14/dataclasses.py", line 1779, in replace
+    return _replace(obj, **changes)
+  File "/usr/lib64/python3.14/dataclasses.py", line 1813, in _replace
+    return self.__class__(**changes)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: Policy.__init__() got an unexpected keyword argument 'max_ratio_step'
+
+----------------------------------------------------------------------
+Ran 80 tests in 0.063s
+
+FAILED (errors=77)

@@ -1,0 +1,17 @@
+E
+======================================================================
+ERROR: test_points (unittest.loader._FailedTest.test_points)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_points
+Traceback (most recent call last):
+  File "/usr/lib64/python3.14/unittest/loader.py", line 141, in loadTestsFromName
+    module = __import__(module_name)
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/controls/test_points.py", line 40, in <module>
+    from ._support import DEFAULT_STEPS, P4_READINGS, e_core, make_session, p4, point_entry, point_profile, point_text, policy_with, profile, with_point_entries
+ImportError: cannot import name 'DEFAULT_STEPS' from 'tests.controls._support' (/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/controls/_support.py)
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

@@ -1,0 +1,74 @@
+.......FF..................F...........F....................F.
+======================================================================
+FAIL: test_no_policy_key_no_write_and_the_refusal_names_the_key (tests.helper.test_runtime.Caps.test_no_policy_key_no_write_and_the_refusal_names_the_key)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 226, in test_no_policy_key_no_write_and_the_refusal_names_the_key
+    e = self.refused(h, "runtime.plan", {"caps": {"3": 45}}, "RUNTIME_POLICY_MISSING")
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 68, in refused
+    self.assertFalse(msg.get("ok"), msg)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'id': 'r2', 'ok': True, 'result': {'plan_id': '34a88fe22f90cc4a4f574b2d29a7afdb2d765eb1b1eb3688e1ecb2a755a391c8', 'nonce': 'M8O48I', 'revert': False, 'steps': [{'n': 1, 'domain': 'caps', 'key': 'cpu3', 'file': 'cpu3/cpufreq/scaling_max_freq', 'before': 5700000, 'value': 4500000, 'expect': [4500000, 4500000], 'ratio': 45}], 'writes': 1, 'ops_needed': 0, 'expires_s': 600, 'journal_new': True, 'warnings': ['the values now in force are journaled before the first write of each key in this boot; "revert" puts them back', 'these are runtime values: a reboot restores the firmware / kernel defaults'], 'policy': {'source': '/home/yk/.hermes/cache/scratch/tmp24w4b_x6/policy.toml', 'cap_ratio_min': None, 'uncore_ratio': None}}}
+
+======================================================================
+FAIL: test_range_and_cluster_rules (tests.helper.test_runtime.Caps.test_range_and_cluster_rules)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 234, in test_range_and_cluster_rules
+    self.refused(h, "runtime.plan", {"caps": {"3": 7}}, "CAPS_RANGE")
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 71, in refused
+    self.assertEqual(msg["error"]["detail"]["check"], check, msg)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'CAPS_BELOW_MIN' != 'CAPS_RANGE'
+- CAPS_BELOW_MIN
++ CAPS_RANGE
+ : {'id': 'r2', 'ok': False, 'error': {'code': 'REFUSED', 'message': "cpu 3: ratio 7 is below the CPU's scaling_min_freq (800000 kHz): the kernel would refuse it. Nothing was written.", 'detail': {'check': 'CAPS_BELOW_MIN', 'key': 'cpu3'}}}
+
+======================================================================
+FAIL: test_reads_caps_parking_uncore_policy_and_the_journal (tests.helper.test_runtime.Read.test_reads_caps_parking_uncore_policy_and_the_journal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 111, in test_reads_caps_parking_uncore_policy_and_the_journal
+    self.assertEqual(r["policy"], {"source": str(self.policy), "cap_ratio_min": 8, "uncore_ratio": [10, 38]})
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'sou[46 chars]jjy/policy.toml', 'cap_ratio_min': None, 'uncore_ratio': None} != {'sou[46 chars]jjy/policy.toml', 'cap_ratio_min': 8, 'uncore_ratio': [10, 38]}
+- {'cap_ratio_min': None,
+?                   ^^^^
+
++ {'cap_ratio_min': 8,
+?                   ^
+
+   'source': '/home/yk/.hermes/cache/scratch/tmpgnwa4jjy/policy.toml',
+-  'uncore_ratio': None}
+?                  ^^^^
+
++  'uncore_ratio': [10, 38]}
+?                  ^^^^^^^^
+
+
+======================================================================
+FAIL: test_a_revert_warns_when_a_journaled_value_is_outside_the_policy_now (tests.helper.test_runtime.Revert.test_a_revert_warns_when_a_journaled_value_is_outside_the_policy_now)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 519, in test_a_revert_warns_when_a_journaled_value_is_outside_the_policy_now
+    self.assertTrue(any("cap_ratio_min" in w for w in warnings), warnings)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['these are runtime values: a reboot restores the firmware / kernel defaults']
+
+======================================================================
+FAIL: test_bounds_policy_and_order_refusals (tests.helper.test_runtime.Uncore.test_bounds_policy_and_order_refusals)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 371, in test_bounds_policy_and_order_refusals
+    self.refused(h, "runtime.plan", {"uncore": {"max_ratio": 39}}, "UNCORE_RANGE")
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yk/AI/arrowlake-tuner/.claude/worktrees/G-226/tests/helper/test_runtime.py", line 68, in refused
+    self.assertFalse(msg.get("ok"), msg)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : {'id': 'r2', 'ok': True, 'result': {'plan_id': 'a9b43ce3ca2201560a835d3302c84ae28aa40541f1362a2a2966127ee49582b4', 'nonce': '486PIN', 'revert': False, 'steps': [{'n': 1, 'domain': 'uncore', 'key': 'max_ratio', 'file': 'intel_uncore_frequency/package_00_die_00/max_freq_khz', 'before': 4000000, 'value': 3900000, 'expect': [3900000, 3900000]}], 'writes': 1, 'ops_needed': 0, 'expires_s': 600, 'journal_new': True, 'warnings': ['the values now in force are journaled before the first write of each key in this boot; "revert" puts them back', 'these are runtime values: a reboot restores the firmware / kernel defaults'], 'policy': {'source': '/home/yk/.hermes/cache/scratch/tmpm6ypd4kh/policy.toml', 'cap_ratio_min': None, 'uncore_ratio': None}}}
+
+----------------------------------------------------------------------
+Ran 62 tests in 6.484s
+
+FAILED (failures=5)
