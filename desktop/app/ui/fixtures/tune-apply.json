@@ -1,7 +1,7 @@
 {
  "request": {
   "args": {
-   "plan_id": "d2b22501c3374e384160744cdef67c59d423f14babec7002f7fb057c0a8b5182",
+   "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
    "typed": "CONFIRM <nonce>"
   },
   "op": "tune.apply"
@@ -14,7 +14,7 @@
    "cpufreq": [],
    "msr_writes": 0,
    "ops_used": 4,
-   "plan_id": "d2b22501c3374e384160744cdef67c59d423f14babec7002f7fb057c0a8b5182",
+   "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
    "readback": [
     {
      "actual": "0xfd800035",

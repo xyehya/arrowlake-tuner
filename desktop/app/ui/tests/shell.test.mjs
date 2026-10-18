@@ -1,6 +1,9 @@
 // node --test desktop/app/ui/tests/   (G-205: store, bridge, mock backend, pure formatting; no DOM, no network, no hardware)
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join, extname, relative } from "node:path";
 
 import {
   createStore, createAppStore, initialState, SERIES, SCREEN_IDS, HISTORY_CAP, applyHelperEvent, deriveMode, deriveAccepted, limitBadges, pushSample,
@@ -437,4 +440,63 @@ test("fixtures are the simulator's own: no host leakage", () => {
   assert.ok(!text.includes("/home/"), "no home paths");
   assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/.test(text.replace(/00000000-0000-4000-8000-000000000000/g, "")), "no real boot id");
   assert.equal(FIXTURES.tuneRead.result.simulator, true);
+});
+
+const UI = fileURLToPath(new URL("..", import.meta.url));
+
+test("fixtures.js (what the browser loads) equals the recorded *.json files (run gen_fixtures.py after changing them)", () => {
+  const dir = join(UI, "fixtures");
+  const names = readdirSync(dir).filter((n) => n.endsWith(".json"));
+  assert.ok(names.length >= 12);
+  const bundle = Object.values(FIXTURES);
+  assert.equal(bundle.length, names.length);
+  for (const n of names) {
+    const json = JSON.parse(readFileSync(join(dir, n), "utf8"));
+    assert.ok(bundle.some((b) => JSON.stringify(b) === JSON.stringify(json)), `${n} is in fixtures.js`);
+  }
+});
+
+// ---------------------------------------------------------------- strict-CSP hygiene (PLAN §2), static
+
+function walk(dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    if (name === "tests" || name === "node_modules") continue;
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) walk(p, out);
+    else out.push(p);
+  }
+  return out;
+}
+
+test("hygiene: no eval, innerHTML, document.write, inline handlers or remote URLs in the UI sources", () => {
+  const files = walk(UI).filter((p) => [".js", ".html", ".css"].includes(extname(p)));
+  assert.ok(files.length >= 15);
+  const banned = [
+    /\beval\s*\(/, /new Function\s*\(/, /\.innerHTML\b/, /\.outerHTML\b/, /insertAdjacentHTML/, /document\.write/, /\.style\.cssText/,
+    /\ssetAttribute\(\s*["']style["']/, /\sstyle\s*=\s*["']/, /\son[a-z]+\s*=\s*["']/i, /(?:https?:)?\/\/(?!www\.w3\.org)[a-z0-9.-]+\.[a-z]{2,}\//i,
+  ];
+  const bad = [];
+  for (const f of files) {
+    const text = readFileSync(f, "utf8").replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const re of banned) if (re.test(text)) bad.push(`${relative(UI, f)}: ${re}`);
+  }
+  assert.deepEqual(bad, []);
+});
+
+test("hygiene: index.html has one external module script and no inline script or style", () => {
+  const html = readFileSync(join(UI, "index.html"), "utf8");
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+  assert.equal(scripts.length, 1);
+  assert.match(scripts[0][1], /type="module"/);
+  assert.match(scripts[0][1], /src="app\.js"/);
+  assert.equal(scripts[0][2].trim(), "");
+  assert.ok(!/<style\b/.test(html));
+});
+
+test("hygiene: every icon named in icons.css exists, and the shipped CSP is the strict one", () => {
+  const css = readFileSync(join(UI, "styles/icons.css"), "utf8");
+  for (const m of css.matchAll(/url\("\.\.\/icons\/([a-z-]+\.svg)"\)/g)) assert.doesNotThrow(() => statSync(join(UI, "icons", m[1])), m[1]);
+  for (const s of SCREEN_IDS) assert.match(css, new RegExp(`data-icon="${s}"`));
+  const conf = JSON.parse(readFileSync(join(UI, "../src-tauri/tauri.conf.json"), "utf8"));
+  assert.match(conf.app.security.csp, /^default-src 'self'; script-src 'self'; style-src 'self'/);
 });

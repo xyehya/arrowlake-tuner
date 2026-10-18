@@ -2,23 +2,18 @@
 // (gen_fixtures.py; see README.md). Same transport interface as the Tauri backend: connect, status, call, listen (+ close).
 // Short ops answer with the recorded response; long ops (tune.read, tune.apply) answer {id}, replay the recorded state/progress events on a timer
 // and finish with a `result` event, exactly as PLAN §3.1 describes the real link.
-// Loaded lazily by bridge.js only for ?bridge=mock, so the AppImage never parses it. Import attributes (`with {type:'json'}`) work in Chrome >= 123
-// and Node >= 22; and they are governed by script-src 'self', not connect-src, so the strict CSP stays untouched.
+// Loaded lazily by bridge.js only for ?bridge=mock, so the AppImage never parses it. The data comes from fixtures.js (the *.json files bundled as one ES
+// module by gen_fixtures.py): Chrome checks JSON module imports and fetch() against connect-src, which the strict CSP restricts to ipc:, whereas a JS
+// module is governed by script-src 'self'. So the mock runs under the exact CSP of tauri.conf.json.
 
-import preflight from "./preflight.json" with { type: "json" };
-import telemetryStart from "./telemetry-start.json" with { type: "json" };
-import telemetryStop from "./telemetry-stop.json" with { type: "json" };
-import telemetry from "./telemetry-events.json" with { type: "json" };
-import tuneRead from "./tune-read.json" with { type: "json" };
-import tuneReadEvents from "./tune-read-events.json" with { type: "json" };
-import tunePlan from "./tune-plan.json" with { type: "json" };
-import tuneApply from "./tune-apply.json" with { type: "json" };
-import tuneApplyEvents from "./tune-apply-events.json" with { type: "json" };
-import profilesList from "./profiles-list.json" with { type: "json" };
-import auditTail from "./audit-tail.json" with { type: "json" };
-import tuneLast from "./tune-last.json" with { type: "json" };
+import F from "./fixtures.js";
 
-export const FIXTURES = { preflight, telemetryStart, telemetryStop, telemetry, tuneRead, tuneReadEvents, tunePlan, tuneApply, tuneApplyEvents, profilesList, auditTail, tuneLast };
+export const FIXTURES = {
+  preflight: F["preflight"], telemetryStart: F["telemetry-start"], telemetryStop: F["telemetry-stop"], telemetry: F["telemetry-events"], tuneRead: F["tune-read"],
+  tuneReadEvents: F["tune-read-events"], tunePlan: F["tune-plan"], tuneApply: F["tune-apply"], tuneApplyEvents: F["tune-apply-events"], profilesList: F["profiles-list"],
+  auditTail: F["audit-tail"], tuneLast: F["tune-last"],
+};
+const { preflight, telemetryStart, telemetryStop, telemetry, tuneRead, tuneReadEvents, tunePlan, tuneApply, tuneApplyEvents, profilesList, auditTail, tuneLast } = FIXTURES;
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const ok = (id, result) => ({ id, ok: true, result });
