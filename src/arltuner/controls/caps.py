@@ -1,5 +1,5 @@
 """G-216: per-CPU maximum-ratio caps (``cpufreq/scaling_max_freq``), plus the pieces the runtime controls (caps, uncore) share -- the sysfs file access, the step, the
-refusal. Pure apart from the files it is given. (Core parking is held out of G-216: a parked CPU renumbers the live topology, see ``ops_runtime.refuse_if_cpu_offline``.)
+refusal. Pure apart from the files it is given. (Core parking is held out of G-216: a parked CPU renumbers the live topology, see ``helper/cpu_online.py``.)
 
 Facts (``[MEASURED lnx 2026-10-18]``): intel_pstate is active (HWP); ``cpu<N>/cpufreq/cpuinfo_max_freq`` of cpu0 is 5700000 kHz; ``scaling_max_freq`` is the user's cap. The XTU
 analogue is a per-core max-ratio: effective ratio = min(turbo table, cap). A P-core cap is ratio x 100000 kHz. An E-core ratio goes through the caller's ``khz_of`` (the kernel's own
