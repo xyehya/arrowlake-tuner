@@ -1,0 +1,20 @@
+You are a READ-ONLY adversarial security reviewer (Opus) for arltuner, host lnx. Do not edit files. No hardware, no sudo, never connect to /run/arltuner.
+Read AGENTS.md, docs/SAFETY.md, desktop/PLAN.md §2 and §6.1, docs/DECISIONS.md D-039/D-046/D-047, desktop/TASKS.md G-214 and
+desktop/progress/logs/R3-G-214.notes. Review `git diff main...task/G-214-power-limits` (you are in its worktree): root-helper ops that write the package
+power limits PL1/PL2/tau through powercap sysfs (/sys/class/powercap/intel-rapl:0/constraint_*), plus plain reads of MSR 0x606/0x610/0x614.
+Answer with file:line evidence:
+1. Can any path write a value outside the policy `[power]` ranges / step limit, write when keys are absent, write PL2 < PL1, or write a file other than
+   the intended constraint files (path construction, symlinks: the zone dir is itself a symlink on real sysfs; O_NOFOLLOW only on the leaf)? Could a
+   crafted request make the root helper write to an arbitrary sysfs/proc file?
+2. Revert skips ranges and step limit and trusts the journal (/run/arltuner/power-journal.json). Who can write that journal? Is it trust-checked (root-owned,
+   mode, boot-id bound)? Could a forged journal make revert write arbitrary values? Recommend.
+3. Powercap writes bypass WriteGuard: no health gate before/after, no dwell/budget, events not `attempt`. Is that acceptable for a powercap write vs the
+   SAFETY.md principles (one transaction at a time, health bracket, read-back, audit before write)? Is the audit record written (and fsync'd) BEFORE the
+   write? Is the mailbox lock / one-op-at-a-time state machine respected (can a power.apply run concurrently with tune.apply or stress)? Recommend the
+   minimal change to restore the invariants (e.g. take the machine lock, health snapshot before/after, an `attempt`-like pre-record of kind powercap
+   that does not count toward the mailbox budget).
+4. Plan/nonce: same single-use/expiry semantics as tune.plan? PLAN_STALE equivalent if the limits changed between plan and apply?
+5. MSR 0x610 lock bit / read-back: correct decode (units from 0x606), correct refusal; tau encoding and the "either bracketing window" acceptance — too lax?
+6. Audit cost: does each record re-read the whole 16 MB log (G-211 made read_state incremental — is it used here)?
+7. Tests: do they prove the claims? Run `python3 tools/run_tests.py` once.
+Verdict ≤ 450 words: APPROVE / APPROVE WITH FIXES / REJECT; numbered findings (severity, file:line, concrete fix).
