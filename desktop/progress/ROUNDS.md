@@ -35,3 +35,4 @@
 - G-223 merged (deepseek-flash) + installed; live decode of 0x64F OK (idle: no active limit; sticky log thermal/VR/PL1/PL2/max-turbo). Readings may hold a decoded dict.
 - G-204 merged (Opus fixes; release guard verified). AppImage from main built. **H1 passed** live: helper connected · writes allowed · accepted matches.
 - G-207 merged (tune logic lib; node 88; golden intents == helper canonical_intent). Dispatched G-208 (cores grid + inspector, S) and G-209 (turbo sub-tab, deepseek-flash) on a shared mount(el,ctx) sub-tab contract. Follow-up: tune.read should expose the ring policy window.
+- G-206 merged + wired into app.js by orchestrator (views were not routed: app.js outside Owns). Dashboard verified by screenshot. G-224 follow-ups filed.
