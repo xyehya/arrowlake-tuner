@@ -1,0 +1,13 @@
+FIX ROUND (your work is committed on this branch; read `git log main..HEAD`). Opus: APPROVE WITH FIXES. You may additionally edit src/arltuner/guard/audit.py
+ONLY to add a new event name (item 4). Apply all, run the full suite, commit "G-214: review fixes (tau snap, journal bounds, lock, powercap_attempt, one AuditLog)":
+1. (med) power.py:121/413/441 tau: snap the requested tau DOWN to the encodable window (kernel rounds down: div then ilog2), range-check the SNAPPED value
+   against [power] tau_s, plan shows the snapped value, read-back must be exact (file and MSR 0x610[23:17]). Tests: tau_s=128 with max 128 never lands at 159.9 s;
+   tau_s=1 with min 1 refused if it snaps below 1.
+2. (med/low) power.py:472 parse_journal: bound PL by ENCODING_PL_MAX_W and tau by ENCODING_TAU_MAX_S; add the _trust(...) parent check on the journal path;
+   revert plan warns when a journal value is outside [power]. Tests: out-of-encoding / wrapping journal values refused.
+3. (low) take the guard's cross-process lock (cfg.lock_path, same O_EXCL scheme) around each powercap write + read-back. Test: a held lock refuses (LOCKED).
+4. (low) audit: new event `powercap_attempt` in EVENTS, written + fsync'd before each write, NOT counted by read_state toward the mailbox budget/dwell
+   (test that read_state ignores it).
+5. (low) build ONE AuditLog per apply (not per record).
+6. (low) tests: health-gate failure during read-back stops the apply; the audit pre-record exists at the moment of the write (assert inside SimPowerFiles.write_int).
+Report ≤ 150 words.

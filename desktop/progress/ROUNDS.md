@@ -38,3 +38,4 @@
 - G-206 merged + wired into app.js by orchestrator (views were not routed: app.js outside Owns). Dashboard verified by screenshot. G-224 follow-ups filed.
 - G-214 done (power.read/plan/apply as separate ops sharing PlanStore nonce semantics — deliberate deviation from 'intent field'; UI drawer applies tune + power plans in sequence). 82 tests, suite 3137. Opus review running (guard bypass for powercap, journal trust, audit cost).
 - G-209 merged (turbo sub-tab, deepseek-flash, 18 tests). Needs <link> styles/turbo.css + tune view wiring at G-208 merge.
+- G-214 Opus: APPROVE WITH FIXES (no arbitrary write/policy bypass; med: tau lands outside policy via lax read-back; journal values unbounded; low: lock, powercap_attempt event, AuditLog per record, tests). Fix round dispatched. Note: ops_tune/ops_accept also build an AuditLog per record (whole-log line count) — check during G-220.
