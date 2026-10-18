@@ -27,3 +27,4 @@
   restore of the accepted state 1.85 s (311 ops, 6 writes, 6/6 read back); accepted 13/13; MCE 0. (A reboot ~08:49 had reset P0 pts 5-8 + ring 8/9.)
 - G-204 committed (49 cargo tests); orchestrator wired the commands into build.rs + capability; Opus review running.
 - Dispatched G-214 (power backend, S) and G-223 (telemetry relabel + 0x64F, deepseek-flash). G-216 waits for G-214 (shared ops/policy files).
+- G-203 merged (deepseek-flash; node --test + cargo test in run_tests.py; Node 24 needs explicit file list). Main: 3054 OK + node 2 + cargo 5.
