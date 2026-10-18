@@ -1,0 +1,35 @@
+[package]
+name = "arltuner-desktop"
+version = "0.0.1"
+description = "arltuner desktop: unprivileged Tauri client for the arltuner root helper"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+
+[lib]
+name = "arltuner_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[features]
+# Dev/test seam for the helper link (PLAN §3.1): accept a socket owned by the current uid.
+# Empty for now; build.rs refuses it in release profiles (the AppImage is a release build).
+dev-socket = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
