@@ -1,0 +1,16 @@
+FIX ROUND on your branch (Opus review: desktop/progress/logs/G-226-review.out in the main checkout — read it). Orchestrator decisions, all findings fixed in code:
+1. (MED) Voltage prediction for a target + positive offset: v_ref = max(new.v_target_raw, fused_v) — the CPU clamps a target below the top fused point UP
+   to it (cpu-rules-audit A:38). A positive offset with fused_v unread -> CPU_LIMIT_UNREAD. Tests: target 1.0 V + 600 mV with fused 1.3 V refused at a 1.625 V
+   limit; target below fused alone predicts fused.
+2. (MED) Positive per-point offsets (core points P2 1..15, ring points) must be checked against the 0x28 limit of their domain: predicted = (that point's
+   base/fused V if read, else the unit's fused top V) + offset <= limit (raw-1 rule); ring uses the P1=2 (ring) 0x28 read; unread base or limit with a
+   POSITIVE offset -> CPU_LIMIT_UNREAD (negative offsets need no ceiling). Boundary tests: limit, limit+1, unread, ring.
+3. (LOW) Removed-key handling: ignore ONLY the known removed keys/sub-keys (list them explicitly); any other unknown key/sub-key in [power]/[runtime] (e.g.
+   runtime.parking) fails closed as before. Fix test_runtime_policy.py:41 expectation accordingly.
+4. (LOW) Pass base_ratio into _turbo_shape_warnings so TURBO_BELOW_BASE fires on the tune.plan path; DEEP_WHOLE_CURVE also when the unit has no earlier read
+   (judge from the requested offset alone).
+5. (LOW) Store the 0x28 limit as raw (not whole mV) so E 0x56C stays exact; expose mV in cpu_limits for display.
+6. (INFO) build_plan string warnings -> Warn objects with codes where trivial.
+7. (INFO) report.py:331-335: drop the "assumed BIOS offset"/policy-edit text (CPU limits now). Leave web/app.js and desktop/app/ui/lib/limits.js alone (other tasks).
+8. Note in the planner docstring that residual cleanup may now lower a leftover OC point's voltage in one step (D-049, intended).
+`python3 tools/run_tests.py` green; commit `G-226: review fixes`.
