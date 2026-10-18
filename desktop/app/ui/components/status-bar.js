@@ -53,7 +53,7 @@ export function createStatusBar(root, store) {
       (s) => s.mode,
       (m) => {
         mode.textContent = m.label;
-        mode.dataset.state = m.writes ? "ok" : m.label === "unknown" ? "unknown" : "warn";
+        mode.dataset.state = m.writes ? "ok" : m.label === "mode unknown" ? "unknown" : "warn";
         mode.title = m.writes ? "The helper accepts writes (policy still bounds every value)." : `Read-only: ${m.reason}`;
       },
     ),

@@ -107,7 +107,7 @@ export function pushSample(history, samples, cap = HISTORY_CAP) {
 // ---- derived header state ----
 /** Mode chip from a preflight result: writes allowed / read-only + the first reason (PLAN §4.1). */
 export function deriveMode(pre) {
-  if (!pre) return { writes: false, label: "unknown", reason: "preflight not read yet" };
+  if (!pre) return { writes: false, label: "mode unknown", reason: "preflight not read yet" };
   if (pre.writes_allowed === true) return { writes: true, label: "writes allowed", reason: "" };
   const checks = Array.isArray(pre.checks) ? pre.checks : [];
   const bad = checks.find((c) => c.status === "fail") || checks.find((c) => c.status === "unknown");

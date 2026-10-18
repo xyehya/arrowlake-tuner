@@ -112,7 +112,7 @@ test("store: toggleSeries keeps canonical order and can empty the strip", () => 
 });
 
 test("store: deriveMode explains read-only from the failing/unknown check", () => {
-  assert.equal(deriveMode(null).label, "unknown");
+  assert.equal(deriveMode(null).label, "mode unknown");
   const pre = FIXTURES.preflight.result;
   const m = deriveMode(pre);
   assert.equal(pre.writes_allowed, false);
