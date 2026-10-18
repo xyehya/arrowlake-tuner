@@ -23,14 +23,14 @@ T-022 / D-016 (the operator's scope: ratio, adaptive OC-point voltage and offset
 policy; static / Power-Gate stay out of scope):
 
 * the profile fields may exceed the baseline; the guard's ``vf_bounded`` check decides by bounds (this module mirrors it);
-* a target whose change exceeds a per-operation step limit (``Policy.max_ratio_step`` / ``max_v_step_mv`` / ``max_offset_step_mv``) while every
-  absolute bound allows the final values makes the plan carry the **next allowed step** as a profile (``ApplyPlan.next_profile_text``;
-  ``require_allowed`` raises ``NeedsRamp``) -- an overclock is reached by small, read-back-verified steps, each its own session;
+* D-049: there are no step limits and no operator ceilings: a target is judged by the CPU's own limits only (cmd ``0x01`` ratio, cmd ``0x28`` voltage, the offset field) and any
+  size of change is one round (``ramp_rounds`` is always 1; ``ApplyPlan.next_profile_text`` is always ``None``). A large change, a positive or deep offset, a non-monotonic
+  or raised turbo table are *warnings* of the plan (:func:`change_notes`), never refusals;
 * a ratio **and** V target that move the same way take two ``0x11`` words: raising = **voltage first** (word 1: the new V target with the
   old ratio; word 2: the full word), lowering = **frequency first** (word 1: the new ratio with the old V target) -- XTU's rule
   (registers.md "Ordering", ``[DECOMPILED]``); the guard refuses a single word that moves both the same way;
-* a profile with an OC-point voltage also reads ``0x28`` (the hardware maximum, XTU's ``raw - 1``) of that CPU: the guard refuses a V target
-  above the current one without that read, and any above the hardware maximum;
+* a profile with an OC-point voltage or a positive offset also reads ``0x28`` (the hardware maximum, XTU's ``raw - 1``) of that CPU: the guard refuses a predicted voltage
+  above the current one without that read (``CPU_LIMIT_UNREAD``), and any above the hardware maximum;
 * the budget counts every WRMSR: reads, writes **and the guard's read-back of each write** (``count_operations``). ``[UNVERIFIED]`` on this
   machine: that the hardware accepts a raise at all (XTU has only written stock-equivalent values), the E-core write scope, and what
   ``0x1C`` returns after a ``0x1D``.
@@ -64,19 +64,31 @@ point's ratio is not its ``expect_ratio``, a point does not exist (rc ``0x11``) 
 ring's own curve; they never share a dictionary key with a core (``ring_words``: point -> word, key 0 = the OC word).
 
 Pre-flight mirrors the guard: ``Policy.cpu_allowed``, ``Policy.match`` and the entry's named predicate from ``guard.CHECKS``, with the same
-session facts (``guard.build_context``: the ``0x1C`` / ``0x09`` / ``0x28`` words, the planned ``0x11`` word, the D-015 / D-016 bounds), so a
+session facts (``guard.build_context``: the ``0x1C`` / ``0x09`` / ``0x28`` / ``0x01`` words, the planned ``0x11`` word, the CPU's own limits), so a
 predicted refusal is exactly what the guard would answer (the guard stays authoritative).
 """
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
 
 from arltuner.guard import CHECKS, MSR_CHECKS, AllowEntry, MsrAllowEntry, MsrRequest, Policy, Refusal, Request
-from arltuner.guard.policy import MSR_TURBO_KIND, CheckContext, build_context, build_msr_context, fused_top_ratio, hw_ratio_max, turbo_bytes
+from arltuner.guard.policy import (
+    DEEP_WHOLE_CURVE_MV,
+    ENCODING_OFFSET_CEILING_MV,
+    ENCODING_OFFSET_FLOOR_MV,
+    LARGE_OFFSET_CHANGE_MV,
+    LARGE_RATIO_CHANGE,
+    MSR_TURBO_KIND,
+    CheckContext,
+    build_context,
+    build_msr_context,
+    fused_top_ratio,
+    hw_ratio_max,
+    turbo_bytes,
+)
 from arltuner.mailbox import Cmd, VfWord
-from arltuner.profiles import PLATFORM, Profile
+from arltuner.profiles import Profile
 from arltuner.topology import Topology
 
 from .model import (
@@ -144,14 +156,14 @@ _CLUSTER_WARNING = (
 
 #: Warning on a plan that raises the ratio, the V target or the offset (D-016). ASCII only.
 RAISE_CAVEAT = (
-    "this plan RAISES a ratio, V target or offset: the numbers come from the reviewed policy, but that the hardware accepts a raise at "
+    "this plan RAISES a ratio, V target or offset: only the CPU's own limits bound it, and that the hardware accepts a raise at "
     "all is UNVERIFIED; take a stability check between steps; a reboot restores the BIOS-programmed state"
 )
 
 
 #: Warning on a plan that raises a turbo table bucket (D-017). ASCII only.
 TURBO_RAISE_CAVEAT = (
-    "this plan RAISES a turbo ratio table bucket (plain wrmsr of 0x650 / 0x1AD, bounded by the policy's ratio_max): that the hardware accepts it and "
+    "this plan RAISES a turbo ratio table bucket (plain wrmsr of 0x650 / 0x1AD, bounded by the CPU's own ratio limit, cmd 0x01): that the hardware accepts it and "
     "the write scope (package or core) are UNVERIFIED -- the guard reads the table back on a CPU of the other core kind and trips on a mismatch; "
     "a reboot restores the BIOS-programmed tables"
 )
@@ -246,9 +258,14 @@ def resolve_ring_targets(profile: Profile, topology: Topology) -> tuple[RingTarg
     return tuple(RingTarget(cpu, p.point, p.offset_mv, p.expect_ratio, profile.ring.oc_word) for p in profile.ring.points)
 
 
+def needs_vmax(target: Target) -> bool:
+    """D-049: a target whose predicted voltage can rise reads the CPU's own voltage limit (``0x28``): it sets an OC-point voltage or a positive whole-curve offset."""
+    return target.oc_voltage_mv is not None or (target.offset_mv is not None and target.offset_mv > 0)
+
+
 def _reads_of(target: Target) -> int:
-    """Reads of one target: the four of XTU's sequence, plus 0x28 when the profile sets an OC-point voltage."""
-    return READS_PER_CPU + (VMAX_EXTRA_READS if target.oc_voltage_mv is not None else 0)
+    """Reads of one target: the four of XTU's sequence, plus 0x28 when the profile can raise the voltage (``needs_vmax``)."""
+    return READS_PER_CPU + (VMAX_EXTRA_READS if needs_vmax(target) else 0)
 
 
 def _max_writes_of(target: Target) -> int:
@@ -311,11 +328,10 @@ def count_operations(
 
 
 def oc_cap_kinds(policy: Policy, targets: Sequence[Target], table_kinds: Sequence[str] = ()) -> tuple[str, ...]:
-    """G-137 (D-039): the core kinds (``"P"``, ``"E"``) whose ``0x01`` limit the plan reads: a kind with a ratio target (or a ``[turbo]`` table, ``table_kinds``) whose policy
-    ratio ceiling is set (a number or ``"auto"``) and whose CPU limit is not yet bound to the policy (``Policy.hw_ratio_max``, e.g. by the helper's ``tune.read``). A ceiling
-    is the policy value clamped by that limit, and an unread limit is no raise."""
+    """G-137 / D-049: the core kinds (``"P"``, ``"E"``) whose ``0x01`` limit the plan reads: a kind with a ratio target (or a ``[turbo]`` table, ``table_kinds``) whose CPU limit is not
+    yet bound to the policy (``Policy.hw_ratio_max``, e.g. by the helper's ``tune.read``). The limit is the CPU's own bound of every ratio, and an unread limit refuses a raise."""
     need = {t.kind for t in targets if t.ratio is not None} | set(table_kinds)
-    return tuple(k for k in ("P", "E") if k in need and policy.hw_ratio_max[k] is None and (k in policy.ratio_auto or policy.ratio_max[k] is not None))
+    return tuple(k for k in ("P", "E") if k in need and policy.hw_ratio_max[k] is None)
 
 
 def oc_cap_reads_of(policy: Policy, targets: Sequence[Target], profile: Profile | None = None) -> int:
@@ -357,12 +373,10 @@ def predict(policy: Policy, req: Request, baseline_word: int | None, ctx: CheckC
     return OK_VERDICT
 
 
-def predict_msr(
-    policy: Policy, req: MsrRequest, baseline_word: int | None, platform_info: int | None = None, favored_words: Mapping[int, int | None] | None = None
-) -> Verdict:
+def predict_msr(policy: Policy, req: MsrRequest, baseline_word: int | None) -> Verdict:
     """What the guard will answer for the plain-MSR ``req`` (the plain twin of :func:`predict`): CPU set, ``msr_allow`` entry (and its CPUs), then
-    for a write the verify CPU (other core kind, covered by a read entry) and ``turbo_ratio_bounded`` on the word read earlier (``baseline_word``)
-    with ``platform_info`` = the ``0xCE`` word read this session. Limits / dwell / lock / gates are not predictable here."""
+    for a write the verify CPU (other core kind, covered by a read entry) and ``turbo_ratio_bounded`` on the word read earlier (``baseline_word``) against the CPU's
+    ratio limit the ``policy`` is bound to (D-049). Dwell / lock / gates are not predictable here."""
     if not policy.cpu_allowed(req.cpu):
         return Verdict(False, Refusal.CPU_NOT_ALLOWED.value, f"cpu {req.cpu} is not in the policy CPU set")
     entry: MsrAllowEntry | None = policy.match_msr(req.msr, req.kind)
@@ -382,7 +396,7 @@ def predict_msr(
     if check is None or baseline_word is None:
         return Verdict(False, Refusal.CHECK_FAILED.value, f"write entry {entry.name!r} has no evaluable check")
     try:
-        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr, platform_info=platform_info, favored_words=favored_words))
+        ok, detail = check(req, baseline_word, entry.params, build_msr_context(policy, req.msr))
     except Exception as exc:
         ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
     if ok is not True:
@@ -512,7 +526,7 @@ def read_steps(
             )
         )
     for t in targets:
-        for kind, cmd, p1, text in (*_CPU_READS, *((_VMAX_READ,) if t.oc_voltage_mv is not None else ())):
+        for kind, cmd, p1, text in (*_CPU_READS, *((_VMAX_READ,) if needs_vmax(t) else ())):
             number += 1
             req = Request(t.cpu, cmd, p1, 0, 0, f"apply: read {text} of {t.label}")
             steps.append(PlanStep(number, kind, t.cpu, cmd, p1, 0, 0, req.purpose, t.label, verdict=predict(policy, req, None), core_kind=t.kind))
@@ -533,21 +547,62 @@ def plan_warnings(
     targets: tuple[Target, ...], policy: Policy | None = None, point_targets: tuple[PointTarget, ...] = ()
 ) -> tuple[str, ...]:
     """Warnings that apply to a plan for ``targets`` (and, T-025, ``point_targets``): the XTU-shape caveat (not for a point-only profile) (0x1D/0x27 and zero-field acceptance are UNVERIFIED on
-    Linux); the cluster caveat for E cores; and, given the ``policy`` and an offset in the profile, the D-015 note that the effective
-    offset is the (operator-stated) BIOS offset plus the runtime offset."""
+    Linux) and the cluster caveat for E cores. D-049: there is no policy offset window any more, so no note about one (``policy`` is kept for the callers' signature); the warnings that
+    depend on the words (large change, positive / deep offset, turbo table shape) come from :func:`change_notes`."""
     warnings: list[str] = [XTU_SHAPE_CAVEAT] if targets else []  # T-025: a point-only profile sends no 0x1D / 0x27 and no OC-point word
     if any(t.cluster is not None for t in (*targets, *point_targets)):
         warnings.append(_CLUSTER_WARNING)
     if point_targets:
         warnings.append(POINT_CAVEAT)
-    if policy is not None and (point_targets or any(t.offset_mv is not None for t in targets)):
-        bios = policy.assumed_bios_offset_mv
-        warnings.append(
-            f"effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV; not readable through the "
-            f"mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the "
-            f"effective offset at {policy.effective_offset_floor_mv} mV"
-        )
     return tuple(warnings)
+
+
+#: D-049 warning codes of :func:`change_notes` (the Review shows them; none is ever a refusal).
+LARGE_CHANGE = "LARGE_CHANGE"
+POSITIVE_OFFSET = "POSITIVE_OFFSET"
+DEEP_WHOLE_CURVE = "DEEP_WHOLE_CURVE"
+TURBO_NOT_MONOTONIC = "TURBO_NOT_MONOTONIC"
+TURBO_BELOW_BASE = "TURBO_BELOW_BASE"
+
+
+def change_notes(
+    label: str,
+    *,
+    ratio: tuple[int | None, int | None] = (None, None),
+    offset_mv: tuple[float | None, float | None] = (None, None),
+    whole_curve: bool = False,
+) -> list[tuple[str, str]]:
+    """``[(code, text)]`` D-049 warnings for one word ``(before, after)``: ``LARGE_CHANGE`` when the offset moves by more than ``LARGE_OFFSET_CHANGE_MV`` or the ratio by more than
+    ``LARGE_RATIO_CHANGE`` (constants of ``guard.policy``, not policy); ``POSITIVE_OFFSET`` when the offset becomes positive (it was not); ``DEEP_WHOLE_CURVE`` when a ``whole_curve``
+    offset (the OC word's ``[31:21]``, every point) goes deeper than ``DEEP_WHOLE_CURVE_MV`` -- the CPU's V/F monotonic clamp does not protect a whole-curve offset
+    (docs/knowledge/platform-arl-s.md; cpu-rules-audit.md row 4a), so such an offset costs stability without any CPU refusal. A side that is ``None`` is not known: nothing is compared."""
+    out: list[tuple[str, str]] = []
+    r0, r1 = ratio
+    if r0 is not None and r1 is not None and abs(r1 - r0) > LARGE_RATIO_CHANGE:
+        out.append((LARGE_CHANGE, f"{label}: ratio {r0} -> {r1} ({r1 - r0:+d}) is a large single change (more than {LARGE_RATIO_CHANGE} bins); the CPU accepts it, take a stability check"))
+    o0, o1 = offset_mv
+    if o0 is not None and o1 is not None and abs(o1 - o0) > LARGE_OFFSET_CHANGE_MV:
+        out.append((LARGE_CHANGE, f"{label}: offset {o0:+.1f} -> {o1:+.1f} mV ({o1 - o0:+.1f}) is a large single change (more than {LARGE_OFFSET_CHANGE_MV} mV); the CPU accepts it, take a stability check"))
+    if o1 is not None and o1 > 0 and (o0 is None or o0 <= 0):
+        out.append((POSITIVE_OFFSET, f"{label}: positive offset {o1:+.1f} mV raises the voltage"))
+    if whole_curve and o1 is not None and o1 < DEEP_WHOLE_CURVE_MV and (o0 is None or o1 < o0):
+        out.append((DEEP_WHOLE_CURVE, f"{label}: whole-curve offset {o1:+.1f} mV is deeper than {DEEP_WHOLE_CURVE_MV} mV; the CPU's V/F clamp does not protect a whole-curve offset"))
+    return out
+
+
+def turbo_change_notes(label: str, new: Sequence[int], old: Sequence[int] | None = None, base_ratio: int | None = None) -> list[tuple[str, str]]:
+    """``[(code, text)]`` D-049 warnings for one turbo table: ``TURBO_NOT_MONOTONIC`` when a bucket is above the one before it (more active cores should never turbo higher; SPEC-v3 F5, not
+    a CPU rule), ``TURBO_BELOW_BASE`` when a bucket is below ``0xCE[15:8]`` (the base ratio), and ``LARGE_CHANGE`` when a bucket moves by more than ``LARGE_RATIO_CHANGE`` bins."""
+    out: list[tuple[str, str]] = []
+    for k in range(len(new) - 1):
+        if new[k] < new[k + 1]:
+            out.append((TURBO_NOT_MONOTONIC, f"{label}: bucket {k} ({new[k]}x) is below bucket {k + 1} ({new[k + 1]}x); more active cores usually never turbo higher, the CPU accepts the table"))
+            break
+    if base_ratio is not None and any(b < base_ratio for b in new):
+        out.append((TURBO_BELOW_BASE, f"{label}: a bucket is below the base ratio {base_ratio}x (0xCE[15:8]); the CPU accepts the table"))
+    if old is not None and any(abs(n - o) > LARGE_RATIO_CHANGE for n, o in zip(new, old)):
+        out.append((LARGE_CHANGE, f"{label}: a bucket moves by more than {LARGE_RATIO_CHANGE} bins; the CPU accepts it, take a stability check"))
+    return out
 
 
 def fill_ratio(base_ratio: int, favored_word: int, top: int | None = None) -> int:
@@ -633,111 +688,6 @@ def _vf_words(current: VfWord, goal: VfWord, top: int | None = None, label: str 
     return ((goal, ""),)
 
 
-def _step_toward(current: int, goal: int, limit: int) -> int:
-    return current + max(-limit, min(limit, goal - current))
-
-
-def _mv_toward(goal_raw: int, current_raw: int, to_raw: Callable[[int], int]) -> int:
-    """The whole-mV profile value whose word value is nearest ``goal_raw`` **without passing it** (seen from ``current_raw``): a profile can
-    only say whole mV, one mV is 1.024 raw, so rounding the other way could exceed the step limit by one raw unit."""
-    mv = round(goal_raw * 1000 / 1024)
-    if goal_raw >= current_raw:
-        while to_raw(mv) > goal_raw:
-            mv -= 1
-        while to_raw(mv + 1) <= goal_raw:
-            mv += 1
-    else:
-        while to_raw(mv) < goal_raw:
-            mv += 1
-        while to_raw(mv - 1) >= goal_raw:
-            mv -= 1
-    return mv
-
-
-def _v_raw_of_mv(mv: int) -> int:
-    return VfWord.v_to_raw(mv / 1000)
-
-
-@dataclass(frozen=True)
-class _Ramp:
-    """The next allowed step of one target: the clamped word and the profile values that produce it."""
-
-    word: VfWord
-    ratio: int | None
-    oc_voltage_mv: int | None
-    offset_mv: int | None
-
-
-def _next_ramp(target: Target, current: VfWord, goal: VfWord, ctx: CheckContext) -> _Ramp:
-    """The goal moved by at most the step limits from ``current``; fields the profile did not set are left alone. A field already within its
-    limit keeps the exact requested value."""
-    ratio = _step_toward(current.ratio, goal.ratio, ctx.max_ratio_step)
-    if goal.v_target_raw == 0:  # no OC point at the goal (G-120): the word carries no target once its ratio leaves the OC range; until then the current one stays
-        v_raw = 0 if ratio <= (ctx.top_fused_ratio or 0) else current.v_target_raw
-    else:
-        v_raw = _step_toward(current.v_target_raw, goal.v_target_raw, ctx.max_v_step_raw)
-    offset_raw = _step_toward(current.offset_raw, goal.offset_raw, ctx.max_offset_step_raw)
-    word = current.with_(ratio=ratio, v_target_raw=v_raw, offset_raw=offset_raw)
-    return _Ramp(
-        word,
-        None if target.ratio is None else ratio,
-        None
-        if target.oc_voltage_mv is None or (goal.v_target_raw == 0 and v_raw != 0)  # no OC point at the goal: until the ratio is out of the OC range the voltage stays as it is
-        else (target.oc_voltage_mv if v_raw == goal.v_target_raw or goal.v_target_raw == 0 else _mv_toward(v_raw, current.v_target_raw, _v_raw_of_mv)),
-        None
-        if target.offset_mv is None
-        else (target.offset_mv if offset_raw == goal.offset_raw else _mv_toward(offset_raw, current.offset_raw, VfWord.mv_to_offset_raw)),
-    )
-
-
-def _next_profile_text(
-    profile_name: str,
-    targets: tuple[Target, ...],
-    ramps: Mapping[int, _Ramp],
-    point_targets: tuple[PointTarget, ...] = (),
-    point_ramps: Mapping[tuple[int, int], int] | None = None,
-    ring_targets: tuple[RingTarget, ...] = (),
-    ring_ramps: Mapping[int, int] | None = None,
-) -> str:
-    """TOML text of the next step: one ``[[core]]`` per target (an E cluster once), the ramped values for the targets that needed one, the
-    requested values for the others; T-025: likewise one ``[[point]]`` per (core, point) with the ramped ``offset_mv`` (``point_ramps``:
-    (cpu, point) -> mV). It is a valid profile (``load_profile``)."""
-    point_ramps = {} if point_ramps is None else point_ramps
-    lines = ["[meta]", f"name = {json.dumps(f'{profile_name} (next step)')}", f'platform = "{PLATFORM}"']
-    seen_clusters: set[int] = set()
-    for t in targets:
-        if t.cluster is not None:
-            if t.cluster in seen_clusters:
-                continue
-            seen_clusters.add(t.cluster)
-        ramp = ramps.get(t.cpu)
-        if t.cluster is not None and ramp is None:  # an E cluster is one profile entry: take the first CPU of it that needs a step
-            ramp = next((ramps[c.cpu] for c in targets if c.cluster == t.cluster and c.cpu in ramps), None)
-        ratio, volts, offset = (t.ratio, t.oc_voltage_mv, t.offset_mv) if ramp is None else (ramp.ratio, ramp.oc_voltage_mv, ramp.offset_mv)
-        lines += ["", "[[core]]", f'kind = "{t.kind}"', f"index = {t.index}"]
-        for key, value in (("ratio", ratio), ("oc_voltage_mv", volts), ("offset_mv", offset)):
-            if value is not None:
-                lines.append(f"{key} = {value}")
-    seen_points: set[tuple[int | None, int]] = set()
-    for pt in point_targets:
-        if pt.cluster is not None:
-            if (pt.cluster, pt.point) in seen_points:
-                continue
-            seen_points.add((pt.cluster, pt.point))
-        mv = point_ramps.get((pt.cpu, pt.point))
-        if mv is None and pt.cluster is not None:  # an E cluster is one entry: take the first CPU of it that needs a step
-            mv = next((point_ramps[(c.cpu, c.point)] for c in point_targets if c.cluster == pt.cluster and c.point == pt.point and (c.cpu, c.point) in point_ramps), None)
-        lines += ["", "[[point]]", f'kind = "{pt.kind}"', f"index = {pt.index}", f"point = {pt.point}", f"offset_mv = {pt.offset_mv if mv is None else mv}"]
-        if pt.expect_ratio is not None:
-            lines.append(f"expect_ratio = {pt.expect_ratio}")
-    if ring_targets:  # G-154: the ring points, the ramped value where a step limit stops the point
-        lines += ["", "[ring]", f"oc_word = {ring_targets[0].oc_word}"]
-        for rt in ring_targets:
-            mv = (ring_ramps or {}).get(rt.point)
-            lines += ["", "[[ring.point]]", f"point = {rt.point}", f"offset_mv = {rt.offset_mv if mv is None else mv}", f"expect_ratio = {rt.expect_ratio}"]
-    return "\n".join(lines) + "\n"
-
-
 def _same_state(target: Target, readings: CoreReadings, goal: VfWord, top: int | None) -> bool:
     """G-148: the core already holds what ``target`` asks for, so a plan that writes only what differs (``only_changed``) sends nothing for it: the goal word is the
     word read (and, when the target sets an OC ratio, ``0x1C[7:0]`` is that ratio already), or -- the target sets no OC ratio and no OC voltage -- the core has no OC
@@ -752,17 +702,8 @@ def _same_state(target: Target, readings: CoreReadings, goal: VfWord, top: int |
     return no_oc_point and live.offset_raw == goal.offset_raw
 
 
-#: G-148 (decision 5): a one-shot apply splits into at most this many guarded rounds; more is refused up front (``NeedsRounds``). A design bound, not a hardware one.
+#: G-148 (decision 5): a one-shot apply used to split into at most this many guarded rounds. D-049 removed the step limits, so every apply is one round; the bound stays for ``check_rounds``.
 MAX_RAMP_ROUNDS = 16
-
-
-def _rounds_for(delta: int, limit: int, exact: bool) -> int:
-    """Rounds to move a field by ``delta`` raw units with a per-operation limit of ``limit``. ``exact`` (the ratio): every step is the full limit. Otherwise (a whole-mV
-    profile value, 1 mV = 1.024 raw) a ramp step can fall one raw unit short of the limit (``_mv_toward``), so ``limit - 1`` is the conservative step."""
-    if delta == 0:
-        return 0
-    step = limit if exact else max(limit - 1, 1)
-    return -(-abs(delta) // step)
 
 
 def ramp_rounds(
@@ -775,65 +716,9 @@ def ramp_rounds(
     only_changed: bool = False,
     ring_words: Mapping[int, int] | None = None,
 ) -> tuple[int, str | None]:
-    """G-148 (D-044, decision 5): how many guarded rounds (read, write every word at most one step limit closer, read back) bring the CPU from ``baseline`` /
-    ``point_words`` to ``profile``, and which unit / field needs the most (``None`` when one round does it). The step limits are measured as the guard measures them
-    (``_check_vf_bounded`` / ``_check_vf_point_offset_bounded``: from the word read in the session, a zero ratio / V target filled from ``0x1C`` / ``0x09``). A CPU or point
-    without a reading counts as one round (the executor reads before it decides). Pure."""
-    ctx_ratio = policy.max_ratio_step
-    v_limit = VfWord.v_to_raw(policy.max_v_step_mv / 1000)
-    off_limit = (policy.max_offset_step_mv * 1024 + 512) // 1000  # as guard.policy.build_context
-    rounds, worst = 1, None
-
-    def note(n: int, text: str) -> None:
-        nonlocal rounds, worst
-        if n > rounds:
-            rounds, worst = n, text
-
-    for t in resolve_targets(profile, topology) if profile.entries else ():
-        readings = baseline.get(t.cpu)
-        if readings is None:
-            continue
-        top = fused_top_ratio(readings.fused)
-        sets_oc = t.ratio is not None or t.oc_voltage_mv is not None
-        current = current_word(readings, sets_oc)
-        try:
-            goal = _goal_word(t, current, top)
-        except PlanError:
-            continue
-        if only_changed and _same_state(t, readings, goal, top):
-            continue
-        base = readings.vf
-        ratio_now = base.ratio or (readings.favored & 0xFF)
-        if base.ratio == 0 and top is not None and 0 < goal.ratio <= top:
-            ratio_now = min(ratio_now, top)
-        if ratio_now:
-            note(_rounds_for(goal.ratio - ratio_now, ctx_ratio, True), f"{t.label} ratio {ratio_now} -> {goal.ratio}, step limit {ctx_ratio}")
-        if goal.v_target_raw:
-            v_now = base.v_target_raw or ((readings.fused >> 8) & 0xFFF)
-            if v_now:
-                note(_rounds_for(goal.v_target_raw - v_now, v_limit, False), f"{t.label} V target {v_now / 1024:.4f} -> {goal.v_target_raw / 1024:.4f} V, step limit {policy.max_v_step_mv} mV")
-        note(_rounds_for(goal.offset_raw - base.offset_raw, off_limit, False), f"{t.label} offset {base.offset_mv:+.1f} -> {goal.offset_mv:+.1f} mV, step limit {policy.max_offset_step_mv} mV")
-    for pt in resolve_point_targets(profile, topology):
-        word = point_words.get((pt.cpu, pt.point))
-        if word is None:
-            continue
-        base_w = VfWord.from_u32(word)
-        try:
-            goal_raw = VfWord.mv_to_offset_raw(pt.offset_mv)
-        except ValueError:
-            continue
-        note(_rounds_for(goal_raw - base_w.offset_raw, off_limit, False), f"{pt.label} point {pt.point} offset {base_w.offset_mv:+.1f} -> {pt.offset_mv:+d} mV, step limit {policy.max_offset_step_mv} mV")
-    for rt in resolve_ring_targets(profile, topology):  # G-154: the ring points move by the same step limit
-        word = (ring_words or {}).get(rt.point)
-        if word is None:
-            continue
-        base_w = VfWord.from_u32(word)
-        try:
-            goal_raw = VfWord.mv_to_offset_raw(rt.offset_mv)
-        except ValueError:
-            continue
-        note(_rounds_for(goal_raw - base_w.offset_raw, off_limit, False), f"ring point {rt.point} offset {base_w.offset_mv:+.1f} -> {rt.offset_mv:+d} mV, step limit {policy.max_offset_step_mv} mV")
-    return rounds, worst
+    """D-049: ``(1, None)`` always. The per-operation step limits that made a big change take several guarded rounds are gone (the CPU's own limits judge the final values), so one
+    round -- read, write every word, read back -- does it. The signature is kept for the callers (``tune.plan``, the executor)."""
+    return 1, None
 
 
 def check_rounds(rounds: int, worst: str | None, per_round: int, extra_ops: int, policy: Policy, boot_ops_used: int = 0) -> int:
@@ -847,11 +732,6 @@ def check_rounds(rounds: int, worst: str | None, per_round: int, extra_ops: int,
     if rounds > MAX_RAMP_ROUNDS or total > allowed:
         raise NeedsRounds(rounds, worst or "a step limit", total, allowed, MAX_RAMP_ROUNDS, f"{where}, {policy.where}")
     return total
-
-
-def _is_step_only(policy: Policy, req: Request, baseline: int, ctx: CheckContext) -> bool:
-    """True when ``req`` is refused by the step limits alone: it would be allowed with the step limits lifted."""
-    return predict(policy, req, baseline, ctx.unlimited_steps()).allowed
 
 
 def _kind_top_ratio(policy: Policy, baseline: Mapping[int, CoreReadings], cpu: int) -> int | None:
@@ -882,13 +762,11 @@ def _ring_steps(
     policy: Policy,
     topology: Topology,
     only_changed: bool,
-    favored_of_kind: Callable[[int], list[int | None] | None],
-) -> tuple[list[PlanStep], list[str], dict[int, int], set[int]]:
-    """G-154 (D-045): the ring's write steps (``number`` 0; the caller numbers them), the reasons the ring unit alone is refused, the ramped value (mV) of every point a step
-    limit stops, and the points whose only obstacle is a step limit. The ring is judged as one unit: any reason other than a step limit drops every ring step (the P/E steps of
-    the plan stand), and the reasons are returned, never swallowed. The ring OC word is BIOS-owned: it is compared with the profile's and **never written**."""
+) -> tuple[list[PlanStep], list[str]]:
+    """G-154 (D-045): the ring's write steps (``number`` 0; the caller numbers them) and the reasons the ring unit alone is refused. The ring is judged as one unit: any reason drops
+    every ring step (the P/E steps of the plan stand), and the reasons are returned, never swallowed. The ring OC word is BIOS-owned: it is compared with the profile's and **never written**."""
     if not ring_targets:
-        return [], [], {}, set()
+        return [], []
     cpu = ring_targets[0].cpu
     refused: list[str] = []
     live_oc = ring_words.get(0)
@@ -900,8 +778,6 @@ def _ring_steps(
             f"ring is not restored (a BIOS ring ratio change needs a new accepted state)"
         )
     steps: list[PlanStep] = []
-    ramps: dict[int, int] = {}
-    step_only: set[int] = set()
     for t in ring_targets:
         word = ring_words.get(t.point)
         if word is None:
@@ -913,7 +789,7 @@ def _ring_steps(
             new = base.with_(offset_raw=goal_raw)
         except ValueError as exc:
             raise PlanError(f"ring point {t.point}: requested offset does not fit the V/F word: {exc}") from exc
-        ctx = build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None, favored_words_of_kind=favored_of_kind(cpu))
+        ctx = build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None)
         purpose = f"apply: write ring point {t.point} offset (0x11 P1=2 P2={t.point}): {t.describe()}"
         req = Request(cpu, int(Cmd.VOLTAGE_FREQ_WRITE), RING_P1, t.point, new.to_u32(), purpose)
         verdict = predict(policy, req, word, ctx)
@@ -926,10 +802,6 @@ def _ring_steps(
                 Refusal.CHECK_FAILED.value,
                 f"expect_ratio (planner): the ratio field read for ring point {t.point} is {base.ratio} (word {word:#010x}), the profile expects {t.expect_ratio}; nothing is sent",
             )
-        elif not verdict.allowed and verdict.reason == Refusal.CHECK_FAILED.value and predict(policy, req, word, ctx.unlimited_steps()).allowed:
-            offset_raw = _step_toward(base.offset_raw, goal_raw, ctx.max_offset_step_raw)
-            ramps[t.point] = t.offset_mv if offset_raw == goal_raw else _mv_toward(offset_raw, base.offset_raw, VfWord.mv_to_offset_raw)
-            step_only.add(t.point)
         steps.append(
             PlanStep(0, StepKind.WRITE_RING_POINT, cpu, req.cmd, RING_P1, t.point, req.data, purpose, f"Ring point {t.point}", before=base, after=new, verdict=verdict)
         )
@@ -939,11 +811,11 @@ def _ring_steps(
         steps = [replace(st, number=0) for st in ordered]
         refused.extend(f"{n}" for n in notes)
     for st in steps:
-        if not st.verdict.allowed and st.p2 not in step_only:
+        if not st.verdict.allowed:
             refused.append(f"ring point {st.p2}: {st.verdict.reason}: {st.verdict.detail}")
     if refused:
-        return [], refused, {}, set()
-    return steps, [], ramps, step_only
+        return [], refused
+    return steps, []
 
 
 def build_plan(
@@ -970,8 +842,7 @@ def build_plan(
     ``msr_words`` (T-023): the plain MSR words read on the write CPU (``0xCE``, ``0x650``, ``0x1AD``); every ``[turbo]`` table of the profile needs
     its MSR here (else ``PlanError``). The turbo writes are ordered by direction (module docstring).
 
-    ``favored_words`` (cpu -> raw ``0x1C`` word): the CPU's own fused ratios known to the session beyond the ``baseline`` rows (a turbo-table-only plan has none);
-    an ``"auto"`` ``ratio_max`` is derived from them and from the baseline rows' words, nothing else.
+    ``favored_words`` (cpu -> raw ``0x1C`` word): kept for the callers' signature; since D-049 (no ``"auto"`` ratio ceiling) nothing is derived from it.
 
     ``point_words`` (T-025): the ``0x10 P2=point`` word read for every ``[[point]]`` target, keyed ``(cpu, point)`` (else ``PlanError``).
 
@@ -990,7 +861,7 @@ def build_plan(
     ``per_core_enabled``: ``True`` -> no 0x15 step, ``False`` -> a 0x15 step, ``None`` -> unknown: a conditional 0x15 step is included (worst
     case). ``misc_word`` (optional) is the 0x14 word read earlier; it fixes the 0x15 data (``old | 0x8``) and must agree with
     ``per_core_enabled``. Every step carries a predicted guard ``Verdict``; the plan never raises for a predicted refusal (see
-    ``ApplyPlan.require_allowed``). A step-limit refusal also yields ``ApplyPlan.next_profile_text`` (D-016).
+    ``ApplyPlan.require_allowed``). D-049: no step limit, so ``ApplyPlan.next_profile_text`` is always ``None``.
     """
     if per_core_enabled is not None and not isinstance(per_core_enabled, bool):
         raise TypeError(f"per_core_enabled must be bool or None, got {type(per_core_enabled).__name__}")
@@ -1034,16 +905,6 @@ def build_plan(
                 known = policy.hw_ratio_max[kind]
                 limits[kind] = None if seen is None else seen if known is None else min(seen, known)
         policy = policy.with_hw_limits(limits)
-    kind_favored = {**(favored_words or {}), **{c: r.favored for c, r in baseline.items()}}  # every 0x1C word this session knows, whichever CPU it was read on
-
-    def favored_of_kind(cpu: int) -> list[int | None] | None:
-        """G-141: the words an ``"auto"`` ratio ceiling of ``cpu``'s kind is derived from -- the 0x1C words of the whole kind, as ``WriteGuard._context`` builds it (the guard judges
-        every write with the kind-wide ceiling, so a plan built from the target CPU's own word alone would refuse a ratio the guard and ``tune.plan`` accept)."""
-        if not policy.ratio_auto:
-            return None
-        kind = policy.core_kind(cpu)
-        return [w for c, w in kind_favored.items() if policy.core_kind(c) == kind]
-
     mailbox = bool(targets or point_targets)  # G-117: False for a turbo-table-only plan (no 0x14, no 0x15, no mailbox word)
     first_cpu = point_targets[0].cpu if point_targets else (targets[0].cpu if targets else 0)
     if mailbox and per_core_enabled is not True:
@@ -1067,6 +928,7 @@ def build_plan(
             )
         )
     turbo_notes: list[str] = []
+    change_warns: list[tuple[str, str]] = []  # D-049 (code, text) warnings of the words the plan writes; none is a refusal
     lowering: list[PlanStep] = []  # built now, numbered when they are appended (a table that only lowers goes first, one that raises goes last)
     raising: list[PlanStep] = []
     for msr, ratios in tables:
@@ -1079,7 +941,9 @@ def build_plan(
         down = any(n < o for n, o in zip(turbo_bytes(new), turbo_bytes(old)))
         purpose = f"apply: write {_TURBO_LABEL[msr]} (plain wrmsr, cpu {write_cpu}): {_bytes_text(old)} -> {_bytes_text(new)}"
         mreq = MsrRequest(write_cpu, msr, new, purpose, "write", verify_cpu)
-        verdict = predict_msr(policy, mreq, old, msr_words.get(PLATFORM_INFO_MSR), {**(favored_words or {}), **{c: r.favored for c, r in baseline.items()}})
+        verdict = predict_msr(policy, mreq, old)
+        base_word = msr_words.get(PLATFORM_INFO_MSR)
+        change_warns.extend(turbo_change_notes(_TURBO_LABEL[msr], turbo_bytes(new), turbo_bytes(old), None if base_word is None else (base_word >> 8) & 0xFF))
         if up and down and verdict.allowed:
             verdict = Verdict(
                 False,
@@ -1100,9 +964,6 @@ def build_plan(
             steps.append(replace(st, number=number))
 
     append_turbo(lowering)
-    ramps: dict[int, _Ramp] = {}
-    point_ramps: dict[tuple[int, int], int] = {}
-    step_only: set[int] = set()  # numbers of the 0x11 steps refused ONLY because a step limit is exceeded
     currents: dict[int, VfWord] = {}
     oc_notes: list[str] = []
     raises = False
@@ -1116,7 +977,7 @@ def build_plan(
         except ValueError as exc:
             raise PlanError(f"{pt.label} point {pt.point}: requested offset does not fit the V/F word: {exc}") from exc
         raises = raises or goal_raw > base.offset_raw
-        ctx = build_context(policy, pt.cpu, favored_word=None, fused_word=None, vf_word_sent=None, favored_words_of_kind=favored_of_kind(pt.cpu))
+        ctx = build_context(policy, pt.cpu, favored_word=None, fused_word=None, vf_word_sent=None)
         purpose = f"apply: write V/F point {pt.point} offset (0x11 P2={pt.point}) of {pt.label}: {pt.describe()}"
         req = Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, new.to_u32(), purpose)
         verdict = predict(policy, req, word, ctx)
@@ -1137,10 +998,7 @@ def build_plan(
                 f"oc_point_slot (planner): point {pt.point} of {pt.label} reads ratio {base.ratio} (word {word:#010x}), above the top fused ratio: it is the OC point the P2 = 0 word "
                 f"creates, never a fused point; set the OC ratio and voltage instead; nothing is sent",
             )
-        elif not verdict.allowed and verdict.reason == Refusal.CHECK_FAILED.value and predict(policy, req, word, ctx.unlimited_steps()).allowed:
-            offset_raw = _step_toward(base.offset_raw, goal_raw, ctx.max_offset_step_raw)
-            point_ramps[(pt.cpu, pt.point)] = pt.offset_mv if offset_raw == goal_raw else _mv_toward(offset_raw, base.offset_raw, VfWord.mv_to_offset_raw)
-            step_only.add(number + 1)
+        change_warns.extend(change_notes(f"{pt.label} point {pt.point}", offset_mv=(base.offset_mv, new.offset_mv)))
         number += 1
         steps.append(
             PlanStep(
@@ -1177,7 +1035,15 @@ def build_plan(
                 f"no OC point and the hardware keeps no V target (the word is ratio | offset << 21)"
             )
         raises = raises or goal.ratio > current.ratio or goal.v_target_raw > current.v_target_raw or goal.offset_raw > current.offset_raw
-        facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax, favored_words_of_kind=favored_of_kind(t.cpu))
+        facts = dict(favored_word=readings.favored, fused_word=readings.fused, max_voltage_word=readings.vmax)
+        change_warns.extend(
+            change_notes(
+                t.label,
+                ratio=(current.ratio, goal.ratio) if t.ratio is not None else (None, None),
+                offset_mv=(readings.vf.offset_mv, goal.offset_mv) if t.offset_mv is not None else (None, None),
+                whole_curve=True,
+            )
+        )
         words = _vf_words(current, goal, top, t.label)
         sent: int | None = None
         for word, stage in words:
@@ -1186,9 +1052,6 @@ def build_plan(
             purpose = f"apply: write V/F word (0x11) of {t.label}{part}: {t.describe()}"
             req = Request(t.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, 0, word.to_u32(), purpose)
             verdict = predict(policy, req, readings.vf.to_u32(), ctx)
-            if not verdict.allowed and verdict.reason == Refusal.CHECK_FAILED.value and _is_step_only(policy, req, readings.vf.to_u32(), ctx):
-                ramps[t.cpu] = _next_ramp(t, current, goal, ctx)
-                step_only.add(number + 1)
             number += 1
             steps.append(
                 PlanStep(
@@ -1263,24 +1126,23 @@ def build_plan(
     ordered, order_notes = reorder_writes(steps[segment:], topology, baseline, point_words)  # G-151
     new_numbers = {st.number: segment + i for i, st in enumerate(ordered, start=1)}  # ordered keeps the step numbers it was given: the same set, new places
     steps[segment:] = [replace(st, number=new_numbers[st.number]) for st in ordered]
-    step_only = {new_numbers[n] for n in step_only}
     oc_notes.extend(order_notes)
-    ring_steps, ring_refused, ring_ramps, ring_step_only = _ring_steps(ring_targets, ring_words, policy, topology, only_changed, favored_of_kind)
+    ring_steps, ring_refused = _ring_steps(ring_targets, ring_words, policy, topology, only_changed)
     number = len(steps)
     for st in ring_steps:  # G-154: the ring unit after the per-core words, ordered inside itself
         number += 1
         steps.append(replace(st, number=number))
-        if st.p2 in ring_step_only:
-            step_only.add(number)
+        if st.before is not None and st.after is not None:
+            change_warns.extend(change_notes(f"ring point {st.p2}", offset_mv=(st.before.offset_mv, st.after.offset_mv)))
     append_turbo(raising)
     if only_changed and not any(s.kind in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR) for s in steps):
-        # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; G-154: the ring writes need no 0x15, and keep their step-limit marks)
+        # G-148: nothing to write through the mailbox: no 0x15 either (renumbered; G-154: the ring writes need no 0x15)
         kept = [s for s in steps if s.kind is not StepKind.WRITE_PERCORE_ENABLE]
         remap = {s.number: i for i, s in enumerate(kept, start=1)}
         steps = [replace(s, number=remap[s.number]) for s in kept]
-        step_only = {remap[n] for n in step_only if n in remap}
     warnings = list(plan_warnings(targets, policy, point_targets))
     warnings.extend(turbo_notes)
+    warnings.extend(f"{code}: {text}" for code, text in change_warns)
     warnings.extend(oc_notes)
     warnings.extend(f"ring not written: {why}" for why in ring_refused)
     if ring_steps and any(st.after is not None and st.before is not None and st.after.offset_raw > st.before.offset_raw for st in ring_steps):
@@ -1298,13 +1160,10 @@ def build_plan(
         if len({currents[c].to_u32() for c in members}) > 1:  # the CPUs of one E cluster are expected to agree ([UNVERIFIED] scope, C-4)
             warnings.append(
                 f"the CPUs of E cluster {cluster} ({', '.join(str(c) for c in members)}) read different current V/F words; the profile is one "
-                "entry for the whole cluster, so a next step is computed from the first CPU that needs one"
+                "entry for the whole cluster"
             )
     if raises:
         warnings.append(RAISE_CAVEAT)
-    # A next step is only offered when the step limits are the ONLY obstacle: with any other predicted refusal (a ceiling, the allowlist, ...)
-    # walking the steps would end in a refusal after several sessions, so the plain refusals are reported instead.
-    hard = any(not st.verdict.allowed and st.number not in step_only and not st.kind.is_ring_read for st in steps)  # G-154: a refused ring read is the ring unit's refusal alone
     return ApplyPlan(
         profile_name=profile.name,
         per_core_enabled=per_core_enabled,
@@ -1315,9 +1174,7 @@ def build_plan(
         warnings=tuple(warnings),
         assumed_bios_offset_mv=policy.assumed_bios_offset_mv,
         effective_offset_floor_mv=policy.effective_offset_floor_mv,
-        next_profile_text=(
-            _next_profile_text(profile.name, targets, ramps, point_targets, point_ramps, ring_targets, ring_ramps) if (ramps or point_ramps or ring_ramps) and not hard else None
-        ),
+        next_profile_text=None,  # D-049: no step limits, so never a next step
         point_targets=point_targets,
         ring_targets=ring_targets,
         ring_refused=tuple(ring_refused),
@@ -1325,32 +1182,19 @@ def build_plan(
 
 
 def _static_problem(policy: Policy, target: Target) -> str | None:
-    """What the guard would refuse about a profile value whatever the hardware answers: a number above an *explicit* policy ceiling or outside
-    the offset window. (A ceiling left at the no-raise default depends on the words read and is judged after the reads.)"""
-    kind = policy.core_kind(target.cpu)
-    if target.ratio is not None:
-        cap = policy.ratio_max[kind]
-        if cap is not None and target.ratio > cap:
-            return f"ratio {target.ratio} is above policy ratio_max {kind} = {cap} ({policy.where})"
-    if target.oc_voltage_mv is not None:
-        cap = policy.v_target_max_mv[kind]
-        if cap is not None and _v_raw_of_mv(target.oc_voltage_mv) > _v_raw_of_mv(cap):
-            return f"OC-point voltage {target.oc_voltage_mv} mV is above policy v_target_max_mv {kind} = {cap} mV ({policy.where})"
+    """What the guard would refuse about a profile value whatever the hardware answers: a number outside a field encoding (D-049: the policy has no value limit, the CPU's own
+    limits depend on the words read and are judged after the reads)."""
     if target.offset_mv is not None:
         return _offset_problem(policy, target.cpu, target.offset_mv)
     return None
 
 
 def _offset_problem(policy: Policy, cpu: int, offset_mv: int) -> str | None:
-    """The offset window of the policy (floor after the assumed BIOS offset, ceiling) for ``offset_mv`` on ``cpu``: shared by the OC-point and V/F point offsets."""
-    raw = VfWord.mv_to_offset_raw(offset_mv)
-    floor, ceiling = policy.offset_floor_raw(cpu), VfWord.mv_to_offset_raw(policy.offset_ceiling_mv)
-    if not floor <= raw <= ceiling:
-        return (
-            f"offset {offset_mv:+d} mV (raw {raw}) is outside the policy window {floor}..{ceiling} raw "
-            f"(effective floor {policy.effective_offset_floor_mv} mV minus the assumed BIOS offset; offset_ceiling_mv "
-            f"{policy.offset_ceiling_mv})"
-        )
+    """The 11-bit offset field (``-1024..1023`` raw, XTU's ``-1000..+999`` mV) for ``offset_mv``: shared by the OC-point and V/F point offsets. The only offset bound left."""
+    try:
+        VfWord.mv_to_offset_raw(offset_mv)
+    except ValueError:
+        return f"offset {offset_mv:+d} mV does not fit the 11-bit offset field (registers.md V/F data word: -1024..1023 raw, XTU range {ENCODING_OFFSET_FLOOR_MV}..+{ENCODING_OFFSET_CEILING_MV} mV)"
     return None
 
 
@@ -1405,19 +1249,13 @@ def preflight(profile: Profile, topology: Topology, policy: Policy, *, boot_ops_
                 refusals.append(PredictedRefusal(number, t.cpu, int(cmd), Refusal.CHECK_FAILED.value, f"vf_bounded: {problem}"))
     if tables:
         write_cpu, verify_cpu = turbo_cpus(topology)
-        for msr, ratios in tables:  # the plain writes: address checks and the explicit ceiling are decidable before the words are read
+        for msr, ratios in tables:  # the plain writes: only the address checks are decidable before the words are read (the CPU's ratio limit needs the 0x01 read)
             number += 1
             entry = policy.match_msr(msr, "write")
-            kind = MSR_TURBO_KIND[msr]
-            cap = policy.ratio_max[kind]
             if not policy.cpu_allowed(write_cpu) or entry is None or not entry.covers_cpu(write_cpu):
                 why = "cpu not allowed" if entry is not None else "matches no msr_allow write entry (default deny; a plain write needs a reviewed policy)"
                 reason = Refusal.CPU_NOT_ALLOWED if entry is not None else Refusal.NOT_ALLOWLISTED
                 refusals.append(PredictedRefusal(number, write_cpu, 0, reason.value, f"plain write of {msr:#x}: {why}", msr))
-            elif cap is not None and max(ratios) > cap:
-                refusals.append(
-                    PredictedRefusal(number, write_cpu, 0, Refusal.CHECK_FAILED.value, f"turbo_ratio_bounded: ratio {max(ratios)} is above policy ratio_max {kind} = {cap} ({policy.where})", msr)
-                )
     if refusals:
         raise PlanRefused(tuple(refusals))
     return targets
