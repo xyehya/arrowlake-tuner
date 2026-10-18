@@ -57,6 +57,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    // Before any GTK/WebKit init: a root webview is a privilege-escalation surface, and the helper link refuses root anyway.
+    if effective_uid() == 0 {
+        eprintln!("arltuner-desktop must not run as root; start it as your normal user (the helper holds the privileges)");
+        std::process::exit(1);
+    }
     tauri::Builder::default()
         // Must be registered first: a second launch focuses the existing window and exits.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
@@ -112,17 +117,22 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_have_no_plugin_grants() {
+    fn capability_grants_exactly_the_expected_permissions() {
         let cap: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).expect("capability parses");
-        for p in cap["permissions"].as_array().unwrap() {
-            let p = p.as_str().unwrap();
-            assert!(
-                p.starts_with("core:")
-                    || matches!(p, "allow-app-version" | "allow-helper-status" | "allow-helper-connect" | "allow-helper-call"),
-                "unexpected permission {p}"
-            );
-        }
+        let perms: Vec<&str> = cap["permissions"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
+        assert_eq!(
+            perms,
+            [
+                "core:window:default",
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "allow-app-version",
+                "allow-helper-status",
+                "allow-helper-connect",
+                "allow-helper-call"
+            ]
+        );
     }
 
     #[test]

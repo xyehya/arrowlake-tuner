@@ -24,6 +24,19 @@ fn done(r: Result<Reply, CallError>) -> Value {
     }
 }
 
+/// Plan on `link` the way the app does: a successful `tune.plan` answer carrying `plan_id`.
+fn make_plan(link: &Link, helper: &mut FakeHelper, plan_id: &str) {
+    std::thread::scope(|s| {
+        let t = s.spawn(|| {
+            let req = helper.request();
+            assert_eq!(req["op"], "tune.plan");
+            helper.send(&json!({"id": req["id"], "ok": true, "result": {"plan_id": plan_id}}));
+        });
+        assert_eq!(done(link.call("tune.plan", &json!({"intent": {"cores": []}}), T))["ok"], true);
+        t.join().unwrap();
+    });
+}
+
 #[test]
 fn unknown_op_is_refused_locally_and_nothing_is_written() {
     let (link, mut helper, _rx) = start();
@@ -223,6 +236,7 @@ fn a_long_ops_result_is_delivered_as_an_event() {
 #[test]
 fn error_results_reach_the_webview_without_unlisted_detail() {
     let (link, mut helper, rx) = start();
+    make_plan(&link, &mut helper, &"a".repeat(64));
     let Ok(Reply::Started(id)) = link.call("tune.apply", &json!({"plan_id": "a".repeat(64), "typed": "CONFIRM ABCDEF"}), T) else { panic!() };
     helper.request();
     let raw = fixture("error_with_detail.json").replace("REPLACE", &id);
@@ -319,4 +333,62 @@ fn the_framed_refusal_line_is_kept_for_the_connect_error() {
     drop(helper);
     assert!(link.wait_finished(T));
     assert_eq!(link.refusal().unwrap()["detail"]["check"], "CLIENT_BUSY");
+}
+
+#[test]
+fn tune_apply_needs_a_plan_made_on_this_connection_and_spends_it() {
+    let (link, mut helper, _rx) = start();
+    let apply = |plan: &str| json!({"plan_id": plan, "typed": "CONFIRM ABCDEF"});
+    let (known, other) = ("a".repeat(64), "b".repeat(64));
+
+    // nothing planned yet: refused locally, nothing written
+    match link.call("tune.apply", &apply(&known), T) {
+        Err(CallError::Refused(r)) => assert_eq!(r.message, "refused locally: plan not made by this app"),
+        other => panic!("{other:?}"),
+    }
+    make_plan(&link, &mut helper, &known);
+    // a different (well-formed) plan id is still refused
+    assert!(matches!(link.call("tune.apply", &apply(&other), T), Err(CallError::Refused(_))));
+    // the planned one goes out ...
+    assert!(matches!(link.call("tune.apply", &apply(&known), T), Ok(Reply::Started(_))));
+    let req = helper.request();
+    assert_eq!(req["op"], "tune.apply", "the refused applies wrote nothing");
+    // ... and is spent
+    assert!(matches!(link.call("tune.apply", &apply(&known), T), Err(CallError::Refused(_))));
+}
+
+#[test]
+fn a_failed_plan_is_not_remembered_and_only_the_last_eight_plans_are() {
+    let (link, mut helper, _rx) = start();
+    std::thread::scope(|s| {
+        let t = s.spawn(|| {
+            let req = helper.request();
+            helper.send(&json!({"id": req["id"], "ok": false, "error": {"code": "REFUSED", "message": "no"}}));
+        });
+        assert_eq!(done(link.call("tune.plan", &json!({"intent": {}}), T))["ok"], false);
+        t.join().unwrap();
+    });
+    let plans: Vec<String> = (0..9).map(|i| format!("{i:x}").repeat(64)).collect();
+    for p in &plans {
+        make_plan(&link, &mut helper, p);
+    }
+    let apply = |plan: &str| json!({"plan_id": plan, "typed": "CONFIRM ABCDEF"});
+    assert!(matches!(link.call("tune.apply", &apply(&plans[0]), T), Err(CallError::Refused(_))), "oldest of nine was dropped");
+    assert!(matches!(link.call("tune.apply", &apply(&plans[8]), T), Ok(Reply::Started(_))));
+}
+
+#[test]
+fn request_ids_are_not_reused_across_links() {
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..3 {
+        let (link, mut helper, _rx) = start();
+        for _ in 0..2 {
+            let t = std::thread::scope(|s| {
+                let t = s.spawn(|| helper.answer_ok());
+                done(link.call("preflight", &json!({}), T));
+                t.join().unwrap()
+            });
+            assert!(seen.insert(t["id"].as_str().unwrap().to_string()), "id repeated");
+        }
+    }
 }

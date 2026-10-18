@@ -52,10 +52,16 @@ fn error_json(code: &str, message: &str, detail: Option<Value>) -> Value {
 impl HelperState {
     /// The app's state: the target from [`Target::from_environment`], real `lstat` / `SO_PEERCRED`.
     pub fn new(sink: Arc<dyn EventSink>) -> HelperState {
-        HelperState::with_parts(Target::from_environment(), Box::new(SysProbe), sink, connect::HANDSHAKE)
+        HelperState::build(Target::from_environment(), Box::new(SysProbe), sink, connect::HANDSHAKE)
     }
 
+    /// Test seam: inject the probe and the target. Only with `dev-socket` (non-release builds).
+    #[cfg(feature = "dev-socket")]
     pub fn with_parts(target: Target, probe: Box<dyn Probe>, sink: Arc<dyn EventSink>, handshake_timeout: Duration) -> HelperState {
+        HelperState::build(target, probe, sink, handshake_timeout)
+    }
+
+    fn build(target: Target, probe: Box<dyn Probe>, sink: Arc<dyn EventSink>, handshake_timeout: Duration) -> HelperState {
         HelperState {
             target,
             probe,

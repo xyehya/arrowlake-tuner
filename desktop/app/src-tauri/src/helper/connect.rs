@@ -252,7 +252,7 @@ pub fn handshake(stream: UnixStream, sink: Arc<dyn EventSink>, who: &str, timeou
                             format!("the helper refused this user: not in the allowlist (/etc/arltuner/helper.toml). Run: sudo bash install.sh --add-user {who}"),
                         ),
                         _ => {
-                            let msg = r.get("message").and_then(Value::as_str).unwrap_or("no reason given");
+                            let msg: String = r.get("message").and_then(Value::as_str).unwrap_or("no reason given").chars().take(500).collect();
                             ConnectError::new(Kind::NotAllowed, format!("the helper refused the connection: {msg}"))
                         }
                     }

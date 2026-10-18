@@ -25,6 +25,9 @@ if [[ "${CARGO_BUILD_FEATURES:-}${CARGO_FEATURES:-}" == *dev-socket* ]]; then
     exit 2
 fi
 
+# Prove the guard still bites (a release check with dev-socket must fail) before building anything.
+bash "$here/check-release-guard.sh"
+
 version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$tauri_dir/Cargo.toml" | head -n1)"
 [[ -n "$version" ]] || { echo "cannot read version from Cargo.toml" >&2; exit 1; }
 

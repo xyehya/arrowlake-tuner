@@ -8,10 +8,11 @@
 //! * Short ops are waited for by the caller. Long ops return their id at once; the final response is emitted as `helper://result`.
 //! * An op in flight when the link dies is reported lost (`LINK_LOST`), never replayed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
@@ -29,6 +30,11 @@ pub const MAX_PENDING_LONG: usize = 4;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(8);
 /// `error.detail` keys that reach the webview (`server.py` `_DETAIL_ALLOW`).
 const DETAIL_ALLOW: [&str; 3] = ["state", "check", "curve_id"];
+/// Plan ids remembered per connection (`tune.apply` is accepted only for one of these).
+const MAX_PLANS: usize = 8;
+/// Request ids come from one process-wide counter: an id is never reused across reconnects, so a late answer to an old
+/// connection's request can never match a new one.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Where the link publishes events. The Tauri build wraps an `AppHandle`; tests collect.
 pub trait EventSink: Send + Sync + 'static {
@@ -84,10 +90,11 @@ enum Waiter {
 struct State {
     alive: bool,
     finished: bool,
-    seq: u64,
     pending: HashMap<String, Waiter>,
     latest: HashMap<String, Value>,
     refusal: Option<Value>,
+    /// `plan_id`s of successful `tune.plan` responses on this connection, oldest first.
+    plans: VecDeque<String>,
 }
 
 struct Shared {
@@ -227,15 +234,44 @@ impl Link {
     /// Send one request. Short ops wait up to `timeout`; long ops return [`Reply::Started`] at once.
     pub fn call(&self, op: &str, args: &Value, timeout: Duration) -> Result<Reply, CallError> {
         let info = ops::check(op, args).map_err(CallError::Refused)?;
+        if op == "tune.apply" && !self.shared.lock().plans.iter().any(|p| args.get("plan_id").and_then(Value::as_str) == Some(p)) {
+            return Err(CallError::Refused(Refusal {
+                code: "BAD_REQUEST",
+                message: "refused locally: plan not made by this app".to_string(),
+            }));
+        }
         let (id, rx) = self.submit(op, args, info.long)?;
+        if op == "tune.apply" {
+            // A plan is spent by the apply that names it (the helper consumes it too).
+            let spent = args.get("plan_id").and_then(Value::as_str);
+            self.shared.lock().plans.retain(|p| Some(p.as_str()) != spent);
+        }
         let Some(rx) = rx else { return Ok(Reply::Started(id)) };
         match rx.recv_timeout(timeout) {
-            Ok(Some(resp)) => Ok(Reply::Done(resp)),
+            Ok(Some(resp)) => {
+                if op == "tune.plan" {
+                    self.remember_plan(&resp);
+                }
+                Ok(Reply::Done(resp))
+            }
             Ok(None) | Err(RecvTimeoutError::Disconnected) => Err(CallError::Unavailable),
             Err(RecvTimeoutError::Timeout) => {
                 self.shared.lock().pending.remove(&id);
                 Err(CallError::Timeout)
             }
+        }
+    }
+
+    fn remember_plan(&self, resp: &Value) {
+        if resp.get("ok") != Some(&Value::Bool(true)) {
+            return;
+        }
+        let Some(plan) = resp.get("result").and_then(|r| r.get("plan_id")).and_then(Value::as_str) else { return };
+        let mut st = self.shared.lock();
+        st.plans.retain(|p| p != plan);
+        st.plans.push_back(plan.to_string());
+        while st.plans.len() > MAX_PLANS {
+            st.plans.pop_front();
         }
     }
 
@@ -250,8 +286,7 @@ impl Link {
             if long && st.pending.values().filter(|w| matches!(w, Waiter::Long)).count() >= MAX_PENDING_LONG {
                 return Err(CallError::TooManyLong);
             }
-            st.seq += 1;
-            id = format!("d{}", st.seq);
+            id = format!("d{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
             let line = encode_line(&json!({"id": id, "op": op, "args": args})).ok_or(CallError::TooLarge)?;
             // Registered before the write: the answer can arrive before write() returns.
             if long {
