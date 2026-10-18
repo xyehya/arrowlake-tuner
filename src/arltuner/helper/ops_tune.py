@@ -2742,11 +2742,18 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
 # profiles.list / profiles.save
 # --------------------------------------------------------------------------------------------------------------
 def _validate_profiles_save(args: dict[str, Any]) -> dict[str, Any]:
-    """``{name, intent}``; G-148: ``intent`` is the Tune editor's rows laid over this boot's read (rows that change nothing, or none, save the read as it is)."""
-    _only(args, {"name", "intent"})
+    """``{name, intent}`` or (G-228) ``{name, from: "read"}``; G-148: ``intent`` is the Tune editor's rows laid over this boot's read (rows that change nothing, or none,
+    save the read as it is). ``from: "read"`` saves this boot's last read as it is (the state the CPU holds), with no editor rows."""
+    _only(args, {"name", "intent", "from"})
     name = args.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise _bad("'name' must be 1..64 characters of a-z 0-9 . _ -")
+    if "from" in args:
+        if "intent" in args:
+            raise _bad("give 'intent' (the editor's rows) or 'from': 'read' (the state of the last read), not both")
+        if args["from"] != "read":
+            raise _bad("'from' must be 'read'")
+        return {"name": name, "intent": None, "from": "read"}
     try:
         intent: dict[str, Any] | None = canonical_intent(args.get("intent"), rows_only=True)
     except OpError as exc:
@@ -2782,7 +2789,7 @@ def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
 
 
 def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    """G-148 (D-044): save a **complete** profile: this boot's last read of every unit (OC word fields, every fused point's offset, both turbo tables when read) with the
+    """G-148 (D-044): save a **complete** profile (G-228: ``{name, from: "read"}`` = the read as it is, no rows; never accepts it): this boot's last read of every unit (OC word fields, every fused point's offset, both turbo tables when read) with the
     editor's rows laid over it (``profiles.complete.overlay``). Refused without a read of this boot (``NO_READ``, "read first"), when a write came after it
     (``STALE_READ``), or when a word cannot be recorded exactly (``NOT_REPRESENTABLE``). The rows pass the same policy range checks as a plan. No hardware."""
     name = args["name"]
@@ -2813,15 +2820,21 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         except ProfileError as exc:
             raise OpError(BAD_REQUEST, f"the edits do not fit the read: {exc}. Nothing was saved.") from None
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(helper.cfg.wall_clock()))
-    header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
+    if args.get("from") == "read":
+        header = f"Saved {stamp} by arltuner (profiles.save, G-228): the state of this boot's last read of every unit, as it is (not made the accepted state). A complete profile."
+    else:
+        header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
     try:
         record = _profile_store(helper).save(name, profile=dump_profile(profile, header))
     except ProfileError as exc:
         raise OpError(BAD_REQUEST, f"the profile cannot be written: {exc}") from None
     except ProfileStoreError as exc:
         raise OpError(REFUSED if exc.code in ("EXISTS", "UNTRUSTED") else BAD_REQUEST if exc.code in ("BAD_NAME", "TOO_BIG") else INTERNAL, exc.message, {"check": exc.code}) from None
-    return {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
-            "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
+    result = {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
+              "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
+    if args.get("from") == "read":
+        result["from"] = "read"  # G-228: saved from the state of the last read, not accepted
+    return result
 
 
 def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:
@@ -2875,7 +2888,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
 # --------------------------------------------------------------------------------------------------------------
 def tune_ops() -> list[OpSpec]:
     from .ops import _validate_vf_dump
-    from .ops_accept import op_profiles_accept, op_profiles_fingerprint, validate_profiles_accept  # lazy: ops_accept imports this module
+    from .ops_accept import op_profiles_accept, op_profiles_diff, op_profiles_fingerprint, validate_profiles_accept, validate_profiles_diff  # lazy: ops_accept imports this module
 
     return [
         # a mailbox read is a WRMSR (docs/SAFETY.md): write-gated on hardware, long (state machine begin/end), one at a time
@@ -2890,6 +2903,8 @@ def tune_ops() -> list[OpSpec]:
         OpSpec("profiles.get", op_profiles_get, _validate_profiles_get, slow=True),
         # G-129 (D-036): the user's accepted state, written by the root helper (a file write, no mailbox / MSR traffic; a read this boot is required)
         OpSpec("profiles.accept", op_profiles_accept, validate_profiles_accept, slow=True),
+        # G-228: what differs between two states (the accepted one, a saved profile, the last read): the confirm step of "Set as accepted"; a file read, no hardware
+        OpSpec("profiles.diff", op_profiles_diff, validate_profiles_diff, slow=True),
         # G-141: records fingerprint.json for the accepted state that exists (a file write, no mailbox / MSR traffic; needs this boot's read of the fused words)
         OpSpec("profiles.fingerprint", op_profiles_fingerprint, _no_args, slow=True),
         # G-123: the stored last read of this boot (a file read, no hardware); also restores the plan state after a helper restart

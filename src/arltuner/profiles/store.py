@@ -19,12 +19,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-__all__ = ["MAX_PROFILES", "MAX_PROFILE_BYTES", "NAME_RE", "ProfileStore", "ProfileStoreError"]
+__all__ = ["MAX_PREVIOUS", "MAX_PROFILES", "MAX_PROFILE_BYTES", "NAME_RE", "PREVIOUS_PREFIX", "ProfileStore", "ProfileStoreError"]
 
 NAME_RE = re.compile(r"[a-z0-9._-]{1,64}\Z")
 MAX_PROFILE_BYTES = 32 * 1024
 MAX_PROFILES = 500  # saved profiles; ``save`` refuses (TOO_BIG) past this, so the root-owned directory cannot be filled through the GUI (G-142)
+#: G-228: the accepted state an accept replaces is kept as ``accepted-before-<UTC stamp>``. Those files do not count toward ``MAX_PROFILES`` (a full library must never block an
+#: accept, which would then leave the replaced state with no copy); they have their own, larger, cap.
+PREVIOUS_PREFIX = "accepted-before-"
+MAX_PREVIOUS = 1000
 _MAX_LISTED = 500  # profiles.list never returns more than this many (a runaway directory must not blow the 64 KiB response line)
+_MAX_LISTED_PREVIOUS = 60  # ... and of these, at most this many previous accepted states (the newest), listed after the others
 _SUFFIX = ".json"
 
 
@@ -89,11 +94,14 @@ class ProfileStore:
             raise ProfileStoreError("TOO_BIG", f"the profile is {len(data)} bytes (limit {MAX_PROFILE_BYTES})")
         self._check_directory(create=True)
         try:
-            have = sum(1 for n in os.listdir(self.directory) if n.endswith(_SUFFIX))
+            files = [n for n in os.listdir(self.directory) if n.endswith(_SUFFIX)]
         except OSError as exc:
             raise ProfileStoreError("IO", f"cannot list {self.directory}: {exc.strerror or exc}") from None
-        if have >= MAX_PROFILES:
-            raise ProfileStoreError("TOO_BIG", f"there are already {have} saved profiles (limit {MAX_PROFILES}); delete some files in {self.directory} first")
+        previous = name.startswith(PREVIOUS_PREFIX)
+        have = sum(1 for n in files if n.startswith(PREVIOUS_PREFIX) == previous)
+        limit = MAX_PREVIOUS if previous else MAX_PROFILES
+        if have >= limit:
+            raise ProfileStoreError("TOO_BIG", f"there are already {have} {'previous accepted states' if previous else 'saved profiles'} (limit {limit}); delete some files in {self.directory} first")
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
             fd = os.open(path, flags, 0o600)
@@ -115,6 +123,18 @@ class ProfileStore:
                 pass
             raise ProfileStoreError("IO", f"cannot write {path}: {exc.strerror or exc}") from None
         return record
+
+    def save_unique(self, base: str, *, profile: str) -> dict[str, Any]:
+        """G-228: :meth:`save` under ``base``; when that name exists, under ``base-2``, ``base-3`` ... (the first free one, at most 99). Used for the accepted state an accept
+        replaces (``accepted-before-<UTC stamp>``), which must be kept whatever else is saved. Any other refusal propagates."""
+        for n in range(1, 100):
+            name = base if n == 1 else f"{base}-{n}"
+            try:
+                return self.save(name, profile=profile)
+            except ProfileStoreError as exc:
+                if exc.code != "EXISTS":
+                    raise
+        raise ProfileStoreError("EXISTS", f"{base!r} and its numbered variants -2 .. -99 are all taken")
 
     def load(self, name: str) -> dict[str, Any]:
         """The stored record; ``NOT_FOUND`` / ``UNTRUSTED`` / ``IO``."""
@@ -151,16 +171,17 @@ class ProfileStore:
         return record
 
     def list(self) -> list[dict[str, Any]]:
-        """``[{name, source: "saved", created, complete}]``, oldest first by name (``complete``: G-148 complete profile, else a legacy partial intent). A file that is not a
-        trusted profile is skipped (never an error)."""
+        """``[{name, source: "saved", created, complete}]``, by name (``complete``: G-148 complete profile, else a legacy partial intent), then (G-228) the newest previous
+        accepted states. A file that is not a trusted profile is skipped (never an error)."""
         if not self._check_directory(create=False):
             return []
         try:
-            names = sorted(n[: -len(_SUFFIX)] for n in os.listdir(self.directory) if n.endswith(_SUFFIX) and NAME_RE.match(n[: -len(_SUFFIX)]))
+            found = sorted(n[: -len(_SUFFIX)] for n in os.listdir(self.directory) if n.endswith(_SUFFIX) and NAME_RE.match(n[: -len(_SUFFIX)]))
         except OSError as exc:
             raise ProfileStoreError("IO", f"cannot list {self.directory}: {exc.strerror or exc}") from None
+        names = [n for n in found if not n.startswith(PREVIOUS_PREFIX)][:_MAX_LISTED] + [n for n in found if n.startswith(PREVIOUS_PREFIX)][-_MAX_LISTED_PREVIOUS:]
         out: list[dict[str, Any]] = []
-        for name in names[:_MAX_LISTED]:
+        for name in names:
             try:
                 record = self.load(name)
             except ProfileStoreError:
