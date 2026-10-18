@@ -17,9 +17,9 @@ from collections.abc import Callable, Iterable
 from arltuner.msr.port import MsrError
 
 from .msrio import (MSR_APERF, MSR_CORE_PERF_LIMIT_REASONS, MSR_GFX_PERF_LIMIT_REASONS, MSR_MPERF,
-                    MSR_PACKAGE_THERM_STATUS, MSR_PERF_STATUS, MSR_PLATFORM_INFO, MSR_TEMPERATURE_TARGET,
+                    MSR_PACKAGE_THERM_STATUS, MSR_PERF_STATUS, MSR_PLATFORM_INFO, MSR_RING_PERF_LIMIT_REASONS, MSR_TEMPERATURE_TARGET,
                     MSR_THERM_STATUS, TelemetryMsr, bits)
-from .limits import decode_core_64f, decode_graphics_6b0
+from .limits import decode_core_64f, decode_graphics_6b0, decode_pkg_therm_1b1, decode_ring_6b1
 from .readings import Reading, unavailable
 
 BUS_MHZ = 100  # [DOC] ARL BCLK 100 MHz; tsc ratio from PLATFORM_INFO
@@ -133,6 +133,26 @@ def read_limit_reasons_gfx(msr: TelemetryMsr, cpu: int = 0) -> Reading:
     try:
         word = msr.rdmsr(cpu, MSR_GFX_PERF_LIMIT_REASONS)
         decoded = decode_graphics_6b0(word).to_json()
+    except (MsrError, ValueError) as e:
+        return unavailable(src, str(e))
+    return Reading(decoded, "", src)
+
+
+def read_limit_reasons_ring(msr: TelemetryMsr, cpu: int = 0) -> Reading:
+    """0x6B1 (ring limit word, package scope) decoded the same way as :func:`read_limit_reasons`. Plain rdmsr."""
+    src = "msr 0x6B1 (decoded)"
+    try:
+        decoded = decode_ring_6b1(msr.rdmsr(cpu, MSR_RING_PERF_LIMIT_REASONS)).to_json()
+    except (MsrError, ValueError) as e:
+        return unavailable(src, str(e))
+    return Reading(decoded, "", src)
+
+
+def read_pkg_therm_status(msr: TelemetryMsr, cpu: int = 0) -> Reading:
+    """0x1B1 throttle bits (package thermal / PROCHOT / critical / power-limit notification and their kernel-cleared log bits) decoded. Plain rdmsr, once per tick."""
+    src = "msr 0x1B1 (decoded)"
+    try:
+        decoded = decode_pkg_therm_1b1(msr.rdmsr(cpu, MSR_PACKAGE_THERM_STATUS)).to_json()
     except (MsrError, ValueError) as e:
         return unavailable(src, str(e))
     return Reading(decoded, "", src)

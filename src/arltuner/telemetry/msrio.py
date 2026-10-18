@@ -5,8 +5,8 @@
 The telemetry package must not import ``arltuner.mailbox`` / ``arltuner.guard`` / ``arltuner.msr.transport``
 (enforced by tests/telemetry/test_isolation.py).
 
-The set below must equal the telemetry read rows in docs/knowledge/telemetry-sources.md; the orchestrator mirrors them into
-``guard/policy.py`` ``PLAIN_MSR_READABLE`` at merge. Evidence tags: see that document.
+The set below must equal the telemetry read rows in docs/knowledge/telemetry-sources.md. It is separate from ``guard/policy.py``
+``PLAIN_MSR_READABLE`` (the guard path for ops) and is not mirrored into it (registers.md). Evidence tags: see that document.
 """
 from __future__ import annotations
 
@@ -25,11 +25,12 @@ MSR_RAPL_POWER_UNIT = 0x606  # [MEASURED lnx 2026-09-29] 0.125 W, 2^-14 J, 2^-10
 MSR_PKG_ENERGY_STATUS = 0x611  # [DOC Intel SDM vol 4]
 MSR_CORE_PERF_LIMIT_REASONS = 0x64F  # core limit word; decode telemetry/limits.py [MEASURED lnx 2026-10-13: 0x1DC21000]
 MSR_GFX_PERF_LIMIT_REASONS = 0x6B0  # GRAPHICS limit word (SDM MSR_GRAPHICS_PERF_LIMIT_REASONS), not a package word [DOC SDM vol 4]
+MSR_RING_PERF_LIMIT_REASONS = 0x6B1  # ring limit word, package scope, read-only [DOC edk2 SkylakeMsr.h; throttling.md section A]; orchestrator decision G-229
 
 TELEMETRY_MSRS = frozenset({
     MSR_MPERF, MSR_APERF, MSR_PLATFORM_INFO, MSR_PERF_STATUS, MSR_THERM_STATUS, MSR_TEMPERATURE_TARGET,
     MSR_PACKAGE_THERM_STATUS, MSR_RAPL_POWER_UNIT, MSR_PKG_ENERGY_STATUS, MSR_CORE_PERF_LIMIT_REASONS,
-    MSR_GFX_PERF_LIMIT_REASONS,
+    MSR_GFX_PERF_LIMIT_REASONS, MSR_RING_PERF_LIMIT_REASONS,
 })
 
 MAILBOX_MSR = 0x150
