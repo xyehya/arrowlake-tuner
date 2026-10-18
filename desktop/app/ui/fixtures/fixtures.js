@@ -524,6 +524,345 @@ export default {
    "writes_allowed": false
   }
  },
+ "profiles-accept-unavailable": {
+  "error": {
+   "code": "REFUSED",
+   "detail": {
+    "check": "NO_ACCEPTED_DIR"
+   },
+   "message": "this helper keeps no accepted state (no accepted-state directory is configured). Nothing was changed."
+  },
+  "id": "c8",
+  "ok": false
+ },
+ "profiles-fingerprint-unavailable": {
+  "error": {
+   "code": "REFUSED",
+   "detail": {
+    "check": "NO_ACCEPTED_DIR"
+   },
+   "message": "this helper keeps no accepted state (no accepted-state directory is configured). Nothing was changed."
+  },
+  "id": "c9",
+  "ok": false
+ },
+ "profiles-get-sim-e-light": {
+  "id": "c6",
+  "ok": true,
+  "result": {
+   "complete": true,
+   "contents": {
+    "complete": true,
+    "rows": [
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P0",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P1",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P2",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P3",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P4",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P5",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P6",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P7",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": -15
+      },
+      "ratio": null,
+      "target": "EC0",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC1",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC2",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC3",
+      "v_target_v": null
+     }
+    ],
+    "turbo": {
+     "E": [
+      48,
+      48,
+      48,
+      48,
+      48,
+      48,
+      48,
+      48
+     ],
+     "P": [
+      57,
+      57,
+      55,
+      55,
+      55,
+      55,
+      55,
+      55
+     ]
+    }
+   },
+   "created": "2026-10-18T11:10:55Z",
+   "name": "sim-e-light",
+   "source": "saved",
+   "summary": {
+    "complete": true,
+    "deepest_offset_mv": -15,
+    "oc_ratios": 0,
+    "points": 0,
+    "turbo": true,
+    "units": 12,
+    "v_targets": 0
+   }
+  }
+ },
+ "profiles-get-sim-p0-undervolt": {
+  "id": "c5",
+  "ok": true,
+  "result": {
+   "complete": true,
+   "contents": {
+    "complete": true,
+    "rows": [
+     {
+      "offset": {
+       "kind": "points",
+       "mv": {
+        "20": 0,
+        "30": 0,
+        "48": -20,
+        "53": -25,
+        "55": 0,
+        "56": 0,
+        "57": 0,
+        "8": 0
+       }
+      },
+      "ratio": null,
+      "target": "P0",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P1",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P2",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P3",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P4",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P5",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P6",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "P7",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC0",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC1",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC2",
+      "v_target_v": null
+     },
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": 0
+      },
+      "ratio": null,
+      "target": "EC3",
+      "v_target_v": null
+     }
+    ],
+    "turbo": {
+     "E": [
+      48,
+      48,
+      48,
+      48,
+      48,
+      48,
+      48,
+      48
+     ],
+     "P": [
+      57,
+      57,
+      55,
+      55,
+      55,
+      55,
+      55,
+      55
+     ]
+    }
+   },
+   "created": "2026-10-18T11:10:55Z",
+   "name": "sim-p0-undervolt",
+   "source": "saved",
+   "summary": {
+    "complete": true,
+    "deepest_offset_mv": -25,
+    "oc_ratios": 0,
+    "points": 8,
+    "turbo": true,
+    "units": 12,
+    "v_targets": 0
+   }
+  }
+ },
  "profiles-list": {
   "id": "c7",
   "ok": true,
@@ -531,6 +870,114 @@ export default {
    "accepted": false,
    "note": "no accepted state directory is configured. Nothing was sent.",
    "profiles": []
+  }
+ },
+ "profiles-save-exists": {
+  "error": {
+   "code": "REFUSED",
+   "detail": {
+    "check": "EXISTS"
+   },
+   "message": "a profile named 'sim-p0-undervolt' already exists (profiles are never overwritten)"
+  },
+  "id": "c4",
+  "ok": false
+ },
+ "profiles-save-sim-e-light": {
+  "request": {
+   "args": {
+    "intent": {
+     "rows": [
+      {
+       "offset": {
+        "kind": "curve",
+        "mv": -15
+       },
+       "ratio": null,
+       "target": "EC0",
+       "v_target_v": null
+      }
+     ],
+     "scope": "unit"
+    },
+    "name": "sim-e-light"
+   },
+   "op": "profiles.save"
+  },
+  "response": {
+   "id": "c3",
+   "ok": true,
+   "result": {
+    "complete": true,
+    "created": "2026-10-18T11:10:55Z",
+    "name": "sim-e-light",
+    "points": 88,
+    "ring_points": 9,
+    "source": "saved",
+    "turbo": true,
+    "units": 12
+   }
+  }
+ },
+ "profiles-save-sim-p0-undervolt": {
+  "request": {
+   "args": {
+    "intent": {
+     "rows": [
+      {
+       "offset": {
+        "kind": "points",
+        "mv": {
+         "48": -20,
+         "53": -25
+        }
+       },
+       "ratio": null,
+       "target": "P0",
+       "v_target_v": null
+      }
+     ],
+     "scope": "unit"
+    },
+    "name": "sim-p0-undervolt"
+   },
+   "op": "profiles.save"
+  },
+  "response": {
+   "id": "c2",
+   "ok": true,
+   "result": {
+    "complete": true,
+    "created": "2026-10-18T11:10:55Z",
+    "name": "sim-p0-undervolt",
+    "points": 88,
+    "ring_points": 9,
+    "source": "saved",
+    "turbo": true,
+    "units": 12
+   }
+  }
+ },
+ "profiles-saved-list": {
+  "id": "c7",
+  "ok": true,
+  "result": {
+   "accepted": false,
+   "note": "no accepted state directory is configured. Nothing was sent.",
+   "profiles": [
+    {
+     "complete": true,
+     "created": "2026-10-18T11:10:55Z",
+     "name": "sim-e-light",
+     "source": "saved"
+    },
+    {
+     "complete": true,
+     "created": "2026-10-18T11:10:55Z",
+     "name": "sim-p0-undervolt",
+     "source": "saved"
+    }
+   ]
   }
  },
  "telemetry-events": {

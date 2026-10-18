@@ -293,7 +293,7 @@ export function ensureApply(store) {
 }
 
 /** statuses: planning | review | stale (replan) | applying | done | failed | cancelled | skipped */
-const makeSection = (kind, spec, req) => ({ kind, label: spec.label, intent: req.intent, draftRef: req.draftRef, plan: null, issuedAt: null, status: "planning", opId: null, progress: null, result: null, summary: null, error: null, cancelling: false });
+const makeSection = (kind, spec, req) => ({ kind, label: req.label || spec.label, intent: req.intent, draftRef: req.draftRef, plan: null, issuedAt: null, status: "planning", opId: null, progress: null, result: null, summary: null, error: null, cancelling: false });
 
 export function createApplyController({ store, bridge, toast = () => {}, kinds = KINDS, now = () => performance.now() }) {
   ensureTune(store);
@@ -326,7 +326,7 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
       const name = typeof r === "string" ? r : r.kind;
       const spec = kinds[name];
       if (!spec) throw new Error("apply: unknown section kind " + name);
-      const req = typeof r === "string" ? spec.request(store) : { intent: r.intent };
+      const req = typeof r === "string" ? spec.request(store) : { intent: r.intent, label: r.label };
       if (req.error) {
         patch({ state: "failed", sections: [], error: { message: req.error, located: null }, seq: get().seq + 1 });
         return "failed";
@@ -805,7 +805,10 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
   }
 
   // ---- events ----
-  const onReview = () => {
+  const onReview = (e) => {
+    // G-213: "tune:review" may carry detail.requests (e.g. [{kind: "tune", intent: {profile: "<name>"}, label}]): the Profiles screen opens the same drawer for a whole-state intent.
+    // Such a plan error is not a field of the Tune editor, so it is never landed on one.
+    const requests = e && e.detail && Array.isArray(e.detail.requests) && e.detail.requests.length ? e.detail.requests : null;
     // the pending bar's placeholder (app.js) sets the drawer content right after this event is dispatched: render on a later tick
     wantOpen = true;
     needFocus = true;
@@ -821,9 +824,9 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       patch0({ state: "planning", sections: [], error: null });
       built = null;
       render();
-      const state = await ctl.review(["tune"]); // every state change renders through the store watch
+      const state = await ctl.review(requests || ["tune"]); // every state change renders through the store watch
       const err = store.get().apply.error;
-      if (state === "failed" && err && err.located) land(err.located);
+      if (state === "failed" && err && err.located && !requests) land(err.located);
     });
   };
   const patch0 = (p) => store.update((s) => ({ apply: { ...s.apply, ...p } }));

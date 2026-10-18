@@ -1,0 +1,11 @@
+{
+ "error": {
+  "code": "REFUSED",
+  "detail": {
+   "check": "NO_ACCEPTED_DIR"
+  },
+  "message": "this helper keeps no accepted state (no accepted-state directory is configured). Nothing was changed."
+ },
+ "id": "c8",
+ "ok": false
+}

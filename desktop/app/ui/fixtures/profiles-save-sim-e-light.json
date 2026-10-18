@@ -1,0 +1,36 @@
+{
+ "request": {
+  "args": {
+   "intent": {
+    "rows": [
+     {
+      "offset": {
+       "kind": "curve",
+       "mv": -15
+      },
+      "ratio": null,
+      "target": "EC0",
+      "v_target_v": null
+     }
+    ],
+    "scope": "unit"
+   },
+   "name": "sim-e-light"
+  },
+  "op": "profiles.save"
+ },
+ "response": {
+  "id": "c3",
+  "ok": true,
+  "result": {
+   "complete": true,
+   "created": "2026-10-18T11:10:55Z",
+   "name": "sim-e-light",
+   "points": 88,
+   "ring_points": 9,
+   "source": "saved",
+   "turbo": true,
+   "units": 12
+  }
+ }
+}

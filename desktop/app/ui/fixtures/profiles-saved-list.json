@@ -1,0 +1,22 @@
+{
+ "id": "c7",
+ "ok": true,
+ "result": {
+  "accepted": false,
+  "note": "no accepted state directory is configured. Nothing was sent.",
+  "profiles": [
+   {
+    "complete": true,
+    "created": "2026-10-18T11:10:55Z",
+    "name": "sim-e-light",
+    "source": "saved"
+   },
+   {
+    "complete": true,
+    "created": "2026-10-18T11:10:55Z",
+    "name": "sim-p0-undervolt",
+    "source": "saved"
+   }
+  ]
+ }
+}

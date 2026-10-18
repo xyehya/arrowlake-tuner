@@ -1,0 +1,154 @@
+{
+ "id": "c6",
+ "ok": true,
+ "result": {
+  "complete": true,
+  "contents": {
+   "complete": true,
+   "rows": [
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P0",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P1",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P2",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P3",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P4",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P5",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P6",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P7",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": -15
+     },
+     "ratio": null,
+     "target": "EC0",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC1",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC2",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC3",
+     "v_target_v": null
+    }
+   ],
+   "turbo": {
+    "E": [
+     48,
+     48,
+     48,
+     48,
+     48,
+     48,
+     48,
+     48
+    ],
+    "P": [
+     57,
+     57,
+     55,
+     55,
+     55,
+     55,
+     55,
+     55
+    ]
+   }
+  },
+  "created": "2026-10-18T11:10:55Z",
+  "name": "sim-e-light",
+  "source": "saved",
+  "summary": {
+   "complete": true,
+   "deepest_offset_mv": -15,
+   "oc_ratios": 0,
+   "points": 0,
+   "turbo": true,
+   "units": 12,
+   "v_targets": 0
+  }
+ }
+}

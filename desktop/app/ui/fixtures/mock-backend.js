@@ -12,8 +12,17 @@ export const FIXTURES = {
   preflight: F["preflight"], telemetryStart: F["telemetry-start"], telemetryStop: F["telemetry-stop"], telemetry: F["telemetry-events"], tuneRead: F["tune-read"],
   tuneReadEvents: F["tune-read-events"], tunePlan: F["tune-plan"], tuneApply: F["tune-apply"], tuneApplyEvents: F["tune-apply-events"], profilesList: F["profiles-list"],
   auditTail: F["audit-tail"], tuneLast: F["tune-last"],
+  // G-213: recorded from the simulator by gen_profiles_fixtures.py (saved profiles, their contents, the refusals); the accepted state is INVENTED below
+  // (one entry per recorded file: shell.test.mjs checks the count)
+  profilesSaveP0: F["profiles-save-sim-p0-undervolt"], profilesSaveELight: F["profiles-save-sim-e-light"], profilesSaveExists: F["profiles-save-exists"],
+  profilesGetP0: F["profiles-get-sim-p0-undervolt"], profilesGetELight: F["profiles-get-sim-e-light"], profilesSavedList: F["profiles-saved-list"],
+  profilesAcceptUnavailable: F["profiles-accept-unavailable"], profilesFingerprintUnavailable: F["profiles-fingerprint-unavailable"],
 };
-const { preflight, telemetryStart, telemetryStop, telemetry, tuneRead, tuneReadEvents, tunePlan, tuneApply, tuneApplyEvents, profilesList, auditTail, tuneLast } = FIXTURES;
+const {
+  preflight, telemetryStart, telemetryStop, telemetry, tuneRead, tuneReadEvents, tunePlan, tuneApply, tuneApplyEvents, profilesList, auditTail, tuneLast,
+  profilesGetP0, profilesGetELight, profilesSavedList, profilesAcceptUnavailable, profilesFingerprintUnavailable,
+} = FIXTURES;
+const profilesGet = [profilesGetP0, profilesGetELight];
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const ok = (id, result) => ({ id, ok: true, result });
@@ -137,9 +146,106 @@ function synthPlan(intent) {
   return { steps, before, after, units, writes: steps.length - 1 };
 }
 
+// ---- profiles (G-213) ---------------------------------------------------------------------------------------------------------------------------------
+// RECORDED from the simulator (gen_profiles_fixtures.py): the two saved profiles (profiles.get contents), the profiles.list answer, the EXISTS refusal, and the NO_ACCEPTED_DIR refusals of
+// profiles.accept / profiles.fingerprint. INVENTED here (the unprivileged simulator keeps no accepted state): a working profiles.accept / profiles.fingerprint, the accepted entry of
+// profiles.list / profiles.get, a profiles.save of any new name, "the words the CPU holds" (the recorded read, plus every plan applied in this mock session) and the plans of
+// {profile} / {restore: "accepted"} intents (one write per point that differs from what is held, in the order of synthPlan). Knobs (query string): `profiles=none` (empty library),
+// `profiles=accepted` (an accepted state equal to the recorded read exists from the start), `accept=unavailable` (accept / fingerprint answer the recorded refusal),
+// `fingerprint=incomplete` (the fingerprint note says what the simulator would: no CPU identity).
+const PROFILE_NAME_RE = /^[a-z0-9._-]{1,64}$/;
+const readUnits = () => tuneRead.result.units.filter((u) => u.cpus && u.cpus[0] && Array.isArray(u.cpus[0].points));
+const pointsOfUnit = (id) => (readUnit(id) ? readUnit(id).cpus[0].points : []);
+const copyHeld = (held) => ({ units: Object.fromEntries(Object.entries(held.units).map(([k, v]) => [k, { ...v }])), turbo: { P: held.turbo.P.slice(), E: held.turbo.E.slice() } });
+
+/** What the mock CPU holds: unit -> {point number: mV}, and the turbo tables. Starts as the recorded read. */
+function initialHeld() {
+  const units = {};
+  for (const u of readUnits()) units[u.id] = Object.fromEntries(u.cpus[0].points.map((p) => [p.point, p.offset_mv]));
+  return { units, turbo: { P: tuneRead.result.tables.p.slice(), E: tuneRead.result.tables.e.slice() } };
+}
+
+/** A complete profile's contents (profiles.get shape) from held words: a unit whose points are all equal is a whole-curve row. */
+function contentsOfHeld(held) {
+  const rows = readUnits().map((u) => {
+    const mvs = pointsOfUnit(u.id).map((p) => held.units[u.id][p.point]);
+    const offset = mvs.every((x) => x === mvs[0]) ? { kind: "curve", mv: mvs[0] } : { kind: "points", mv: Object.fromEntries(pointsOfUnit(u.id).map((p) => [String(p.ratio), held.units[u.id][p.point]])) };
+    return { target: u.id, offset, ratio: null, v_target_v: null };
+  });
+  return { rows, turbo: { E: held.turbo.E.slice(), P: held.turbo.P.slice() }, complete: true };
+}
+
+function summarize(contents) {
+  let deepest = null;
+  let points = 0;
+  for (const r of contents.rows) {
+    if (!r.offset) continue;
+    const values = r.offset.kind === "curve" ? [r.offset.mv] : Object.values(r.offset.mv);
+    if (r.offset.kind === "points") points += values.length;
+    deepest = deepest === null ? Math.min(...values) : Math.min(deepest, ...values);
+  }
+  return {
+    units: contents.rows.length, points, deepest_offset_mv: deepest, oc_ratios: contents.rows.filter((r) => r.ratio !== null).length,
+    v_targets: contents.rows.filter((r) => r.v_target_v !== null).length, turbo: !!contents.turbo, complete: contents.complete === true,
+  };
+}
+
+/** The offset a profile row asks for at a point, or null when the row says nothing about it. */
+function wantedMv(row, p) {
+  if (!row.offset) return null;
+  if (row.offset.kind === "curve") return row.offset.mv;
+  return String(p.ratio) in row.offset.mv ? row.offset.mv[String(p.ratio)] : null;
+}
+
+/** Held words with the rows (and turbo) of an intent laid over them. */
+function heldAfter(held, intent) {
+  const next = copyHeld(held);
+  for (const row of (intent && intent.rows) || []) {
+    if (!next.units[row.target] || !row.offset) continue;
+    for (const p of pointsOfUnit(row.target)) {
+      const want = wantedMv(row, p);
+      if (want !== null) next.units[row.target][p.point] = want;
+    }
+  }
+  for (const k of Object.keys((intent && intent.turbo) || {})) next.turbo[k] = intent.turbo[k].slice();
+  return next;
+}
+
+/** The tune.plan intent that takes held words to a profile's contents: only what differs (the helper writes only what differs from the CPU). */
+function intentToReach(contents, held) {
+  const rows = [];
+  for (const row of contents.rows) {
+    if (!held.units[row.target]) continue;
+    const mv = {};
+    for (const p of pointsOfUnit(row.target)) {
+      const want = wantedMv(row, p);
+      if (want !== null && want !== held.units[row.target][p.point]) mv[String(p.ratio)] = want;
+    }
+    if (Object.keys(mv).length) rows.push({ target: row.target, offset: { kind: "points", mv }, v_target_v: null, ratio: null });
+  }
+  const intent = {};
+  if (rows.length) Object.assign(intent, { scope: "unit", rows });
+  const turbo = {};
+  for (const k of ["P", "E"]) if (contents.turbo && Array.isArray(contents.turbo[k]) && contents.turbo[k].some((x, i) => x !== held.turbo[k][i])) turbo[k] = contents.turbo[k].slice();
+  if (Object.keys(turbo).length) intent.turbo = turbo;
+  return intent;
+}
+
+/** "" when the contents equal the held words, else the first difference. */
+function heldDifference(contents, held) {
+  const intent = intentToReach(contents, held);
+  if (intent.rows && intent.rows.length) {
+    const [ratio, mv] = Object.entries(intent.rows[0].offset.mv)[0];
+    return `${intent.rows[0].target} at ${ratio}x the profile has ${mv} mV`;
+  }
+  return intent.turbo ? "the " + Object.keys(intent.turbo)[0] + " turbo table differs" : "";
+}
+
+const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "Z");
+
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
  *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off), applyMode ('mismatch' | 'stale' | null; `?apply=`; see synthPlan above). */
-function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply") } = {}) {
+function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint") } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -148,6 +254,14 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   let tick = 0;
   let busyOp = null;
   let running = null; // the replay of the long op in flight ({id, cancelled, done, sent})
+  // G-213 profiles state (see the block above createMockTransport)
+  const profilesMode = profiles;
+  const acceptUnavailable = accept === "unavailable";
+  let held = initialHeld(); // the words the mock CPU holds
+  const saved = new Map(); // name -> {created, contents}
+  if (profilesMode !== "none") for (const g of profilesGet) saved.set(g.result.name, { created: g.result.created, contents: clone(g.result.contents) });
+  let accepted = profilesMode === "accepted" ? { name: "read-20261018-120000", contents: contentsOfHeld(held) } : null;
+  const planIntents = new Map(); // plan_id -> the intent it was made from (what an apply puts into `held`)
 
   const emit = (event, payload) => {
     for (const cb of [...(listeners.get(event) || [])]) cb(payload);
@@ -213,11 +327,12 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   let staleFired = false;
   let recordedGone = false; // the recorded plan was applied or forgotten: the next plan of an empty intent gets a fresh id
   const nonceOf = (n) => "M" + n.toString(8).padStart(5, "0").replace(/\d/g, (d) => String(Number(d) + 2));
-  function issuePlan(intent) {
+  function issuePlan(intent, { whole = false } = {}) {
     const synth = synthPlan(intent);
     const recorded = tunePlan.response.result;
-    if (!synth.writes && !recordedGone) {
+    if (!synth.writes && !recordedGone && !whole) {
       if (!plans.has(recorded.plan_id)) plans.set(recorded.plan_id, clone(recorded)); // the recorded one-point plan
+      planIntents.set(recorded.plan_id, tunePlan.request.args.intent);
       return plans.get(recorded.plan_id);
     }
     const n = ++planSeq;
@@ -233,10 +348,40 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
       const mvs = synth.steps.map((s) => s.offset_mv).filter((x) => typeof x === "number");
       if (mvs.some((x) => x > 0)) plan.warnings.unshift({ code: "POSITIVE_OFFSET", text: "a positive offset raises the voltage of the point: more heat, not more stability headroom" });
       if ((intent.rows || []).some((r) => r.target.startsWith("EC") && r.offset && r.offset.kind === "points" && "40" in r.offset.mv)) plan.warnings.unshift({ code: "E40_OFFSET", text: "an offset on the E-cluster 40x point has been reported to destabilise the cluster [COMMUNITY]" });
+    } else if (whole) {
+      // a profile that equals what the CPU holds: nothing to write
+      Object.assign(plan, { steps: [], before: {}, after: {}, units: [], writes: 0, reads: 0, ops_needed: 0, rounds: 0, warnings: [] });
     }
     plans.set(plan.plan_id, plan);
+    planIntents.set(plan.plan_id, intent);
     return plan;
   }
+
+  // {profile: name} / {restore: "accepted"}: the plan of the writes that take the held words to the profile's contents
+  function planWholeState(intent) {
+    let contents;
+    if (intent.restore !== undefined) {
+      if (!accepted) return { error: { code: "REFUSED", message: "there is no usable accepted state yet (save a profile as accepted on the Profiles tab). Nothing was sent.", detail: { check: "NO_ACCEPTED_STATE" } } };
+      contents = accepted.contents;
+    } else if (accepted && accepted.name === intent.profile) contents = accepted.contents;
+    else if (saved.has(intent.profile)) contents = saved.get(intent.profile).contents;
+    else return { error: { code: "BAD_REQUEST", message: `no such profile: ${intent.profile}`, detail: { check: "PROFILE_NOT_FOUND" } } };
+    const target = intentToReach(contents, held);
+    const refused = mockRefusal(target);
+    if (refused) return { error: { code: "REFUSED", message: refused, detail: { check: "POLICY_RANGE" } } };
+    return { plan: issuePlan(target, { whole: true }) };
+  }
+
+  const acceptedMatch = () => {
+    if (!accepted) return null;
+    return [{ cpu: 0, match: heldDifference(accepted.contents, held) === "", diffs: [] }];
+  };
+  const getResult = (name) => {
+    if (accepted && accepted.name === name) return { name, source: "accepted", created: null, complete: true, contents: clone(accepted.contents), summary: summarize(accepted.contents) };
+    const rec = saved.get(name);
+    if (!rec) return null;
+    return { name, source: "saved", created: rec.created, complete: rec.contents.complete === true, contents: clone(rec.contents), summary: summarize(rec.contents) };
+  };
   /** The final response and progress events of an apply of `plan` (the recorded ones for the recorded plan). */
   function applyOutcome(id, plan) {
     if (plan.plan_id === tunePlan.response.result.plan_id) return { events: tuneApplyEvents, response: ok(id, clone(tuneApply.response.result)) };
@@ -290,6 +435,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
         case "tune.last": {
           const r = clone(tuneLast.result);
           if (r.available) r.at = now() / 1000 - 60; // pretend the recorded read happened a minute ago
+          if (r.available && accepted) Object.assign(r.result, { accepted_match: acceptedMatch(), accepted_note: null }); // G-213: redone against the (invented) accepted state
           return ok(id, r);
         }
         case "curves.list":
@@ -297,12 +443,63 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
         case "curves.get":
           if (!baseline || args.id !== "mock-baseline") return fail(id, "NOT_FOUND", "no such curve in the mock");
           return ok(id, inventedBaseline());
-        case "profiles.list":
-          return ok(id, clone(profilesList.result));
+        case "profiles.list": {
+          const entries = [...saved].map(([name, rec]) => ({ name, source: "saved", created: rec.created, complete: true }));
+          const result = { profiles: [...(accepted ? [{ name: accepted.name, source: "accepted", created: null, complete: true }] : []), ...entries], accepted: !!accepted };
+          if (!accepted) result.note = profilesSavedList.result.note;
+          return ok(id, result);
+        }
+        case "profiles.get": {
+          if (typeof args.name !== "string" || !PROFILE_NAME_RE.test(args.name)) return fail(id, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -");
+          const got = getResult(args.name);
+          return got ? ok(id, got) : fail(id, "BAD_REQUEST", `no profile named '${args.name}'`, { check: "PROFILE_NOT_FOUND" });
+        }
+        case "profiles.save": {
+          if (typeof args.name !== "string" || !PROFILE_NAME_RE.test(args.name)) return fail(id, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -");
+          const intent = args.intent;
+          if (!intent || typeof intent !== "object" || Array.isArray(intent) || Object.keys(intent).some((k) => k !== "scope" && k !== "rows")) return fail(id, "BAD_REQUEST", "only a {scope, rows} intent can be saved as a profile");
+          if (saved.has(args.name) || (accepted && accepted.name === args.name)) return fail(id, "REFUSED", `a profile named '${args.name}' already exists (profiles are never overwritten)`, { check: "EXISTS" });
+          const refused = mockRefusal(intent);
+          if (refused) return fail(id, "REFUSED", refused, { check: "POLICY_RANGE" });
+          const contents = contentsOfHeld(heldAfter(held, intent));
+          const created = isoSeconds(now());
+          saved.set(args.name, { created, contents });
+          const sum = summarize(contents);
+          return ok(id, { name: args.name, source: "saved", created, complete: true, units: sum.units, points: sum.points, turbo: true, ring_points: 0 });
+        }
+        case "profiles.accept": {
+          if (acceptUnavailable) return { ...clone(profilesAcceptUnavailable), id };
+          let name;
+          if (args.from !== undefined) {
+            if (args.from !== "read") return fail(id, "BAD_REQUEST", "'from' must be 'read'");
+            name = "read-" + isoSeconds(now()).replace(/[-:]/g, "").replace("T", "-").replace("Z", "");
+          } else {
+            if (typeof args.name !== "string" || !PROFILE_NAME_RE.test(args.name)) return fail(id, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -");
+            const got = getResult(args.name);
+            if (!got) return fail(id, "BAD_REQUEST", `no profile named '${args.name}'`, { check: "PROFILE_NOT_FOUND" });
+            const difference = heldDifference(got.contents, held);
+            if (difference) return fail(id, "REFUSED", `'${args.name}' is not what the CPU holds now (${difference}). Apply it first (Profiles > Review and apply), then set it as accepted.`, { check: "NOT_APPLIED" });
+            name = args.name;
+          }
+          const replaced = accepted ? [accepted.name] : [];
+          accepted = { name, contents: contentsOfHeld(held) };
+          const sum = summarize(accepted.contents);
+          return ok(id, { name, source: "accepted", from: args.from !== undefined ? "read" : "saved", accepted_at: isoSeconds(now()), replaced, cpus: 24, core_entries: sum.units, points: sum.points, turbo: true, complete: true, ring_points: 0, fingerprint: "complete" });
+        }
+        case "profiles.fingerprint": {
+          if (acceptUnavailable) return { ...clone(profilesFingerprintUnavailable), id };
+          if (!accepted) return fail(id, "REFUSED", "there is no accepted state to record a fingerprint for; accept a profile first (Profiles > Set as accepted).", { check: "NO_ACCEPTED_STATE" });
+          const incomplete = fingerprint === "incomplete";
+          return ok(id, { recorded: isoSeconds(now()), cpus: 24, accepted: [accepted.name], fingerprint: incomplete ? "incomplete: no CPU identity under the simulator" : "complete" });
+        }
         case "audit.tail":
           return ok(id, clone(auditTail.result));
         case "tune.plan": {
           if (!args.intent || typeof args.intent !== "object") return fail(id, "BAD_REQUEST", "tune.plan needs {intent: {...}}");
+          if (args.intent.profile !== undefined || args.intent.restore !== undefined) {
+            const whole = planWholeState(args.intent);
+            return whole.error ? fail(id, whole.error.code, whole.error.message, whole.error.detail) : ok(id, clone(whole.plan));
+          }
           const refused = mockRefusal(args.intent);
           if (refused) return fail(id, "REFUSED", refused, { check: "POLICY_RANGE" });
           return ok(id, clone(issuePlan(args.intent))); // an empty intent answers the recorded one-point plan; anything else is synthesized (synthPlan)
@@ -332,6 +529,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           }
           if (args.typed !== `CONFIRM ${plan.nonce}`) return fail(id, "CONFIRM_MISMATCH", "the typed confirmation does not match the plan's nonce");
           plans.delete(plan.plan_id); // single use
+          held = heldAfter(held, planIntents.get(plan.plan_id)); // G-213: what the mock CPU holds now (profiles.accept compares with it)
           if (plan.plan_id === tunePlan.response.result.plan_id) recordedGone = true;
           const outcome = applyOutcome(id, plan);
           replayLong(id, outcome.events, outcome.response);
