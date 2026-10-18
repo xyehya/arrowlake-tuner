@@ -244,7 +244,13 @@ export function createThrottleEvents(store, bridge) {
     }
     if (stopped) return;
     if (res && res.ok && res.result && Array.isArray(res.result.records)) setThrottleEvents(store, { state: "ok", records: res.result.records, path: res.result.path || null, truncated: !!res.result.truncated, error: null, at: Date.now() / 1000 });
-    else setThrottleEvents(store, { state: "error", error: (res && res.error && res.error.message) || "the helper gave no event list", records: [] });
+    else {
+      setThrottleEvents(store, { state: "error", error: (res && res.error && res.error.message) || "the helper gave no event list", records: [] });
+      if (res && res.error && res.error.code === "UNKNOWN_OP" && timer) {
+        clearInterval(timer); // a helper without throttle.tail will not grow one: the Refresh button still asks again
+        timer = null;
+      }
+    }
   }
   const unsub = [store.watch((s) => s.throttleEvents, () => draw()), store.watch((s) => s.throttleSession.resetAt, () => draw())];
   refresh();
