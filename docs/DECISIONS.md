@@ -235,3 +235,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   front-end only; the root helper, guard, policy, CLI and restore scripts stay Python stdlib (D-012 holds for every privileged line). The
   AppImage never contains root code (SPEC §4.4): the helper is still installed by `install.sh`. The web GUI stays as a fallback until the desktop
   app reaches parity. Plan, tasks and progress: `desktop/PLAN.md`, `desktop/TASKS.md`, `desktop/progress/`.
+- **D-047 · 2026-10-18 · Standing autonomy for the desktop track (operator).** Operator: "run autonomously so go everything for u and use passwordless
+  sudo". The orchestrator session performs hardware sittings (H1–H5), installs (`sudo bash install.sh`), helper restarts and live verification
+  without asking per sitting. Unchanged: SAFETY.md (one mailbox transaction at a time, no sweeps, guard refusals never worked around, read-back,
+  health gate, cold-boot recovery plan); workers still never touch hardware; new policy keys get the most conservative values (the machine's
+  current/BIOS values as ceilings, no widening of existing limits) and are recorded with backups; every sitting is logged in `captures/lnx/`.
