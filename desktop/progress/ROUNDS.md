@@ -21,3 +21,9 @@
   (end state = confirmed "after" but the shown "before"/diff can be wrong); low: point-key parsing (non-ASCII digits -> INTERNAL, "04"/"4" dup).
   Two full runs OK (3031); the worker's flaky failure not reproduced (only a logged ConnectionResetError in a web test thread). Fix round dispatched.
   Note for G-213/G-217: profiles.save refuses ring, so a ring edit can be saved only after it is applied.
+
+## R3 · 2026-10-18 · D-047 standing autonomy
+- G-211 merged (Opus fixes verified). Installed (`sudo install.sh`, 21/21). **H2 live:** gap 194 -> 5 ms; tune.read 1.06 s (155 ops); after-reboot
+  restore of the accepted state 1.85 s (311 ops, 6 writes, 6/6 read back); accepted 13/13; MCE 0. (A reboot ~08:49 had reset P0 pts 5-8 + ring 8/9.)
+- G-204 committed (49 cargo tests); orchestrator wired the commands into build.rs + capability; Opus review running.
+- Dispatched G-214 (power backend, S) and G-223 (telemetry relabel + 0x64F, deepseek-flash). G-216 waits for G-214 (shared ops/policy files).
