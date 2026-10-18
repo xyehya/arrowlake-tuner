@@ -24,6 +24,7 @@ read-back that follows a write is logged as ``readback``, never ``attempt``, so 
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import stat
@@ -274,44 +275,135 @@ def _parse_ts(value: object, where: str) -> float:
 parse_audit_ts = _parse_ts  # public name for other readers of the audit log, so they apply the guard's exact timestamp rule
 
 
+# ---------------------------------------------------------------------------------------------------------------- read_state
+# G-211 (apply speed): the whole-file scan below cost ~100 ms per call on the real 16 MB log and the guard calls it twice per operation. The log is
+# append-only, so the summary after byte N is a function of bytes[0:N] only: ``read_state`` keeps, per path and per process, how far it has already
+# summarised and parses only what was appended since. Model and invariants (each is tested, tests/guard/test_audit_incremental.py):
+#  * the cached summary covers exactly the *complete* ("\n"-terminated) lines before ``offset``; ``offset`` always sits right after a "\n" (or is 0);
+#  * the cache is used only if the file we just opened (fresh ``O_NOFOLLOW`` open + ``fstat`` regular/one-link check, as before) has the same
+#    ``(st_dev, st_ino)``, is at least ``offset`` bytes long, and the bytes at its start and just before ``offset`` are the ones we saw
+#    (``_ANCHOR`` bytes each). Anything else -- another inode, truncation, a rewrite in place -- discards the cache and rescans from byte 0;
+#  * an unterminated last line is judged afresh on every call and never cached (counted if it parses as an event, ignored if it is cut short: the
+#    old rule), so a line another process is still writing is not consumed half way;
+#  * a malformed *complete* line raises ``AuditUnreadable`` and nothing is committed: the next call fails the same way (fail closed);
+#  * outside the model (documented, not detected): a byte of the already-summarised middle of the file edited in place without changing the size.
+#    The log is root-owned 0600 and written with ``O_APPEND`` only; someone who can do that can equally delete or truncate it.
+_ANCHOR = 256  # bytes compared at the start of the file and just before ``offset`` to notice a file that was rewritten in place
+_TAIL_CACHE_MAX = 16  # paths remembered per process (the helper and the CLI use one; tests use many temp files)
+
+
+class _Tail:
+    """What ``read_state`` already knows of one audit file: the summary of its first ``offset`` bytes (``lines`` complete lines)."""
+
+    __slots__ = ("anchor", "by_boot", "dev", "head", "ino", "last", "lines", "offset")
+
+    def __init__(self) -> None:
+        self.dev = self.ino = -1
+        self.offset = 0
+        self.lines = 0
+        self.last: float | None = None
+        self.by_boot: dict[str | None, int] = {}
+        self.head = b""  # first bytes of the file as summarised
+        self.anchor = b""  # the bytes just before ``offset``
+
+
+_TAILS: dict[str, _Tail] = {}
+_TAILS_LOCK = threading.Lock()
+#: counters for tests and the bench: bytes parsed by ``read_state`` and full (from byte 0) scans, since import
+SCAN_STATS = {"bytes_read": 0, "full_scans": 0}
+
+
+def _fold_line(raw: bytes, where: str, partial: bool) -> tuple[float, str | None] | None:
+    """One audit line -> ``(timestamp, boot_id)`` of an ``attempt`` record, ``None`` for any line that does not count; :class:`AuditUnreadable` if
+    the line cannot be interpreted. ``partial``: the line has no terminating newline, so one that is not JSON is a write cut short (ignored)."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        record = json.loads(text.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if partial:
+            return None  # truncated trailing line: tolerated
+        raise AuditUnreadable(f"{where}: not a valid audit record: {exc}") from exc
+    if not isinstance(record, Mapping) or not isinstance(record.get("event"), str):
+        raise AuditUnreadable(f"{where}: audit record is not an object with an 'event'")
+    if record["event"] != "attempt":
+        return None
+    stamp = _parse_ts(record.get("ts"), where)
+    boot = record.get("boot_id")
+    if boot is not None and not isinstance(boot, str):
+        raise AuditUnreadable(f"{where}: attempt 'boot_id' is neither a string nor null")
+    return stamp, boot
+
+
+def _cache_matches(tail: _Tail, st: os.stat_result, handle: io.BufferedReader) -> bool:
+    """May ``tail`` be extended with the bytes after ``tail.offset`` of the file ``handle`` is open on? (module comment above)"""
+    if tail.offset == 0:
+        return True  # nothing summarised yet: scanning from byte 0 is what extending it means
+    if st.st_ino == 0 or (tail.dev, tail.ino) != (st.st_dev, st.st_ino) or st.st_size < tail.offset:
+        return False
+    handle.seek(0)
+    if handle.read(len(tail.head)) != tail.head:
+        return False
+    handle.seek(tail.offset - len(tail.anchor))
+    return handle.read(len(tail.anchor)) == tail.anchor
+
+
 def read_state(path: Path | str) -> AuditState:
-    """Scan the whole audit file and summarise it for the guard's cross-process limits.
+    """Summarise the audit file for the guard's cross-process limits (incrementally: see the module comment above ``_ANCHOR``).
 
     A missing or empty file is "no history". A non-empty line that is not a JSON object with a string ``event`` raises
     :class:`AuditUnreadable`, *except* a final line with no terminating newline that fails to parse (a write cut short by a
     crash or caught mid-append by another process): that partial line is ignored. ``attempt`` records must carry a valid
     timezone-aware ISO-8601 ``ts`` and a ``boot_id`` that is a string or null (absent = null). OS errors propagate as
     ``OSError`` (the guard treats them like :class:`AuditUnreadable`). A symlink is refused, as by :class:`AuditLog`.
+    The result is identical to summarising the whole file from byte 0.
     """
     target = Path(path)
     _refuse_symlink(target)
-    last: float | None = None
-    by_boot: dict[str | None, int] = {}
-    try:
-        handle = os.fdopen(_open_read(target), "rb")
-    except FileNotFoundError:
-        return AuditState(None, MappingProxyType({}))
-    with handle:
-        for number, raw in enumerate(handle, 1):
-            partial = not raw.endswith(b"\n")  # only ever true for the last line of the file
-            text = raw.strip()
-            if not text:
-                continue
-            where = f"{target}:{number}"
-            try:
-                record = json.loads(text.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                if partial:
-                    continue  # truncated trailing line: tolerated
-                raise AuditUnreadable(f"{where}: not a valid audit record: {exc}") from exc
-            if not isinstance(record, Mapping) or not isinstance(record.get("event"), str):
-                raise AuditUnreadable(f"{where}: audit record is not an object with an 'event'")
-            if record["event"] != "attempt":
-                continue
-            stamp = _parse_ts(record.get("ts"), where)
-            boot = record.get("boot_id")
-            if boot is not None and not isinstance(boot, str):
-                raise AuditUnreadable(f"{where}: attempt 'boot_id' is neither a string nor null")
-            last = stamp if last is None else max(last, stamp)
-            by_boot[boot] = by_boot.get(boot, 0) + 1
+    key = os.path.abspath(target)
+    with _TAILS_LOCK:
+        try:
+            handle = os.fdopen(_open_read(target), "rb")
+        except FileNotFoundError:
+            _TAILS.pop(key, None)
+            return AuditState(None, MappingProxyType({}))
+        with handle:
+            st = os.fstat(handle.fileno())
+            tail = _TAILS.get(key)
+            if tail is None or not _cache_matches(tail, st, handle):
+                tail = _Tail()
+                SCAN_STATS["full_scans"] += 1
+            tail.dev, tail.ino = st.st_dev, st.st_ino
+            handle.seek(tail.offset)
+            offset, lines, last, by_boot = tail.offset, tail.lines, tail.last, dict(tail.by_boot)
+            pending: bytes | None = None  # the unterminated last line, if any
+            for raw in handle:
+                SCAN_STATS["bytes_read"] += len(raw)
+                if not raw.endswith(b"\n"):
+                    pending = raw
+                    break
+                lines += 1
+                offset += len(raw)
+                counted = _fold_line(raw, f"{target}:{lines}", False)
+                if counted is not None:
+                    stamp, boot = counted
+                    last = stamp if last is None else max(last, stamp)
+                    by_boot[boot] = by_boot.get(boot, 0) + 1
+            if offset > tail.offset:  # commit what is complete; an exception above leaves the cache exactly as it was
+                if tail.offset == 0:
+                    handle.seek(0)
+                    tail.head = handle.read(min(_ANCHOR, offset))
+                handle.seek(offset - min(_ANCHOR, offset))
+                tail.anchor = handle.read(min(_ANCHOR, offset))
+                tail.offset, tail.lines, tail.last, tail.by_boot = offset, lines, last, dict(by_boot)
+            if len(_TAILS) >= _TAIL_CACHE_MAX and key not in _TAILS:
+                _TAILS.pop(next(iter(_TAILS)))
+            _TAILS[key] = tail
+            if pending is not None:  # judged afresh each call, never committed
+                counted = _fold_line(pending, f"{target}:{lines + 1}", True)
+                if counted is not None:
+                    stamp, boot = counted
+                    last = stamp if last is None else max(last, stamp)
+                    by_boot[boot] = by_boot.get(boot, 0) + 1
     return AuditState(last, MappingProxyType(by_boot))

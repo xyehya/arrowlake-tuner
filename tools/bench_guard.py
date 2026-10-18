@@ -29,7 +29,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 from arltuner.controls.executor import _Pacer  # noqa: E402
 from arltuner.guard import ENV_FLAG, AuditLog, Confirmation, WriteGuard, default_m1_policy  # noqa: E402
 from arltuner.guard import guard as guard_mod  # noqa: E402
-from arltuner.guard.audit import AuditLog as _AuditLog  # noqa: E402
+from arltuner.guard import audit as audit_module  # noqa: E402
 from arltuner.health import make_health_gate  # noqa: E402
 from arltuner.msr import MailboxTransport, SimConfig, SimMsrPort  # noqa: E402
 from arltuner.topology import arl_s_285k  # noqa: E402
@@ -153,21 +153,13 @@ def main() -> int:
         confirm = Confirmation("bench", "bench")
         request_cls = guard_mod.Request
 
-        holder = getattr(guard, "hold_lock", None)  # G-211: the session-held lock, when the guard has it
-        session = holder() if holder is not None else None
-        if session is not None:
-            session.__enter__()
-        try:
-            for n in range(args.ops):
-                req = request_cls(cpus[n % len(cpus)], 0x10, 0, 0, 0, "bench read")
-                t = time.perf_counter()
-                wait(None)
-                guard.execute(req, confirm)
-                mark()
-                timers.end_op(time.perf_counter() - t)
-        finally:
-            if session is not None:
-                session.__exit__(None, None, None)
+        for n in range(args.ops):
+            req = request_cls(cpus[n % len(cpus)], 0x10, 0, 0, 0, "bench read")
+            t = time.perf_counter()
+            wait(None)
+            guard.execute(req, confirm)
+            mark()
+            timers.end_op(time.perf_counter() - t)
 
         rows = timers.per_op
         keys = (*PARTS, "other", "total")
@@ -178,6 +170,7 @@ def main() -> int:
             "ops": args.ops, "log_bytes": log_bytes, "fsync": not args.no_fsync, "audit_open_ms": open_s * 1000,
             "median_ms": med, "mean_ms": mean, "overhead_median_ms": statistics.median(overhead), "overhead_p90_ms": sorted(overhead)[int(0.9 * len(overhead))],
             "tripped": guard.tripped, "operations": guard.operations,
+            "audit_scan": dict(getattr(audit_module, "SCAN_STATS", {})),  # G-211 incremental reader (absent before it)
         }
         if args.json:
             print(json.dumps(result, indent=2))
@@ -187,6 +180,8 @@ def main() -> int:
             print(f"{'part':<14}{'median ms':>11}{'mean ms':>10}")
             for k in keys:
                 print(f"{k:<14}{med[k]:>11.3f}{mean[k]:>10.3f}")
+            if result["audit_scan"]:
+                print(f"audit parse: {result['audit_scan']}")
             print(f"overhead per op (total - transact): median {result['overhead_median_ms']:.2f} ms, p90 {result['overhead_p90_ms']:.2f} ms")
         return 1 if guard.tripped else 0
 
