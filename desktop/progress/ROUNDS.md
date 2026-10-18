@@ -29,3 +29,6 @@
 - Dispatched G-214 (power backend, S) and G-223 (telemetry relabel + 0x64F, deepseek-flash). G-216 waits for G-214 (shared ops/policy files).
 - G-203 merged (deepseek-flash; node --test + cargo test in run_tests.py; Node 24 needs explicit file list). Main: 3054 OK + node 2 + cargo 5.
 - G-212 merged + installed; **H3 passed** (ring P2 7 −5 mV in 0.06 s, read back, reverted by restore 1.83 s, 13/13, MCE 0). G-204 Opus: APPROVE WITH FIXES (low) -> fix round.
+- G-205 merged (UI shell; node 36, smoke 11; screenshot checked by orchestrator). Orchestrator error: `pkill -f 'http.server 8765'` killed its own
+  shell (self-match), so the merge + notes did not happen while G-206/G-207 were already dispatched; both stopped within seconds (no work), worktrees
+  removed, redone correctly. dispatch.sh now refuses a missing notes file. Rule: kill by PID (ss/lsof), never pkill -f with a string in the command.

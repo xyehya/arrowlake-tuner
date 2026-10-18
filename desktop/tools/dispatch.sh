@@ -9,6 +9,7 @@ ROOT="$(git -C "$(dirname "$0")/../.." rev-parse --show-toplevel)"
 WT="$ROOT/.claude/worktrees/$ID"; BR="task/$ID-$SLUG"
 LOGS="$ROOT/desktop/progress/logs"; mkdir -p "$LOGS"
 case "$MODEL" in sonnet) M=claude-sonnet-5-5 ;; opus) M=claude-opus-5-5 ;; *) echo "bad model $MODEL" >&2; exit 2 ;; esac
+if [ -n "$NOTES" ] && [ ! -f "$NOTES" ]; then echo "notes file $NOTES missing: refusing to dispatch without it" >&2; exit 2; fi
 
 if [ ! -d "$WT" ]; then
   if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BR"; then git -C "$ROOT" worktree add -q "$WT" "$BR"

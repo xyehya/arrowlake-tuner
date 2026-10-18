@@ -1,0 +1,6 @@
+- G-205 is merged: use its store.js, bridge.js, components (dom.js, fmt.js, monitor-strip.js) and styles/tokens.css; follow its patterns and CSP rules
+  (fixtures are imported as the ES module fixtures/fixtures.js because connect-src is ipc: only).
+- Simulator fixtures show telemetry as n/a with reasons (no MSR access unprivileged); `?bridge=mock&motion=1` overlays a waveform: make sure both the
+  n/a path and the moving path render well. Topology (P0..P7 favored stars, EC0..EC3) comes from preflight/topology in the fixtures, never hard-coded (D-036).
+- Run node tests with the explicit file glob (Node 24): node --test "desktop/app/ui/tests/*.test.mjs". Playwright: /usr/bin/python3 has playwright.
+- Visual quality matters: dense, calm, aligned, tabular numerals; look at desktop/discovery/xtu-reference.md. The orchestrator screenshots every screen.

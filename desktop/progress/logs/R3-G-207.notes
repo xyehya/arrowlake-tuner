@@ -1,0 +1,8 @@
+- G-205 is merged (store.js, bridge.js, fixtures incl. a recorded tune.read result and tune.plan). G-212 is merged: tune.read returns
+  intent_features ["ring"] and the intent accepts {ring:{points:{"<P2>": mV}}}; build ring support fully but only emit `ring` when
+  intent_features contains "ring".
+- Your intents must validate against the real helper: the test that runs python on the helper's intent parser should use /usr/bin/python3 with
+  sys.path including src/ (stdlib only). Find the parse function in src/arltuner/helper/ops_tune.py (intent schema ~1222-1320 + the G-212 ring part).
+- Multi-select semantics (PLAN §4.2): an edit on point ratio R applies to every selected unit that has a point at ratio R; P and E selected together
+  are two sections. Model "mixed" values explicitly.
+- Run node tests with the explicit glob (Node 24): node --test "desktop/app/ui/tests/*.test.mjs".
