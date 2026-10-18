@@ -1,0 +1,25 @@
+- RESTART: your earlier run was stopped by the orchestrator (decision D-049, docs/DECISIONS.md). Your worktree keeps that partial work
+  (fixtures gen_power_runtime_fixtures.py, power-apply*.json, intent.js edits) — review it, keep what fits, redo what doesn't.
+- D-049: NO policy in the GUI. Wherever the earlier notes said "policy range", show the CPU's own limits from `cpu_limits` (contract below; produced by G-226,
+  running in parallel — put a recorded-shape fixture in the mock): e.g. "CPU max voltage 1.625 V (read 0x28)", "OC ratio limit 120x", "PL field max", "cpufreq
+  800–5700 MHz", "uncore 8x–40x". Never show policy.toml or its keys. A refusal shows the CPU rule it hit (code CPU_LIMIT_UNREAD -> "Read CPU state first").
+- Review drawer: render plan warnings (LARGE_CHANGE, TURBO_NOT_MONOTONIC, PL2_BELOW_PL1, DEEP_WHOLE_CURVE, POSITIVE_OFFSET, ...) as amber rows above the
+  write list; they never block Apply.
+- Contract cpu_limits: {"P": {"max_mv", "max_ratio", "source"}, "E": {...}, "ring": {...}, "offset_mv": [-1000, 999], "power": {"locked", "pl_max_w"},
+  "caps_khz": {"<cpu>": [min,max]}, "uncore_khz": [min,max]} on tune.read/tune.last/power.read/runtime.read; null = not read.
+- Also: the Tune inspector's limit column (G-208) shows CPU limits instead of policy limits — you may edit views/tune/inspector code ONLY for that label/source.
+(earlier notes, superseded where they conflict) - Helper side is merged AND installed: read src/arltuner/helper/ops_power.py (power.read/plan/apply, {revert:true}) and ops_runtime.py (runtime.read/plan/apply;
+(earlier notes, superseded where they conflict)   plan {caps?, uncore?} or {revert:true}; parking is REFUSED by the helper (D-048): build NO parking UI — drop "parking" from this task; show per-CPU online
+(earlier notes, superseded where they conflict)   state read-only). Real responses: record fixtures from the simulator (temp paths) for power.read/plan/apply and runtime.read/plan/apply into
+(earlier notes, superseded where they conflict)   desktop/app/ui/fixtures/ (new files only; extend the mock; regenerate fixtures.js via gen_fixtures.py, which bundles every *.json).
+(earlier notes, superseded where they conflict) - G-225 (Rust allowlist for power.*/runtime.*) is running in parallel; the UI only uses bridge.call, so build against the mock.
+(earlier notes, superseded where they conflict) - Sub-tabs inside Tune (views/tune.js has the sub-tab registry; add yours the way turbo.js is registered — you may edit tune.js ONLY to register them):
+(earlier notes, superseded where they conflict)   Power: PL1 / PL2 / tau with current (file and MSR), boot value, policy range, step limit; XTU-style labels ("Processor Core Power Limit (PL1)",
+(earlier notes, superseded where they conflict)   "Processor Core Turbo Power Limit (PL2)", "Turbo Boost Power Time Window"); Revert to boot values.
+(earlier notes, superseded where they conflict)   Ring & caps: per-core max-ratio caps (P per core, E per cluster — say "applies to all 4 cores of the cluster"), the plan note when a ratio is
+(earlier notes, superseded where they conflict)   unreachable by a cpufreq cap ("capped at Nx"), uncore min/max ratio within initial bounds; Revert.
+(earlier notes, superseded where they conflict)   These are RUNTIME settings: say "lost on reboot" next to each section.
+(earlier notes, superseded where they conflict) - Review & Apply: register kinds "power" and "runtime" with the apply drawer (views/tune/apply.js registerKind) so one Review shows V/F + power + runtime
+(earlier notes, superseded where they conflict)   sections applied in sequence (stop on first failure). The typed confirm for power/runtime apply is "CONFIRM " + nonce like tune.
+(earlier notes, superseded where they conflict) - Policy refusals (missing [runtime] keys -> the helper names the key) are shown inline with the key name, not as a generic error.
+(earlier notes, superseded where they conflict) - Do NOT run build-appimage.sh / write desktop/dist. Node 24 glob; Playwright via /usr/bin/python3; tests/power-runtime.smoke.py.

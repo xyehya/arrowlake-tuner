@@ -151,3 +151,10 @@ core map 8 P tiles in one row at 1280 px; calmer tile colours (heat scale on a d
 **G-225 · Rust allowlist: power.* + runtime.*** · S · R · deps G-214, G-216
 Owns `desktop/app/src-tauri/src/helper/ops.rs` (+ link.rs plan binding), tests. Goal: add `power.read/plan/apply` and `runtime.read/plan/apply` with arg-shape
 checks; bind `power.apply` / `runtime.apply` to plan_ids this connection got from the matching `*.plan` (separate bounded sets). Accept: cargo tests (unknown keys refused, cross-kind plan id refused).
+
+**G-226 · Helper: CPU-enforced limits only (D-049)** · M · R · deps G-216, G-225
+Owns `src/arltuner/guard/{policy,guard,planner,encoding}.py`, `src/arltuner/controls/{power,caps,uncore}.py`, `src/arltuner/helper/ops_tune.py` (limit paths
+only), `policies/default.toml`, their tests. Goal: remove every operator-policy VALUE limit listed in desktop/progress/logs/cpu-rules-audit.md §B; enforce
+only CPU/kernel rules (§A rows 1, 3, 5, 6, 9 lock/fields, 10, 11) read at runtime, fail closed when a CPU limit is unread; demote non-CPU rules to warnings;
+keep every PROCESS invariant. Expose the limits as `cpu_limits` (contract in notes). Accept: tests per removed limit (now allowed + warned) and per CPU rule
+(refused at the CPU value, source cited); Opus review.
