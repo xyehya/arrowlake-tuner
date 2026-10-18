@@ -95,6 +95,23 @@ export class Bridge {
     return res;
   }
 
+  /** App settings (G-219): `{ok, result: {refresh_s, strip_series, window, notifications}, warning?}`. A backend without them answers UNSUPPORTED. */
+  settingsGet() {
+    return this.#native("settingsGet");
+  }
+
+  /** Merge `patch` into the persisted settings; the whole new settings object comes back, or `{ok:false, error}` and nothing changes. */
+  settingsSet(patch) {
+    if (!isObject(patch)) throw new TypeError("bridge.settingsSet: patch must be an object");
+    return this.#native("settingsSet", patch);
+  }
+
+  /** Desktop notification, raised by the Rust side (no webview permission); only while the window is unfocused and notifications are on. */
+  notify(title, body = "") {
+    if (typeof title !== "string" || !title.trim()) throw new TypeError("bridge.notify: title must be a non-empty string");
+    return this.#native("notify", title, String(body));
+  }
+
   /** Final response of a long op (resolves from the `result` event; immediately if it already arrived). */
   wait(id) {
     if (this.#results.has(id)) return Promise.resolve(this.#results.get(id));
@@ -135,6 +152,21 @@ export class Bridge {
   }
 
   // ---- internals ----
+  /** Pass-through to an optional transport function that answers `{ok, ...}` like the helper commands do. */
+  async #native(name, ...args) {
+    if (typeof this.#t[name] !== "function") {
+      return { ok: false, error: { code: "UNSUPPORTED", message: `${name} is not available in the ${this.#name} backend` } };
+    }
+    let res;
+    try {
+      res = await this.#t[name](...args);
+    } catch (e) {
+      return { ok: false, error: { code: "BRIDGE_ERROR", message: e && e.message ? e.message : String(e) } };
+    }
+    if (!isObject(res) || typeof res.ok !== "boolean") return { ok: false, error: { code: "BRIDGE_ERROR", message: "malformed reply from the backend" } };
+    return res;
+  }
+
   #setLink(link) {
     const same = link.state === this.#link.state && link.kind === this.#link.kind && link.message === this.#link.message;
     this.#link = link;
@@ -188,6 +220,9 @@ export function createTauriTransport(tauri = globalThis.__TAURI__) {
     status: () => invoke("helper_status"),
     call: (op, args) => invoke("helper_call", { op, args }),
     listen: (event, cb) => tauri.event.listen(`helper://${event}`, (e) => cb(e.payload)),
+    settingsGet: () => invoke("settings_get"),
+    settingsSet: (patch) => invoke("settings_set", { patch }),
+    notify: (title, body) => invoke("notify", { title, body }),
   };
 }
 
