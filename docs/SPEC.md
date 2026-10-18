@@ -90,6 +90,7 @@ Every control is shown; a control is **writable only after its gate is recorded*
 | P turbo table `0x1AD` | T-023 code built | **written once, ungated** (same 10-06 test: `0x373737373737393A`) | G5: supervised write + read-back + gate |
 | P OC-point target voltage raise | library; accepted policy has no P ceiling (= fused) | **written once, ungated** (same test, the 2026-10-06 session policy) | operator adds a P ceiling to the root policy by hand, then G5 gate |
 | Ring point offsets (P1 2, P2 1..9) | profiles/restore (D-045) + `tune.plan {ring}` (G-212) | **proven**: restore since 2026-10-15; editor intent H3 2026-10-18 (P2 7 −5 mV, read back, reverted) | — (D-046) |
+| Package power limits PL1 / PL2 / tau (powercap; MSR 0x610 read-back) | `power.read/plan/apply/revert` (G-214) | **proven**: H4 2026-10-18 (PL2 295→275 W, revert to boot values, 275 W again; file and MSR agree) | policy `[power]` ceilings = BIOS values (D-047) |
 
 ## 6. Screens
 1. **Dashboard:** live tiles + per-core table (§8); preflight; applied vs accepted ("matches accepted" / "equivalent: residual OC point (cleared by a cold boot); voltages as accepted" (G-147) / "differs: n" / "stock"); ops used / 600.
