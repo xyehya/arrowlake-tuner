@@ -19,6 +19,11 @@ Owns `src/arltuner/helper/ops_tune.py` (intent parse/resolve for ring only), `te
 Accept: intent `{ring:{points:{"4":-25}}}` plans ring P2 writes within policy; ring OC word never written; changed ring OC word refuses ring alone; tests.
 
 Round notes from the orchestrator:
-- Read docs/DECISIONS.md D-045 and the ring parts of src/arltuner/helper/ops_tune.py and src/arltuner/profiles/ first. The ring is already a unit in profiles/restore; you only add an intent form for the editor. Ring writes stay offset-only on P1=2, P2 within the policy ring entry; ring OC word never written.
-- Add a capability flag in the tune.read or preflight result (e.g. "intent_features": ["ring"]) so the desktop UI can detect support. Update docs/ARCHITECTURE.md Contract 9 intent line accordingly.
-- Security-relevant (helper op): Opus review before merge.
+FIX ROUND (your earlier work on this branch is committed; read `git log main..HEAD`). Opus review: APPROVE WITH FIXES. Apply exactly these, then the full suite,
+commit "G-212: review fixes (ring PLAN_STALE, strict point keys)":
+1. (med) Ring points are not stale-checked. Add `ring_refs: {p2: word}` to Resolved and StoredPlan, filled from `last` in `_ring_setting`; in `_stale_check`
+   (ops_tune.py:2443-2461) compare it with the `before` of each WRITE_RING_POINT step -> PLAN_STALE exactly like core points (nothing written). Do NOT key
+   it under refs[(0, p2)] (collides with P-core 0, ring goes through CPU 0). Test: plan ring point 4, change the sim ring word, apply -> PLAN_STALE, zero writes.
+2. (low) ops_tune.py:1288 point keys: accept only re.fullmatch(r"[0-9]{1,2}", key); reject keys that duplicate after normalising ("04" with "4") with
+   BAD_REQUEST; no ValueError may escape as INTERNAL. Tests for "²", "04"+"4", "4.0", " 4", "-1", "", a 5000-digit string.
+Report ≤ 150 words.

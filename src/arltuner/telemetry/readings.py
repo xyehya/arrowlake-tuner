@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class Reading:
     """One telemetry value. ``value`` is ``None`` exactly when the reading is unavailable; ``reason`` then says why."""
 
-    value: float | int | None
+    value: float | int | dict | None  # dict: a decoded word (limit reasons, G-223)
     unit: str = ""
     source: str = ""
     reason: str | None = None

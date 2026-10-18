@@ -26,8 +26,15 @@ Accept: `cargo test` covers: non-socket / non-root node refused (via injectable 
 `dev-socket` against the Python simulator helper (`tools/arltuner-helper.py` sim on a temp socket) runs `preflight`, `telemetry.start`, receives ≥ 2 telemetry events.
 
 Round notes from the orchestrator:
-- G-202 is merged: the Tauri scaffold exists in desktop/app/src-tauri. Add a `helper` module; register the commands in lib.rs (you may edit lib.rs only to add `mod helper;` and the command registration lines — say so in the report).
-- libc is the only new crate allowed for SO_PEERCRED/lstat (std::os::unix::net::UnixStream::peer_cred is unstable). Keep unsafe blocks minimal, each with a SAFETY comment.
-- Mirror refusal texts from src/arltuner/web/helperlink.py:305-362 exactly (the user should see the same fix commands as in the web GUI).
-- Integration test: spawn the simulator with temp paths (see the hard rules); write a helper.toml in a temp dir admitting your own user for --helper-toml; build tests with --features dev-socket.
-- An Opus reviewer will check: no path to bypass the root checks in a release build (cfg/feature gating), no unbounded reads, no panics on malformed input, no op outside the allowlist reaches the socket.
+FIX ROUND (your work + the orchestrator's wiring commit 532ca7f are on this branch; read `git log main..HEAD`). Opus: APPROVE WITH FIXES (all low). You may
+edit capabilities/default.json, build.rs, src/lib.rs and desktop/tools/build-appimage.sh for these items. Apply, test, commit "G-204: review fixes":
+1. capabilities/default.json: replace core:event:default with core:event:allow-listen + core:event:allow-unlisten; lib.rs test asserts the EXACT permission list.
+2. mod.rs:58 `with_parts`: #[cfg(feature = "dev-socket")] (update helper_dev.rs / helper_sim.rs which already need the feature).
+3. link.rs:253 ids: one process-wide static AtomicU64 counter so ids never repeat across reconnects.
+4. Bind tune.apply to this connection's plans: remember plan_ids from successful tune.plan responses (bounded, last 8), consume on tune.apply, otherwise
+   refuse locally "refused locally: plan not made by this app". Test it.
+5. Refuse to run as effective uid 0 at the top of run() before any GTK/WebKit init (print a clear message, exit 1). Keep the connect-time check.
+6. A must-fail check: `cargo check --release --features dev-socket` must fail — add it to build-appimage.sh preflight (expects failure) and a Rust/cargo
+   test or a run_tests-friendly script; do not edit tools/run_tests.py.
+7. Cap the refusal message from the helper at 500 chars (connect.rs:255).
+Run cargo test (with and without dev-socket) and python3 tools/run_tests.py. Report ≤ 150 words.
