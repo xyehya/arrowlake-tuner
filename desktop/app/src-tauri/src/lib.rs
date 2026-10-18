@@ -1,11 +1,12 @@
 //! arltuner-desktop: unprivileged Tauri 2 client (PLAN §3). This scaffold has the window, tray,
 //! single-instance, window-state and notification plumbing; the helper link arrives in G-204.
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
 pub mod helper;
+pub mod notify;
+pub mod settings;
+pub mod tray;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -29,31 +30,12 @@ fn app_version() -> String {
     VERSION.to_string()
 }
 
-fn show_main(app: &AppHandle) {
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
-}
-
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("arltuner")
-        .menu(&menu)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main(app),
-            "quit" => app.exit(0),
-            _ => {}
-        });
-    if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
-    }
-    tray.build(app)?;
-    Ok(())
 }
 
 pub fn run() {
@@ -71,11 +53,16 @@ pub fn run() {
             app_version,
             helper::helper_status,
             helper::helper_connect,
-            helper::helper_call
+            helper::helper_call,
+            settings::settings_get,
+            settings::settings_set,
+            notify::notify
         ])
         .setup(|app| {
             helper::init(app.handle());
-            build_tray(app.handle())?;
+            settings::init(app.handle());
+            notify::init(app.handle());
+            tray::build(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -130,7 +117,10 @@ mod tests {
                 "allow-app-version",
                 "allow-helper-status",
                 "allow-helper-connect",
-                "allow-helper-call"
+                "allow-helper-call",
+                "allow-settings-get",
+                "allow-settings-set",
+                "allow-notify"
             ]
         );
     }
