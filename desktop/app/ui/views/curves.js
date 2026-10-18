@@ -537,6 +537,7 @@ export function createCurvesController({ bridge, store }) {
     liveHead: null,
     tableDelta: false,
     renaming: null,
+    renameText: null, // what has been typed into the rename box (null = untouched)
     confirmDelete: null,
     words: null, // modelFromRead of the kept tune read (fused top points), or null
   };
@@ -649,7 +650,10 @@ export function createCurvesController({ bridge, store }) {
   }
 
   async function onResult(fin) {
-    if (fin && isStr(fin.id)) view.done.add(fin.id);
+    if (fin && isStr(fin.id)) {
+      view.done.add(fin.id);
+      watching.delete(fin.id);
+    }
     view.run = null;
     view.cancelling = false;
     cv.live = null;
@@ -756,6 +760,7 @@ export function createCurvesController({ bridge, store }) {
     }
     const res = await bridge.call("curves.update", { id, name: n.slice(0, 64) });
     cv.renaming = null;
+    cv.renameText = null;
     view.status = res.ok ? "Renamed." : `Rename failed: ${errText(res.error)}`;
     delete cv.cache[id]; // the stored record carries the name
     await loadCurves(false);
@@ -862,7 +867,7 @@ export const VFCHART_CSS = `
 `;
 
 /**
- * createVfChart(host, {label}) -> {render(model), hover(mhz, v), get model}. Geometry goes through SVG attributes only; the tooltip is SVG drawn inside the chart (no HTML
+ * createVfChart(host, {label}) -> {render(model), hover(mhz, v), destroy(), get model}. Geometry goes through SVG attributes only; the tooltip is SVG drawn inside the chart (no HTML
  * positioning, so no inline style). Arrow keys on the focused chart move the crosshair by 100 MHz, Escape clears it.
  */
 export function createVfChart(host, { label = "V/F curves" } = {}) {
@@ -1021,18 +1026,32 @@ export function createVfChart(host, { label = "V/F curves" } = {}) {
     ch.tip.setAttribute("transform", `translate(${tx.toFixed(1)} ${VC.T + 6})`);
   }
 
+  let observer = null;
+  let timer = null;
   if (typeof ResizeObserver === "function") {
     let lastW = 0;
-    let timer = null;
-    new ResizeObserver(() => {
+    observer = new ResizeObserver(() => {
       const w = Math.round(host.clientWidth);
       if (!ch.model || Math.abs(w - lastW) < 24) return;
       lastW = w;
       clearTimeout(timer);
       timer = setTimeout(() => render(ch.model), 120);
-    }).observe(host);
+    });
+    observer.observe(host);
   }
-  return { render, hover, get model() { return ch.model; } };
+  return {
+    render,
+    hover,
+    get model() {
+      return ch.model;
+    },
+    /** Stop watching the host's size (call when the screen goes away). */
+    destroy() {
+      if (observer) observer.disconnect();
+      observer = null;
+      clearTimeout(timer);
+    },
+  };
 }
 
 // ---------------------------------------------------------------- view
@@ -1059,9 +1078,9 @@ const CSS = `
 .cv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
 .cv-tools select { max-width: 34ch; }
 .legend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 var(--space-3); }
-.lg-chip { --u: var(--pending); display: inline-flex; align-items: center; gap: 7px; padding: 2px 11px 2px 9px; font: inherit; font-size: var(--fs-sm); border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
-.lg-chip .sw { width: 14px; height: 4px; border-radius: 2px; background: var(--u); opacity: 0.35; }
-.lg-chip[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--u) 13%, var(--surface-2)); border-color: color-mix(in srgb, var(--u) 50%, var(--border)); }
+.lg-chip { display: inline-flex; align-items: center; gap: 7px; padding: 2px 11px 2px 9px; font: inherit; font-size: var(--fs-sm); border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
+.lg-chip .sw { width: 14px; height: 4px; border-radius: 2px; background: var(--u, var(--pending)); opacity: 0.35; }
+.lg-chip[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--u, var(--pending)) 13%, var(--surface-2)); border-color: color-mix(in srgb, var(--u, var(--pending)) 50%, var(--border)); }
 .lg-chip[aria-pressed="true"] .sw { opacity: 1; }
 .seg-btn { padding: 1px 9px; }
 .cv-note { max-width: 110ch; margin: 6px 0 0; color: var(--text-dim); font-size: var(--fs-sm); }
@@ -1070,14 +1089,14 @@ const CSS = `
 .cv-stock[hidden] { display: none; }
 .cv-wrap[hidden] { display: none; }
 .cv-scroll { overflow: auto; }
-.vf-table td.vt { font-family: var(--font-mono); font-size: 12.5px; text-align: center; padding: 4px 6px; min-width: 52px; color: var(--text); }
+.vf-table td.vt { font-family: var(--font-mono); font-size: 12.5px; text-align: center; padding: 4px 6px; min-width: 52px; }
 .vf-table th { text-align: center; }
 .vf-table th[scope="row"] { text-align: left; font-weight: 600; color: var(--text); position: sticky; left: 0; background: var(--surface); }
 .vf-table .vt-na { color: var(--text-faint); text-align: center; }
 .hv-0 { background: #17305a; } .hv-1 { background: #1c4272; } .hv-2 { background: #22558a; } .hv-3 { background: #2a69a1; } .hv-4 { background: #337db6; }
-.hv-5 { background: #3f91c8; } .hv-6 { background: #54a6d6; color: #08142e !important; } .hv-7 { background: #72bbe2; color: #08142e !important; } .hv-8 { background: #98d0ec; color: #08142e !important; } .hv-9 { background: #c4e6f6; color: #08142e !important; }
-.dv-m0 { background: #1c3f6e; } .dv-m1 { background: #25609a; } .dv-m2 { background: #3b88c4; } .dv-m3 { background: #78b9e6; color: #08142e !important; }
-.dv-p0 { background: #5e3b18; } .dv-p1 { background: #8d5619; } .dv-p2 { background: #c47a22; } .dv-p3 { background: #f2ab4e; color: #08142e !important; }
+.hv-5 { background: #3f91c8; } .hv-6 { background: #54a6d6; color: #08142e; } .hv-7 { background: #72bbe2; color: #08142e; } .hv-8 { background: #98d0ec; color: #08142e; } .hv-9 { background: #c4e6f6; color: #08142e; }
+.dv-m0 { background: #1c3f6e; } .dv-m1 { background: #25609a; } .dv-m2 { background: #3b88c4; } .dv-m3 { background: #78b9e6; color: #08142e; }
+.dv-p0 { background: #5e3b18; } .dv-p1 { background: #8d5619; } .dv-p2 { background: #c47a22; } .dv-p3 { background: #f2ab4e; color: #08142e; }
 .lib-table td { vertical-align: middle; }
 .lib-name { white-space: nowrap; }
 .lib-name .pill { margin-left: 6px; }
@@ -1086,10 +1105,6 @@ const CSS = `
 .lib-actions .btn.danger { color: var(--danger); border-color: rgba(239, 107, 95, 0.5); }
 .lib-table tr.is-current td:first-child { box-shadow: inset 3px 0 0 var(--pending); }
 .inline-edit { width: 22ch; margin-right: 6px; }
-.pill { display: inline-block; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
-.pill[data-tone="ok"] { color: var(--ok); border-color: rgba(79, 197, 140, 0.45); background: var(--ok-bg); }
-.pill[data-tone="warn"] { color: var(--warn); border-color: rgba(242, 178, 76, 0.5); background: var(--warn-bg); }
-.pill[data-tone="pending"] { color: var(--pending); border-color: rgba(111, 168, 255, 0.5); background: var(--pending-bg); }
 `;
 
 function pill(text, tone, title = "") {
@@ -1121,9 +1136,12 @@ export function curvesView() {
       const { store } = ctx;
       const ctl = curvesController(ctx);
       const { cv, view } = ctl;
-      const m = unitModel(store.get().preflight);
-      const ids = m.ids;
-      const presetList = presets(m);
+      // The topology comes from preflight, which may arrive after this screen was mounted (a start on #/curves): picker, presets and legend are rebuilt when it does.
+      let m = unitModel(store.get().preflight);
+      let ids = m.ids;
+      let presetList = presets(m);
+      const topoOf = (x) => x.ids.join(",") + "|" + favoredIds(x).join(",");
+      let topoKey = topoOf(m);
 
       // ---- measure card ----
       const modeSeg = segmented([{ value: "quick", label: "Quick", title: "The V/F point ratios of each unit, about 2 minutes for all units" }, { value: "dense", label: "Dense", title: "Every ratio from 8 to the unit's top, about 10 minutes for all units" }], cv.mode, (v) => { cv.mode = v; render(); }, { label: "Resolution" });
@@ -1132,7 +1150,8 @@ export function curvesView() {
       nameInput.addEventListener("input", () => { cv.name = nameInput.value; });
       const measureBtn = h("button", { type: "button", class: "btn primary", id: "btn-measure", text: "Measure", on: { click: () => ctl.startMeasure() } });
       const cancelBtn = h("button", { type: "button", class: "btn", id: "btn-measure-cancel", text: "Cancel", on: { click: () => ctl.cancel() } });
-      const picker = unitPicker(m, cv.sel || new Set(ids), (s) => { cv.sel = s; render(); }, { label: "Units to measure" });
+      const buildPicker = () => unitPicker(m, cv.sel || new Set(ids), (s) => { cv.sel = s; render(); }, { label: "Units to measure" });
+      let picker = buildPicker();
       const est = h("p", { class: "cv-est", id: "cv-est", role: "status" });
       const turbo = h("p", { class: "cv-turbo", id: "cv-turbo-note", role: "status", hidden: true, text: TURBO_OFF_NOTE });
       const bar = h("progress", { id: "cv-bar", max: 1, value: 0, "aria-label": "Measurement progress" });
@@ -1148,11 +1167,13 @@ export function curvesView() {
 
       // ---- curves card ----
       const viewSeg = segmented([{ value: "chart", label: "Chart" }, { value: "table", label: "Table" }, { value: "library", label: "Library" }], cv.view, (v) => { cv.view = v; render(); }, { label: "Curve view" });
+      viewSeg.el.id = "cv-view";
       const primarySel = h("select", { id: "cv-primary", "aria-label": "Curve" });
       primarySel.addEventListener("change", () => ctl.select(primarySel.value));
       const compareSel = h("select", { id: "cv-compare", "aria-label": "Compare with" });
       compareSel.addEventListener("change", () => ctl.setCompare(compareSel.value));
-      const presetSeg = segmented(presetList.map((p) => ({ value: p.value, label: p.label, title: p.title || "" })), "all", (v) => { cv.drawn = new Set(presetList.find((p) => p.value === v).units); render(); }, { label: "Units drawn" });
+      const buildPresets = () => segmented(presetList.map((p) => ({ value: p.value, label: p.label, title: p.title || "" })), "all", (v) => { cv.drawn = new Set(presetList.find((p) => p.value === v).units); render(); }, { label: "Units drawn" });
+      let presetSeg = buildPresets();
       const bandBtn = h("button", { type: "button", class: "chip toggle seg-btn", id: "cv-band", text: "Spread band", title: "Shade the lowest to highest voltage across the units drawn", on: { click: () => { cv.band = !cv.band; render(); } } });
       const deltaBtn = h("button", { type: "button", class: "chip toggle seg-btn", id: "cv-delta", text: "Δ mV", on: { click: () => { if (cv.compare) { cv.delta = !cv.delta; render(); } } } });
       const legend = h("div", { class: "legend-chips", id: "cv-legend", role: "group", "aria-label": "Units drawn. Press to toggle; hold Shift to show only one." });
@@ -1244,9 +1265,10 @@ export function curvesView() {
           const nameCell = h("td", { class: "lib-name", title: c.id });
           if (cv.renaming === c.id) {
             const inp = h("input", { type: "text", class: "inline-edit", maxlength: 64, "aria-label": `New name for ${r.name}` });
-            inp.value = c.name || "";
+            inp.value = cv.renameText === null ? c.name || "" : cv.renameText; // a repaint must not throw away what was typed
+            inp.addEventListener("input", () => { cv.renameText = inp.value; });
             const commit = () => ctl.rename(c.id, inp.value);
-            const stop = () => { cv.renaming = null; render(); };
+            const stop = () => { cv.renaming = null; cv.renameText = null; render(); };
             inp.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") stop(); });
             nameCell.append(inp, h("button", { type: "button", class: "btn primary", dataset: { act: "save" }, text: "Save", on: { click: commit } }), h("button", { type: "button", class: "btn", text: "Cancel", on: { click: stop } }));
             setTimeout(() => inp.focus(), 0);
@@ -1260,7 +1282,7 @@ export function curvesView() {
           btn("View", "Show this curve in the chart", () => { cv.view = "chart"; ctl.select(c.id); render(); });
           btn("Compare", "Overlay this curve on the one in the chart", () => { if (c.id !== cv.primary) { cv.view = "chart"; ctl.setCompare(c.id); render(); } });
           btn(c.baseline === true ? "Clear baseline" : "Set baseline", "A stock baseline is what the table can subtract (one at a time)", () => ctl.toggleBaseline(c), { act: "baseline" });
-          btn("Rename", "Rename this curve", () => { cv.renaming = c.id; render(); });
+          btn("Rename", "Rename this curve", () => { cv.renaming = c.id; cv.renameText = null; render(); });
           btn("Export", "Copy this curve as JSON to the clipboard", async () => {
             const text = await ctl.recordJson(c);
             if (!text) view.status = "Could not load the curve to export it.";
@@ -1291,7 +1313,23 @@ export function curvesView() {
             nameCell, h("td", { text: r.created }), h("td", { text: r.mode }), h("td", {}, pill(r.tuning.text, r.tuning.tone, r.tuning.title)), h("td", { class: "n", text: String(r.units) }), act);
         }));
       }
+      function syncTopology() {
+        const next = unitModel(store.get().preflight);
+        if (topoOf(next) === topoKey) return;
+        topoKey = topoOf(next);
+        m = next;
+        ids = next.ids;
+        presetList = presets(m);
+        const fresh = buildPicker();
+        picker.el.replaceWith(fresh.el);
+        picker = fresh;
+        const seg = buildPresets();
+        presetSeg.el.replaceWith(seg.el);
+        presetSeg = seg;
+      }
+
       function render() {
+        syncTopology();
         const running = !!view.run;
         const gate = ctl.gate();
         const n = (cv.sel ? ids.filter((u) => cv.sel.has(u)) : ids).length;
@@ -1346,8 +1384,17 @@ export function curvesView() {
           if (root.isConnected) render();
         });
       };
+      subs.push(() => chart.destroy());
       subs.push(ctl.subscribe(paintSoon));
-      subs.push(store.subscribe((s, prev) => { if (s.link !== prev.link || s.helperOp !== prev.helperOp || s.preflight !== prev.preflight) paintSoon(); }));
+      // heartbeats replace store.helperOp several times a second: repaint only when what the screen shows from it (the gate text, the topology) changed
+      let lastGate = ctl.gate();
+      subs.push(store.subscribe((s, prev) => {
+        const gate = ctl.gate();
+        if (s.link !== prev.link || s.preflight !== prev.preflight || gate !== lastGate) {
+          lastGate = gate;
+          paintSoon();
+        }
+      }));
       render();
       if (store.get().link.state === "connected") {
         if (!cv.loaded) ctl.loadCurves(false);

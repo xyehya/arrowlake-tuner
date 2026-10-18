@@ -3,7 +3,8 @@
 // loadStressList/renderStressHistory :4490-4811, markup web/index.html:334-400). Differences from the page: the units come from preflight.topology (D-036),
 // the run state lives in a controller keyed by the bridge (so a result that arrives while another screen is open is kept), and the controller and every
 // rule (args, gate, wording) are pure/DOM-free and unit-tested. The D-019 banner is always rendered, the result never says "pass", only "no errors detected in N min".
-// Also home of the unit helpers + palette shared with views/curves.js (unitModel, unitPicker, UNIT_CSS): this task owns no other file.
+// Also home of what views/curves.js shares with it (this task owns no other file; hoist candidate: components/units.js): unitModel / favMark / cpuSub / unitTitle / quickSets,
+// unitPicker, UNIT_CSS (palette, tiles, .pill), opGate, errText, fmtDate.
 import { h, svg, clear } from "../components/dom.js";
 import { fmtNum, NA } from "../components/fmt.js";
 import { createSpark, installStyles, installScreenStyles, segmented } from "../components/spark.js";
@@ -39,15 +40,15 @@ export const CAP_MAX = 60;
 
 // ---------------------------------------------------------------- units (shared with Curves)
 
-/** The 12-unit palette of web/style.css: warm P-cores, cool E-clusters. `--u` carries the colour, every mark reads it. */
+/** Shared by Stress and Curves: the 12-unit palette of web/style.css (warm P-cores, cool E-clusters; `--u` carries the colour, every mark reads it), the unit tiles and the `.pill` chip. */
 export const UNIT_CSS = `
 .u-P0 { --u: #ffb547; } .u-P1 { --u: #ff8a4c; } .u-P2 { --u: #ff6b6b; } .u-P3 { --u: #ffe27a; }
 .u-P4 { --u: #ff8fc0; } .u-P5 { --u: #d97be8; } .u-P6 { --u: #d2a86b; } .u-P7 { --u: #f4cdb0; }
 .u-EC0 { --u: #5ad8e6; } .u-EC1 { --u: #3ee0a8; } .u-EC2 { --u: #6fa8ff; } .u-EC3 { --u: #a9b6ff; }
-.unit-tile { --u: var(--pending); position: relative; display: inline-flex; flex-direction: column; gap: 1px; min-width: 74px; padding: 5px 10px 5px 14px; text-align: left;
+.unit-tile { position: relative; display: inline-flex; flex-direction: column; gap: 1px; min-width: 74px; padding: 5px 10px 5px 14px; text-align: left;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
-.unit-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--u); border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.unit-tile[aria-pressed="true"] { border-color: color-mix(in srgb, var(--u) 55%, var(--border)); background: color-mix(in srgb, var(--u) 10%, var(--surface-2)); }
+.unit-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--u, var(--pending)); border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.unit-tile[aria-pressed="true"] { border-color: color-mix(in srgb, var(--u, var(--pending)) 55%, var(--border)); background: color-mix(in srgb, var(--u, var(--pending)) 10%, var(--surface-2)); }
 .unit-tile[aria-pressed="false"] { background: transparent; color: var(--text-dim); border-style: dashed; }
 .unit-tile[aria-pressed="false"]::before { opacity: 0.25; }
 .unit-tile:disabled { cursor: default; }
@@ -55,6 +56,11 @@ export const UNIT_CSS = `
 .unit-tile .ut-name { font-weight: 600; }
 .unit-tile .ut-sub { font-size: var(--fs-xs); color: var(--text-dim); }
 .unit-tile .ut-mhz { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.pill { display: inline-block; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.pill[data-tone="ok"] { color: var(--ok); border-color: rgba(79, 197, 140, 0.45); background: var(--ok-bg); }
+.pill[data-tone="warn"] { color: var(--warn); border-color: rgba(242, 178, 76, 0.5); background: var(--warn-bg); }
+.pill[data-tone="bad"] { color: var(--danger); border-color: rgba(239, 107, 95, 0.5); background: var(--danger-bg); }
+.pill[data-tone="pending"] { color: var(--pending); border-color: rgba(111, 168, 255, 0.5); background: var(--pending-bg); }
 .unit-picker { display: flex; flex-direction: column; gap: var(--space-2); }
 .unit-rows { display: flex; flex-direction: column; gap: 6px; }
 .unit-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -459,10 +465,6 @@ const CSS = `
 .st-sum { margin: 0 0 var(--space-3); font-size: var(--fs-lg); }
 .st-sum.bad { color: var(--danger); }
 .st-pills { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.pill { display: inline-block; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
-.pill[data-tone="ok"] { color: var(--ok); border-color: rgba(79, 197, 140, 0.45); background: var(--ok-bg); }
-.pill[data-tone="warn"] { color: var(--warn); border-color: rgba(242, 178, 76, 0.5); background: var(--warn-bg); }
-.pill[data-tone="bad"] { color: var(--danger); border-color: rgba(239, 107, 95, 0.5); background: var(--danger-bg); }
 .st-stats { display: flex; flex-wrap: wrap; gap: var(--space-5); margin: var(--space-3) 0; }
 .st-stat { display: flex; flex-direction: column; }
 .st-stat-v { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -488,9 +490,10 @@ export function stressView() {
       const { store } = ctx;
       const ctl = stressController(ctx);
       const { st, view } = ctl;
-      const model = unitModel(store.get().preflight);
-      const ids = model.ids;
-      if (st.sel === null) st.sel = new Set(ids);
+      // The topology comes from preflight, which may arrive after this screen was mounted (a start on #/stress): the picker is rebuilt when it does.
+      let model = unitModel(store.get().preflight);
+      let ids = model.ids;
+      let topoKey = ids.join(",") + "|" + favoredIds(model).join(",");
 
       // ---- setup card ----
       const kindSeg = segmented([{ value: "cpu", label: "CPU", title: "Load the cores you pick with stress-ng" }, { value: "memory", label: "Memory", title: "Test the memory with stressapptest on all CPUs" }], st.kind, (k) => { st.kind = k; render(); }, { label: "Screen" });
@@ -504,7 +507,8 @@ export function stressView() {
       const capSel = h("select", { id: "st-cap", "aria-label": "Ratio cap" }, h("option", { value: "", text: "No cap" }));
       for (let r = CAP_MAX; r >= CAP_MIN; r--) capSel.append(h("option", { value: String(r), text: `${r}${TIMES} (${r * 100} MHz)` }));
       capSel.addEventListener("change", () => { st.cap = capSel.value === "" ? null : Number(capSel.value); render(); });
-      const picker = unitPicker(model, st.sel, (s) => { st.sel = s; render(); }, { mhz: true, label: "Units to load" });
+      const buildPicker = () => unitPicker(model, st.sel || new Set(ids), (s) => { st.sel = s; render(); }, { mhz: true, label: "Units to load" });
+      let picker = buildPicker();
       const field = (label, ...kids) => { const f = h("div", { class: "st-field" }, h("span", { class: "st-label", text: label }), ...kids); return f; };
       const fKind = field("Screen", kindSeg.el);
       const fMethod = field("CPU load", methodSeg.el);
@@ -627,7 +631,20 @@ export function stressView() {
         picker.setMhz(mhz);
       }
 
+      function syncTopology() {
+        const next = unitModel(store.get().preflight);
+        const key = next.ids.join(",") + "|" + favoredIds(next).join(",");
+        if (key === topoKey) return;
+        topoKey = key;
+        model = next;
+        ids = next.ids;
+        const fresh = buildPicker();
+        picker.el.replaceWith(fresh.el);
+        picker = fresh;
+      }
+
       function render() {
+        syncTopology();
         const running = !!view.run;
         const cpu = st.kind === "cpu";
         kindSeg.set(st.kind);
@@ -641,7 +658,7 @@ export function stressView() {
         durRange.setAttribute("aria-valuetext", fmtLen(stressDuration(st)));
         for (const el of [memSel, capSel, durRange]) el.disabled = running;
         for (const seg of [kindSeg, methodSeg, durSeg]) for (const b of seg.el.children) b.disabled = running;
-        picker.set(running ? new Set(view.run.units) : st.sel);
+        picker.set(running ? new Set(view.run.units) : st.sel || new Set(ids));
         picker.setDisabled(running);
         const gate = ctl.gate();
         const none = cpu && selectedUnits(st, ids).length === 0;
@@ -655,9 +672,14 @@ export function stressView() {
       }
 
       subs.push(ctl.subscribe(render));
+      // heartbeats replace store.helperOp several times a second: repaint only when what the screen shows from it (the gate text, the topology) changed
+      let lastGate = ctl.gate();
       subs.push(store.subscribe((s, prev) => {
-        if (s.link !== prev.link || s.helperOp !== prev.helperOp || s.preflight !== prev.preflight) render();
-        else if (s.telemetry !== prev.telemetry) renderLive();
+        const gate = ctl.gate();
+        if (s.link !== prev.link || s.preflight !== prev.preflight || gate !== lastGate) {
+          lastGate = gate;
+          render();
+        } else if (s.telemetry !== prev.telemetry) renderLive();
       }));
       render();
       if (store.get().link.state === "connected") ctl.loadList();
