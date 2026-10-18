@@ -169,3 +169,9 @@ Owns `src/arltuner/telemetry/{sampler,cpu,msrio,limits}.py` (+ new `throttle.py`
 `components/throttle.js` / styles, `docs/knowledge/telemetry-sources.md`, tests. Spec: docs/knowledge/throttling.md (§B mapping, §C read strategy, §D read path, §E log).
 Accept: Power · Current/EDP · Thermal chips (+ VR thermal, grey Max-turbo) from 0x64F status, 10 Hz duty fractions, popover with every active bit + source word,
 no MSR write anywhere, throttle.jsonl event log + GUI list; node + Playwright + Python tests.
+
+**G-228 · Save full state as a profile; accept keeps history** · M · R · deps G-213, G-226
+Owns `src/arltuner/helper/ops_accept.py`, `src/arltuner/profiles/store.py`, the profiles.save path in `ops_tune.py`, `desktop/app/ui/views/profiles.js` (+css),
+`desktop/app/src-tauri/src/helper/ops.rs` (profiles.save arg shape only), tests. Operator 2026-10-18 (an accidental "Set as accepted" overwrote a known-good
+accepted state with no backup). Accept: save-from-read creates a complete profile without accepting; accept moves the replaced state into saved profiles;
+confirm step shows the per-unit diff; tests at helper + UI; Opus review.

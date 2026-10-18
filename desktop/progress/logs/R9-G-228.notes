@@ -1,0 +1,16 @@
+- Incident 2026-10-18: the operator clicked "Set as accepted" by mistake; AcceptedStore.replace overwrote the 2026-10-15 accepted profile with no backup. The
+  orchestrator rebuilt it from a restore log and re-accepted it (captures/lnx/accepted-restore-20261018.txt). Make this impossible to lose again.
+1. `profiles.save {name, from: "read"}`: a COMPLETE profile (same writer as accept: _profile_from_words + dump_profile, incl. E OC words, ring, turbo) from this
+   boot's last read, saved in the ProfileStore WITHOUT accepting. Same STALE_READ / NO_READ refusals as accept; never overwrites (EXISTS). Keep the existing
+   {name, intent} shape working (rows only). Rust ops.rs: allow the {name, from:"read"} shape (exactly those keys).
+2. `profiles.accept` (both forms): BEFORE replacing, save the profile being replaced into the ProfileStore as `accepted-before-<UTC yyyymmdd-HHMMSS>` (complete
+   profile text as it was; if that name exists add -2, -3). If that save fails, refuse the accept (nothing changed). Return `previous_saved_as`. Audit it.
+3. UI (views/profiles.js): "Save current state as…" button (name field, validation ^[a-z0-9._-]{1,64}$) next to the accepted card; it needs a fresh read
+   (if STALE_READ/NO_READ, say "Read CPU state first" with a button to Tune). "Set as accepted" opens a confirm step listing per-unit differences between the
+   current accepted state and the new one (use profiles.get on both and diff points/E OC/ring/turbo), with "Accept" / "Cancel"; after success a toast:
+   "Previous accepted state saved as <name>" with an "Undo" action = profiles.accept {name: previous} (shown only if the CPU still holds... no: Undo applies
+   nothing; it only re-accepts if the CPU holds that state, otherwise the helper refuses NOT_APPLIED — show that message and offer "Review and apply" for it).
+4. Saved list: mark `accepted-before-*` entries as "previous accepted" (sub-label), sorted newest first, deletable later (no delete op now: say so).
+5. The legacy web GUI (src/arltuner/web) — leave it.
+- Mock: extend for profiles.save from read + accept previous_saved_as. Simulator for helper tests (temp paths + an accepted dir under the temp dir).
+- Do NOT run build-appimage.sh. Node 24 glob; Playwright via the python3 that has playwright. `python3 tools/run_tests.py` green.
