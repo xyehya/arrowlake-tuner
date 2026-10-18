@@ -55,16 +55,16 @@ class Decode(unittest.TestCase):
         self.assertEqual(pw.tau_from_raw(17, UNIT_US), 127926272)
         self.assertEqual(pw.tau_to_raw(127926272, UNIT_US), 17)
 
-    def test_tau_quantisation_brackets_the_request(self) -> None:
-        self.assertEqual(pw.tau_quantized(127926272, UNIT_US), (127926272, 127926272))
-        lo, hi = pw.tau_quantized(140_000_000, UNIT_US)
-        self.assertEqual((lo, hi), (127926272, pw.tau_from_raw(17 | 1 << 5, UNIT_US)))
-        self.assertLess(lo, 140_000_000)
-        self.assertGreater(hi, 140_000_000)
-        lo, hi = pw.tau_quantized(470_000_000, UNIT_US)  # Z = 3 rolls over into the next exponent
-        self.assertEqual(hi, pw.tau_from_raw(19, UNIT_US))
+    def test_tau_snaps_down_to_an_encodable_window(self) -> None:
+        self.assertEqual(pw.tau_snap(127926272, UNIT_US), 127926272)  # encodable: unchanged
+        snapped = pw.tau_snap(140_000_000, UNIT_US)
+        self.assertEqual(snapped, 127926272)  # Z = 0 holds until 2^17 * 1.25 units
+        self.assertEqual(pw.tau_snap(snapped, UNIT_US), snapped)  # idempotent
+        self.assertEqual(pw.tau_snap(470_000_000, UNIT_US), pw.tau_from_raw(18 | 3 << 5, UNIT_US))  # Z = 3 stays in the lower exponent: never rolls up
+        for asked in (1_000_000, 2_345_678, 56_000_000, 128_000_000, 3_000_000_000):
+            self.assertLessEqual(pw.tau_snap(asked, UNIT_US), asked)
         with self.assertRaises(pw.PowerError):
-            pw.tau_quantized(500, UNIT_US)  # below one time unit
+            pw.tau_snap(500, UNIT_US)  # below one time unit
 
 
 class PlanBounds(unittest.TestCase):
@@ -89,7 +89,7 @@ class PlanBounds(unittest.TestCase):
         self.refused({"pl1_w": 254}, "POWER_RANGE", "pl1_w")
         self.refused({"pl2_w": 296}, "POWER_RANGE", "pl2_w")
         self.refused({"tau_s": 0.5}, "POWER_RANGE", "tau_s")
-        self.refused({"tau_s": 201}, "POWER_RANGE", "tau_s")
+        self.refused({"tau_s": 260}, "POWER_RANGE", "tau_s")  # snaps to 255.8 s; 201 s would snap to 191.9 s, inside
 
     def test_absent_policy_keys_refuse_and_name_the_key(self) -> None:
         for key, value in (("pl1_w", 200), ("pl2_w", 280), ("tau_s", 50)):
@@ -112,6 +112,22 @@ class PlanBounds(unittest.TestCase):
         self.refused({"pl1_w": 200}, "POWER_STEP", "pl1_w", pol=pol)  # 50 W down
         self.assertEqual(len(self.plan({"pl1_w": 210}, pol=pol)), 1)  # exactly 40 W is allowed
 
+    def test_tau_is_snapped_down_and_the_snapped_value_is_what_is_bounded(self) -> None:
+        pol = policy("[power]\ntau_s = [1, 128]\n")
+        steps = self.plan({"tau_s": 128}, pol=pol, st=state(tau_us=50_000_000))  # 128 s snaps to 127.926272 s, inside [1, 128]: never the next window up (159.9 s)
+        snapped = pw.tau_snap(128 * UW, UNIT_US)
+        self.assertEqual([(s.key, s.value, s.expect) for s in steps], [("tau_s", snapped, (snapped, snapped))])
+        self.assertLessEqual(steps[0].value, 128 * UW)
+        steps = self.plan({"tau_s": 140}, pol=policy("[power]\ntau_s = [1, 130]\n"), st=state(tau_us=50_000_000))  # 140 s > max 130 but snaps to 127.9 s: the snapped value is checked
+        self.assertEqual(steps[0].value, 127926272)
+        self.refused({"tau_s": 130}, "POWER_RANGE", "tau_s", pol=policy("[power]\ntau_s = [128, 200]\n"))  # snaps to 127.9 s < 128
+
+    def test_tau_that_snaps_below_the_minimum_is_refused(self) -> None:
+        pol = policy("[power]\ntau_s = [1, 200]\n")
+        text = self.refused({"tau_s": 1}, "POWER_RANGE", "tau_s", pol=pol)  # 1 s = 1024 units - a hair; snaps to 0.999424 s
+        self.assertIn("snapped down", text)
+        self.assertEqual(len(self.plan({"tau_s": 1.3}, pol=pol)), 1)  # 1.3 s snaps to 1.249 s
+
     def test_the_nothing_to_do_intent(self) -> None:
         self.refused({}, "NOTHING_TO_DO")
         self.assertEqual(self.plan({"pl1_w": 250}), [])  # already in force: no steps (the op says so)
@@ -120,6 +136,7 @@ class PlanBounds(unittest.TestCase):
         self.refused({"pl1_w": 200.5}, "POWER_VALUE", "pl1_w")
         self.refused({"pl1_w": True}, "POWER_VALUE", "pl1_w")
         self.refused({"tau_s": -1}, "POWER_VALUE", "tau_s")
+        self.refused({"tau_s": 0.0005}, "POWER_VALUE", "tau_s", pol=policy("[power]\ntau_s = [0.001, 200]\n"))  # below one time unit
 
     def test_pl2_must_not_be_below_pl1(self) -> None:
         self.refused({"pl2_w": 240}, "POWER_ORDER", "pl2_w")  # against the PL1 in force (250)
@@ -222,20 +239,19 @@ class ReadBack(unittest.TestCase):
         self.assertIn("cannot be read back", pw.readback_problem(step, None, view(sim), UNITS))
         self.assertIn("MSR 0x610 could not be read", pw.readback_problem(step, 250 * UW, pw.MsrView(note="x"), UNITS))
 
-    def test_tau_accepts_either_bracketing_window_when_the_register_agrees(self) -> None:
-        asked = 140_000_000
-        lo, hi = pw.tau_quantized(asked, UNIT_US)
-        step = self.step("tau_s", asked, expect=(lo, hi))
+    def test_tau_read_back_is_exact(self) -> None:
+        asked = pw.tau_snap(140_000_000, UNIT_US)
+        step = self.step("tau_s", asked)
         sim = pw.SimPowerFiles()
-        sim.write_int(pw.FILES["tau_s"], asked)  # the model rounds down
-        self.assertEqual(sim.read_int(step.file), lo)
-        self.assertIsNone(pw.readback_problem(step, lo, view(sim), UNITS))
-        sim.tau_raw = pw.tau_to_raw(hi, UNIT_US)  # a kernel that rounds up
-        self.assertIsNone(pw.readback_problem(step, hi, view(sim), UNITS))
+        sim.write_int(pw.FILES["tau_s"], asked)
+        self.assertIsNone(pw.readback_problem(step, sim.read_int(step.file), view(sim), UNITS))
+        up = pw.tau_from_raw(17 | 1 << 5, UNIT_US)  # the next window up is not accepted
+        sim.tau_raw = pw.tau_to_raw(up, UNIT_US)
+        self.assertIn("expected", pw.readback_problem(step, up, view(sim), UNITS))
 
     def test_tau_far_from_the_request_or_unchanged_is_a_mismatch(self) -> None:
-        asked = 140_000_000
-        step = self.step("tau_s", asked, expect=pw.tau_quantized(asked, UNIT_US))
+        asked = pw.tau_snap(140_000_000, UNIT_US)
+        step = self.step("tau_s", asked)
         sim = pw.SimPowerFiles(drop_writes=True, tau_us=50_000_000)
         self.assertIn("expected", pw.readback_problem(step, sim.read_int(step.file), view(sim), UNITS))
 
@@ -304,7 +320,7 @@ class SimKernel(unittest.TestCase):
         sim.write_int(pw.FILES["pl1_w"], 200_050_000)  # 1/8 W granularity: rounded down
         self.assertEqual(sim.read_int(pw.FILES["pl1_w"]), 200_000_000)
         sim.write_int(pw.FILES["tau_s"], 140_000_000)
-        self.assertEqual(sim.read_int(pw.FILES["tau_s"]), pw.tau_quantized(140_000_000, UNIT_US)[0])
+        self.assertEqual(sim.read_int(pw.FILES["tau_s"]), pw.tau_snap(140_000_000, UNIT_US))
 
     def test_a_locked_zone_ignores_the_write_and_the_register_says_so(self) -> None:
         sim = pw.SimPowerFiles(locked=True)
@@ -331,6 +347,23 @@ class Journal(unittest.TestCase):
         for data in (b"not json", b"[]", json.dumps({"version": 2, "values": {}}).encode(), json.dumps({"version": 1, "boot_id": "b", "values": {"pl1_uw": -1}}).encode()):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 pw.parse_journal(data, "b")
+
+
+    def test_values_the_registers_cannot_hold_are_refused(self) -> None:
+        def doc(**values) -> bytes:
+            base = {"pl1_uw": 250 * UW, "pl2_uw": 295 * UW, "tau_us": 127926272}
+            return json.dumps({"version": 1, "boot_id": "b", "values": {**base, **values}}).encode()
+
+        for values in (
+            {"pl1_uw": 4096 * UW},  # above the 15-bit field
+            {"pl2_uw": 2**63},  # wraps
+            {"pl1_uw": (1 << 15) * 125_000},
+            {"tau_us": int(pw.ENCODING_TAU_MAX_S * UW) + 1},
+            {"tau_us": 2**70},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                pw.parse_journal(doc(**values), "b")
+        self.assertEqual(pw.parse_journal(doc(pl1_uw=4095 * UW), "b")["pl1_uw"], 4095 * UW)
 
 
 class Revert(unittest.TestCase):

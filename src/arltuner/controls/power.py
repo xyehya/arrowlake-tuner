@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from arltuner.guard.policy import Policy
+from arltuner.guard.policy import ENCODING_PL_MAX_W, ENCODING_TAU_MAX_S, Policy
 
 __all__ = [
     "BIOS_NOTE",
@@ -45,7 +45,7 @@ __all__ = [
     "read_state",
     "readback_problem",
     "tau_from_raw",
-    "tau_quantized",
+    "tau_snap",
     "tau_to_raw",
 ]
 
@@ -106,8 +106,8 @@ def tau_from_raw(field7: int, time_unit_us: int) -> int:
 
 
 def tau_to_raw(window_us: int, time_unit_us: int) -> int:
-    """The 7-bit field the kernel writes for ``window_us``: ``Y = floor(log2(window / unit))``, ``Z = floor(4 * (window/unit - 2^Y) / 2^Y)`` -- rounded **down** to an encodable
-    window ``[UNVERIFIED]`` (the kernel source says so; the direction is to be confirmed on the write sitting H4, which is why the read-back rule accepts both neighbours)."""
+    """The 7-bit field the kernel writes for ``window_us``: ``Y = floor(log2(window / unit))``, ``Z = floor(4 * (window/unit - 2^Y) / 2^Y)`` -- the request is rounded **down** to
+    an encodable window ``[UNVERIFIED]`` (the kernel source says so; the write sitting H4 confirms or refutes it, and a read-back that differs from the planned window trips)."""
     if window_us < time_unit_us:
         raise PowerError(f"a time window of {window_us} us is below the time unit ({time_unit_us} us)")
     n = window_us // time_unit_us
@@ -118,15 +118,9 @@ def tau_to_raw(window_us: int, time_unit_us: int) -> int:
     return y | ((z & 0x3) << 5)
 
 
-def tau_quantized(window_us: int, time_unit_us: int) -> tuple[int, int]:
-    """``(lower, upper)``: the two encodable windows (us) that bracket ``window_us`` (equal when it is encodable exactly)."""
-    lower_raw = tau_to_raw(window_us, time_unit_us)
-    lower = tau_from_raw(lower_raw, time_unit_us)
-    if lower >= window_us:
-        return lower, lower
-    y, z = lower_raw & 0x1F, (lower_raw >> 5) & 0x3
-    upper_raw = (y | ((z + 1) << 5)) if z < 3 else ((y + 1) & 0x1F)
-    return lower, tau_from_raw(upper_raw, time_unit_us)
+def tau_snap(window_us: int, time_unit_us: int) -> int:
+    """The encodable window (us) at or below ``window_us`` -- what the kernel leaves in force after a write of ``window_us``. Idempotent. ``PowerError`` below one time unit."""
+    return tau_from_raw(tau_to_raw(window_us, time_unit_us), time_unit_us)
 
 
 @dataclass(frozen=True)
@@ -293,7 +287,8 @@ def read_state(files: PowerFiles) -> State:
 # --------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PowerStep:
-    """One powercap file write. ``key`` is the intent key; values in the file's unit (uW / us); ``expect`` is the value (or the two bracketing values for tau) a read-back may show."""
+    """One powercap file write. ``key`` is the intent key; values in the file's unit (uW / us); ``value`` is already encodable (a tau is snapped down); ``expect`` is the ``(low, high)``
+    a read-back may show -- both ends equal ``value``: the read-back is exact."""
 
     number: int
     key: str
@@ -337,6 +332,14 @@ def _intent_values(intent: Mapping[str, Any]) -> dict[str, int | float]:
     return out
 
 
+def _snap_tau(window_us: int, units: Units) -> int:
+    """``window_us`` snapped down to the window the register can hold; ``Refused`` below one time unit / above the exponent."""
+    try:
+        return tau_snap(window_us, int(units.time_s * 1_000_000))
+    except PowerError as exc:
+        raise Refused("POWER_VALUE", str(exc), "tau_s") from None
+
+
 def _writable(state: State, units: Units | None, msr: MsrView | None, keys: Mapping[str, Any]) -> Units:
     """The lock / readability gate shared by a set and a revert: ``Units`` of ``0x606``, or :class:`Refused`."""
     if msr is None or msr.limit is None:
@@ -374,7 +377,6 @@ def _steps(new_uw: Mapping[str, int], state: State, units: Units, max_step_w: in
                     f"[power] max_step_w = {max_step_w} W ({where})",
                     key,
                 )
-    unit_us = int(units.time_s * 1_000_000)
     order = ["pl1_w", "pl2_w"] if state.pl2_uw is None or pl1 <= state.pl2_uw else ["pl2_w", "pl1_w"]
     order.append("tau_s")
     steps: list[PowerStep] = []
@@ -382,14 +384,7 @@ def _steps(new_uw: Mapping[str, int], state: State, units: Units, max_step_w: in
         if key not in changing:
             continue
         value = changing[key]
-        if key == "tau_s":
-            try:
-                expect = tau_quantized(value, unit_us)
-            except PowerError as exc:
-                raise Refused("POWER_VALUE", str(exc), key) from None
-        else:
-            expect = (value, value)
-        steps.append(PowerStep(len(steps) + 1, key, FILES[key], state.value(key), value, expect))  # type: ignore[arg-type]
+        steps.append(PowerStep(len(steps) + 1, key, FILES[key], state.value(key), value, (value, value)))  # type: ignore[arg-type]
     return steps
 
 
@@ -397,7 +392,7 @@ def plan(intent: Mapping[str, Any], policy: Policy, state: State, units: Units |
     """The write steps for ``intent`` (``{pl1_w?, pl2_w?, tau_s?}``) over the values in force, or :class:`Refused` -- nothing is written by planning.
 
     Checks, in this order (each refusal names its check): the policy keys (``POWER_POLICY_MISSING``: names the key), the lock bit of ``0x610`` and its readability (``POWER_LOCKED`` /
-    ``POWER_MSR_UNREADABLE``: a write that may silently not take is not sent), the ranges (``POWER_RANGE``), the step (``POWER_STEP``; an absent ``max_step_w`` refuses like a missing
+    ``POWER_MSR_UNREADABLE``: a write that may silently not take is not sent), the ranges (``POWER_RANGE``; a tau is snapped down to the encodable window first and *that* value is checked), the step (``POWER_STEP``; an absent ``max_step_w`` refuses like a missing
     range), PL2 >= PL1 against the *final* pair (``POWER_ORDER``). Steps that change nothing are dropped. Write order: if the final PL1 does not exceed the current PL2
     (``new PL1 <= old PL2``) PL1 goes first, else PL2 goes first -- the pair PL2 >= PL1 then holds after every single write (a PL1 that goes down before a PL2 that goes down; a PL2
     that goes up before a PL1 that goes up); tau last.
@@ -410,9 +405,16 @@ def plan(intent: Mapping[str, Any], policy: Policy, state: State, units: Units |
     new_uw: dict[str, int] = {}
     for key, v in want.items():
         lo, hi = ranges[key]
-        if not lo <= v <= hi:
-            raise Refused("POWER_RANGE", f"{key} = {v:g} is outside [power] {key} = [{lo:g}, {hi:g}] ({policy.where})", key)
-        new_uw[key] = int(round(v * _UW_PER_W))
+        value_uw = int(round(v * _UW_PER_W))
+        shown = f"{v:g}"
+        if key == "tau_s":  # the kernel rounds the window down: the value that will be in force is the one the policy bounds
+            snapped = _snap_tau(value_uw, units)
+            if snapped != value_uw:
+                shown = f"{v:g} (snapped down to the encodable {snapped / _UW_PER_W:g})"
+            value_uw = snapped
+        if not lo <= value_uw / _UW_PER_W <= hi:
+            raise Refused("POWER_RANGE", f"{key} = {shown} is outside [power] {key} = [{lo:g}, {hi:g}] ({policy.where})", key)
+        new_uw[key] = value_uw
     max_step = None
     if any(k in new_uw and new_uw[k] != state.value(k) for k in ("pl1_w", "pl2_w")):
         if policy.power is None or policy.power.max_step_w is None:
@@ -427,6 +429,8 @@ def plan_revert(values: Mapping[str, int | None], state: State, units: Units | N
     asked = {"pl1_w": values["pl1_uw"], "pl2_w": values["pl2_uw"], "tau_s": values["tau_us"]}
     new_uw = {k: v for k, v in asked.items() if v is not None}
     units = _writable(state, units, msr, new_uw)
+    if "tau_s" in new_uw:
+        new_uw["tau_s"] = _snap_tau(new_uw["tau_s"], units)
     return _steps(new_uw, state, units, None, "the journal")
 
 
@@ -434,14 +438,13 @@ def plan_revert(values: Mapping[str, int | None], state: State, units: Units | N
 # the read-back rule
 # --------------------------------------------------------------------------------------------------------------
 def readback_problem(step: PowerStep, file_value: int | None, msr: MsrView | None, units: Units | None) -> str | None:
-    """``None`` when the write took: the file reads back an encodable value ``step.expect`` allows (PL: exactly the value; tau: one of the two windows bracketing the request) **and**
-    the ``0x610`` field, decoded, agrees with the file (PL: within one power unit; tau: the same quantised window). Otherwise the reason (a mismatch trips the apply)."""
+    """``None`` when the write took: the file reads back an encodable value ``step.expect`` allows (exactly ``step.value``: the PL as asked, the tau as snapped by the plan) **and**
+    the ``0x610`` field, decoded, agrees with the file (PL: within one power unit; tau: ``[23:17]`` decodes to exactly the same window). Otherwise the reason (a mismatch trips the apply)."""
     if file_value is None:
         return f"{step.file} cannot be read back"
     lo, hi = step.expect
     if not lo <= file_value <= hi:
-        want = f"{lo}" if lo == hi else f"{lo} or {hi}"
-        return f"{step.file} reads {file_value}, expected {want}"
+        return f"{step.file} reads {file_value}, expected {lo if lo == hi else f'{lo} to {hi}'}"
     if msr is None or msr.limit is None or units is None:
         return "MSR 0x610 could not be read back, so the write is not confirmed by the register"
     if msr.limit.locked:
@@ -479,6 +482,9 @@ def parse_journal(data: bytes, boot_id: str | None) -> dict[str, int | None] | N
         raise ValueError("bad power journal values")
     if values["pl1_uw"] is None or values["tau_us"] is None:
         raise ValueError("bad power journal values")
+    pl_max_uw, tau_max_us = ENCODING_PL_MAX_W * _UW_PER_W, ENCODING_TAU_MAX_S * _UW_PER_W
+    if any(values[k] is not None and values[k] > pl_max_uw for k in ("pl1_uw", "pl2_uw")) or values["tau_us"] > tau_max_us:
+        raise ValueError("power journal values outside what the registers can hold")
     if doc.get("boot_id") != boot_id or boot_id is None:
         return None
     return values

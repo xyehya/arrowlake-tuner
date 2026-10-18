@@ -3,11 +3,14 @@ coherent in the simulated port) or a fake sysfs tree (``make_powercap``); no har
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from arltuner.controls import power as pw
+from arltuner.helper import ops_power
 from arltuner.helper.ops_power import PowerWiring
 
 from ._support import HelperCase
@@ -37,11 +40,11 @@ BASE = 'cpus = ["0-23"]\nmax_operations_per_session = 300\nmax_operations_per_bo
 class PowerCase(HelperCase):
     n = 0
 
-    def boot(self, policy: str = BASE + MSR_READS + POWER, sim: pw.SimPowerFiles | None = None) -> Any:
+    def boot(self, policy: str = BASE + MSR_READS + POWER, sim: pw.SimPowerFiles | None = None, **cfg: Any) -> Any:
         self.policy.write_text(policy, encoding="utf-8", newline="\n")
         self.zone = sim or pw.SimPowerFiles()
         self.journal = self.tmp / "power-journal.json"
-        h = self.start()
+        h = self.start(self.config(**cfg) if cfg else None)
         h.helper.power_wiring = PowerWiring(self.zone, self.journal)
         return h
 
@@ -160,7 +163,7 @@ class Apply(PowerCase):
         self.assertEqual(oct(self.journal.stat().st_mode & 0o777), "0o600")
         # the audit: a record before the write, one after the read-back, in that order, none of them an "attempt"
         recs = self.power_records()
-        self.assertEqual([(r["event"], r.get("phase")) for r in recs], [("result", "before_write"), ("readback", None)])
+        self.assertEqual([r["event"] for r in recs], ["powercap_attempt", "readback"])
         self.assertEqual((recs[0]["written"], recs[0]["before"], recs[0]["key"], recs[0]["plan_id"]), (275 * UW, 295 * UW, "pl2_w", plan["plan_id"]))
         self.assertTrue(recs[1]["matches"])
         self.assertFalse([r for r in self.audit_records() if r["event"] == "attempt"])
@@ -175,11 +178,13 @@ class Apply(PowerCase):
         self.assertTrue(res["complete"])
         self.assertEqual([w[0] for w in self.zone.writes], ["constraint_0_power_limit_uw", "constraint_1_power_limit_uw", "constraint_0_time_window_us"])
         tau = res["readback"][2]
-        lo, hi = pw.tau_quantized(100 * UW, 976)
-        self.assertEqual(tau["expected"], [lo, hi])
-        self.assertEqual(tau["file"], lo)  # the kernel model rounds down
+        snapped = pw.tau_snap(100 * UW, 976)
+        self.assertEqual(plan["steps"][2]["value"], snapped)  # the plan shows the snapped window
+        self.assertLessEqual(snapped, 100 * UW)
+        self.assertEqual(tau["expected"], [snapped, snapped])
+        self.assertEqual(tau["file"], snapped)  # the kernel model rounds down, and the read-back is exact
         self.assertTrue(all(r["match"] for r in res["readback"]))
-        self.assertEqual([r["event"] for r in self.power_records()], ["result", "readback"] * 3)
+        self.assertEqual([r["event"] for r in self.power_records()], ["powercap_attempt", "readback"] * 3)
 
     def test_no_policy_keys_no_write_and_the_refusal_names_the_key(self) -> None:
         h = self.boot(BASE + MSR_READS)  # no [power] table
@@ -223,7 +228,7 @@ class Apply(PowerCase):
         self.assertEqual([s["status"] for s in res["steps"]], ["unverified", "not_sent"])
         self.assertFalse(res["readback"][0]["match"])
         self.assertIn("reads 250000000, expected 200000000", res["readback"][0]["problem"])
-        self.assertEqual([r["event"] for r in self.power_records()], ["result", "readback", "trip"])
+        self.assertEqual([r["event"] for r in self.power_records()], ["powercap_attempt", "readback", "trip"])
         self.assertEqual(self.power_records()[-1]["reason"], "TRIPPED")
 
     def test_the_register_disagreeing_with_the_file_trips(self) -> None:
@@ -272,7 +277,107 @@ class Apply(PowerCase):
         self.assertEqual(self.zone.writes, [])
 
 
+class Witnessed(pw.SimPowerFiles):
+    """Records what the audit log and the lock file look like at the moment each file write happens."""
+
+    def __init__(self, case: PowerCase, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.case = case
+        self.seen: list[tuple[str, int, bool]] = []
+
+    def write_int(self, name: str, value: int) -> None:
+        last = self.case.power_records()[-1]
+        self.seen.append((last["event"], last["written"], os.path.exists(self.case.lock)))
+        super().write_int(name, value)
+
+
+class Safeguards(PowerCase):
+    def test_the_audit_pre_record_and_the_lock_exist_when_the_write_happens(self) -> None:
+        sim = Witnessed(self)
+        h = self.boot(sim=sim)
+        res = self.apply(h, self.plan(h, {"pl1_w": 200, "pl2_w": 250}))
+        self.assertTrue(res["complete"], res)
+        self.assertEqual(sim.seen, [("powercap_attempt", 200 * UW, True), ("powercap_attempt", 250 * UW, True)])
+        self.assertFalse(self.lock.exists())  # released after each transaction
+        recs = self.power_records()
+        self.assertEqual([r["event"] for r in recs], ["powercap_attempt", "readback"] * 2)
+        self.assertFalse([r for r in self.audit_records() if r["event"] == "attempt"])  # the guard's budget and dwell are untouched
+
+    def test_a_held_lock_refuses_before_anything_is_sent(self) -> None:
+        h = self.boot()
+        plan = self.plan(h, {"pl2_w": 280})
+
+        def hold(*args: Any, **kw: Any) -> None:  # another process takes the lock after the apply re-planned (the guard's reads need it free, so it appears late)
+            self.lock.write_text("4242\n")
+
+        with mock.patch.object(ops_power, "_write_journal", side_effect=hold):
+            msg = self.call(h, "power.apply", {"plan_id": plan["plan_id"], "typed": "CONFIRM " + plan["nonce"]})
+        self.assertEqual((msg["error"]["code"], msg["error"]["detail"]["check"]), ("REFUSED", "LOCKED"), msg)
+        self.assertEqual(self.zone.writes, [])
+        self.assertEqual(self.power_records(), [])  # no pre-record: nothing was going to be sent
+        self.assertEqual(self.lock.read_text(), "4242\n")  # someone else's lock is never removed
+
+    def test_a_health_gate_that_fails_during_the_read_back_stops_the_apply(self) -> None:
+        sim = pw.SimPowerFiles()
+        h = self.boot(sim=sim, health_gate_factory=lambda: (lambda phase: (not sim.writes, "the machine is unwell")))
+        plan = self.plan(h, {"pl1_w": 200, "pl2_w": 250})
+        res = self.apply(h, plan)
+        self.assertFalse(res["complete"])
+        self.assertEqual(res["stop"]["kind"], "unverified")
+        self.assertTrue(res["stop"]["tripped"])
+        self.assertEqual(len(sim.writes), 1)  # the second step was never sent
+        self.assertEqual([s["status"] for s in res["steps"]], ["unverified", "not_sent"])
+        self.assertIn("could not be read back", res["readback"][0]["problem"])
+        self.assertEqual([r["event"] for r in self.power_records()], ["powercap_attempt", "readback", "trip"])
+
+    def test_the_journal_path_is_trust_checked_on_read_and_write(self) -> None:
+        h = self.boot()
+        with mock.patch.object(ops_power, "_trust", wraps=ops_power._trust) as trust:
+            self.apply(h, self.plan(h, {"pl2_w": 260}))
+            self.ok(h, "power.read")
+        journal_checks = [c for c in trust.call_args_list if c.args[1] == self.journal]
+        self.assertGreaterEqual(len(journal_checks), 3)  # plan (read), apply (read + write), read
+        self.assertTrue(all(c.kwargs == {"want": "file", "must_exist": False} for c in journal_checks))
+
+    def test_tau_is_snapped_down_in_the_plan_and_read_back_exactly(self) -> None:
+        h = self.boot(BASE + MSR_READS + "\n[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 128]\nmax_step_w = 100\n")
+        self.apply(h, self.plan(h, {"tau_s": 60}))
+        plan = self.plan(h, {"tau_s": 128})
+        self.assertEqual(plan["steps"][0]["value"], 127926272)  # 127.9 s: never the next window up (159.9 s)
+        self.assertEqual(plan["after"]["tau_s"], 127.926272)
+        res = self.apply(h, plan)
+        self.assertTrue(res["complete"], res)
+        self.assertEqual((res["readback"][0]["file"], res["readback"][0]["msr"]), (127926272, 127926272))
+        self.assertEqual(self.zone.read_int(pw.FILES["tau_s"]), 127926272)
+
+    def test_a_tau_that_snaps_below_the_minimum_is_refused(self) -> None:
+        h = self.boot(BASE + MSR_READS + "\n[power]\ntau_s = [1, 200]\n")
+        err = self.refused(h, "power.plan", {"power": {"tau_s": 1}}, "POWER_RANGE")
+        self.assertIn("snapped down", err["message"])
+        self.assertEqual(self.zone.writes, [])
+
+
 class Revert(PowerCase):
+    def test_a_journal_the_registers_cannot_hold_is_refused(self) -> None:
+        h = self.boot()
+        for values in ({"pl1_uw": 4096 * UW, "pl2_uw": 295 * UW, "tau_us": 127926272}, {"pl1_uw": 250 * UW, "pl2_uw": 2**63, "tau_us": 127926272}, {"pl1_uw": 250 * UW, "pl2_uw": 295 * UW, "tau_us": 2**70}):
+            with self.subTest(values=values):
+                doc = {"version": 1, "boot_id": "11111111-2222-3333-4444-555555555555", "created": 0, "pid": 1, "values": values, "note": ""}
+                self.journal.write_text(json.dumps(doc))
+                self.journal.chmod(0o600)
+                self.refused(h, "power.plan", {"revert": True}, "JOURNAL_UNUSABLE")
+        self.assertEqual(self.zone.writes, [])
+
+    def test_a_revert_warns_when_a_boot_value_is_outside_the_policy(self) -> None:
+        h = self.boot()
+        self.apply(h, self.plan(h, {"pl1_w": 200}))
+        self.policy.write_text(BASE + MSR_READS + "\n[power]\npl1_w = [100, 200]\ntau_s = [1, 200]\nmax_step_w = 100\n", encoding="utf-8", newline="\n")
+        plan = self.ok(h, "power.plan", {"revert": True})  # the boot PL1 is 250 W, the policy now says <= 200
+        self.assertTrue(any("boot value of pl1_w (250)" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertFalse(any("pl2_w" in w for w in plan["warnings"]))  # no [power] pl2_w: nothing to compare with
+        self.assertTrue(self.apply(h, plan)["complete"])  # and it still restores
+        self.assertEqual(self.zone.pl1_uw, 250 * UW)
+
     def test_revert_puts_the_boot_values_back(self) -> None:
         h = self.boot()
         self.apply(h, self.plan(h, {"pl1_w": 200, "pl2_w": 250, "tau_s": 60}))

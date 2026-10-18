@@ -1,10 +1,12 @@
 """G-214: the ``[power]`` table of the policy and the plain-MSR read allowlist for ``0x606`` / ``0x610`` / ``0x614``. Policy parsing only; no hardware."""
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
-from arltuner.guard import MsrAllowEntry, PolicyError, default_m1_policy, load_policy
+from arltuner.guard import AuditLog, MsrAllowEntry, PolicyError, default_m1_policy, load_policy, read_state
+from arltuner.guard.audit import EVENTS
 from arltuner.guard.policy import PLAIN_MSR_READABLE, PLAIN_MSR_WRITABLE, PowerPolicy
 from arltuner.topology import arl_s_285k
 
@@ -87,6 +89,23 @@ class PowerMsrAllowlist(unittest.TestCase):
             self.assertIsNotNone(policy.match_msr(msr, "read"), hex(msr))
             self.assertIsNone(policy.match_msr(msr, "write"), hex(msr))
         self.assertIsNone(policy.power)
+
+
+class PowercapAudit(unittest.TestCase):
+    def test_powercap_attempt_is_an_event_but_not_a_mailbox_attempt(self) -> None:
+        """A powercap file write is audited before it is sent, yet it neither counts toward the per-boot mailbox budget nor starts a dwell."""
+        self.assertIn("powercap_attempt", EVENTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.jsonl"
+            log = AuditLog(path)
+            log.append("powercap_attempt", kind="powercap", boot_id="boot-1", key="pl1_w", written=200_000_000)
+            state = read_state(path)
+            self.assertIsNone(state.last_attempt_wall)
+            self.assertEqual(dict(state.attempts_by_boot), {})
+            log.append("attempt", boot_id="boot-1")
+            log.append("powercap_attempt", kind="powercap", boot_id="boot-1", key="pl2_w", written=250_000_000)
+            state = read_state(path)
+            self.assertEqual(dict(state.attempts_by_boot), {"boot-1": 1})
 
 
 if __name__ == "__main__":

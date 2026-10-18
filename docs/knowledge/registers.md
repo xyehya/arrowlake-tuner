@@ -183,7 +183,7 @@ PL1 `[14:0]` (x 0.125 W), enable `[15]`, clamp `[16]`, tau `[23:17]` (`Y` = `[21
 **lock `[63]`** (set = read-only until reset; `[DOC SDM]`, XTU's "PL lock = 0x610 b63" `[DECOMPILED mailbox-recon-summary.md]`). Bits `[62:49]` are not decoded.
 **Time window rounding.** The kernel converts with the integer time unit 1000000 / 1024 = **976 us** (`[MEASURED lnx 2026-10-18]`: 127926272 us = 2^17 x 976 us, i.e. Y = 17, Z = 0) and the field is
 `Y = floor(log2(window / unit))`, `Z = floor(4 x (window/unit - 2^Y) / 2^Y)` -- a request is rounded **down** to an encodable window `[UNVERIFIED]` (kernel `intel_rapl_common.c` from memory;
-confirm on the write sitting H4). The read-back rule therefore accepts either of the two windows that bracket the request and then requires the register's `[23:17]`, decoded, to equal the file.
+confirm on the write sitting H4). The plan therefore snaps the requested tau **down** to the encodable window, range-checks *that* value against `[power] tau_s`, shows it, and the read-back must equal it exactly (file, and the register's `[23:17]` decoded). If H4 shows the kernel rounds the other way, the apply trips on the read-back and this rule is revisited.
 **0x614 PKG_POWER_INFO**: thermal spec power `[14:0]` (125 W `[MEASURED lnx]` reference-285k notes platform.md §4), minimum `[30:16]`, maximum `[46:32]`, maximum window `[53:48]` -- layout `[DOC SDM]`,
 min / max fields `[UNVERIFIED]` on Arrow Lake. Shown for information; never a bound.
 **Runtime writes** `[MEASURED lnx 2026-10-08]` (platform-arl-s.md §12): PL1/PL2 powercap writes take effect while bit 63 is clear; a PL2 write changed only `0x610[46:32]`; a reboot restores the firmware value

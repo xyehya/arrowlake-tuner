@@ -6,12 +6,13 @@
   ``CONFIRM <nonce>`` / 600 s / single-use semantics as ``tune.plan`` (:class:`~arltuner.helper.ops_tune.PlanStore`). The policy's ``[power]`` table bounds every value; an absent key
   refuses the write and names itself (revert needs only the journal: it restores a recorded state).
 * ``power.apply``: one powercap file per transaction. Before the first write the boot values are journaled (``power-journal.json``, root 0600, bound to the boot id, written only when absent
-  or from another boot, never removed, never applied at start); each write is audited before it is sent, read back from the file **and** from MSR ``0x610`` (decoded), and a mismatch
-  stops the apply (no retry, no auto-revert) and is audited as a trip.
+  or from another boot, never removed, never applied at start); each write is audited (``powercap_attempt``, fsync'd) before it is sent, under the guard's cross-process lock (``lock_path``,
+  the same ``O_EXCL`` scheme), read back from the file **and** from MSR ``0x610`` (decoded), and a mismatch stops the apply (no retry, no auto-revert) and is audited as a trip.
+  A tau is snapped down to the encodable window by the plan, and the read-back must show exactly that window.
 
 Why this is not part of ``tune.plan`` / ``tune.apply``: those are profile-centred (``ops_tune``) and the guard (``WriteGuard``) only knows the OC mailbox and the plain MSRs; a powercap file
-is neither. The MSR reads go through the guard (allowlist, health gate, audit ``msr_read``); the file writes are audited here with the existing events (``result`` before and after the
-write, ``readback``, ``trip``, ``error``, ``refused``) and ``kind = "powercap"`` -- deliberately **not** ``attempt``: that event counts against the mailbox budget and dwell (``read_state``).
+is neither. The MSR reads go through the guard (allowlist, health gate, audit ``msr_read``); the file writes are audited here with ``kind = "powercap"``: ``powercap_attempt`` before the write, then ``readback``, ``trip``, ``error`` --
+deliberately **not** ``attempt``: that event counts against the mailbox budget and dwell (``read_state`` ignores ``powercap_attempt``).
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ from .ops import OpContext, OpSpec, _only, _refuse, _trust, _trust_refusal, help
 from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _guarded_session, _load_policy, _validate_tune_apply
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, PLAN_STALE, OpError
 from .state import State
-from .trust import TrustError, open_checked
+from .trust import TrustError, check_lock_file, open_checked
 
 if TYPE_CHECKING:
     from .core import Helper
@@ -199,6 +200,7 @@ def _policy_json(policy: Policy) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------------------------------
 def _read_journal(helper: Helper, w: PowerWiring) -> dict[str, int | None] | None:
     """The boot values of this boot's journal, ``None`` when there is none (or it is from another boot). A journal that cannot be trusted or parsed is a refusal, never a guess."""
+    _trust(helper, w.journal_path, want="file", must_exist=False)  # the parent chain is root-owned and not writable by others (SPEC 4.4)
     try:
         fd = open_checked(w.journal_path, write=False, create=False, euid=helper.cfg.euid_fn(), what="power journal")
     except FileNotFoundError:
@@ -222,6 +224,7 @@ def _write_journal(helper: Helper, w: PowerWiring, state: pw.State, boot_id: str
     doc = pw.journal_doc(state, boot_id, helper.cfg.wall_clock())
     data = json.dumps(doc, separators=(",", ":")).encode("ascii")
     path = w.journal_path
+    _trust(helper, path, want="file", must_exist=False)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
     try:
         fd = open_checked(tmp, write=True, create=True, mode=0o600, euid=helper.cfg.euid_fn(), what="power journal")
@@ -246,24 +249,108 @@ def _write_journal(helper: Helper, w: PowerWiring, state: pw.State, boot_id: str
 # --------------------------------------------------------------------------------------------------------------
 # audit
 # --------------------------------------------------------------------------------------------------------------
-def _audit(helper: Helper, event: str, **fields: Any) -> None:
-    """One audit record of a powercap action (a fresh ``AuditLog`` per record: the guard sessions between two records append to the same file). ``OSError`` propagates."""
+def _open_audit(helper: Helper) -> AuditLog:
+    """The one ``AuditLog`` of an apply. ``OSError`` when the log cannot be opened (the apply then sends nothing)."""
     cfg = helper.cfg
     _trust(helper, cfg.audit_path, want="file", must_exist=False)
     try:
         os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=cfg.euid_fn(), what="audit log"))
     except TrustError as exc:
         raise OSError(str(exc)) from None
-    AuditLog(cfg.audit_path).append(event, ts=cfg.wall_clock(), operator=cfg.operator, kind="powercap", boot_id=_boot_id(helper), **fields)
+    return AuditLog(cfg.audit_path)
 
 
-def _audit_quiet(helper: Helper, event: str, **fields: Any) -> str | None:
+def _audit(helper: Helper, log: AuditLog, event: str, **fields: Any) -> None:
+    """One audit record of a powercap action. ``OSError`` propagates."""
+    cfg = helper.cfg
+    log.append(event, ts=cfg.wall_clock(), operator=cfg.operator, kind="powercap", boot_id=_boot_id(helper), **fields)
+
+
+def _audit_quiet(helper: Helper, log: AuditLog, event: str, **fields: Any) -> str | None:
     """After the first write: a record that cannot be written is reported, never allowed to hide the outcome."""
     try:
-        _audit(helper, event, **fields)
+        _audit(helper, log, event, **fields)
     except OSError as exc:
         return f"could not write the audit record ({event}): {exc}"
     return None
+
+
+# --------------------------------------------------------------------------------------------------------------
+# the cross-process lock (the guard's scheme: an O_EXCL file at cfg.lock_path holding our pid; an existing file is never removed here)
+# --------------------------------------------------------------------------------------------------------------
+class _NotSent(Exception):
+    """A step was refused before its write was sent. ``check`` names the reason."""
+
+    def __init__(self, check: str, text: str) -> None:
+        super().__init__(text)
+        self.check = check
+
+
+def _take_lock(helper: Helper) -> None:
+    cfg = helper.cfg
+    try:
+        check_lock_file(cfg.lock_path, euid=cfg.euid_fn())
+    except TrustError as exc:
+        raise _NotSent("LOCK_UNTRUSTED", f"untrusted lock file: {exc}") from None
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(cfg.lock_path, flags, 0o600)
+    except FileExistsError:
+        raise _NotSent("LOCKED", f"lock file {cfg.lock_path} exists (another mailbox or power transaction is in progress, or a stale lock: clear it by hand)") from None
+    except OSError as exc:
+        raise _NotSent("LOCKED", f"cannot create lock file {cfg.lock_path}: {exc.strerror or exc}") from None
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+    except OSError as exc:
+        try:
+            os.unlink(cfg.lock_path)  # created a moment ago by us
+        except OSError:
+            pass
+        raise _NotSent("LOCKED", f"cannot write lock file {cfg.lock_path}: {exc.strerror or exc}") from None
+    finally:
+        os.close(fd)
+
+
+def _release_lock(helper: Helper) -> str | None:
+    """``None`` when released; else why the lock file is still there (every later transaction would refuse until it is cleared)."""
+    try:
+        os.unlink(helper.cfg.lock_path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"could not remove the lock file {helper.cfg.lock_path}: {exc.strerror or exc}"
+    return None
+
+
+@dataclass
+class _Sent:
+    """What one sent step left: the file read-back (``None`` = unreadable), a failed write, a lock that could not be released."""
+
+    file_value: int | None = None
+    write_error: pw.PowerError | None = None
+    lock_problem: str | None = None
+
+
+def _send_step(helper: Helper, w: PowerWiring, log: AuditLog, step: pw.PowerStep, record: dict[str, Any]) -> _Sent:
+    """Under the lock: the ``powercap_attempt`` record (written and fsync'd first), the one file write, the file read-back. :class:`_NotSent` before the write is sent."""
+    _take_lock(helper)
+    sent = _Sent()
+    try:
+        try:
+            _audit(helper, log, "powercap_attempt", detail=f"powercap write {step.key}: {step.before} -> {step.value}", **record)
+        except OSError as exc:
+            raise _NotSent("AUDIT_UNAVAILABLE", f"the audit log cannot be written ({exc}); the write was not sent") from None
+        try:
+            w.files.write_int(step.file, step.value)
+            try:
+                sent.file_value = w.files.read_int(step.file)
+            except pw.PowerError:
+                sent.file_value = None
+        except pw.PowerError as exc:
+            sent.write_error = exc
+    finally:
+        sent.lock_problem = _release_lock(helper)
+    return sent
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -356,8 +443,8 @@ def op_power_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
 # --------------------------------------------------------------------------------------------------------------
 # power.plan
 # --------------------------------------------------------------------------------------------------------------
-def _steps_for(helper: Helper, ctx: OpContext, policy: Policy, w: PowerWiring, args: dict[str, Any], what: str) -> tuple[list[pw.PowerStep], pw.State, pw.MsrView, bool]:
-    """``(steps, state, msr view, will_journal)`` for a plan-shaped ``args``; raises the refusal."""
+def _steps_for(helper: Helper, ctx: OpContext, policy: Policy, w: PowerWiring, args: dict[str, Any], what: str) -> tuple[list[pw.PowerStep], pw.State, pw.MsrView, dict[str, int | None] | None]:
+    """``(steps, state, msr view, journal values of this boot or None)`` for a plan-shaped ``args``; raises the refusal."""
     state = _read_state(w)
     view = _msr_view(helper, ctx, policy, MSRS[:2], what)
     boot = _read_journal(helper, w)
@@ -372,7 +459,7 @@ def _steps_for(helper: Helper, ctx: OpContext, policy: Policy, w: PowerWiring, a
         raise _refused(exc) from None
     if not steps:
         raise OpError(REFUSED, "the values in force already are the ones asked: nothing to write. Nothing was written.", {"check": "NOTHING_TO_DO"})
-    return steps, state, view, boot is None and not args.get("revert")
+    return steps, state, view, boot
 
 
 def _after(state: pw.State, steps: list[pw.PowerStep]) -> dict[str, Any]:
@@ -384,11 +471,26 @@ def _after(state: pw.State, steps: list[pw.PowerStep]) -> dict[str, Any]:
     }
 
 
+def _journal_policy_warnings(policy: Policy, boot: dict[str, int | None]) -> list[str]:
+    """A revert restores a recorded state and is not bounded by ``[power]``; say so when a recorded value lies outside what the policy would allow now."""
+    out: list[str] = []
+    p = policy.power
+    for key, field_name in (("pl1_w", "pl1_uw"), ("pl2_w", "pl2_uw"), ("tau_s", "tau_us")):
+        rng = None if p is None else getattr(p, key)
+        value = boot[field_name]
+        if rng is not None and value is not None and not rng[0] <= value / _UW <= rng[1]:
+            out.append(f"the boot value of {key} ({value / _UW:g}) is outside the policy's [power] {key} = [{rng[0]:g}, {rng[1]:g}]: the revert restores it anyway")
+    return out
+
+
 def op_power_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     policy = _load_policy(helper)
     w = _wiring(helper)
-    steps, state, view, journal_new = _steps_for(helper, ctx, policy, w, args, "power.plan")
-    warnings = ["tau is written as asked and the kernel rounds it to an encodable window; the read-back shows the value in force"] if any(s.key == "tau_s" for s in steps) else []
+    steps, state, view, boot = _steps_for(helper, ctx, policy, w, args, "power.plan")
+    journal_new = boot is None and not args.get("revert")
+    warnings = ["tau is rounded down to the window the register can encode (the step shows that window); the read-back must show exactly it"] if any(s.key == "tau_s" for s in steps) else []
+    if args.get("revert") and boot is not None:
+        warnings.extend(_journal_policy_warnings(policy, boot))
     if journal_new:
         warnings.append(f"the values now in force are journaled before the first write ({pw.BIOS_NOTE}); \"revert\" puts them back")
     warnings.append("package power limits are runtime state: a reboot restores the firmware values")
@@ -414,10 +516,14 @@ def op_power_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict
     if boot_id is None:
         raise OpError(REFUSED, "the boot id is unknown, so the power journal cannot be bound to this boot. Nothing was written.", {"check": "BOOT_ID_UNKNOWN"})
     # the plan was made from the values then in force: plan again from the values now; any difference is stale (nothing written)
-    steps, state, view, journal_new = _steps_for(helper, ctx, policy, w, plan.intent, "power.apply")
+    steps, state, view, boot = _steps_for(helper, ctx, policy, w, plan.intent, "power.apply")
     if [(s.key, s.before, s.value) for s in steps] != [(s.key, s.before, s.value) for s in plan.steps]:
         raise OpError(PLAN_STALE, "the power values changed since the plan was made (or the plan no longer fits the policy); nothing was written. Plan again.")
-    if journal_new:
+    try:
+        log = _open_audit(helper)  # the one AuditLog of this apply
+    except OSError as exc:
+        raise OpError(REFUSED, f"the audit log cannot be opened ({exc}); nothing was written.", {"check": "AUDIT_UNAVAILABLE"}) from None
+    if boot is None and not plan.revert:
         _write_journal(helper, w, state, boot_id)  # before the first write, only when this boot has none
     results: list[dict[str, Any]] = []
     readback: list[dict[str, Any]] = []
@@ -432,29 +538,25 @@ def op_power_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict
             break
         record = dict(key=step.key, path=str(w.files.path(step.file)), before=step.before, written=step.value, plan_id=plan.plan_id, revert=plan.revert)
         try:
-            _audit(helper, "result", phase="before_write", detail=f"powercap write {step.key}: {step.before} -> {step.value}", **record)
-        except OSError as exc:
+            outcome = _send_step(helper, w, log, step, record)
+        except _NotSent as exc:
             entry["status"] = "refused"
-            reason = f"step {step.number}: the audit log cannot be written ({exc}); the write was not sent"
+            reason = f"step {step.number}: {exc}"
             if sent == 0:
-                raise OpError(REFUSED, f"{reason}. Nothing was written.", {"check": "AUDIT_UNAVAILABLE"}) from None
+                raise OpError(REFUSED, f"{reason}. Nothing was written.", {"check": exc.check}) from None
             stop = {"kind": "refused", "reason": reason, "tripped": False}
             break
-        try:
-            w.files.write_int(step.file, step.value)
-        except pw.PowerError as exc:
-            sent += 1  # a failed write may have reached the file
+        sent += 1  # a failed write may have reached the file
+        if outcome.lock_problem:
+            warnings.append(outcome.lock_problem)
+        if outcome.write_error is not None:
+            exc = outcome.write_error
             entry["status"] = "error"
             entry["detail"] = str(exc)
-            note = _audit_quiet(helper, "error", detail=str(exc), **record)
-            warnings.extend(filter(None, [note]))
+            warnings.extend(filter(None, [_audit_quiet(helper, log, "error", detail=str(exc), **record)]))
             stop = {"kind": "transport", "reason": f"step {step.number}: {exc}", "tripped": True}
             break
-        sent += 1
-        try:
-            file_value = w.files.read_int(step.file)
-        except pw.PowerError:
-            file_value = None
+        file_value = outcome.file_value
         after_view = _msr_view(helper, ctx, policy, MSRS[:2], "power.apply read-back") if not ctx.cancel.is_set() else pw.MsrView(note="cancelled")
         problem = pw.readback_problem(step, file_value, after_view, after_view.units)
         lim = after_view.limit
@@ -463,10 +565,13 @@ def op_power_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict
             "key": step.key, "expected": list(step.expect), "file": file_value, "msr": msr_value, "match": problem is None, **({} if problem is None else {"problem": problem}),
         })
         entry.update(status="ok" if problem is None else "unverified", file_value=file_value)
-        warnings.extend(filter(None, [_audit_quiet(helper, "readback", detail=problem or "the file and MSR 0x610 show the value written", read_value=file_value, matches=problem is None, **record)]))
+        warnings.extend(filter(None, [_audit_quiet(helper, log, "readback", detail=problem or "the file and MSR 0x610 show the value written", read_value=file_value, matches=problem is None, **record)]))
         if problem is not None:
-            warnings.extend(filter(None, [_audit_quiet(helper, "trip", reason="TRIPPED", detail=problem, **record)]))
+            warnings.extend(filter(None, [_audit_quiet(helper, log, "trip", reason="TRIPPED", detail=problem, **record)]))
             stop = {"kind": "unverified", "reason": f"step {step.number}: read-back mismatch: {problem}; stopping (no retry, no automatic revert)", "tripped": True}
+            break
+        if outcome.lock_problem:  # the next transaction would refuse on the stale lock: stop here, loudly
+            stop = {"kind": "refused", "reason": f"step {step.number}: {outcome.lock_problem}", "tripped": True}
             break
     try:
         after = pw.read_state(w.files).as_json()
