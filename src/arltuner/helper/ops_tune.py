@@ -195,6 +195,7 @@ class StoredPlan:
     mismatches: int = 0
     restore: bool = False  # G-147: the restore of the accepted state (G-148: or any complete profile): the apply scans for a residual OC point and neutralises it
     rounds: int = 1  # G-148: guarded rounds the last read says the apply needs within the step limits (the budget reserves them; the apply re-judges from its own reads)
+    ring_refs: dict[int, int] = field(default_factory=dict)  # G-212: ring point (P2) -> the word the plan assumed; kept apart from ``refs`` (the ring is read through CPU 0 but is not P-core 0)
 
 
 class PlanStore:
@@ -1286,8 +1287,10 @@ def _canonical_ring(raw: object) -> dict[str, Any]:
         raise _bad("ring.points must be a non-empty object {P2 point number: mV}")
     out: dict[str, int] = {}
     for key, value in points.items():
-        if not isinstance(key, str) or not key.isdigit() or not POINT_RANGE[0] <= int(key) <= POINT_RANGE[1]:
-            raise _bad(f"ring.points key {key!r} is not a ring point number ({POINT_RANGE[0]}..{POINT_RANGE[1]}; P2 = 0 is the ring OC word, which is never written)")
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9]{1,2}", key) or not POINT_RANGE[0] <= int(key) <= POINT_RANGE[1]:
+            raise _bad(f"ring.points key {key[:20]!r} is not a ring point number ({POINT_RANGE[0]}..{POINT_RANGE[1]}; P2 = 0 is the ring OC word, which is never written)" if isinstance(key, str) else "ring.points key is not a string")
+        if str(int(key)) in out:
+            raise _bad(f"ring.points names point {int(key)} more than once")
         out[str(int(key))] = _int_mv(value, f"ring.points[{key}]")
     return {"points": dict(sorted(out.items(), key=lambda kv: int(kv[0])))}
 
@@ -1462,6 +1465,7 @@ class Resolved:
     refs: dict[tuple[int, int], int]
     warnings: list[str]
     units: list[str]
+    ring_refs: dict[int, int] = field(default_factory=dict)  # G-212: ring point (P2) -> the word of the last ring read the intent was built from (PLAN_STALE at apply)
 
 
 def _unit_reference(last: Mapping[int, Sequence[int]] | None, cpus: Sequence[int]) -> tuple[int, Sequence[int]] | None:
@@ -1580,14 +1584,17 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
     if "turbo" in intent:
         turbo = _explicit_turbo(helper, intent["turbo"], turbo, policy, warnings)
     ring = _ring_setting(helper, intent["ring"], policy, topology) if "ring" in intent else None  # G-212
+    ring_refs: dict[int, int] = {}
     if ring is not None:
         units.append(ringmod.UNIT)
+        last_ring = _last_ring(helper) or ()
+        ring_refs = {rp.point: int(last_ring[rp.point]) for rp in ring.points}
     try:
         entries = tuple(CoreSetting(k, i, **v) for (k, i), v in cores.items())  # type: ignore[arg-type]
         profile = Profile(name, entries, turbo, tuple(points.values()), ring=ring)  # G-119: a turbo-only plan has no entries and no points; G-212: a ring-only plan has neither
     except ProfileError as exc:
         raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
-    return Resolved(profile, refs, warnings, units)
+    return Resolved(profile, refs, warnings, units, ring_refs)
 
 
 def _check_ring_range(policy: Policy, topology: Topology, points: Mapping[str, int]) -> None:
@@ -2388,7 +2395,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         sort_keys=True,
     )
     plan_id = hashlib.sha256(canon.encode()).hexdigest()
-    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore, rounds=rounds))
+    _state(helper).plans.add(StoredPlan(plan_id, nonce, helper.cfg.monotonic(), profile, resolved.refs, ops_needed, restore=restore, rounds=rounds, ring_refs=resolved.ring_refs))
     result = {
         "plan_id": plan_id,
         "nonce": nonce,
@@ -2443,18 +2450,26 @@ def _stale_check(plan: StoredPlan, topology: Topology):  # type: ignore[no-untyp
     """The ``plan_check`` hook of the executor: the baselines it just read must be the words the plan assumed (``PLAN_STALE`` before any write)."""
 
     def check(applied: ApplyPlan) -> None:
-        if not plan.refs:
+        if not plan.refs and not plan.ring_refs:
             return
         seen: dict[tuple[int, int], int] = {}
+        ring_seen: dict[int, int] = {}
         for step in applied.steps:
             if step.kind is StepKind.WRITE_VF and step.before is not None:
                 seen[(step.cpu, 0)] = step.before.to_u32()
             elif step.kind is StepKind.WRITE_VF_POINT and step.before is not None:
                 seen[(step.cpu, step.p2)] = step.before.to_u32()
+            elif step.kind is StepKind.WRITE_RING_POINT and step.before is not None:
+                ring_seen[step.p2] = step.before.to_u32()
         diffs = [
             f"{unit_of_cpu(topology, cpu)} cpu {cpu} {'OC word' if point == 0 else 'point ' + str(point)}: planned from {plan.refs[(cpu, point)]:#010x}, now {word:#010x}"
             for (cpu, point), word in sorted(seen.items())
             if (cpu, point) in plan.refs and plan.refs[(cpu, point)] != word
+        ]
+        diffs += [
+            f"ring point {point}: planned from {plan.ring_refs[point]:#010x}, now {word:#010x}"
+            for point, word in sorted(ring_seen.items())
+            if point in plan.ring_refs and plan.ring_refs[point] != word
         ]
         if diffs:
             more = f" (+{len(diffs) - 3} more)" if len(diffs) > 3 else ""

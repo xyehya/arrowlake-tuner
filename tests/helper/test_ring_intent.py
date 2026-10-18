@@ -50,6 +50,21 @@ class Canonical(RingIntentCase):
                 canonical_intent(bad)
             self.assertEqual(caught.exception.code, "BAD_REQUEST")
 
+    def test_point_keys_are_one_or_two_ascii_digits_and_unique(self) -> None:
+        for bad in (
+            {"ring": {"points": {"\u00b2": -25}}},  # superscript two: str.isdigit() is true, int() fails
+            {"ring": {"points": {"04": -25, "4": -25}}},  # the same point twice after normalising
+            {"ring": {"points": {"4.0": -25}}},
+            {"ring": {"points": {" 4": -25}}},
+            {"ring": {"points": {"-1": -25}}},
+            {"ring": {"points": {"": -25}}},
+            {"ring": {"points": {"1" * 5000: -25}}},
+            {"ring": {"points": {"\u0664": -25}}},  # Arabic-indic four
+        ):
+            with self.subTest(bad=repr(bad)[:60]), self.assertRaises(OpError) as caught:
+                canonical_intent(bad)
+            self.assertEqual(caught.exception.code, "BAD_REQUEST")
+
     def test_a_ring_intent_cannot_be_saved_as_a_profile(self) -> None:
         with self.assertRaises(OpError):
             canonical_intent({"scope": "unit", "rows": [row("P0", curve=-10)], "ring": {"points": {"4": -25}}}, rows_only=True)
@@ -162,6 +177,27 @@ class RingOcWordChanged(RingIntentCase):
         self.assertEqual([w for w in plan["warnings"] if w["code"] == "RING_NOT_RESTORED"], [])
         self.assertEqual(plan["units"], ["ring"])
         self.assertEqual(self.apply_ok(h, plan)["ring_refused"], [])
+        self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, -26)
+
+
+class RingStale(RingIntentCase):
+    def test_a_ring_word_that_changed_since_the_plan_makes_it_stale_before_any_write(self) -> None:
+        h = self.boot(COLD)
+        self.read(h)
+        plan = self.plan(h, {"ring": {"points": {"4": -25}}})
+        self.sim._vf[(int(Domain.RING), -1, 4)] = self.sim.vf(0, int(Domain.RING), 4).with_(offset_raw=-3)  # somebody else moved the ring point (test double; no mailbox write)
+        start = len(self.sim.requests)
+        r = self.apply(h, plan)
+        self.assertEqual(error_code(r), "PLAN_STALE")
+        self.assertIn("ring point 4", r["error"]["message"])
+        self.assertEqual(ring_requests(self.sim, 0x11, start), [], "nothing was written")
+        self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, -3)
+
+    def test_a_p_core_with_the_same_point_number_does_not_collide_with_the_ring(self) -> None:
+        h = self.boot(COLD)
+        self.read(h)
+        plan = self.plan(h, {**rows(row("P0", curve=-10)), "ring": {"points": {"4": -25}}})
+        self.apply_ok(h, plan)
         self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, -26)
 
 
