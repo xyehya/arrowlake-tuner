@@ -20,3 +20,10 @@ Script: `desktop/progress/logs/measure_latency.py`. Window: 100 transactions of 
 ## Rule kept
 One transaction at a time, the health bracket around each transaction, read-back of every write and the plan nonce are not negotiable (SAFETY.md,
 D-032). Speed comes only from making the bookkeeping cheaper.
+
+## After G-211 (merged 2026-10-18) `[MEASURED lnx 2026-10-18, simulator bench]`
+`tools/bench_guard.py` (300 ops, 16.0 MB synthetic log, real fsync, simulator transport): guard overhead per op **211.8 ms -> 3.15 ms median
+(p90 3.57 ms)**. Audit-state read 206.9 -> 0.07 ms (incremental parse: append-only, rescan on inode / size / anchor bytes / same-size mtime change);
+health snapshots 3.5 -> 1.5 ms (fake tree, indicative). Lock 0.05 ms and fsync ~1 ms unchanged. The 194 ms live gap was the audit parse.
+First scan per helper process still reads the whole log once (~100 ms). Live confirmation = hardware sitting H2 (needs `sudo bash install.sh` +
+helper restart, then one timed `tune.read`). The full test suite went from ~405 s to ~222 s as a side effect.
