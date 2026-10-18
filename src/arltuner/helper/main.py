@@ -28,6 +28,8 @@ import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+from arltuner.telemetry.throttle import throttle_log_path
 from typing import Any, BinaryIO, TextIO
 
 from arltuner.cli import InstalledStateRefused, default_audit_path, default_lock_path
@@ -68,6 +70,20 @@ class _Parser(argparse.ArgumentParser):
     def exit(self, status: int = 0, message: str | None = None) -> None:  # type: ignore[override]
         raise _Usage(message or "")
 
+
+
+def _accepted_label(directory: Path | None) -> str | None:
+    """G-229: the throttle log's ``tuning_id`` = the accepted profile's name (``accepted:<name>``), read from ``CURRENT`` only when an event opens; None if absent."""
+    if directory is None:
+        return None
+    try:
+        text = (directory / "CURRENT").read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("profile = profiles/") and line.endswith(".toml"):
+            return "accepted:" + line[len("profile = profiles/"):-len(".toml")][:64]
+    return None
 
 def _parser() -> argparse.ArgumentParser:
     p = _Parser(prog="arltuner-helper", description="arltuner root helper (JSON lines on stdin/stdout, or on a Unix socket with --socket). Non-root runs only; as root there is no argv but --device [--socket].", add_help=True, allow_abbrev=False)
@@ -192,7 +208,8 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
             topology_fn=lambda: topo,
             preflight_fn=lambda: preflight(Path("/"), topology=topo, helper_service=False),
             sampler_factory=lambda interval: Sampler(
-                None, topo, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval
+                None, topo, hwmon_root=nowhere / "hwmon", powercap_root=nowhere / "powercap", cpu_root=nowhere / "cpu", interval_s=interval,
+                throttle_log=throttle_log_path(Path(args.audit)) if args.audit else None,
             ),
             simulator=True,
             enforce_trust=False,
@@ -206,7 +223,8 @@ def build_config(args: argparse.Namespace, *, log: Callable[[str], None], root: 
     def sampler_factory(interval: float) -> PortOwningSampler:
         port = DevCpuMsrPort(writable=False)
         try:
-            return PortOwningSampler(port, Sampler(TelemetryMsr(port), imc=device_imc(interval, lstat_fn), interval_s=interval))
+            return PortOwningSampler(port, Sampler(TelemetryMsr(port), imc=device_imc(interval, lstat_fn), interval_s=interval,
+                                                   throttle_log=throttle_log_path(audit), tuning_id_fn=lambda: _accepted_label(INSTALLED_ACCEPTED_DIR if root else None)))
         except BaseException:
             port.close()
             raise
