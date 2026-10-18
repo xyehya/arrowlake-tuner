@@ -1,0 +1,162 @@
+/* runtime.css: the Power, Ring & uncore and Ratio caps sub-tabs of Tune (G-217). Loaded by views/tune/rt-common.js ensureStyle(). Tokens only: blue = pending, amber = warning / refused, dim = read-only. */
+.rt-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 1000px;
+}
+
+.rt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+
+.rt-title {
+  font-size: var(--fs-lg);
+}
+
+.rt-chip {
+  padding: 0 8px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  background: var(--warn-bg);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.rt-sub {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.rt-readbar,
+.rt-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+
+.rt-actions {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.rt-pending.on {
+  color: var(--pending);
+  font-weight: 600;
+}
+
+.rt-read-text[data-state="error"] {
+  color: var(--danger);
+}
+
+.rt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+
+.rt-table th,
+.rt-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rt-table thead th {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.rt-table tr.pending > th,
+.rt-table tr.pending > td:first-of-type {
+  box-shadow: inset 3px 0 0 var(--pending);
+}
+
+.rt-table tr.rt-refused {
+  background: var(--danger-bg);
+}
+
+.rt-now {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.rt-now .rt-bad {
+  color: var(--warn);
+}
+
+.rt-limit {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.rt-limit.warn,
+.rt-warn {
+  color: var(--warn);
+}
+
+.rt-warns {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rt-warns li {
+  padding: var(--space-1) var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.rt-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+}
+
+.rt-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.rt-dot.off {
+  background: var(--text-faint);
+}
+
+.rt-section {
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.rt-section > h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-md);
+}
+
+.rt-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}

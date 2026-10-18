@@ -5,6 +5,34 @@
   "accepted_match": null,
   "accepted_note": "no accepted state directory is configured",
   "complete": true,
+  "cpu_limits": {
+   "E": {
+    "max_mv": 1355,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+   },
+   "P": {
+    "max_mv": 1625,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+   },
+   "caps_khz": null,
+   "offset_mv": [
+    -1000,
+    999
+   ],
+   "power": {
+    "locked": null,
+    "pl_max_w": null,
+    "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+   },
+   "ring": {
+    "max_mv": 1999,
+    "max_ratio": 85,
+    "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+   },
+   "uncore_khz": null
+  },
   "differences": [],
   "extras_notes": {},
   "fused": {
@@ -76,7 +104,8 @@
      999
     ],
     "ratio_max_oc": 120,
-    "v_target_max_mv": 1355
+    "v_target_max_mv": 1355,
+    "v_target_max_raw": 1388
    },
    "P": {
     "offset_mv": [
@@ -84,7 +113,8 @@
      999
     ],
     "ratio_max_oc": 120,
-    "v_target_max_mv": 1625
+    "v_target_max_mv": 1625,
+    "v_target_max_raw": 1664
    }
   },
   "intent_features": [
@@ -93,39 +123,39 @@
   "limits": {
    "offset_mv": {
     "E": {
-     "max": 200,
-     "min": -200
+     "max": 999,
+     "min": -1000
     },
     "P": {
-     "max": 200,
-     "min": -200
+     "max": 999,
+     "min": -1000
     }
    },
    "ratio_max": {
-    "E": 49,
-    "P": 60
+    "E": null,
+    "P": null
    },
    "source": {
     "ratio_max": {
-     "E": "auto",
-     "P": "auto"
+     "E": "none",
+     "P": "none"
     },
     "v_target_max": {
-     "E": "auto",
-     "P": "auto"
+     "E": "none",
+     "P": "none"
     }
    },
    "v_target_max_v": {
-    "E": 1.355,
-    "P": 1.625
+    "E": null,
+    "P": null
    }
   },
-  "ops_done": 151,
-  "ops_extras": 28,
+  "ops_done": 153,
+  "ops_extras": 30,
   "ops_ring": 11,
   "ops_words": 112,
   "problems": [],
-  "read_at": "2026-10-18T09:45:52Z",
+  "read_at": "2026-10-18T16:15:14Z",
   "ring": {
    "cpu": 0,
    "end": "rc 0x11 at P2=10",

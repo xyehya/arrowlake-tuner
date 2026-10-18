@@ -1,0 +1,18 @@
+{
+ "request": {
+  "args": {
+   "parking": {
+    "8": false
+   }
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "error": {
+   "code": "BAD_REQUEST",
+   "message": "core parking is not supported (held, D-pending)"
+  },
+  "id": "c6",
+  "ok": false
+ }
+}

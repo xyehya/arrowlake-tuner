@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { createAppStore, applyHelperEvent, SERIES } from "../store.js";
 import { FIXTURES } from "../fixtures/mock-backend.js";
+import G from "../fixtures/g217/fixtures-g217.js";
 import { sparkPath } from "../components/spark.js";
 import { niceNum, niceTicks, padSpan, dataRange, chartPaths, fmtSpan, nearestIndex, MIN_SPAN, CHART_W, CHART_H } from "../components/chart.js";
 import {
@@ -15,7 +16,7 @@ import {
 import { deriveThrottle } from "../store.js";
 import { tileModel, throttleTileModel, appendChartSample, chartReasons, opsModel, memModel, ageText, HISTORY_S } from "../views/dashboard.js";
 import {
-  sortChecks, checkState, normLimits, normHw, limitRows, limitsNote, preflightSummary, countStatuses, topologyRows, fmtSigned, POLICY_FILE, MINUS,
+  sortChecks, checkState, mergeCpuLimits, limitRows, limitsNote, preflightSummary, countStatuses, topologyRows, fmtSigned, MINUS,
 } from "../views/system.js";
 import { auditRequest, auditKeep, auditRow, auditRows, auditNote, auditTime, MB_NAMES, hex } from "../views/audit.js";
 
@@ -372,43 +373,51 @@ test("system: preflightSummary explains why writes are off", () => {
   assert.deepEqual(countStatuses(undefined), {});
 });
 
-test("system: limits come from the helper's kept read, with sources; nothing is hard-coded", () => {
+test("system: the limits are the CPU's own (cpu_limits of the kept read), with the register each came from", () => {
   const last = FIXTURES.tuneLast.result;
-  const limits = normLimits(last.result.limits);
-  const hw = normHw(last.result.hw_limits);
-  assert.deepEqual(limits.P, { offMin: -200, offMax: 200, vtMax: 1.625, ratioMax: 60, vtSrc: "auto", ratioSrc: "auto" });
-  assert.equal(limits.E.ratioMax, 49);
-  assert.deepEqual(hw.P, { ratioOc: 120, vtMaxV: 1.625, off: [-1000, 999] });
-  const rows = limitRows(limits, hw);
-  assert.equal(rows.length, 6);
-  assert.deepEqual(rows[0], { what: "Voltage offset", kind: "P-cores", policy: `${MINUS}200…+200 mV`, cpu: `${MINUS}1000…+999 mV (field range)`, source: `your policy (${POLICY_FILE})` });
-  assert.equal(rows[1].policy, "up to 1.625 V");
-  assert.match(rows[1].source, /^auto/);
-  assert.equal(rows[2].cpu, "up to 120× (cmd 0x01)");
-  assert.equal(limitRows(null, null).length, 0);
+  const cl = mergeCpuLimits(last.result.cpu_limits);
+  const rows = limitRows(cl);
+  const row = (what, kind) => rows.find((r) => r.what === what && r.kind === kind);
+  assert.deepEqual(row("CPU max voltage", "P-cores"), { what: "CPU max voltage", kind: "P-cores", cpu: "1.625 V", source: "OC mailbox 0x28 [11:0] − 1 LSB" });
+  assert.equal(row("OC ratio limit", "P-cores").cpu, "120×");
+  assert.equal(row("OC ratio limit", "P-cores").source, "OC mailbox 0x01 [7:0]");
+  assert.equal(row("CPU max voltage", "E-clusters").cpu, "1.355 V");
+  assert.equal(row("CPU max voltage", "Ring").cpu, "1.999 V", "the ring has its own entry");
+  assert.equal(row("V/F offset field", "P, E, ring").cpu, `${MINUS}1000…+999 mV`);
+  assert.match(row("Package power limits", "Package").cpu, /^n\/a · Read CPU state first/, "tune.last leaves the power part null: it comes from the power read");
+  assert.match(row("Ratio cap range", "All CPUs").cpu, /^n\/a · Read CPU state first/);
+  assert.match(row("Uncore ratio range", "Ring").cpu, /^n\/a · Read CPU state first/);
+  assert.equal(limitRows(null).length, 0);
+  assert.ok(rows.every((r) => !/polic/i.test(JSON.stringify(r))), "no policy anywhere in the table");
 });
 
-test("system: a limit the policy does not state is n/a with the reason, and an unread CPU ceiling says so", () => {
-  const limits = normLimits({ offset_mv: { P: { min: -50, max: 0 }, E: { min: -50, max: 0 } }, v_target_max_v: { P: 1.5 }, ratio_max: {}, source: {} });
-  assert.equal(limits.P.vtMax, 1.5);
-  assert.equal(limits.E.vtMax, null);
-  const rows = limitRows(limits, null);
-  const eRatio = rows.find((r) => r.kind === "E-clusters" && r.what === "OC ratio");
-  assert.match(eRatio.policy, /^n\/a · none stated/);
-  assert.match(eRatio.cpu, /^n\/a · not read/);
-  assert.match(eRatio.source, /states no ratio_max/);
-  assert.equal(normLimits({ offset_mv: { P: { min: 1 } } }), null);
-  assert.equal(normLimits(null), null);
-  assert.equal(normHw({}), null);
-  assert.equal(normHw({ P: { offset_mv: [1] } }).P.off, null);
+test("system: the power, cpufreq and uncore limits come from the Power / Ratio caps / Ring & uncore reads when those ran", () => {
+  const last = FIXTURES.tuneLast.result;
+  const cl = mergeCpuLimits(last.result.cpu_limits, { power: G["power-read"].result.cpu_limits, runtime: G["runtime-read"].result.cpu_limits });
+  const rows = limitRows(cl);
+  assert.equal(rows.find((r) => r.what === "Package power limits").cpu, "writable, field maximum 4095.875 W");
+  assert.equal(rows.find((r) => r.what === "Ratio cap range").cpu, "800–5700 MHz (24 CPUs)");
+  assert.equal(rows.find((r) => r.what === "Uncore ratio range").cpu, "8×–40×");
+  const locked = mergeCpuLimits(last.result.cpu_limits, { power: { ...G["power-read"].result.cpu_limits, power: { locked: true, pl_max_w: 4095.875, source: "" } } });
+  assert.match(limitRows(locked).find((r) => r.what === "Package power limits").cpu, /^locked by firmware/);
+});
+
+test("system: a limit that was not read says Read CPU state first (the recorded unread shape)", () => {
+  const cl = mergeCpuLimits(G["power-read-unread"].result.cpu_limits);
+  const rows = limitRows(cl);
+  const v = rows.find((r) => r.what === "CPU max voltage" && r.kind === "P-cores");
+  assert.match(v.cpu, /^n\/a · Read CPU state first/);
+  assert.match(rows.find((r) => r.what === "OC ratio limit" && r.kind === "E-clusters").cpu, /^n\/a · Read CPU state first/);
+  assert.equal(mergeCpuLimits(null), null);
 });
 
 test("system: limitsNote", () => {
   assert.match(limitsNote(null, null), /read the ratios and voltages in Tune/);
   assert.match(limitsNote({ available: false }, null), /Not read yet/);
-  assert.match(limitsNote({ available: true, result: { limits_note: "old helper" } }, null), /old helper/);
-  assert.match(limitsNote({ available: true, result: {} }, null), /did not report the policy limits/);
-  assert.ok(limitsNote({ available: true, result: {} }, { P: {} }).includes(POLICY_FILE));
+  assert.match(limitsNote({ available: true, result: {} }, null), /did not report the CPU limits/);
+  const ok = limitsNote({ available: true, result: {} }, { kinds: {} });
+  assert.match(ok, /limits of your CPU/);
+  assert.doesNotMatch(ok, /polic/i);
 });
 
 test("system: topologyRows from preflight, favored flag and cpu ranges", () => {

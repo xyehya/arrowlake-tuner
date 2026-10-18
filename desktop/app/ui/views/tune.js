@@ -12,7 +12,8 @@
 //     units:  the lib/units.js module,   limits: the lib/limits.js module,
 //     model:  () -> the units model of the current read (null before the first read; the tab is remounted when a new read replaces it),
 //     tune:   the controller (state(), setSelection(), readCpu(), ...) }
-// tune.js owns the tab bar and mounts views/tune/turbo.js (G-209) for "Turbo ratios"; Power / Ring & uncore / Ratios & parking show a placeholder until G-217.
+// tune.js owns the tab bar and mounts the modules of SUBTAB_MODULES: turbo.js (G-209, needs a tune.read), power.js / ring.js / runtime.js (G-217: they read power.read / runtime.read themselves, so no
+// tune.read is needed; the ring tab shows its V/F editor once there is one). "Ratio caps" is PLAN's "Ratios & parking" without parking (held, D-048).
 //
 // app.js integration: `VIEWS.tune = tuneView`; the pending bar's Discard calls `discardDraft(store)` and Review calls `requestReview(store)`, which bumps `tune.reviewSeq` and dispatches the
 // DOM event "tune:review" ({detail: {changes, units}}) on `store.events` (an EventTarget; it exists from the first discardDraft / requestReview / Tune mount on). G-210 listens to that.
@@ -22,16 +23,25 @@ import { setPending, setLastRead, pushToast } from "../store.js";
 import * as unitsLib from "../lib/units.js";
 import * as draftLib from "../lib/draft.js";
 import * as limitsLib from "../lib/limits.js";
+import { pendingCounts, discardRt } from "../lib/rtstate.js";
+import { requestReview as requestRuntimeReview } from "./tune/runtime-kinds.js";
 import { createGrid } from "./tune/grid.js";
 import { createInspector } from "./tune/inspector.js";
 
 export const SUBTABS = [
   { id: "cores", label: "Cores" },
   { id: "turbo", label: "Turbo ratios" },
-  { id: "power", label: "Power", task: "G-217" },
-  { id: "ring", label: "Ring & uncore", task: "G-217" },
-  { id: "ratios", label: "Ratios & parking", task: "G-217" },
+  { id: "power", label: "Power" },
+  { id: "ring", label: "Ring & uncore" },
+  { id: "ratios", label: "Ratio caps" }, // "Ratios & parking" of PLAN §4.2 minus parking (held, D-048)
 ];
+/** The sub-tabs that are separate modules (`mount(el, ctx)` / `unmount()`), and whether they need a tune.read first (the runtime tabs read power.read / runtime.read themselves, G-217). */
+export const SUBTAB_MODULES = {
+  turbo: { path: "./tune/turbo.js", needsRead: true },
+  power: { path: "./tune/power.js", needsRead: false },
+  ring: { path: "./tune/ring.js", needsRead: false },
+  ratios: { path: "./tune/runtime.js", needsRead: false },
+};
 export const NO_BASELINE_REASON = "no baseline curve (Curves → Measure)";
 
 // ---- the store slice ----------------------------------------------------------------------------------------------------------------------
@@ -47,19 +57,37 @@ export const initialTune = () => ({
   reviewSeq: 0,
 });
 
+const watched = new WeakSet();
+
 export function ensureTune(store) {
   if (!store.events) store.events = new EventTarget(); // the "tune:review" channel (see requestReview)
   if (!store.get().tune) store.set({ tune: initialTune() });
+  if (!watched.has(store) && typeof store.watch === "function") {
+    watched.add(store);
+    store.watch((s) => s.rt, () => syncPending(store)); // the runtime edits (power, ratio caps, uncore) are part of the same pending bar
+  }
   return store.get().tune;
 }
 
-/** Re-count the pending bar from the slice: {changes, units} of diff(model, draft). */
+/**
+ * Write the pending bar: the V/F + turbo + ring draft counts {changes, units} plus the pending runtime edits (power / ratio caps / uncore, lib/rtstate.js; the runtime tabs show
+ * "N runtime, M V/F" with M = pending.changes - pendingCounts(rt).total).
+ */
+export function setPendingAll(store, changes, units) {
+  const rt = store.get().rt;
+  const c = rt ? pendingCounts(rt) : { power: 0, caps: 0, uncore: 0, total: 0 };
+  setPending(store, changes + c.total, units + (c.power ? 1 : 0) + c.caps + (c.uncore ? 1 : 0));
+}
+
+/** Re-count the pending bar from the slice: {changes, units} of diff(model, draft), plus the runtime edits. */
 export function syncPending(store) {
   const t = store.get().tune;
-  if (!t || !t.model) return setPending(store, 0, 0);
+  if (!t || !t.model) return setPendingAll(store, 0, 0);
   const d = draftLib.diff(t.model, t.draft);
-  return setPending(store, d.total, d.unitCount);
+  return setPendingAll(store, d.total, d.unitCount);
 }
+
+const hasRuntimeEdits = (rt) => !!rt && ["power", "caps", "uncore"].some((k) => rt.edits && Object.keys(rt.edits[k] || {}).length > 0);
 
 export function patchTune(store, patch) {
   ensureTune(store);
@@ -69,12 +97,20 @@ export function patchTune(store, patch) {
 
 export function discardDraft(store) {
   ensureTune(store);
+  if (hasRuntimeEdits(store.get().rt)) discardRt(store);
   patchTune(store, { draft: draftLib.emptyDraft() });
 }
 
-/** The pending bar's "Review & Apply": counts a request in the slice and fires "tune:review" on store.events. */
+/**
+ * The pending bar's "Review & Apply": counts a request in the slice and fires "tune:review" on store.events. With pending runtime edits (power, ratio caps, uncore) one drawer covers
+ * everything: the V/F + turbo + ring draft first, then power, then the caps / uncore (views/tune/runtime-kinds.js builds those requests).
+ */
 export function requestReview(store) {
   const t = ensureTune(store);
+  if (hasRuntimeEdits(store.get().rt)) {
+    patchTune(store, { reviewSeq: t.reviewSeq + 1 });
+    return requestRuntimeReview(store);
+  }
   const d = t.model ? draftLib.diff(t.model, t.draft) : { total: 0, unitCount: 0 };
   patchTune(store, { reviewSeq: t.reviewSeq + 1 });
   store.events.dispatchEvent(new CustomEvent("tune:review", { detail: { changes: d.total, units: d.unitCount } }));
@@ -353,12 +389,8 @@ export function tuneView() {
         unmountSub();
         const def = SUBTABS.find((x) => x.id === t.subtab);
         panel.dataset.tab = t.subtab;
-        if (def.task) {
-          panel.append(h("div", { class: "card placeholder" }, h("p", { text: def.label + " is coming with " + def.task + "." }), h("p", { class: "muted", text: "The backend ops it needs (PLAN §6) land first; the editors reuse the Cores inspector." })));
-          sub = { id: t.subtab, model: t.model, unmount() {} };
-          return;
-        }
-        if (!t.model) {
+        const spec = SUBTAB_MODULES[t.subtab];
+        if (!t.model && (!spec || spec.needsRead)) {
           panel.append(h("div", { class: "card empty-read" }, h("p", { text: "Nothing to edit yet." }), h("p", { class: "muted", text: 'Use "Read CPU state" above: the app reads the V/F points, the turbo tables and the limits once per boot. Nothing is written.' })));
           sub = { id: t.subtab, model: t.model, unmount() {} };
           return;
@@ -373,7 +405,7 @@ export function tuneView() {
         sub = mine;
         const note = h("p", { class: "muted", text: "Loading…" });
         panel.append(note);
-        import("./tune/turbo.js").then(
+        import(spec.path).then(
           (mod) => {
             if (sub !== mine) return;
             clear(panel);
@@ -382,7 +414,7 @@ export function tuneView() {
           },
           () => {
             if (sub !== mine) return;
-            note.textContent = "Turbo ratios are coming with G-209.";
+            note.textContent = def.label + " could not be loaded.";
           },
         );
       }

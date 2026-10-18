@@ -1,0 +1,226 @@
+{
+ "request": {
+  "args": {
+   "revert": true
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "id": "c18",
+  "ok": true,
+  "result": {
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": {
+     "0": [
+      800000,
+      5700000
+     ],
+     "1": [
+      800000,
+      5500000
+     ],
+     "10": [
+      800000,
+      4900000
+     ],
+     "11": [
+      800000,
+      4900000
+     ],
+     "12": [
+      800000,
+      4900000
+     ],
+     "13": [
+      800000,
+      4900000
+     ],
+     "14": [
+      800000,
+      4900000
+     ],
+     "15": [
+      800000,
+      4900000
+     ],
+     "16": [
+      800000,
+      4900000
+     ],
+     "17": [
+      800000,
+      4900000
+     ],
+     "18": [
+      800000,
+      4900000
+     ],
+     "19": [
+      800000,
+      4900000
+     ],
+     "2": [
+      800000,
+      5500000
+     ],
+     "20": [
+      800000,
+      4900000
+     ],
+     "21": [
+      800000,
+      4900000
+     ],
+     "22": [
+      800000,
+      4900000
+     ],
+     "23": [
+      800000,
+      4900000
+     ],
+     "3": [
+      800000,
+      5700000
+     ],
+     "4": [
+      800000,
+      5500000
+     ],
+     "5": [
+      800000,
+      5500000
+     ],
+     "6": [
+      800000,
+      5500000
+     ],
+     "7": [
+      800000,
+      5500000
+     ],
+     "8": [
+      800000,
+      4900000
+     ],
+     "9": [
+      800000,
+      4900000
+     ]
+    },
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": [
+     800000,
+     4000000
+    ]
+   },
+   "expires_s": 600,
+   "journal_new": false,
+   "nonce": "7UUA4C",
+   "ops_needed": 0,
+   "plan_id": "ce8488dbcb60beb6744f1459ecabab51a6ca0165da99d9e148a800e8438ab611",
+   "revert": true,
+   "steps": [
+    {
+     "before": 5000000,
+     "domain": "caps",
+     "expect": [
+      5700000,
+      5700000
+     ],
+     "file": "cpu0/cpufreq/scaling_max_freq",
+     "key": "cpu0",
+     "n": 1,
+     "value": 5700000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu8/cpufreq/scaling_max_freq",
+     "key": "cpu8",
+     "n": 2,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu9/cpufreq/scaling_max_freq",
+     "key": "cpu9",
+     "n": 3,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu10/cpufreq/scaling_max_freq",
+     "key": "cpu10",
+     "n": 4,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu11/cpufreq/scaling_max_freq",
+     "key": "cpu11",
+     "n": 5,
+     "value": 4900000
+    },
+    {
+     "before": 3800000,
+     "domain": "uncore",
+     "expect": [
+      4000000,
+      4000000
+     ],
+     "file": "intel_uncore_frequency/package_00_die_00/max_freq_khz",
+     "key": "max_ratio",
+     "n": 6,
+     "value": 4000000
+    }
+   ],
+   "warnings": [
+    "these are runtime values: a reboot restores the firmware / kernel defaults"
+   ],
+   "writes": 6
+  }
+ }
+}

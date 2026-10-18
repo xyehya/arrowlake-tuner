@@ -1,15 +1,15 @@
 // turbo.js: the Tune screen's "Turbo ratios" sub-tab (G-209). PLAN §4.2 — an XTU-style Active Cores table for P and for E (1..8 buckets), side by side:
 // one ratio stepper per bucket (minus / typed / plus, arrow keys ±1), the value as read, a pending marker when the draft differs, the read-only bucket core
-// counts and the policy/CPU ceiling with its source; below each table an inline SVG step chart (ratio vs active cores).
+// counts and the CPU's ceiling with its source; below each table an inline SVG step chart (ratio vs active cores).
 // Ported from web/app.js:2846-2860 (turboCur / turboEff / turboKinds / setBucket), 3514-3600 (turboLabel / turboStepChart / renderTurbo / buildTurbo).
 //
 //   mount(el, ctx) / unmount()
 //   ctx = {store, bridge, draft, units, limits, model?, read?, getDraft?, setDraft?, onChange?}
-//     store   the app store (store.js). After every accepted edit the pending counts are written with setPending(store, ...); nothing else is read from it.
+//     store   the app store (store.js). After every accepted edit the pending counts are written with setPendingAll(store, ...) (views/tune.js: the draft plus the runtime edits); nothing else is read from it.
 //     bridge  accepted for parity with the other views; this view never talks to the helper. An edit is local until Review & Apply (PLAN §4.3).
 //     draft   lib/draft.js — the turbo API used here is turboCur(model, kind), turboEff(model, draft, kind), setBucket(model, draft, kind, i, value),
 //             discardTurbo(draft, kind) and diff(model, draft). A wrapper exposing the same functions works; the current draft VALUE may also be passed.
-//     units   lib/units.js (modelFromRead; used only when no model is handed in), limits lib/limits.js (limitsFor / limitLine).
+//     units   lib/units.js (modelFromRead; used only when no model is handed in), limits lib/limits.js (limitsFor).
 //     model   the units model (units.modelFromRead of a tune.read result); `read` (the raw result) is the fallback, then store state.
 //     getDraft / setDraft  the host's accessors for the shared draft (required together). Without them the draft in `ctx.draft`, in store state
 //             (`tune.draft`), or a view-local empty draft is used, in that order.
@@ -20,12 +20,12 @@
 //
 // Hardware rules carried here, never invented: the turbo table may only be non-increasing (a bucket may not exceed the bucket to its left, fewer active
 // cores = higher ratio), the floor is the lowest V/F point the kind's cores have (units.turboFloor, read live) and the ceiling of bucket 1 is the
-// effective ratio limit from the read (policy ∩ CPU, limitsFor). With no stated ceiling a bucket is never raised above what was read (G-133).
+// CPU's OC ratio limit from the read (cpu_limits, limitsFor). With that limit unread a bucket is never raised above what was read (G-133).
 import { h, svg, clear } from "../../components/dom.js";
 import * as draftLib from "../../lib/draft.js";
 import * as unitsLib from "../../lib/units.js";
 import * as limitsLib from "../../lib/limits.js";
-import { setPending } from "../../store.js";
+import { setPendingAll } from "../tune.js";
 import { isNum, fmtRatio, MINUS, TIMES } from "../../lib/format.js";
 
 export const TURBO_CSS = "styles/turbo.css";
@@ -55,10 +55,10 @@ export function bucketLabel(i, counts) {
 /** Lowest ratio a bucket of this kind may hold: the lowest V/F point of its units (read live), never a literal. */
 export const bucketFloor = (model, kind) => unitsLib.turboFloor(model, kind) ?? 1;
 
-/** The effective ratio limit of a kind from the read: {max, source, policy, cpu} or null when the read states none. */
+/** The ratio limit of a kind from the read (the CPU's own OC ratio limit, mailbox 0x01): {max, source} or null when it was not read. */
 export function ratioLimit(model, kind) {
   const l = limitsLib.limitsFor(model, kind);
-  return l && l.known && l.ratio ? { max: l.ratio.max, source: l.ratio.source, policy: l.ratio.policy, cpu: l.ratio.cpu } : null;
+  return l && l.known && l.ratio ? { max: l.ratio.max, source: l.ratio.source } : null;
 }
 
 /** Ceiling of bucket i: the bucket to its left; for bucket 0 the effective ratio limit, else the read value (no stated ceiling = no raise, G-133). */
@@ -97,7 +97,7 @@ export function checkBucket(model, kind, i, value, eff) {
     const r = ratioLimit(model, kind);
     return r
       ? { ok: false, code: "above_limit", reason: n + TIMES + " is above the " + r.max + TIMES + " ceiling (" + r.source + ")." }
-      : { ok: false, code: "no_ceiling", reason: n + TIMES + " is above the " + cur[0] + TIMES + " value that was read, and no ratio ceiling is stated, so this table may only be lowered." };
+      : { ok: false, code: "no_ceiling", reason: n + TIMES + " is above the " + cur[0] + TIMES + " value that was read, and the CPU's OC ratio limit (mailbox 0x01) has not been read (Read CPU state first), so this table may only be lowered." };
   }
   return { ok: true, value: n };
 }
@@ -118,17 +118,12 @@ export function editBucket(model, draft, kind, i, value, api = draftLib) {
   return { draft: next, value: chk.value, changed: next !== draft };
 }
 
-/** The ceiling hint of a table with its source (policy file / CPU), in one line. */
+/** The ceiling hint of a table with its source (the CPU's OC ratio limit), in one line. */
 export function limitHint(model, kind) {
   const l = limitsLib.limitsFor(model, kind);
-  if (!l.known) return "The read reported no policy limits, so no bucket may be raised above what was read (lowering stays available).";
-  if (!l.ratio) {
-    return l.policy && l.policy.ratioSrc === "auto"
-      ? "The policy's ratio_max is auto and could not be resolved from this read, so no bucket may be raised above what was read."
-      : "Your policy states no ratio_max, so no bucket may be raised above what was read.";
-  }
-  const cpu = isNum(l.ratio.cpu) && isNum(l.ratio.max) && l.ratio.cpu > l.ratio.max ? "; the CPU itself allows OC ratios up to " + l.ratio.cpu + TIMES : "";
-  return "Bucket 1 (fewest active cores) may be raised up to " + l.ratio.max + TIMES + " (" + l.ratio.source + cpu + "). Lowering a bucket brings the buckets to its right down with it.";
+  if (!l.known) return "The helper did not report the CPU limits, so no bucket may be raised above what was read (lowering stays available).";
+  if (!l.ratio) return l.ratioWhy + ", so no bucket may be raised above what was read (lowering stays available).";
+  return "Bucket 1 (fewest active cores) may be raised up to " + l.ratio.max + TIMES + " (" + l.ratio.source + "). Lowering a bucket brings the buckets to its right down with it.";
 }
 
 // ---- the step chart -------------------------------------------------------------------------------------------------------------------------
@@ -214,7 +209,7 @@ const effOf = (inst, kind) => inst.api.draft.turboEff(inst.model, getDraft(inst)
 function syncPending(inst) {
   if (!inst.store) return;
   const d = inst.api.draft.diff(inst.model, getDraft(inst));
-  setPending(inst.store, d.total, d.unitCount);
+  setPendingAll(inst.store, d.total, d.unitCount);
 }
 
 const note = (text) => h("p", { class: "turbo-note", text });

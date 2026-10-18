@@ -1,17 +1,17 @@
 // views/system.js: System screen (PLAN §4.4): preflight, tuning limits with their sources, helper/link and the refresh-interval setting, live topology.
-// Port of web/app.js: renderPreflight (:375-420, CHECK_ORDER :353), normLimits/normHw/renderSysLimits (:3678-3730, D-038/D-039), renderHelper (:476-494).
-// The limits are never fixed in the page: they come from the helper's kept tune read (`tune.last`: `limits` = the operator's policy, `hw_limits` = what the
-// CPU reports; no mailbox traffic), and the screen says whose they are and where to change them. Without a read there is no table, only the reason.
+// Port of web/app.js: renderPreflight (:375-420, CHECK_ORDER :353), renderHelper (:476-494).
+// The limits are never fixed in the page: they are the CPU's own (D-049), from the helper's kept tune read (`tune.last`: `cpu_limits`; no mailbox traffic) plus the Power /
+// Ratio caps / Ring & uncore reads when those ran. Without a read there is no table, only the reason; a limit not read yet says "Read CPU state first".
 // Not here yet: persisted settings (settings_get/set arrive with the Tauri core, G-204), theme density, notifications.
 import { h, clear } from "../components/dom.js";
 import { fmtClock, NA } from "../components/fmt.js";
 import { setPreflight } from "../store.js";
+import { normCpuLimits, capWindow, uncoreWindow, READ_FIRST } from "../lib/cpulimits.js";
 import { installScreenStyles, installStyles, segmented } from "../components/spark.js";
 
 const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 
-export const POLICY_FILE = "/etc/arltuner/policy.toml";
 export const MINUS = "−";
 export const INTERVALS = [0.25, 0.5, 1, 2, 5];
 export const DEFAULT_INTERVAL_S = 1;
@@ -35,80 +35,62 @@ export function fmtSigned(x) {
   return (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
 }
 
-/** `limits` of tune.read / tune.last -> {P:{offMin,offMax,vtMax,ratioMax,vtSrc,ratioSrc}, E:{...}} or null (web normLimits). A null number = the policy states none. */
-export function normLimits(l) {
-  if (!isObj(l) || !isObj(l.offset_mv)) return null;
-  const out = {};
-  const src = isObj(l.source) ? l.source : {};
-  for (const k of ["P", "E"]) {
-    const o = l.offset_mv[k];
-    if (!isObj(o) || !isNum(o.min) || !isNum(o.max)) return null;
-    const pick = (obj) => (isObj(obj) && isNum(obj[k]) ? obj[k] : null);
-    const why = (obj) => (isObj(obj) && typeof obj[k] === "string" ? obj[k] : null);
-    out[k] = { offMin: o.min, offMax: o.max, vtMax: pick(l.v_target_max_v), ratioMax: pick(l.ratio_max), vtSrc: why(src.v_target_max), ratioSrc: why(src.ratio_max) };
-  }
-  return out;
+/**
+ * The CPU's own limits (D-049, lib/cpulimits.js): `tune.last`'s `cpu_limits` carries P / E / ring and the offset field; the power, cpufreq and uncore parts come from the
+ * Power / Ratio caps / Ring & uncore reads (`rt` = {power, runtime}: their `cpu_limits`), merged in when those were read.
+ */
+export function mergeCpuLimits(base, rt = {}) {
+  const cl = normCpuLimits(base);
+  const pw = normCpuLimits(rt.power);
+  const run = normCpuLimits(rt.runtime);
+  if (!cl && !pw && !run) return null;
+  const out = cl || { kinds: {}, offsetMv: null, power: null, capsKhz: {}, uncoreKhz: null };
+  return {
+    ...out,
+    power: pw && pw.power && (pw.power.plMaxW !== null || pw.power.locked !== null) ? pw.power : out.power,
+    capsKhz: run && Object.keys(run.capsKhz).length ? run.capsKhz : out.capsKhz,
+    uncoreKhz: run && run.uncoreKhz ? run.uncoreKhz : out.uncoreKhz,
+  };
 }
 
-/** `hw_limits` -> {P|E: {ratioOc, vtMaxV, off:[lo,hi]|null}} or null (web normHw). */
-export function normHw(hw) {
-  if (!isObj(hw)) return null;
-  const out = {};
-  for (const k of ["P", "E"]) {
-    const o = hw[k];
-    if (!isObj(o)) continue;
-    out[k] = {
-      ratioOc: isNum(o.ratio_max_oc) ? o.ratio_max_oc : null,
-      vtMaxV: isNum(o.v_target_max_mv) ? o.v_target_max_mv / 1000 : null,
-      off: Array.isArray(o.offset_mv) && o.offset_mv.length === 2 && o.offset_mv.every(isNum) ? o.offset_mv : null,
-    };
-  }
-  return Object.keys(out).length ? out : null;
-}
-
-/** Rows of the limits table. Each: {what, kind, policy, cpu, source}; "n/a" cells carry their reason in the text. */
-export function limitRows(limits, hw) {
-  if (!limits) return [];
+/** Rows of the limits table. Each: {what, kind, cpu, source}; a limit that was not read says "Read CPU state first" in its cell (starts with NA). */
+export function limitRows(cl) {
+  if (!cl) return [];
   const rows = [];
-  for (const k of ["P", "E"]) {
-    const lim = limits[k];
-    if (!lim) continue;
-    const cpu = hw ? hw[k] : null;
-    const kind = k === "P" ? "P-cores" : "E-clusters";
-    const auto = (s) => (s === "auto" ? "auto: resolved from the CPU's own limit" : `your policy (${POLICY_FILE})`);
-    rows.push({
-      what: "Voltage offset",
-      kind,
-      policy: `${fmtSigned(lim.offMin)}…${fmtSigned(lim.offMax)} mV`,
-      cpu: cpu && cpu.off ? `${fmtSigned(cpu.off[0])}…${fmtSigned(cpu.off[1])} mV (field range)` : `${NA} · not read`,
-      source: `your policy (${POLICY_FILE})`,
-    });
-    rows.push({
-      what: "Adaptive voltage (OC point)",
-      kind,
-      policy: isNum(lim.vtMax) ? `up to ${lim.vtMax.toFixed(3)} V` : `${NA} · none stated, no raise`,
-      cpu: cpu && isNum(cpu.vtMaxV) ? `up to ${cpu.vtMaxV.toFixed(3)} V (cmd 0x28)` : `${NA} · not read`,
-      source: isNum(lim.vtMax) ? auto(lim.vtSrc) : `your policy (${POLICY_FILE}) states no v_target_max_mv`,
-    });
-    rows.push({
-      what: "OC ratio",
-      kind,
-      policy: isNum(lim.ratioMax) ? `up to ${lim.ratioMax}×` : `${NA} · none stated, no raise`,
-      cpu: cpu && isNum(cpu.ratioOc) ? `up to ${cpu.ratioOc}× (cmd 0x01)` : `${NA} · not read`,
-      source: isNum(lim.ratioMax) ? auto(lim.ratioSrc) : `your policy (${POLICY_FILE}) states no ratio_max`,
-    });
+  const unread = () => `${NA} · ${READ_FIRST}`;
+  const mhz = (khz) => Math.round(khz / 1000);
+  for (const [k, kind] of [["P", "P-cores"], ["E", "E-clusters"], ["ring", "Ring"]]) {
+    const o = cl.kinds[k];
+    if (!o) continue;
+    rows.push({ what: "CPU max voltage", kind, cpu: isNum(o.maxMv) ? `${(o.maxMv / 1000).toFixed(3)} V` : unread(), source: "OC mailbox 0x28 [11:0] − 1 LSB" });
+    rows.push({ what: "OC ratio limit", kind, cpu: isNum(o.maxRatio) ? `${o.maxRatio}×` : unread(), source: "OC mailbox 0x01 [7:0]" });
   }
+  rows.push({ what: "V/F offset field", kind: "P, E, ring", cpu: cl.offsetMv ? `${fmtSigned(cl.offsetMv[0])}…${fmtSigned(cl.offsetMv[1])} mV` : `${NA} · not reported`, source: "11-bit offset field" });
+  const p = cl.power;
+  rows.push({
+    what: "Package power limits",
+    kind: "Package",
+    cpu: !p || (p.locked === null && p.plMaxW === null) ? `${NA} · ${READ_FIRST} (Tune → Power)` : `${p.locked ? "locked by firmware" : "writable"}, field maximum ${isNum(p.plMaxW) ? p.plMaxW + " W" : NA}`,
+    source: "MSR 0x610 (lock bit 63, 15-bit fields) in the units of MSR 0x606",
+  });
+  const cpus = Object.keys(cl.capsKhz);
+  const ws = cpus.map((c) => capWindow(cl, c)).filter(Boolean);
+  rows.push({
+    what: "Ratio cap range",
+    kind: "All CPUs",
+    cpu: ws.length ? `${mhz(Math.min(...ws.map((w) => w.minKhz).filter(isNum)))}–${mhz(Math.max(...ws.map((w) => w.maxKhz)))} MHz (${cpus.length} CPUs)` : `${NA} · ${READ_FIRST} (Tune → Ratio caps)`,
+    source: "cpufreq cpuinfo_min/max_freq",
+  });
+  const u = uncoreWindow(cl);
+  rows.push({ what: "Uncore ratio range", kind: "Ring", cpu: u ? `${u.min}×–${u.max}×` : `${NA} · ${READ_FIRST} (Tune → Ring & uncore)`, source: "intel_uncore_frequency initial_min/max_freq_khz" });
   return rows;
 }
 
-/** The note above the limits table (web renderSysLimits :3721). `last` = the tune.last result ({available, result}) or null. */
-export function limitsNote(last, limits) {
+/** The note above the limits table. `last` = the tune.last result ({available, result}) or null; `cl` = mergeCpuLimits(). */
+export function limitsNote(last, cl) {
   if (!last || last.available !== true) return "Not read yet this boot: read the ratios and voltages in Tune to see the limits.";
-  if (!limits) {
-    const n = isObj(last.result) && typeof last.result.limits_note === "string" ? last.result.limits_note : "";
-    return n || "The helper did not report the policy limits (update the helper), so the Tune controls stay disabled.";
-  }
-  return `Every limit is your policy, not the tool's: edit ${POLICY_FILE} (as root) to go further, up to what your CPU reports. A change applies from the next read or plan.`;
+  if (!cl) return "The helper did not report the CPU limits (update the helper), so the Tune controls stay disabled.";
+  return "These are the limits of your CPU, read from it. They are the only bounds on a value (besides the field encodings); a limit that was not read is shown as \"Read CPU state first\" and a write that needs it is refused until it is.";
 }
 
 /** Preflight summary + banner text (why the app is read-only / refused). */
@@ -186,7 +168,7 @@ export function systemView() {
       // ---- limits
       const limNote = h("p", { class: "dcard-note", id: "sys-limits-note" });
       const limBody = h("tbody", { id: "sys-limits-body" });
-      const limTable = h("table", { class: "tbl", id: "sys-limits" }, h("thead", {}, h("tr", {}, ...["Control", "Applies to", "Your policy", "CPU reports", "Source"].map((t) => h("th", { text: t })))), limBody);
+      const limTable = h("table", { class: "tbl", id: "sys-limits" }, h("thead", {}, h("tr", {}, ...["Limit", "Applies to", "CPU limit", "Source"].map((t) => h("th", { text: t })))), limBody);
       const limReload = h("button", { type: "button", class: "btn", id: "sys-limits-reload", text: "Reload", title: "Ask the helper for its kept tune read again (no mailbox traffic)", on: { click: () => loadLimits() } });
       const limCard = h("section", { class: "dcard", id: "sys-limits-card" }, h("div", { class: "dcard-head" }, h("h2", { text: "Tuning limits" }), h("span", { class: "spacer" }), limReload), limNote, limTable);
 
@@ -268,19 +250,21 @@ export function systemView() {
         add("Bridge", bridge.name);
         add("Helper state", op.state || NA);
         add("Mailbox ops this boot", isNum(op.opsUsed) ? String(op.opsUsed) : NA);
-        add("Per-boot cap", isNum(op.opsBudget) && op.opsBudget > 0 ? `${op.opsBudget} (policy; a limit, not a target)` : NA);
+        add("Per-boot cap", isNum(op.opsBudget) && op.opsBudget > 0 ? `${op.opsBudget} (a limit, not a target)` : NA);
         add("Last telemetry", isNum(st.telemetry.t) ? fmtClock(st.telemetry.t) : "none yet");
         add("Last tune read", st.lastReadAt ? fmtClock(st.lastReadAt) : "none this boot");
       };
-      const drawLimits = (last) => {
+      let lastTune = null;
+      const drawLimits = (last = lastTune) => {
+        lastTune = last;
         clear(limBody);
-        const limits = last && last.available === true && isObj(last.result) ? normLimits(last.result.limits) : null;
-        const hw = last && last.available === true && isObj(last.result) ? normHw(last.result.hw_limits) : null;
-        limNote.textContent = limitsNote(last, limits);
-        limTable.hidden = !limits;
-        for (const r of limitRows(limits, hw)) {
+        const rt = store.get().rt || {};
+        const cl = last && last.available === true && isObj(last.result) ? mergeCpuLimits(last.result.cpu_limits, { power: rt.power && rt.power.result ? rt.power.result.cpu_limits : null, runtime: rt.runtime && rt.runtime.result ? rt.runtime.result.cpu_limits : null }) : null;
+        limNote.textContent = limitsNote(last, cl);
+        limTable.hidden = !cl;
+        for (const r of limitRows(cl)) {
           const cell = (t) => h("td", { class: t.startsWith(NA) ? "na" : "", text: t });
-          limBody.append(h("tr", {}, h("td", { text: r.what }), h("td", { text: r.kind }), cell(r.policy), cell(r.cpu), h("td", { class: "muted", text: r.source })));
+          limBody.append(h("tr", {}, h("td", { text: r.what }), h("td", { text: r.kind }), cell(r.cpu), h("td", { class: "muted", text: r.source })));
         }
       };
 
@@ -322,6 +306,7 @@ export function systemView() {
         store.watch((s) => s.link, (_v, st) => drawHelper(st)),
         store.watch((s) => s.helperOp, (_v, st) => drawHelper(st)),
         store.watch((s) => s.lastReadAt, (_v, st) => drawHelper(st)),
+        store.watch((s) => s.rt, () => drawLimits()),
       );
       // telemetry.t changes every sample: redraw only the helper card line, cheaply, once a second
       timer = globalThis.setInterval(() => drawHelper(store.get()), 1000);

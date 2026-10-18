@@ -86,29 +86,29 @@ const stepParam = () => {
   const n = Number(searchParam("step"));
   return Number.isFinite(n) && n >= 1 ? n : null;
 };
-const POLICY_FLOOR_MV = -150; // tighter than the editor's own -200 clamp, so a refusal is reachable from the UI
-const POLICY_CEIL_MV = 150;
+const MOCK_FLOOR_MV = -150; // a mock CPU limit tighter than the editor's own clamp (the CPU's offset field, -1000..+999), so a refusal is reachable from the UI
+const MOCK_CEIL_MV = 150;
 const rawOf = (mv) => Math.round(mv * 1.024);
 const mvOfRaw = (raw) => Math.round((raw / 1.024) * 1000) / 1000;
 const wordOf = (mv, ratio) => "0x" + ((((rawOf(mv) & 0x7ff) << 21) | ratio) >>> 0).toString(16).padStart(8, "0");
 const readUnit = (id) => tuneRead.result.units.find((u) => u.id === id) || null;
 const signed = (n) => (n >= 0 ? "+" : "-") + Math.abs(n);
-const outside = (mv) => mv < POLICY_FLOOR_MV || mv > POLICY_CEIL_MV;
-const WINDOW = `${POLICY_FLOOR_MV}.0..+${POLICY_CEIL_MV}.0 mV`;
+const outside = (mv) => mv < MOCK_FLOOR_MV || mv > MOCK_CEIL_MV;
+const WINDOW = `${MOCK_FLOOR_MV}.0..+${MOCK_CEIL_MV}.0 mV`;
 
-/** The helper's POLICY_RANGE message (ops_tune.py _check_range shape) for the first offset of the intent outside the mock policy, else null. */
+/** A CPU-limit refusal message (D-049: the CPU's own limits are the only bound) for the first offset of the intent outside the mock CPU limit, else null. */
 function mockRefusal(intent) {
   for (const row of intent.rows || []) {
     const o = row.offset;
     if (!o) continue;
     for (const mv of o.kind === "curve" ? [o.mv] : Object.values(o.mv || {})) {
       if (outside(mv)) {
-        return `${row.target}: offset ${signed(mv)} mV (raw ${rawOf(mv)}) is outside the policy window ${WINDOW} (policy effective_offset_floor_mv = ${POLICY_FLOOR_MV}, offset_ceiling_mv = ${POLICY_CEIL_MV}; mock policy; the field encoding allows -1000..999 mV). Nothing was sent.`;
+        return `${row.target}: offset ${signed(mv)} mV (raw ${rawOf(mv)}) is outside the CPU limit ${WINDOW} (mock CPU limit; the field encoding allows -1000..999 mV). Nothing was sent.`;
       }
     }
   }
   for (const [no, mv] of Object.entries((intent.ring && intent.ring.points) || {})) {
-    if (outside(mv)) return `ring point ${no}: offset ${signed(mv)} mV (raw ${rawOf(mv)}) is outside the policy window ${WINDOW} (mock policy). Nothing was sent.`;
+    if (outside(mv)) return `ring point ${no}: offset ${signed(mv)} mV (raw ${rawOf(mv)}) is outside the CPU limit ${WINDOW} (mock CPU limit). Nothing was sent.`;
   }
   return null;
 }
@@ -581,8 +581,10 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
 
 // G-218: Curves/Stress fixtures and run simulation are layered on top of the base transport.
 import { wrapMockTransport } from "./mock-backend-g218.js";
+// G-217: power.* / runtime.* (Tune → Power, Ring & uncore, Ratio caps) and `cpu_limits` on the reads, layered on top
+import { wrapMockTransportG217 } from "./mock-backend-g217.js";
 export function createMockTransport(opts = {}) {
   // the recorded simulator curves seed the library (incl. a baseline for Tune predictions) unless ?nobaseline asks for none
   const seed = opts.seed ?? (noBaselineParam() ? "none" : "recorded");
-  return wrapMockTransport(createBaseMockTransport(opts), { ...opts, seed });
+  return wrapMockTransportG217(wrapMockTransport(createBaseMockTransport(opts), { ...opts, seed }), opts);
 }

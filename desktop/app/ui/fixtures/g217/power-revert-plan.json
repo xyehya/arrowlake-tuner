@@ -1,0 +1,104 @@
+{
+ "request": {
+  "args": {
+   "revert": true
+  },
+  "op": "power.plan"
+ },
+ "response": {
+  "id": "c12",
+  "ok": true,
+  "result": {
+   "after": {
+    "pl1_w": 250.0,
+    "pl2_w": 295.0,
+    "tau_s": 127.926272
+   },
+   "before": {
+    "max_power_uw": 125000000,
+    "pl1_uw": 230000000,
+    "pl1_w": 230.0,
+    "pl2_tau_us": 2440,
+    "pl2_uw": 280000000,
+    "pl2_w": 280.0,
+    "tau_s": 55.967744,
+    "tau_us": 55967744
+   },
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": null
+   },
+   "expires_s": 600,
+   "journal_new": false,
+   "locked": false,
+   "nonce": "RBHFEI",
+   "ops_needed": 0,
+   "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
+   "revert": true,
+   "steps": [
+    {
+     "before": 230000000,
+     "expect": [
+      250000000,
+      250000000
+     ],
+     "file": "constraint_0_power_limit_uw",
+     "key": "pl1_w",
+     "n": 1,
+     "value": 250000000
+    },
+    {
+     "before": 280000000,
+     "expect": [
+      295000000,
+      295000000
+     ],
+     "file": "constraint_1_power_limit_uw",
+     "key": "pl2_w",
+     "n": 2,
+     "value": 295000000
+    },
+    {
+     "before": 55967744,
+     "expect": [
+      127926272,
+      127926272
+     ],
+     "file": "constraint_0_time_window_us",
+     "key": "tau_s",
+     "n": 3,
+     "value": 127926272
+    }
+   ],
+   "warnings": [
+    "tau is rounded down to the window the register can encode (the step shows that window); the read-back must show exactly it",
+    "package power limits are runtime state: a reboot restores the firmware values"
+   ],
+   "writes": 3
+  }
+ }
+}

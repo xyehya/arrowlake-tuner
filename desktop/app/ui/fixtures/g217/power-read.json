@@ -1,0 +1,77 @@
+{
+ "id": "c7",
+ "ok": true,
+ "result": {
+  "available": true,
+  "boot": null,
+  "cpu_limits": {
+   "E": {
+    "max_mv": 1355,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read"
+   },
+   "P": {
+    "max_mv": 1625,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read"
+   },
+   "caps_khz": null,
+   "offset_mv": [
+    -1000,
+    999
+   ],
+   "power": {
+    "locked": false,
+    "pl_max_w": 4095.875,
+    "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+   },
+   "ring": {
+    "max_mv": 1999,
+    "max_ratio": 85,
+    "source": "0x28/0x01 read"
+   },
+   "uncore_khz": null
+  },
+  "journal": "/var/lib/arltuner/power-journal.json",
+  "locked": false,
+  "msr": {
+   "info": {
+    "max_w": 0.0,
+    "min_w": 0.0,
+    "raw": "0x00000000000003e8",
+    "tdp_w": 125.0
+   },
+   "limit": {
+    "locked": false,
+    "pl1_clamp": true,
+    "pl1_enabled": true,
+    "pl1_w": 250.0,
+    "pl2_clamp": false,
+    "pl2_enabled": true,
+    "pl2_w": 295.0,
+    "raw": "0x00008938002387d0",
+    "tau_s": 127.926272,
+    "tau_us": 127926272
+   },
+   "units": {
+    "power_unit_w": 0.125,
+    "raw": "0xa0e03",
+    "time_unit_s": 0.0009765625
+   }
+  },
+  "msr_note": null,
+  "note": null,
+  "powercap": {
+   "max_power_uw": 125000000,
+   "pl1_uw": 250000000,
+   "pl1_w": 250.0,
+   "pl2_tau_us": 2440,
+   "pl2_uw": 295000000,
+   "pl2_w": 295.0,
+   "tau_s": 127.926272,
+   "tau_us": 127926272
+  },
+  "read_only_reason": null,
+  "writable": true
+ }
+}

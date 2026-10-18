@@ -138,12 +138,12 @@ test("curve rows: ring rows are keyed by the P2 point number, the OC slot is mar
   assert.match(rows[0].why, /ring/);
 });
 
-test("limits: the field's disabled reason and the row's limit cell name the source", () => {
+test("limits: the field's disabled reason and the row's limit cell name the CPU as the source", () => {
   assert.equal(disabledReason(m, "P"), "");
   assert.equal(disabledReason(m, "R"), "");
   assert.match(disabledReason(model({ intent_features: undefined }), "R"), /ring/);
-  assert.match(disabledReason(model({ limits: null }), "P"), /policy limits/);
-  assert.equal(limitCell(m, "P"), "±200 · policy");
+  assert.match(disabledReason(model({ cpu_limits: null }), "P"), /did not report the CPU limits/);
+  assert.equal(limitCell(m, "P"), "−1000…+999 · CPU (11-bit V/F offset field)");
   assert.match(limitCell(m, "R"), /^−1000…\+999 · CPU/);
 });
 

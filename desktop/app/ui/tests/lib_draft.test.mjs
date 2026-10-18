@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import FIX from "../fixtures/fixtures.js";
+import G from "../fixtures/g217/fixtures-g217.js";
 import { modelFromRead, RING_ID } from "../lib/units.js";
 import {
   emptyDraft, isEmpty, setCurve, setPoint, setRingPoint, setVt, setOcRatio, setOcOffset, ocOffsetOf, setBucket, discardUnits, discardTurbo, curveValue, pointValue, ringValue,
@@ -34,12 +35,16 @@ test("draft: 1/1024 V raw equality: -20 over a read of -19.531 is not pending", 
   assert.equal(setPoint(m, emptyDraft(), ["P0"], 53, -25).units.P0.pts[53], -25);
 });
 
-test("draft: values are whole mV inside the policy window", () => {
+test("draft: values are whole mV inside the CPU's offset field", () => {
   const m = model();
   assert.deepEqual(setPoint(m, emptyDraft(), ["P0"], 53, -20.4).units.P0.pts, { 53: -20 });
-  assert.deepEqual(setPoint(m, emptyDraft(), ["P0"], 53, -999).units.P0.pts, { 53: -200 });
+  assert.deepEqual(setPoint(m, emptyDraft(), ["P0"], 53, -5000).units.P0.pts, { 53: -1000 });
+  assert.deepEqual(setPoint(m, emptyDraft(), ["P0"], 53, 5000).units.P0.pts, { 53: 999 });
   assert.equal(isEmpty(setPoint(m, emptyDraft(), ["P0"], 53, NaN)), true);
-  assert.equal(isEmpty(setPoint(model({ limits: null }), emptyDraft(), ["P0"], 53, -20)), true, "no limits read = nothing may be set");
+  assert.equal(isEmpty(setPoint(model({ cpu_limits: null }), emptyDraft(), ["P0"], 53, -20)), true, "no limits reported = nothing may be set");
+  const unread = model({ cpu_limits: structuredClone(G["power-read-unread"].result.cpu_limits) });
+  assert.deepEqual(setPoint(unread, emptyDraft(), ["P0"], 53, -20).units.P0.pts, { 53: -20 }, "the CPU voltage ceiling is unread: a negative offset is still editable");
+  assert.equal(isEmpty(setPoint(unread, emptyDraft(), ["P0"], 53, 20)), true, "...a positive one is clamped to 0 (= no change)");
   assert.equal(isEmpty(setPoint(m, emptyDraft(), ["P0"], 54, -20)), true, "no such point");
 });
 
@@ -111,7 +116,8 @@ test("OC ratio on E: a ratio above the fused top creates the OC point with an au
   d = setVt(m, d, ["EC0"], 1.1612);
   assert.deepEqual(d.units.EC0, { pts: {}, ratio: 48, vt: 1.16 });
   assert.equal(isEmpty(setOcRatio(m, setOcRatio(m, emptyDraft(), ["EC0"], 48), ["EC0"], null)), true);
-  assert.equal(isEmpty(setOcRatio(m, emptyDraft(), ["EC0"], 50)), true, "above the policy's 49x");
+  assert.equal(isEmpty(setOcRatio(m, emptyDraft(), ["EC0"], 121)), true, "above the CPU's OC ratio limit (120x)");
+  assert.equal(isEmpty(setOcRatio(model({ cpu_limits: structuredClone(G["power-read-unread"].result.cpu_limits) }), emptyDraft(), ["EC0"], 48)), true, "the OC ratio limit is unread: no OC ratio");
   assert.equal(isEmpty(setOcRatio(m, emptyDraft(), ["EC0"], 45)), true, "not an OC ratio");
   assert.equal(setVt(m, d, ["EC0"], 2).units.EC0.vt, 1.355, "clamped to the target ceiling");
   assert.equal(isEmpty(setVt(m, emptyDraft(), ["EC0"], 1.2)), true, "a target needs an OC point");
@@ -144,12 +150,12 @@ test("turbo: non-increasing while typing; lowering a bucket brings its right nei
   assert.deepEqual(d.turbo.P, [57, 57, 57, 55, 55, 55, 55, 55], "not above the bucket on its left");
   d = setBucket(m, emptyDraft(), "P", 0, 50);
   assert.deepEqual(d.turbo.P, [50, 50, 50, 50, 50, 50, 50, 50]);
-  assert.equal(setBucket(m, d, "P", 0, 99).turbo.P[0], 60, "raise stops at the policy ceiling");
+  assert.equal(setBucket(m, d, "P", 0, 999).turbo.P[0], 120, "raise stops at the CPU's OC ratio limit");
   assert.equal(setBucket(m, emptyDraft(), "P", 7, 1).turbo.P[7], 8, "floor = the read's lowest point");
   assert.equal(isEmpty(setBucket(m, setBucket(m, emptyDraft(), "P", 2, 56), "P", 2, 55)), true);
   assert.equal(isEmpty(discardTurbo(d, "P")), true);
-  const noLimits = model({ limits: null, hw_limits: null });
-  assert.equal(setBucket(noLimits, emptyDraft(), "P", 0, 70).turbo.P, undefined, "no ceiling stated = no raise above the read");
+  const noLimits = model({ cpu_limits: structuredClone(G["power-read-unread"].result.cpu_limits) });
+  assert.equal(setBucket(noLimits, emptyDraft(), "P", 0, 70).turbo.P, undefined, "OC ratio limit unread = no raise above the read");
   assert.equal(setBucket(model({ turbo: null, tables: null }), emptyDraft(), "P", 0, 50).turbo.P, undefined, "no table read, no edit");
 });
 

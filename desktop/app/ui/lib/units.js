@@ -6,7 +6,8 @@
 // Hardware rules this model carries (docs/knowledge/platform-arl-s.md §3): fused points take offsets only; the OC point is the P2 = 0 word (ratio + adaptive target) and cannot be
 // cleared at runtime; an OC ratio is any ratio above a unit's stock maximum; E clusters share one ratio.
 import { isNum } from "./format.js";
-import { normLimits, normHw, limitsFor } from "./limits.js";
+import { limitsFor } from "./limits.js";
+import { normCpuLimits } from "./cpulimits.js";
 
 export const RING_ID = "ring";
 /** Offsets compare equal when they are the same 1/1024 V raw word (the hardware cannot tell -19.5 from -20 mV); voltages within a quarter of a raw step. */
@@ -88,7 +89,7 @@ const tb = (o) => (isObj(o) && Array.isArray(o.ratios) && o.ratios.length === 8 
 
 /**
  * tune.read result -> model, or null when it holds no unit. Model:
- *   order [ids], units {id: unit}, turbo {P:{ratios,counts}, E:{...}, favored:{unit: ratio}} | null, limits (policy), hw (CPU),
+ *   order [ids], units {id: unit}, turbo {P:{ratios,counts}, E:{...}, favored:{unit: ratio}} | null, cpuLimits (the CPU's own limits, lib/cpulimits.js),
  *   features {ring: bool} (from `intent_features`: the ring field is only built when the helper says it understands it), readAt, complete, simulator.
  */
 export function modelFromRead(result) {
@@ -143,8 +144,7 @@ export function modelFromRead(result) {
     order,
     units,
     turbo,
-    limits: normLimits(result.limits),
-    hw: normHw(result.hw_limits),
+    cpuLimits: normCpuLimits(result.cpu_limits),
     intentFeatures: features,
     features: { ring: features.includes("ring") && !!units[RING_ID] },
     readAt: typeof result.read_at === "string" ? result.read_at : null,
@@ -246,9 +246,9 @@ export function ocRatioWindow(model, ids) {
   if (kinds.length > 1) return { min: null, max: null, reason: "P and E have separate OC ratios: edit them one section at a time" };
   const lim = limitsFor(model, kinds[0]);
   const sms = us.map(stockMaxOf);
-  if (!lim.known) return { min: null, max: null, reason: "policy limits not reported" };
+  if (!lim.known) return { min: null, max: null, reason: "the helper did not report the CPU limits" };
   if (sms.some((x) => x === null)) return { min: null, max: null, reason: "this unit's stock ratio (0x1C) was not read" };
-  if (!lim.ratio) return { min: null, max: null, reason: lim.policy.ratioSrc === "auto" ? "ratio_max is auto and could not be resolved from this read" : "your policy states no ratio_max" };
+  if (!lim.ratio) return { min: null, max: null, reason: lim.ratioWhy };
   const min = Math.max(...sms) + 1;
   if (lim.ratio.max < min) return { min, max: lim.ratio.max, reason: "OC ratios above " + lim.ratio.max + "× are not allowed (" + lim.ratio.source + ")" };
   return { min, max: lim.ratio.max, reason: null, source: lim.ratio.source };
