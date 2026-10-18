@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use super::frame::{encode_line, read_frame, Frame, MAX_LINE};
-use super::ops::{self, Refusal};
+use super::ops::{self, plan_role, PlanKind, Refusal};
 
 pub const EVENT_PREFIX: &str = "helper://";
 /// Long ops (`server.py` `max_pending_long`) a client may have in flight at once.
@@ -30,7 +30,7 @@ pub const MAX_PENDING_LONG: usize = 4;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(8);
 /// `error.detail` keys that reach the webview (`server.py` `_DETAIL_ALLOW`).
 const DETAIL_ALLOW: [&str; 3] = ["state", "check", "curve_id"];
-/// Plan ids remembered per connection (`tune.apply` is accepted only for one of these).
+/// Plan ids remembered per connection and kind (`*.apply` is accepted only for one of these).
 const MAX_PLANS: usize = 8;
 /// Request ids come from one process-wide counter: an id is never reused across reconnects, so a late answer to an old
 /// connection's request can never match a new one.
@@ -93,8 +93,9 @@ struct State {
     pending: HashMap<String, Waiter>,
     latest: HashMap<String, Value>,
     refusal: Option<Value>,
-    /// `plan_id`s of successful `tune.plan` responses on this connection, oldest first.
-    plans: VecDeque<String>,
+    /// `plan_id`s of successful `*.plan` responses on this connection, oldest first; one bounded set per [`PlanKind`], so a plan id of
+    /// one kind is never accepted by another kind's `*.apply`.
+    plans: [VecDeque<String>; PlanKind::COUNT],
 }
 
 struct Shared {
@@ -234,23 +235,26 @@ impl Link {
     /// Send one request. Short ops wait up to `timeout`; long ops return [`Reply::Started`] at once.
     pub fn call(&self, op: &str, args: &Value, timeout: Duration) -> Result<Reply, CallError> {
         let info = ops::check(op, args).map_err(CallError::Refused)?;
-        if op == "tune.apply" && !self.shared.lock().plans.iter().any(|p| args.get("plan_id").and_then(Value::as_str) == Some(p)) {
-            return Err(CallError::Refused(Refusal {
-                code: "BAD_REQUEST",
-                message: "refused locally: plan not made by this app".to_string(),
-            }));
+        let role = plan_role(op);
+        if let Some((kind, true)) = role {
+            if !self.shared.lock().plans[kind.index()].iter().any(|p| args.get("plan_id").and_then(Value::as_str) == Some(p)) {
+                return Err(CallError::Refused(Refusal {
+                    code: "BAD_REQUEST",
+                    message: "refused locally: plan not made by this app".to_string(),
+                }));
+            }
         }
         let (id, rx) = self.submit(op, args, info.long)?;
-        if op == "tune.apply" {
+        if let Some((kind, true)) = role {
             // A plan is spent by the apply that names it (the helper consumes it too).
             let spent = args.get("plan_id").and_then(Value::as_str);
-            self.shared.lock().plans.retain(|p| Some(p.as_str()) != spent);
+            self.shared.lock().plans[kind.index()].retain(|p| Some(p.as_str()) != spent);
         }
         let Some(rx) = rx else { return Ok(Reply::Started(id)) };
         match rx.recv_timeout(timeout) {
             Ok(Some(resp)) => {
-                if op == "tune.plan" {
-                    self.remember_plan(&resp);
+                if let Some((kind, false)) = role {
+                    self.remember_plan(kind, &resp);
                 }
                 Ok(Reply::Done(resp))
             }
@@ -262,16 +266,17 @@ impl Link {
         }
     }
 
-    fn remember_plan(&self, resp: &Value) {
+    fn remember_plan(&self, kind: PlanKind, resp: &Value) {
         if resp.get("ok") != Some(&Value::Bool(true)) {
             return;
         }
         let Some(plan) = resp.get("result").and_then(|r| r.get("plan_id")).and_then(Value::as_str) else { return };
         let mut st = self.shared.lock();
-        st.plans.retain(|p| p != plan);
-        st.plans.push_back(plan.to_string());
-        while st.plans.len() > MAX_PLANS {
-            st.plans.pop_front();
+        let set = &mut st.plans[kind.index()];
+        set.retain(|p| p != plan);
+        set.push_back(plan.to_string());
+        while set.len() > MAX_PLANS {
+            set.pop_front();
         }
     }
 
