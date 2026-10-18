@@ -163,3 +163,9 @@ keep every PROCESS invariant. Expose the limits as `cpu_limits` (contract in not
 Owns `desktop/app/ui/views/tune/apply.js` (afterApply), `views/tune.js` / inspector render paths as needed, `src/arltuner/helper/ops_tune.py`
 (`_record_apply`/`op_tune_last` only), tests. Reported live by the operator 2026-10-18. Accept: a test that fails before the fix and passes after, at the layer
 where the bug is; Playwright smoke shows the applied value in tile + inspector right after Apply with no Read.
+
+**G-229 · Throttling indicators + event log (XTU-style)** · M · deps G-206, G-223
+Owns `src/arltuner/telemetry/{sampler,cpu,msrio,limits}.py` (+ new `throttle.py`), `desktop/app/ui/{store.js,views/dashboard.js,components/monitor-strip.js}` + a new
+`components/throttle.js` / styles, `docs/knowledge/telemetry-sources.md`, tests. Spec: docs/knowledge/throttling.md (§B mapping, §C read strategy, §D read path, §E log).
+Accept: Power · Current/EDP · Thermal chips (+ VR thermal, grey Max-turbo) from 0x64F status, 10 Hz duty fractions, popover with every active bit + source word,
+no MSR write anywhere, throttle.jsonl event log + GUI list; node + Playwright + Python tests.
