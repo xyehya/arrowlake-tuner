@@ -455,7 +455,8 @@ class Revert(RuntimeCase):
         h = self.boot()
         self.go(h, caps={"3": 45})
         self.files.online[3] = 0  # parked behind our back
-        self.refused(h, "runtime.plan", {"revert": True}, "NOTHING_TO_DO")  # no step is left (the CPU has no cpufreq directory)
+        e = self.refused(h, "runtime.plan", {"revert": True}, "NOTHING_TO_DO")  # no step is left (the CPU has no cpufreq directory)
+        self.assertIn("cpu 3 has no cpufreq directory (offline): its cap was not restored", e["message"])
 
     def test_a_revert_waits_for_a_run_that_holds_the_caps_but_unparking_does_not(self) -> None:
         h = self.boot()
@@ -620,6 +621,8 @@ class Recovery(RuntimeCase):
         res = self.apply(h, self.plan(h, revert=True))
         self.assertTrue(res["complete"], res)
         self.assertEqual((self.cap(3), self.files.online[12]), (P_MAX, 1))
+        self.assertFalse(self.journal_doc()["in_flight"])  # the revert settled it
+        self.ok(h, "runtime.plan", {"caps": {"5": 45}})  # and planning works again
 
 
 class SimDefaults(RuntimeCase):

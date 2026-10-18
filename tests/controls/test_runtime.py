@@ -258,8 +258,17 @@ class Parking(Case):
 
     def test_revert_unparks_first_and_needs_no_policy(self) -> None:
         self.files.write_int("cpu12/online", 0)
-        steps = pk.plan_revert({12: 1, 13: 0, 0: 1}, self.online())
-        self.assertEqual([(s.key, s.before, s.value) for s in steps], [("cpu12", 0, 1), ("cpu13", 1, 0)])
+        steps, notes = pk.plan_revert({12: 1, 13: 0, 0: 1}, self.online(), TOPO)
+        self.assertEqual(([(s.key, s.before, s.value) for s in steps], notes), ([("cpu12", 0, 1), ("cpu13", 1, 0)], []))
+
+    def test_revert_never_parks_the_last_online_cpu_of_a_kind(self) -> None:
+        for cpu in range(9, 24):  # something else took all but cpu 8 offline since the journal was written
+            self.files.write_int(f"cpu{cpu}/online", 0)
+        steps, notes = pk.plan_revert({8: 0, 9: 1}, self.online(), TOPO)  # the journal: cpu8 was offline, cpu9 online
+        self.assertEqual([(s.key, s.value) for s in steps], [("cpu9", 1), ("cpu8", 0)])  # the unpark makes room, so the park is fine
+        steps, notes = pk.plan_revert({8: 0}, self.online(), TOPO)
+        self.assertEqual(steps, [])
+        self.assertIn("last online E CPU", notes[0])
 
 
 class Uncore(Case):

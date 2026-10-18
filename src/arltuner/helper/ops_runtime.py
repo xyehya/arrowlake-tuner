@@ -438,8 +438,9 @@ def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: di
         if args.get("revert"):
             if journal is None or journal.empty():
                 raise OpError(REFUSED, "there is nothing to revert to: no runtime value was written in this boot (no journal for this boot). Nothing was written.", {"check": "NO_JOURNAL"})
-            steps = pk.plan_revert(journal.online, pk.read_state(w.files, sorted(journal.online)))
-            caps_steps, notes = cp.plan_revert(journal.caps, cp.read_state(w.files, sorted(journal.caps)))
+            steps, notes = pk.plan_revert(journal.online, pk.read_state(w.files, sorted(journal.online)), topo)
+            caps_steps, cap_notes = cp.plan_revert(journal.caps, cp.read_state(w.files, sorted(journal.caps)))
+            notes += cap_notes
             steps += caps_steps
             if journal.uncore:
                 steps += un.plan_revert(journal.uncore, un.read_state(w.files))
@@ -482,7 +483,7 @@ def _planned(helper: Helper, w: RuntimeWiring, args: dict[str, Any]) -> tuple[li
     policy = _load_policy(helper)
     steps, notes, journal = _steps_for(helper, None if args.get("revert") else policy, w, args)
     if not steps:
-        raise OpError(REFUSED, "the values in force already are the ones asked: nothing to write. Nothing was written.", {"check": "NOTHING_TO_DO"})
+        raise OpError(REFUSED, " ".join(["the values in force already are the ones asked: nothing to write.", *(f"{n}." for n in notes), "Nothing was written."]), {"check": "NOTHING_TO_DO"})
     return steps, notes, journal, policy
 
 
@@ -654,8 +655,7 @@ def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         if not plan.revert:
             _end_in_flight(helper, w, journal, boot_id, [])  # nothing was sent: nothing is in flight
         raise
-    if not plan.revert:
-        journal.in_flight = False
+    if not plan.revert or (run.stop is None and journal.in_flight):  # a complete revert also settles a journal left in flight by a dead helper
         _end_in_flight(helper, w, journal, boot_id, run.warnings)
     complete = run.stop is None
     out: dict[str, Any] = {

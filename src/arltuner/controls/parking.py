@@ -84,12 +84,25 @@ def plan(intent: Mapping[int, bool], policy: Policy, online: Mapping[int, bool |
     return steps
 
 
-def plan_revert(values: Mapping[int, int], online: Mapping[int, bool | None]) -> list[RuntimeStep]:
-    """The writes that put the journaled online states back (``values`` = ``{cpu: 0|1}``), unparks first. The policy and the last-of-kind rule do not apply: this restores a recorded state."""
+def plan_revert(values: Mapping[int, int], online: Mapping[int, bool | None], topology: Topology) -> tuple[list[RuntimeStep], list[str]]:
+    """The writes that put the journaled online states back (``values`` = ``{cpu: 0|1}``), unparks first: ``(steps, notes)``. The policy does not apply (a recorded state is restored), but
+    a park that would leave no CPU of its kind online (something else emptied the kind meanwhile) is dropped with a note: a revert restores what it safely can."""
     steps: list[RuntimeStep] = []
+    notes: list[str] = []
+    final = {c.cpu: online.get(c.cpu) is not False for c in topology.cores}
+    for cpu in sorted(values):
+        if values[cpu] == 1 and online.get(cpu) is False and cpu in final:
+            final[cpu] = True
     for want in (1, 0):
         for cpu in sorted(values):
             state = online.get(cpu)
-            if values[cpu] == want and state is not None and int(state) != want:
-                steps.append(RuntimeStep(len(steps) + 1, "parking", f"cpu{cpu}", online_file(cpu), int(state), want, (want, want)))
-    return steps
+            if values[cpu] != want or state is None or int(state) == want:
+                continue
+            if want == 0 and cpu in final:
+                kind = topology.by_cpu(cpu).kind
+                if not any(final[c] for c in topology.cpus_of_kind(kind) if c != cpu):
+                    notes.append(f"cpu {cpu} was not parked again: it is the last online {kind} CPU")
+                    continue
+                final[cpu] = False
+            steps.append(RuntimeStep(len(steps) + 1, "parking", f"cpu{cpu}", online_file(cpu), int(state), want, (want, want)))
+    return steps, notes
