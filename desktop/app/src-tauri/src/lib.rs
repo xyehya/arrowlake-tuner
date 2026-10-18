@@ -5,6 +5,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
+pub mod helper;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// True when the process was asked only for its version (`--version` / `-V`).
@@ -60,8 +62,14 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![app_version])
+        .invoke_handler(tauri::generate_handler![
+            app_version,
+            helper::helper_status,
+            helper::helper_connect,
+            helper::helper_call
+        ])
         .setup(|app| {
+            helper::init(app.handle());
             build_tray(app.handle())?;
             Ok(())
         })
