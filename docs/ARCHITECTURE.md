@@ -183,9 +183,13 @@ Units: `"P0".."P7"` (cpus `[n]`), `"EC0".."EC3"` (cpus `[8..11]`, `[12..15]`, `[
 - **`curves.list {}`** ⇒ `{curves: [{id, name, created, mode, complete, tuning_state.kind, units: [unit], baseline}]}` (newest first);
   **`curves.get {id}`** ⇒ record; **`curves.update {id, name?, baseline?: bool}`** (one baseline at most); **`curves.delete {id}`**.
   Storage `/var/lib/arltuner/curves/` root 0700, files 0600, id `^[0-9]{8}T[0-9]{6}Z-[a-z0-9]{4}$`, same open rules as contract 8.
-- **`tune.read {}`** = old `vf.dump` (alias kept), result adds per unit/point decoded `{ratio, offset_mv, v_target_v|null, mode}`.
+- **`tune.read {}`** = old `vf.dump` (alias kept), result adds per unit/point decoded `{ratio, offset_mv, v_target_v|null, mode}`. G-212: result (and `tune.last`'s `result`) carries `intent_features: [str]` — the optional `tune.plan` intent keys this helper understands (`["ring"]`); a front-end gates its ring editor on it.
 - **`tune.plan {intent}`** (short) — `intent`: `{scope: "simple"|"unit", rows: [{target: "P"|"E"|unit, offset: {kind: "curve", mv} | {kind:
-  "points", mv: {ratio: mv}} | null, v_target_v: float|null, ratio: int|null}]}` or `{profile: name}` or `{reset: "stock"}` or
+  "points", mv: {ratio: mv}} | null, v_target_v: float|null, ratio: int|null}], turbo?: {P?, E?: [8 ratios]}, ring?: {points: {"<P2>": mv}}}`
+  (`rows` + `scope` together; `turbo` and `ring` may stand alone or beside them; **G-212 `ring`**: the ring (cache, P1 = 2) points keyed by the **P2 point
+  number** 1..15 of the last ring read (not by ratio), offset-only; the ring OC word (P2 = 0) is BIOS-owned, taken from the last read and never written: a
+  live OC word that differs refuses the ring unit alone (`ring_refused`, warning `RING_NOT_RESTORED`); each point must sit in the policy `0x11 P1=2` entry's
+  window else `REFUSED POLICY_RANGE`; needs a ring read this boot (`NO_READ`); not savable via `profiles.save`) or `{profile: name}` or `{reset: "stock"}` or
   `{restore: "accepted"}` ⇒ contract 8 plan result + `before`/`after` per unit/point `{ratio, offset_mv, v_target_v}`, `warnings: [str]`.
   Out-of-policy ⇒ `REFUSED detail.check="POLICY_RANGE"` naming the field and the limit.
 - **`tune.apply {plan_id, typed}`** (long; write-gated) — contract 8 apply rules ⇒ `{steps: [...], readback: [{unit, point, expected, actual,
