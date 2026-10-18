@@ -13,6 +13,7 @@ import { createPendingBar } from "./components/pending-bar.js";
 import { createToaster } from "./components/toast.js";
 import { createDrawer } from "./components/drawer.js";
 import { placeholderView } from "./components/placeholder.js";
+import { setupView, needsSetup } from "./views/setup.js";
 import { tuneView, discardDraft, requestReview } from "./views/tune.js";
 
 import { dashboardView } from "./views/dashboard.js";
@@ -82,17 +83,26 @@ export async function boot(doc = document) {
   // ---- screens ----
   const screenRoot = doc.getElementById("screen");
   let current = null;
-  store.watch(
-    (s) => s.screen,
-    (id) => {
-      if (current) current.unmount();
-      clear(screenRoot);
-      screenRoot.dataset.screen = id;
-      current = VIEWS[id]();
-      current.mount(screenRoot, ctx);
-      doc.title = `arltuner · ${SCREENS.find((s) => s.id === id).label}`;
-    },
-  );
+  let shownKey = "";
+  // The Setup screen (G-219) replaces the work screens while the helper link is down for a reason the operator can fix.
+  const render = () => {
+    const st = store.get();
+    const setup = needsSetup(st.link);
+    const key = setup ? "setup" : st.screen;
+    if (key === shownKey && current) return;
+    shownKey = key;
+    if (current) current.unmount();
+    clear(screenRoot);
+    screenRoot.dataset.screen = key;
+    current = setup ? setupView() : VIEWS[st.screen]();
+    current.mount(screenRoot, ctx);
+    doc.title = setup ? "arltuner · Setup" : `arltuner · ${SCREENS.find((s) => s.id === st.screen).label}`;
+  };
+  ctx.onConnected = () => {
+    startUp({ store, bridge, toast }).then(render, (e) => toast("error", `startup failed: ${e && e.message ? e.message : e}`));
+  };
+  store.watch((s) => s.screen, render);
+  store.watch((s) => s.link, render);
   const fromHash = screenFromHash(doc.defaultView.location.hash);
   if (fromHash) setScreen(store, fromHash);
   doc.defaultView.addEventListener("hashchange", () => {
