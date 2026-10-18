@@ -184,6 +184,34 @@ class TestApply(unittest.TestCase):
             self.assertEqual(page.inner_text("#apply-close"), "Close")
             self.assert_clean(page)
 
+    # ---- G-227: the applied offsets show in the tile and the inspector right after Apply, with no Read ----
+    def applied_shows_without_a_read(self, query: str, last_calls: int):
+        with self.page(query) as page:
+            self.edit(page, 57, "-20", "P0")
+            self.edit(page, 55, "-15", "P1")
+            page.click("#pending-review")
+            page.wait_for_selector("#apply-go")
+            page.click("#apply-go")
+            page.wait_for_selector(".apply-result", timeout=10000)
+            self.assertEqual(self.calls(page, "tune.read"), [], "no Read CPU state")
+            self.assertGreaterEqual(len(self.calls(page, "tune.last")), last_calls)
+            self.assertTrue(page.is_hidden("#pending-bar"), "the draft is gone")
+            for unit, ratio, want in (("P0", 57, -20), ("P1", 55, -15)):
+                tile = page.locator(f".tile[data-unit='{unit}'] .tile-foot").inner_text()
+                self.assertRegex(tile, rf"^{MINUS}(19\.5|{abs(want)}|{abs(want) - 0.5}|14\.6) mV$", f"{unit} tile")
+                page.click(f".tile[data-unit='{unit}']")
+                value = float(page.locator(f".insp-section tr[data-ratio='{ratio}'] input").first.input_value().replace(MINUS, "-"))
+                self.assertAlmostEqual(value, want, delta=0.6, msg=f"{unit} x{ratio} in the inspector")
+            self.assert_clean(page)
+
+    @browser
+    def test_applied_offsets_show_in_tile_and_inspector_without_a_read(self):
+        self.applied_shows_without_a_read("?bridge=mock&tick=100&step=10", 1)
+
+    @browser
+    def test_applied_offsets_show_when_the_helper_has_no_record_of_the_apply(self):
+        self.applied_shows_without_a_read("?bridge=mock&tick=100&step=10&last=gone", 1)
+
     @browser
     def test_two_units_are_listed_in_write_order_and_end_read_back_ok(self):
         with self.page("?bridge=mock&tick=100&step=40") as page:
@@ -225,7 +253,7 @@ class TestApply(unittest.TestCase):
 
     # ---- mismatch ----
     @browser
-    def test_mismatch_result_is_shown_and_the_draft_is_kept(self):
+    def test_mismatch_result_is_shown_and_the_written_draft_gives_way_to_the_cpu_words(self):
         with self.page("?bridge=mock&tick=100&apply=mismatch") as page:
             self.review(page)
             page.wait_for_selector("#apply-go")
@@ -237,7 +265,7 @@ class TestApply(unittest.TestCase):
             self.assertEqual(page.locator(".apply-readback tr[data-match='false']").count(), 1)
             self.assertIn("Do not trust this state", page.inner_text(".apply-result"))
             self.assertEqual(page.inner_text("#drawer-title"), "Applied, with problems")
-            self.assertTrue(page.is_visible("#pending-bar"), "a state that did not read back keeps the draft")
+            self.assertTrue(page.is_hidden("#pending-bar"), "G-227: the written unit's pending edits give way to the CPU's words, which the tiles show")
             self.assert_clean(page)
 
     # ---- plan error ----

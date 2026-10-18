@@ -16,7 +16,7 @@ import { openDrawer, closeDrawer, setScreen, setLastRead } from "../../store.js"
 import { plural, fmtMv, fmtV, isNum, DASH, TIMES } from "../../lib/format.js";
 import { buildIntent } from "../../lib/intent.js";
 import { modelFromRead } from "../../lib/units.js";
-import { emptyDraft } from "../../lib/draft.js";
+import { emptyDraft, discardUnits } from "../../lib/draft.js";
 import { ensureTune, patchTune, fmtSeconds } from "../tune.js";
 
 const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -240,6 +240,38 @@ export function locateError(error, intent) {
   return { ...base, unit };
 }
 
+/**
+ * G-227: the units model with the plan's predicted offsets (and the intent's turbo tables) laid over the words whose read-back matched (`summary.readback` rows {unit, point, match};
+ * a turbo row is {unit: "P"|"E", point: "turbo"}); null when nothing changed. Pure. Only offsets and ratios are patched (this module has no word decoder): a word that read back
+ * different is left as it was, and the caller says so.
+ */
+export function modelAfterApply(model, section, summary) {
+  if (!isObj(model) || !isObj(section) || !isObj(section.plan)) return null;
+  const after = normState(section.plan.after);
+  const turbo = isObj(section.intent) && isObj(section.intent.turbo) ? section.intent.turbo : {};
+  let next = null;
+  for (const row of summary.readback) {
+    if (row.match !== true) continue;
+    if (row.point === "turbo") {
+      if (isObj(model.turbo) && isObj(model.turbo[row.unit]) && Array.isArray(turbo[row.unit]) && turbo[row.unit].length === 8) {
+        next ||= structuredClone(model);
+        next.turbo[row.unit].ratios = turbo[row.unit].slice();
+      }
+      continue;
+    }
+    const entry = after.has(row.unit) ? after.get(row.unit).get(row.point) : null;
+    if (!isNum(row.point) || !model.units[row.unit] || !entry || !isNum(entry.offset_mv)) continue;
+    const at = (m) => {
+      const u = m.units[row.unit];
+      return [row.point === 0 ? u.oc : null, u.points.find((p) => p.point === row.point), u.ocPoint && u.ocPoint.point === row.point ? u.ocPoint : null].filter(Boolean);
+    };
+    if (!at(model).length) continue;
+    next ||= structuredClone(model);
+    for (const t of at(next)) t.offset_mv = entry.offset_mv;
+  }
+  return next;
+}
+
 // ---- section kinds -------------------------------------------------------------------------------------------------------------------------------
 export const KINDS = {
   tune: {
@@ -254,19 +286,27 @@ export const KINDS = {
       return built.error ? { error: built.error } : { intent: built.intent, draftRef: t.draft };
     },
     locate: locateError,
-    /** After an apply: re-read tune.last (no mailbox traffic) so tiles show the new words; clear the draft when everything read back as written and it was not edited meanwhile. */
-    async afterApply({ store, bridge, section, summary }) {
-      const clean = summary.allMatch && store.get().tune.draft === section.draftRef;
+    /**
+     * After an apply: re-read tune.last (no mailbox traffic) so tiles and inspector show the new words. G-227: when the helper has no usable record (unavailable, an error, or one that
+     * predates this apply: applied_at null) the model is patched from the plan and the matched read-back rows, so the applied offsets show without a "Read CPU state". The draft entries
+     * of the units that were written go (the model is what the CPU holds, a clamped point included) unless the draft was edited meanwhile; with no new model the draft stays.
+     */
+    async afterApply({ store, bridge, section, summary, toast }) {
       const last = await bridge.call("tune.last");
+      const rec = last.ok && isObj(last.result) && last.result.available && isObj(last.result.result) && last.result.applied_at != null ? last.result : null;
       const patch = {};
-      if (clean) patch.draft = emptyDraft();
-      if (last.ok && last.result && last.result.available && last.result.result) {
-        const model = modelFromRead(last.result.result);
-        if (model) {
-          const at = new Date(last.result.at * 1000).toISOString();
-          Object.assign(patch, { model, read: { ...store.get().tune.read, state: "ready", fromLast: true, at, durationMs: null, ops: last.result.result.ops_done ?? null, error: null } });
-          setLastRead(store, at, last.result.result.accepted_match ?? null, last.result.result.accepted_note || "");
-        }
+      let model = rec ? modelFromRead(rec.result) : null;
+      if (model) {
+        const at = isNum(rec.at) ? new Date(rec.at * 1000).toISOString() : new Date().toISOString();
+        Object.assign(patch, { model, read: { ...store.get().tune.read, state: "ready", fromLast: true, at, durationMs: null, ops: rec.result.ops_done ?? null, error: null } });
+        setLastRead(store, at, rec.result.accepted_match ?? null, rec.result.accepted_note || "");
+      } else if ((model = modelAfterApply(store.get().tune.model, section, summary))) {
+        patch.model = model;
+        if (toast) toast("warn", "The helper has no stored read to show the applied words from: the tiles follow the plan and the read-back. Re-read the CPU state to confirm.");
+      }
+      if (model && store.get().tune.draft === section.draftRef) {
+        patch.draft = summary.allMatch ? emptyDraft() : discardUnits(section.draftRef, summary.readback.map((x) => x.unit).filter((u) => typeof u === "string"));
+        if (!summary.allMatch && summary.mismatches.length && toast) toast("warn", plural(summary.mismatches.length, "word") + " read back different from the plan (clamped by the CPU): the tiles show what the CPU holds.");
       }
       if (Object.keys(patch).length) patchTune(store, patch);
     },
@@ -429,7 +469,7 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
           const summary = summarizeResult(res.result);
           setSection(i, { status: "done", result: res.result, summary, opId: get().sections[i].opId });
           try {
-            if (kinds[secs[i].kind].afterApply) await kinds[secs[i].kind].afterApply({ store, bridge, section: get().sections[i], summary });
+            if (kinds[secs[i].kind].afterApply) await kinds[secs[i].kind].afterApply({ store, bridge, section: get().sections[i], summary, toast });
           } catch (e) {
             toast("warn", "The apply finished but refreshing the tiles failed: " + (e && e.message ? e.message : e));
           }
