@@ -142,3 +142,8 @@ Accept: tray status colours by helper state; settings persisted to `~/.config/ar
 **G-221 · Release build + docs** · S · deps all — build script polish, sha256, `docs/guide/desktop-app.md`, README section, screenshots (read-only),
 install to `~/AppImages/arltuner.AppImage` on operator request.
 **G-222 · Final review** · O — adversarial review of the whole desktop diff (Rust link, capabilities, CSP, new helper ops); operator acceptance.
+
+**G-224 · Dashboard follow-ups** · S · deps G-206
+Owns `desktop/app/ui/views/dashboard.js`, `components/coremap.js`, new `views/dashboard/{cores,sensors}.js`, `styles/views.css` (+ one `<link>` in index.html).
+Goal: port the web Cores table + Sensors sub-views; mem.read on screen open (read-only MCHBAR); move constructed-stylesheet CSS into `styles/views.css`;
+core map 8 P tiles in one row at 1280 px; calmer tile colours (heat scale on a dark base). Accept: Playwright (mock) + orchestrator screenshot.
