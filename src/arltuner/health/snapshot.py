@@ -145,16 +145,18 @@ def _read_modules(root: Path) -> frozenset[str]:
     return frozenset(names)
 
 
-def _read_number(path: Path, base: int) -> int | None:
-    """One informational number from a small file; ``None`` when unreadable or not a number (never an error)."""
+def _read_number(path: str, base: int) -> int | None:
+    """One informational number from a small file; ``None`` when unreadable or not a number (never an error).
+    G-211: a ``str`` path and an unbuffered ``rb`` file (no ``Path`` object, no ``BufferedReader`` per file): the machinecheck walk opens a few hundred files per
+    snapshot and the snapshot is taken twice per mailbox transaction. Same bytes read (the first 256), same parse, same ``None`` cases."""
     try:
-        with open(path, "rb") as handle:
-            return int(handle.read(256).decode("ascii", "replace").strip(), base)
+        with open(path, "rb", buffering=0) as handle:
+            return int((handle.read(256) or b"").decode("ascii", "replace").strip(), base)
     except (OSError, ValueError):
         return None
 
 
-def _listdir_sorted(path: Path, prefix: str) -> list[str] | None:
+def _listdir_sorted(path: str, prefix: str) -> list[str] | None:
     try:
         return sorted(name for name in os.listdir(path) if name.startswith(prefix))
     except OSError:
@@ -163,10 +165,10 @@ def _listdir_sorted(path: Path, prefix: str) -> list[str] | None:
 
 def _read_thermal(root: Path) -> dict[str, int] | None:
     """``{"thermal_zoneN": millidegC}`` from ``sys/class/thermal/thermal_zone*/temp``; ``None`` when nothing could be read."""
-    base = root / "sys" / "class" / "thermal"
+    base = os.path.join(root, "sys", "class", "thermal")
     found: dict[str, int] = {}
     for zone in _listdir_sorted(base, "thermal_zone") or ():
-        value = _read_number(base / zone / "temp", 10)
+        value = _read_number(os.path.join(base, zone, "temp"), 10)
         if value is not None:
             found[zone] = value
     return found or None
@@ -174,11 +176,12 @@ def _read_thermal(root: Path) -> dict[str, int] | None:
 
 def _read_machinecheck(root: Path) -> dict[str, int] | None:
     """``{"machinecheckN/bankM": value}`` from ``sys/devices/system/machinecheck/machinecheck*/bank*`` (hex); ``None`` if absent."""
-    base = root / "sys" / "devices" / "system" / "machinecheck"
+    base = os.path.join(root, "sys", "devices", "system", "machinecheck")
     found: dict[str, int] = {}
     for cpu in _listdir_sorted(base, "machinecheck") or ():
-        for bank in _listdir_sorted(base / cpu, "bank") or ():
-            value = _read_number(base / cpu / bank, 16)
+        cpu_dir = os.path.join(base, cpu)
+        for bank in _listdir_sorted(cpu_dir, "bank") or ():
+            value = _read_number(os.path.join(cpu_dir, bank), 16)
             if value is not None:
                 found[f"{cpu}/{bank}"] = value
     return found or None
