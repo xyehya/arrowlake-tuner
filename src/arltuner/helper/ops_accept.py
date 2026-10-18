@@ -533,6 +533,6 @@ def op_profiles_diff(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         else:
             not_compared.append({"what": what, "why": "neither state records it"})
     if side_a["partial"] or side_b["partial"]:
-        not_compared.append({"what": "settings a partial (legacy) profile does not set", "why": "only what it sets is compared"})
+        not_compared.append({"what": "settings a partial (legacy) profile does not set", "why": "listed with '-' on its side, not as equal"})
     return {"a": side_a, "b": side_b, "rows": rows[:DIFF_ROWS_MAX], "units": [{"unit": u, "n": n} for u, n in counts.items()], "compared": compared, "not_compared": not_compared,
             "truncated": max(0, len(rows) - DIFF_ROWS_MAX)}

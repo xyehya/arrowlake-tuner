@@ -660,7 +660,7 @@ export function profilesView() {
 
       function diffNode(d) {
         if (d.error) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: "The comparison is unavailable (" + d.error + "); the helper still keeps the replaced state." });
-        if (d.rows === null) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: d.chain ? "The current accepted state is an older chain; each member is kept as a profile." : "There is no accepted state to compare with." });
+        if (d.rows === null) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: d.chain ? "The current accepted state is an older chain, which the helper refuses to replace until it is one profile: run '" + ACCEPTED_MIGRATE_HINT + "' once." : "There is no accepted state to compare with." });
         const box = h("div", { class: "pr-diff-box", id: "pr-ask-diff" }, h("p", { class: "pr-note", id: "pr-ask-diff-note", text: diffSummary(d.rows, d.result) }));
         if (!d.rows.length) return box;
         const body = h("tbody");
@@ -680,7 +680,7 @@ export function profilesView() {
         const d = await acceptDiff(name);
         say("");
         if (d.error === READ_FIRST_TEXT) return readFirst(d.read);
-        setAsk({ title: "Set as accepted?", text: acceptConfirmText(name === null ? "The state of the last read" : '"' + name + '"', replaced) + " " + previousKeptText(replaced), detail: diffNode(d), yes: "Accept", focusCancel: true, run: () => acceptState(name) });
+        setAsk({ title: "Set as accepted?", text: acceptConfirmText(name === null ? "The state of the last read" : '"' + name + '"', replaced) + (replaced.length > 1 ? "" : " " + previousKeptText(replaced)), detail: diffNode(d), yes: "Accept", focusCancel: true, run: () => acceptState(name) });
       }
 
       async function acceptState(name, setAside = false) {
