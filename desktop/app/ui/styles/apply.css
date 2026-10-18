@@ -1,0 +1,220 @@
+/* apply.css: the apply drawer (G-210, views/tune/apply.js loads it itself, like tune.css). Semantic colours from tokens.css only; no inline styles anywhere. */
+.apply-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.apply-section:last-child {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+
+.apply-sec-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.apply-sec-head h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.apply-section p {
+  margin: 0;
+}
+
+.apply-lead strong {
+  font-size: var(--fs-lg);
+}
+
+.apply-ops,
+.apply-vccia,
+.apply-progress {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.apply-pill {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.apply-pill[data-state="writing"] {
+  color: var(--pending);
+  border-color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.apply-pill[data-state="written"] {
+  color: var(--pending);
+  border-color: var(--border-strong);
+}
+
+.apply-pill[data-state="ok"] {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.apply-pill[data-state="mismatch"],
+.apply-pill[data-state="interrupted"] {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.apply-pill[data-state="unverified"],
+.apply-pill[data-state="not_started"] {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.apply-warnings {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.apply-warnings li.warn {
+  color: var(--warn);
+}
+
+.apply-warnings li.bad {
+  color: var(--danger);
+}
+
+.apply-badge {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.apply-warn-line {
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+
+.apply-scroll {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.apply-units,
+.apply-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.apply-units th,
+.apply-units td,
+.apply-table th,
+.apply-table td {
+  padding: 2px var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.apply-units tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.apply-units tr[data-status="writing"] {
+  background: var(--pending-bg);
+}
+
+.apply-table tr.is-bad {
+  background: var(--danger-bg);
+}
+
+.apply-steps {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--fs-sm);
+  max-height: 160px;
+  overflow: auto;
+}
+
+.apply-steps li.conditional {
+  color: var(--text-dim);
+}
+
+.apply-order summary,
+.apply-warnings-box summary,
+.apply-readback summary,
+.apply-cpufreq summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.apply-bar {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--pending);
+}
+
+.apply-error-box {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+}
+
+.apply-error-box p {
+  margin: var(--space-1) 0 0;
+}
+
+.apply-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.apply-result[data-ok="true"] .apply-headline {
+  color: var(--ok);
+}
+
+.apply-why,
+.apply-cancel-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--fs-sm);
+}
+
+/* a plan refusal landed on its field in the Tune editor */
+.plan-error {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.field-error-note {
+  margin: var(--space-1) 0 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  max-width: 60ch;
+}
+
+.plan-error-banner {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+}
