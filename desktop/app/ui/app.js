@@ -14,6 +14,7 @@ import { createToaster } from "./components/toast.js";
 import { createDrawer } from "./components/drawer.js";
 import { placeholderView } from "./components/placeholder.js";
 import { setupView, needsSetup } from "./views/setup.js";
+import { createApplyDrawer } from "./views/tune/apply.js";
 import { tuneView, discardDraft, requestReview } from "./views/tune.js";
 
 import { dashboardView } from "./views/dashboard.js";
@@ -55,6 +56,7 @@ export async function boot(doc = document) {
 
   const toast = (kind, text, ttlMs) => pushToast(store, { kind, text, ttlMs });
   const drawer = createDrawer(doc.getElementById("drawer"), store);
+  const applyDrawer = createApplyDrawer({ store, bridge, toast: (kind, text, ttlMs) => pushToast(store, { kind, text, ttlMs }), drawer, doc }); // G-210
   const ctx = { store, bridge, toast, drawer, openDrawer: (title) => openDrawer(store, title), closeDrawer: () => closeDrawer(store) };
 
   const goto = (id) => {
@@ -72,12 +74,8 @@ export async function boot(doc = document) {
       setPending(store, 0, 0);
       toast("info", "Pending changes discarded.");
     },
-    // G-208 fires "tune:review" on store.events; G-210 replaces this placeholder with the real plan + apply drawer.
-    onReview: () => {
-      requestReview(store);
-      drawer.setContent(h("p", { class: "muted", text: "The ordered write list and the Apply button arrive with the apply drawer (G-210)." }));
-      openDrawer(store, "Review & Apply");
-    },
+    // G-208 fires "tune:review" on store.events; the apply drawer (G-210, created below) listens to it and opens itself.
+    onReview: () => requestReview(store),
   });
 
   // ---- screens ----
@@ -123,7 +121,7 @@ export async function boot(doc = document) {
   for (const ev of ["heartbeat", "state", "progress", "telemetry"]) bridge.on(ev, (p) => applyHelperEvent(store, ev, p));
   bridge.on("link", (l) => setLink(store, l));
 
-  if (bridge.name === "mock") globalThis.__arltuner = { store, bridge, ctx }; // test seam for the Playwright smoke; never set for the real bridge
+  if (bridge.name === "mock") globalThis.__arltuner = { store, bridge, ctx, applyDrawer }; // test seam for the Playwright smoke; never set for the real bridge
 
   try {
     const link = await bridge.connect();

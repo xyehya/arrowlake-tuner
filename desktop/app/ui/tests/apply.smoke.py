@@ -3,7 +3,7 @@
 Run:  ARLTUNER_BROWSER_TESTS=1 python3 desktop/app/ui/tests/apply.smoke.py   (or add --browser; needs playwright for Python + google-chrome / ARLTUNER_CHROME)
 Without the opt-in the browser tests are skipped. Same loopback server and CSP as tune.smoke.py (the CSP is the one of src-tauri/tauri.conf.json). No hardware, no helper:
 the mock bridge plans from the intent and replays the apply (mock-backend.js, INVENTED parts marked there). Knobs: `?step=<ms>` slow progress, `?apply=mismatch|stale`.
-app.js is not edited by this task, so the test mounts the drawer itself (createApplyDrawer on the app's own ctx from the mock-only seam window.__arltuner).
+The app mounts the drawer (app.js); the test uses that instance from the mock-only seam window.__arltuner.applyDrawer.
 """
 from __future__ import annotations
 
@@ -37,12 +37,11 @@ document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.
 """
 MOUNT_JS = """
 async () => {
-  const m = await import('/views/tune/apply.js');
   const { bridge } = window.__arltuner;
   window.__calls = [];
   const call = bridge.call.bind(bridge);
   bridge.call = async (op, args) => { const res = await call(op, args); window.__calls.push({ op, args, res }); return res; };
-  window.__apply = m.createApplyDrawer(window.__arltuner.ctx);
+  window.__apply = window.__arltuner.applyDrawer;
 }
 """
 MINUS = "−"
