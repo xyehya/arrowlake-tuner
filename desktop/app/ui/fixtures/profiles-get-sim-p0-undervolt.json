@@ -1,0 +1,163 @@
+{
+ "id": "c5",
+ "ok": true,
+ "result": {
+  "complete": true,
+  "contents": {
+   "complete": true,
+   "rows": [
+    {
+     "offset": {
+      "kind": "points",
+      "mv": {
+       "20": 0,
+       "30": 0,
+       "48": -20,
+       "53": -25,
+       "55": 0,
+       "56": 0,
+       "57": 0,
+       "8": 0
+      }
+     },
+     "ratio": null,
+     "target": "P0",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P1",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P2",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P3",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P4",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P5",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P6",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "P7",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC0",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC1",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC2",
+     "v_target_v": null
+    },
+    {
+     "offset": {
+      "kind": "curve",
+      "mv": 0
+     },
+     "ratio": null,
+     "target": "EC3",
+     "v_target_v": null
+    }
+   ],
+   "turbo": {
+    "E": [
+     48,
+     48,
+     48,
+     48,
+     48,
+     48,
+     48,
+     48
+    ],
+    "P": [
+     57,
+     57,
+     55,
+     55,
+     55,
+     55,
+     55,
+     55
+    ]
+   }
+  },
+  "created": "2026-10-18T11:10:55Z",
+  "name": "sim-p0-undervolt",
+  "source": "saved",
+  "summary": {
+   "complete": true,
+   "deepest_offset_mv": -25,
+   "oc_ratios": 0,
+   "points": 8,
+   "turbo": true,
+   "units": 12,
+   "v_targets": 0
+  }
+ }
+}

@@ -31,3 +31,11 @@ it got, then deletes the temp dir. Re-run it to refresh; ids, timestamps and the
   `ipc: http://ipc.localhost`; a JS module is governed by `script-src 'self'`. This way the mock runs under the exact shipped CSP. `tests/shell.test.mjs` fails if `fixtures.js`
   and the JSON files drift apart.
 - The directory ships inside the AppImage with the rest of `ui/` (`frontendDist: "../ui"`). Only `mock-backend.js` / `fixtures.js` are loaded, and only for `?bridge=mock`.
+
+## Profile fixtures (G-213)
+`python3 desktop/app/ui/fixtures/gen_profiles_fixtures.py` (simulator, temp paths, never applies) adds, next to the files above, and rebuilds `fixtures.js` from every `*.json` here (the older recordings are not re-made):
+`profiles-save-<name>.json` (request + response of `profiles.save` for `sim-p0-undervolt` and `sim-e-light`), `profiles-get-<name>.json` (what each holds: complete, 12 units, turbo tables),
+`profiles-saved-list.json` (`profiles.list` with both saved), `profiles-save-exists.json` (the `EXISTS` refusal), `profiles-accept-unavailable.json` / `profiles-fingerprint-unavailable.json` (the unprivileged simulator keeps no
+accepted-state directory: `NO_ACCEPTED_DIR`). The accepted state itself cannot be recorded, so the mock **invents** it (`profiles.accept`, `profiles.fingerprint`, the accepted entry of `profiles.list` / `get`,
+plans of `{profile}` / `{restore: "accepted"}`; marked INVENTED in `mock-backend.js`). Query knobs: `profiles=none`, `profiles=accepted`, `accept=unavailable`, `fingerprint=incomplete`.
+Note the recorded `tune-last.json` was read after the recorded apply (P0 53x at -20 mV), while the saved profiles were taken from the read before it.

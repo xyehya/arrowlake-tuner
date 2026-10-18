@@ -1,0 +1,192 @@
+/* profiles.css: the Profiles screen (G-213, views/profiles.js loads it itself, like tune.css and apply.css). Colours from tokens.css only; no inline styles anywhere. */
+.profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 980px;
+}
+
+.profiles .screen-head {
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.profiles .card {
+  max-width: none;
+}
+
+.profiles h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+}
+
+.profiles h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-md);
+}
+
+.profiles p {
+  margin: var(--space-1) 0;
+}
+
+.pr-status {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.pr-status[data-kind="ok"] {
+  color: var(--ok);
+}
+
+.pr-status[data-kind="warn"] {
+  color: var(--warn);
+}
+
+.pr-status[data-kind="error"] {
+  color: var(--danger);
+}
+
+.pr-ask {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.pr-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pr-row label {
+  color: var(--text-dim);
+}
+
+.pr-row select,
+.pr-name-input {
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.pr-name-input {
+  width: 22em;
+  font-family: var(--font-mono);
+}
+
+.pr-note {
+  font-size: var(--fs-sm);
+}
+
+.pr-pill {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.pr-pill[data-state="ok"] {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.pr-pill[data-state="unknown"] {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.pr-accepted-line,
+.pr-accepted-names,
+.pr-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pr-accepted-name,
+.pr-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.pr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pr-item {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.pr-item:first-child {
+  border-top: 0;
+}
+
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pr-detail {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.pr-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-sm);
+}
+
+.pr-table th,
+.pr-table td {
+  padding: 2px var(--space-3) 2px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.pr-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.pr-table .n {
+  text-align: right;
+}
+
+.profiles .mono {
+  font-family: var(--font-mono);
+}
+
+.profiles .scroll {
+  max-height: 28em;
+  overflow: auto;
+}
+
+.profiles .sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

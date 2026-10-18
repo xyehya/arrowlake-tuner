@@ -1,0 +1,11 @@
+{
+ "error": {
+  "code": "REFUSED",
+  "detail": {
+   "check": "EXISTS"
+  },
+  "message": "a profile named 'sim-p0-undervolt' already exists (profiles are never overwritten)"
+ },
+ "id": "c4",
+ "ok": false
+}
