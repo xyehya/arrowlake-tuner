@@ -1,0 +1,12 @@
+- G-210 merged: the apply drawer (views/tune/apply.js) is mounted by app.js; `registerKind(name, spec)` adds plan sections. "Review and apply" of a
+  profile = tune.plan {intent: {profile: "<name>"}} shown in the same drawer (add a way to open the drawer with a given intent: export a function from
+  apply.js only if needed and say so — you may edit apply.js ONLY to add that entry point). "Restore accepted" = intent {restore: "accepted"}.
+- Port web/app.js Profiles (cite lines): accepted-state card (current accepted profile, "Set the current state as accepted" = profiles.accept {from:"read"},
+  "Record CPU fingerprint for Windows" = profiles.fingerprint), profile list with summary (profiles.list / profiles.get), Load into Tune (fills the shared
+  draft from profile contents — use lib/draft.js; the Tune screen's draft lives in the tune controller, see views/tune.js), Review and apply, Set as
+  accepted (profiles.accept {name}), Save current Tune settings (profiles.save {name, intent}; name ^[a-z0-9._-]{1,64}$; never overwrites), Compare two
+  profiles (diff table, "as applied" vs "this file only" like the web page).
+- profiles.save refuses `ring` in the intent (G-212 note): if the draft holds ring edits, say "apply the ring edit first, then save" instead of failing.
+- Export profilesView() returning {id, mount, unmount}; the orchestrator wires it into app.js at merge.
+- Mock: add profile fixtures (record with the simulator using temp paths, or synthesise clearly labelled ones) — you own new fixture files + mock additions.
+- Node 24 glob; Playwright via /usr/bin/python3; tests/profiles.smoke.py.
