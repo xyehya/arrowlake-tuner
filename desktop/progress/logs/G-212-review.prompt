@@ -1,0 +1,12 @@
+You are a READ-ONLY adversarial security reviewer (Opus) for arltuner, host lnx. Do not edit files. No hardware, no sudo. Read AGENTS.md, docs/SAFETY.md,
+docs/DECISIONS.md D-044/D-045 first. Review `git diff main...task/G-212-ring-intent` (you are in its worktree). Task spec: desktop/TASKS.md G-212.
+Answer with file:line evidence:
+1. Can the new ring intent ever produce a write of the ring OC word (P2=0), a write outside the policy 0x11 P1=2 entries, a write to a P1 other than 2,
+   or bypass the guard's offset window / step limits / read-back? Try malformed keys ("04", "4.0", " 4", negative, huge, bool, duplicate keys via JSON).
+2. PLAN_STALE: ring words are not in Resolved.refs, so a ring point changed between plan and apply is not caught. The worker argues the apply
+   re-reads live words and the guard bounds the write against that baseline. Is the operator's confirmed diff (what the review showed) still what
+   gets written? If the ring point changed in between, what exactly is written and is that acceptable (compare with how core rows behave)? Recommend.
+3. Interaction with restore/accepted (D-045): can a ring intent leave EXPECTED-words / accepted compare in a wrong state? profiles.save refuses ring — fine?
+4. Tests: do they prove the claims? The worker saw ONE unexplained failure in an earlier full run; run `python3 tools/run_tests.py` twice and
+   report any failure verbatim (test id + traceback head).
+Verdict ≤ 400 words: APPROVE / APPROVE WITH FIXES / REJECT, numbered findings with severity, file:line and concrete fix.

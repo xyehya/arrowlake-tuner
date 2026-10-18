@@ -24,6 +24,12 @@ Accept: bench before/after in the report; ≤ 20 ms median overhead per op on th
 rescan on inode/size mismatch or truncation, lock still excludes a second process, health gate still trips on each injected fault, dwell still honoured when > 0.
 
 Round notes from the orchestrator:
-- Measured live (docs/knowledge/apply-latency.md): mailbox transaction 1 ms median; 194 ms median between transactions; real audit log 15.9 MB. Your bench must reproduce the overhead shape on a synthetic 16 MB log first (report per-part timing: read_state parse, lock, audit fsync, health snapshots, pacer), THEN optimize the biggest parts.
-- This is security-relevant code (guard). Semantics must be identical; an Opus reviewer will read your diff adversarially. Prefer small, obviously-correct changes with tests over cleverness. Document each change's invariant in the code comment and in your report.
-- Keep: one transaction at a time, health snapshot before and after every transaction, fsync of the attempt record before the write, read-back, budget/dwell checks semantics, fail-closed on any unreadable state.
+FIX ROUND (your earlier work on this branch is already committed; read `git log main..HEAD`). An Opus reviewer returned APPROVE WITH FIXES.
+Apply exactly these, nothing else, then re-run the full suite and the bench, commit "G-211: review fixes (mtime check, parsed-bytes anchors, anchor top-up, tests)":
+1. (med) audit.py:289/339 — store st_mtime_ns at commit; in _cache_matches return False when st_size == cached offset and mtime differs (same-size
+   in-place rewrite must rescan). Add the test: cache 50 identical A records, rewrite same size with records 2–48 as B -> must return the rescanned state.
+2. (low) audit.py:394-398 — take the start/end anchor bytes from the bytes the parse loop already read, not from a second read after parsing.
+3. (low) audit.py:394 — top up the start anchor while it is shorter than _ANCHOR (256).
+5. (low) tests — add: threads calling read_state concurrently with AuditLog.append (no exception, final state equals a full rescan); a replacement
+   file with an identical start (new inode) rescans. Fix test_snapshot_g211.py:133 calling setUp() inside each subtest (temp dir leak) — use a fresh tempdir per subtest with cleanup.
+Report ≤ 200 words with the new bench median/p90.

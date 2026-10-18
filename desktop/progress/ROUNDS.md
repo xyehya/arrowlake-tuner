@@ -14,3 +14,6 @@
 
 ## R2 · 2026-10-18
 - Merged G-215, G-202; main suite OK. Dispatched G-204 (Rust link, S), G-205 (UI shell, S), G-203 (test hooks, deepseek-flash); G-211 Opus review running.
+- G-211 Opus review: APPROVE WITH FIXES (med: same-size mid-log rewrite undetected by a long-running helper; low: anchor bytes source, anchor
+  top-up, tests). Fix round dispatched to Sonnet. Session-held lock + pacer change deliberately not done (lock 0.05 ms/op; pacer already 0 at dwell 0).
+- G-212 done (ring intent, intent_features ["ring"], 3031 OK; one unexplained earlier failure) -> Opus review (PLAN_STALE does not cover ring words).
