@@ -3,11 +3,10 @@
 
     python3 desktop/app/ui/fixtures/g217/gen_fixtures_g217.py
 
-One simulator run on the helper of THIS checkout. That helper still has the operator-policy layer (D-049 removes it in G-226), so the run needs a policy with [power] / [runtime] keys: the temp
-copy of policies/default.toml gets the example keys appended (its own copy; the operator's policy is never touched), then the helper plans, applies, reads back and reverts. What D-049
-changes in the answers is removed here: every `policy` object is dropped from the recordings, and the refusals that were about the policy (POWER_POLICY_MISSING, POWER_RANGE,
-RUNTIME_POLICY_MISSING, the "no policy" reads) are not recorded at all. Kept: the refusals that are CPU / process rules (NO_JOURNAL, the held parking BAD_REQUEST, UNCORE_RANGE).
-`cpu_limits` (G-226) does not exist in this helper yet: the mock (mock-backend-g217.js) invents it from the recorded cpufreq rows and uncore bounds and says so.
+One simulator run on the helper of THIS checkout (D-049: the CPU's own limits are the only bounds, so no [power] / [runtime] policy keys are needed; the temp copy of policies/default.toml is
+its own, the operator's policy is never touched). The helper reads the tuning words first (`tune.read`: the CPU's voltage ceiling and OC ratio limit, 0x28 / 0x01), then plans, applies, reads back
+and reverts. `cpu_limits` is recorded as the helper returns it on each read (the reads of the simulator hold the per-op nulls: tune.read has no power / cpufreq / uncore part, power.read and
+runtime.read have theirs). Every `policy` object is dropped from the recordings. The recordings keep the refusals that are CPU / process rules (NO_JOURNAL, the held parking BAD_REQUEST, UNCORE_RANGE).
 Files: power-*.json / runtime-*.json next to this script (request + response where a request matters); then fixtures-g217.js is rebuilt from EVERY *.json here (the format gen_fixtures.py uses).
 Nothing here is a reference-machine measurement (D-036): the numbers are the simulator's own model. Python stdlib only.
 """
@@ -29,17 +28,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from gen_fixtures import ROOT, Client  # noqa: E402
 
-POLICY_KEYS = """
-[power]
-pl1_w = [125, 253]
-pl2_w = [125, 295]
-tau_s = [1, 128]
-max_step_w = 50
-
-[runtime]
-cap_ratio_min = 8
-uncore_ratio = [8, 40]
-"""
 POWER_SET = {"pl1_w": 230, "pl2_w": 280, "tau_s": 56}
 
 
@@ -82,8 +70,6 @@ def main() -> int:
     os.chmod(toml, 0o600)
     shutil.copy(ROOT / "policies" / "default.toml", policy)
     os.chmod(policy, 0o600)
-    with policy.open("a", encoding="utf-8") as fh:
-        fh.write(POLICY_KEYS)
     proc = subprocess.Popen(
         [sys.executable, "-I", str(ROOT / "tools" / "arltuner-helper.py"), "--sim", "--socket", "--socket-path", str(sock), "--helper-toml", str(toml),
          "--policy", str(policy), "--audit", str(tmp / "audit.jsonl"), "--lock", str(tmp / "lock"), "--state-dir", str(tmp / "state")],
@@ -98,6 +84,12 @@ def main() -> int:
 
         def call(op: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
             return c.call(op, args)
+
+        # ---- before tune.read: the reads with the CPU's voltage ceiling / OC ratio limit not read yet (cpu_limits.P/E/ring = null: the "Read CPU state first" shape) ----
+        write("power-read-unread.json", scrub(call("power.read"), tmp))
+        write("runtime-read-unread.json", scrub(call("runtime.read"), tmp))
+        tr = call("tune.read")  # reads 0x28 / 0x01 (simulator): from here on cpu_limits.P / E / ring hold the CPU's limits
+        assert tr.get("ok"), tr
 
         # ---- before any write: the reads, and the refusals that are CPU / process rules ----
         write("power-revert-nojournal.json", pair("power.plan", {"revert": True}, call("power.plan", {"revert": True}), tmp))

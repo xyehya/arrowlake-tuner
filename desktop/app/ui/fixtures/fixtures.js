@@ -8467,7 +8467,7 @@ export default {
  "tune-apply": {
   "request": {
    "args": {
-    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
+    "plan_id": "112b8b9a955be9da3914d2b6adce281f0a559711082e8e502929e85c48068076",
     "typed": "CONFIRM <nonce>"
    },
    "op": "tune.apply"
@@ -8480,7 +8480,7 @@ export default {
     "cpufreq": [],
     "msr_writes": 0,
     "ops_used": 4,
-    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
+    "plan_id": "112b8b9a955be9da3914d2b6adce281f0a559711082e8e502929e85c48068076",
     "readback": [
      {
       "actual": "0xfd800035",
@@ -8505,8 +8505,7 @@ export default {
      }
     ],
     "warnings": [
-     "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state",
-     "effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV"
+     "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state"
     ],
     "writes_sent": 1
    }
@@ -8523,7 +8522,7 @@ export default {
    "of": 6,
    "op_id": "c6",
    "ops_budget": 100000,
-   "ops_used": 152,
+   "ops_used": 154,
    "step": 1
   },
   {
@@ -8531,7 +8530,7 @@ export default {
    "of": 6,
    "op_id": "c6",
    "ops_budget": 100000,
-   "ops_used": 153,
+   "ops_used": 155,
    "step": 2
   },
   {
@@ -8539,7 +8538,7 @@ export default {
    "of": 6,
    "op_id": "c6",
    "ops_budget": 100000,
-   "ops_used": 154,
+   "ops_used": 156,
    "step": 3
   }
  ],
@@ -8547,14 +8546,42 @@ export default {
   "id": "c9",
   "ok": true,
   "result": {
-   "applied_at": 1792316752.4838252,
-   "at": 1792316752.4727194,
+   "applied_at": 1792340114.4705052,
+   "at": 1792340114.4582124,
    "available": true,
    "boot_id": "00000000-0000-4000-8000-000000000000",
    "result": {
     "accepted_match": null,
     "accepted_note": "no accepted state directory is configured",
     "complete": true,
+    "cpu_limits": {
+     "E": {
+      "max_mv": 1355,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+     },
+     "P": {
+      "max_mv": 1625,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+     },
+     "caps_khz": null,
+     "offset_mv": [
+      -1000,
+      999
+     ],
+     "power": {
+      "locked": null,
+      "pl_max_w": null,
+      "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+     },
+     "ring": {
+      "max_mv": 1999,
+      "max_ratio": 85,
+      "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+     },
+     "uncore_khz": null
+    },
     "differences": [],
     "differences_stale": true,
     "extras_notes": {},
@@ -8627,7 +8654,8 @@ export default {
        999
       ],
       "ratio_max_oc": 120,
-      "v_target_max_mv": 1355
+      "v_target_max_mv": 1355,
+      "v_target_max_raw": 1388
      },
      "P": {
       "offset_mv": [
@@ -8635,7 +8663,8 @@ export default {
        999
       ],
       "ratio_max_oc": 120,
-      "v_target_max_mv": 1625
+      "v_target_max_mv": 1625,
+      "v_target_max_raw": 1664
      }
     },
     "intent_features": [
@@ -8644,39 +8673,39 @@ export default {
     "limits": {
      "offset_mv": {
       "E": {
-       "max": 200,
-       "min": -200
+       "max": 999,
+       "min": -1000
       },
       "P": {
-       "max": 200,
-       "min": -200
+       "max": 999,
+       "min": -1000
       }
      },
      "ratio_max": {
-      "E": 49,
-      "P": 60
+      "E": null,
+      "P": null
      },
      "source": {
       "ratio_max": {
-       "E": "auto",
-       "P": "auto"
+       "E": "none",
+       "P": "none"
       },
       "v_target_max": {
-       "E": "auto",
-       "P": "auto"
+       "E": "none",
+       "P": "none"
       }
      },
      "v_target_max_v": {
-      "E": 1.355,
-      "P": 1.625
+      "E": null,
+      "P": null
      }
     },
-    "ops_done": 151,
-    "ops_extras": 28,
+    "ops_done": 153,
+    "ops_extras": 30,
     "ops_ring": 11,
     "ops_words": 112,
     "problems": [],
-    "read_at": "2026-10-18T09:45:52Z",
+    "read_at": "2026-10-18T16:15:14Z",
     "ring": {
      "cpu": 0,
      "end": "rc 0x11 at P2=10",
@@ -11058,10 +11087,10 @@ export default {
     "complete": false,
     "expires_s": 600,
     "name": "tune-7c3ceb84",
-    "nonce": "6YK4BQ",
-    "ops_left": 99849,
+    "nonce": "37IRHH",
+    "ops_left": 99847,
     "ops_needed": 6,
-    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
+    "plan_id": "112b8b9a955be9da3914d2b6adce281f0a559711082e8e502929e85c48068076",
     "predicted": null,
     "reads": 2,
     "rounds": 1,
@@ -11090,10 +11119,6 @@ export default {
       "text": "per-point offsets change one V/F point (0x11 with P2 = the point); the hardware keeps V(n) >= V(n-1): arltuner models it (CLAMPED warnings) but cannot read the lower fused voltages"
      },
      {
-      "code": "NOTE",
-      "text": "effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV"
-     },
-     {
       "code": "NO_BASELINE",
       "text": "measure a stock baseline for predictions (no curve is flagged baseline)"
      },
@@ -11114,6 +11139,34 @@ export default {
    "accepted_match": null,
    "accepted_note": "no accepted state directory is configured",
    "complete": true,
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read 2026-10-18T16:15:14Z"
+    },
+    "uncore_khz": null
+   },
    "differences": [],
    "extras_notes": {},
    "fused": {
@@ -11185,7 +11238,8 @@ export default {
       999
      ],
      "ratio_max_oc": 120,
-     "v_target_max_mv": 1355
+     "v_target_max_mv": 1355,
+     "v_target_max_raw": 1388
     },
     "P": {
      "offset_mv": [
@@ -11193,7 +11247,8 @@ export default {
       999
      ],
      "ratio_max_oc": 120,
-     "v_target_max_mv": 1625
+     "v_target_max_mv": 1625,
+     "v_target_max_raw": 1664
     }
    },
    "intent_features": [
@@ -11202,39 +11257,39 @@ export default {
    "limits": {
     "offset_mv": {
      "E": {
-      "max": 200,
-      "min": -200
+      "max": 999,
+      "min": -1000
      },
      "P": {
-      "max": 200,
-      "min": -200
+      "max": 999,
+      "min": -1000
      }
     },
     "ratio_max": {
-     "E": 49,
-     "P": 60
+     "E": null,
+     "P": null
     },
     "source": {
      "ratio_max": {
-      "E": "auto",
-      "P": "auto"
+      "E": "none",
+      "P": "none"
      },
      "v_target_max": {
-      "E": "auto",
-      "P": "auto"
+      "E": "none",
+      "P": "none"
      }
     },
     "v_target_max_v": {
-     "E": 1.355,
-     "P": 1.625
+     "E": null,
+     "P": null
     }
    },
-   "ops_done": 151,
-   "ops_extras": 28,
+   "ops_done": 153,
+   "ops_extras": 30,
    "ops_ring": 11,
    "ops_words": 112,
    "problems": [],
-   "read_at": "2026-10-18T09:45:52Z",
+   "read_at": "2026-10-18T16:15:14Z",
    "ring": {
     "cpu": 0,
     "end": "rc 0x11 at P2=10",

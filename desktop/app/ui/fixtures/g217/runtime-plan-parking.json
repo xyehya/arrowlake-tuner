@@ -12,7 +12,7 @@
    "code": "BAD_REQUEST",
    "message": "core parking is not supported (held, D-pending)"
   },
-  "id": "c3",
+  "id": "c6",
   "ok": false
  }
 }

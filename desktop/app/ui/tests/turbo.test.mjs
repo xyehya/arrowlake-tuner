@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import FIX from "../fixtures/fixtures.js";
+import G from "../fixtures/g217/fixtures-g217.js";
 import { modelFromRead } from "../lib/units.js";
 import { emptyDraft, diff, turboCur } from "../lib/draft.js";
 import { buildIntent } from "../lib/intent.js";
@@ -108,7 +109,12 @@ const {
 } = turbo;
 
 const READ = FIX["tune-read"].result;
-const model = (patch = {}) => modelFromRead({ ...structuredClone(READ), ...patch });
+// The recorded simulator CPU allows OC ratios up to 120x (0x01); these tests use a CPU whose limit is 60x (P) / 49x (E) so the ceiling is reachable by a few steps. The unread shape is recorded too.
+const TIGHT = structuredClone(READ.cpu_limits);
+TIGHT.P.max_ratio = 60;
+TIGHT.E.max_ratio = 49;
+const UNREAD = structuredClone(G["power-read-unread"].result.cpu_limits);
+const model = (patch = {}) => modelFromRead({ ...structuredClone(READ), cpu_limits: structuredClone(TIGHT), ...patch });
 
 /** Mount on the fixture model with a host-owned draft (the way views/tune.js will). */
 function host(patch = {}, ctxExtra = {}) {
@@ -155,10 +161,11 @@ test("turbo: floor is the lowest live V/F point, the ceiling of bucket 1 is the 
   assert.equal(bucketFloor(m, "P"), 8);
   assert.equal(bucketFloor(m, "E"), 8);
   const eff = turboCur(m, "P").slice();
-  assert.equal(bucketCeiling(m, "P", 0, eff), 60, "policy ∩ CPU ratio_max");
+  assert.equal(bucketCeiling(m, "P", 0, eff), 60, "the CPU's OC ratio limit (0x01)");
   assert.equal(bucketCeiling(m, "P", 3, eff), eff[2]);
-  assert.deepEqual(ratioLimit(m, "P"), { max: 60, source: "policy (auto: the CPU's own limit)", policy: 60, cpu: 120 });
-  assert.equal(bucketCeiling(model({ limits: null }), "P", 0, eff), eff[0], "no stated ceiling = no raise above the read (G-133)");
+  assert.deepEqual(ratioLimit(m, "P"), { max: 60, source: "CPU OC ratio limit (mailbox 0x01)" });
+  assert.equal(ratioLimit(modelFromRead(structuredClone(READ)), "P").max, 120, "the recorded simulator CPU");
+  assert.equal(bucketCeiling(model({ cpu_limits: UNREAD }), "P", 0, eff), eff[0], "OC ratio limit unread = no raise above the read (G-133)");
 });
 
 test("turbo: checkBucket refuses the order, the ceiling and the floor with a reason", () => {
@@ -177,16 +184,18 @@ test("turbo: checkBucket refuses the order, the ceiling and the floor with a rea
   const over = checkBucket(m, "P", 0, 61, eff);
   assert.equal(over.code, "above_limit");
   assert.match(over.reason, /60×/);
-  assert.match(over.reason, /policy/);
+  assert.match(over.reason, /0x01/);
+  assert.doesNotMatch(over.reason, /polic/i);
 
   assert.equal(checkBucket(m, "P", 4, "5", eff).code, "below_floor");
   assert.equal(checkBucket(m, "P", 4, "", eff).code, "not_a_ratio");
   assert.equal(checkBucket(m, "P", 4, "5.5", eff).code, "not_a_ratio");
   assert.deepEqual(checkBucket(m, "P", 4, 55, eff), { ok: true, value: 55 }, "no-op always accepted");
 
-  const nope = checkBucket(model({ limits: null }), "P", 0, 58, eff);
+  const nope = checkBucket(model({ cpu_limits: UNREAD }), "P", 0, 58, eff);
   assert.equal(nope.code, "no_ceiling");
   assert.match(nope.reason, /may only be lowered/);
+  assert.match(nope.reason, /Read CPU state first/);
 
   assert.equal(checkBucket(model({ turbo: null, tables: null }), "P", 0, 50, eff).code, "no_table");
   assert.equal(checkBucket(m, "P", 9, 50, eff).code, "no_bucket");
@@ -228,12 +237,15 @@ test("turbo: both tables in one intent are exactly {turbo:{P:[...8],E:[...8]}}",
   assert.equal(diff(m, d).turbo.E, 5, "one bucket lowered, five differ from the read");
 });
 
-test("turbo: the limit hint names the policy file and the CPU's own ceiling", () => {
+test("turbo: the limit hint names the CPU's own ceiling (0x01); unread says Read CPU state first", () => {
   const line = limitHint(model(), "P");
   assert.match(line, /60×/);
-  assert.match(line, /policy/i);
-  assert.match(line, /120×/);
-  assert.match(limitHint(model({ limits: null }), "P"), /no bucket may be raised/);
+  assert.match(line, /0x01/);
+  assert.doesNotMatch(line, /polic/i);
+  const unread = limitHint(model({ cpu_limits: UNREAD }), "P");
+  assert.match(unread, /Read CPU state first/);
+  assert.match(unread, /no bucket may be raised/);
+  assert.match(limitHint(model({ cpu_limits: null }), "P"), /did not report the CPU limits/);
 });
 
 test("turbo: the step chart keeps eight buckets and a flat table off the axis", () => {

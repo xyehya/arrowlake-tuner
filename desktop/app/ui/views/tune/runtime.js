@@ -3,7 +3,7 @@
 // An E cluster runs one ratio, so its cap is one field that applies to all 4 cores of the cluster (the intent names every online CPU of it). A ratio the cpufreq grid cannot hit is capped one bin lower and
 // the PLAN says so ("capped at 22×" in the drawer); this view does not predict it.
 // Parking is NOT offered (D-048: a parked CPU renumbers the topology); the per-CPU online state is shown read-only. D-049: the window shown is the CPU's own (`cpu_limits.caps_khz`: the cpufreq range of
-// that CPU), never a policy; unread -> disabled with "Read CPU state first".
+// that CPU); unread -> disabled with "Read CPU state first".
 //   mount(el, ctx) / unmount();  ctx = subTabContext of views/tune.js.
 import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
@@ -16,7 +16,8 @@ import { ensureStyle, head, createReadBar, createActionBar, limitNote, LOST_ON_R
 /** The cap window of a unit in ratios: the strictest over its CPUs. null when the CPU limits are not read. */
 export function unitWindow(cl, cpus) {
   const ws = cpus.map((c) => capWindow(cl, c)).filter(Boolean);
-  return ws.length ? { min: Math.max(...ws.map((w) => w.min)), max: Math.min(...ws.map((w) => w.max)) } : null;
+  const mins = ws.map((w) => w.min).filter(isNum);
+  return ws.length ? { min: mins.length ? Math.max(...mins) : null, max: Math.min(...ws.map((w) => w.max)) } : null;
 }
 
 /** Why the cap fields are off ("" = usable). */
@@ -96,7 +97,8 @@ export function mount(el, ctx) {
       buildRows(groups);
     }
     const cl = normCpuLimits(result ? result.cpu_limits : null);
-    const why = capsDisabledReason(result) || (!cl ? READ_FIRST + " (the CPU's cpufreq limits come from that read)" : "");
+    const noRange = !!result && !groups.some((g) => unitWindow(cl, g.cpus));
+    const why = capsDisabledReason(result) || (noRange ? READ_FIRST + " (the CPU's cpufreq limits come from that read)" : "");
     const edit = s.rt.edits.caps;
     for (const g of groups) {
       const u = inst.units.get(g.unit);

@@ -9,7 +9,7 @@
   "of": 6,
   "op_id": "c6",
   "ops_budget": 100000,
-  "ops_used": 152,
+  "ops_used": 154,
   "step": 1
  },
  {
@@ -17,7 +17,7 @@
   "of": 6,
   "op_id": "c6",
   "ops_budget": 100000,
-  "ops_used": 153,
+  "ops_used": 155,
   "step": 2
  },
  {
@@ -25,7 +25,7 @@
   "of": 6,
   "op_id": "c6",
   "ops_budget": 100000,
-  "ops_used": 154,
+  "ops_used": 156,
   "step": 3
  }
 ]

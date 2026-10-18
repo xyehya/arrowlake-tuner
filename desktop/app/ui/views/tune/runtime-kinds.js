@@ -1,11 +1,11 @@
 // views/tune/runtime-kinds.js: the "power" and "runtime" section kinds of the apply drawer (views/tune/apply.js registerKind) and the helper reads they share (G-217).
 //
-// WHAT THE DRAWER NEEDS FROM apply.js (apply.js is G-210's file; `tests/apply-hooks.patch` is the ~30-line change, see its header): power.plan / runtime.plan take their fields at the top level
-// (ops_power.py _validate_power_plan, ops_runtime.py _validate_runtime_plan; the Rust allowlist rejects {intent: ...}), so a kind may carry
+// WHAT THE DRAWER TAKES FROM A KIND (views/tune/apply.js hooks): power.plan / runtime.plan take their fields at the top level (ops_power.py _validate_power_plan, ops_runtime.py
+// _validate_runtime_plan; the Rust allowlist rejects {intent: ...}), so a kind carries
 //   planArgs(intent) -> the args of the plan call (default {intent}),   explain(error) -> the refusal text,   view(plan) -> {units: [{unit, keys, lines}], steps: [text]} (a plan that is not tune-shaped).
-// Without those hooks apply.js ignores the extra fields and would send {intent: ...}, which the helper refuses (BAD_REQUEST): the Review button of the tabs stays correct, the drawer then says so.
 //
-// The tabs build their requests with requestReview(): one drawer, V/F section first (when there is a Tune draft), then power, then runtime; applied in that order, stop on first failure.
+// The tabs and the pending bar (views/tune.js requestReview) build their requests with requestReview(): one drawer, V/F + turbo + ring section first (when there is a Tune draft), then power,
+// then runtime (caps + uncore); applied in that order, stop on first failure. Plan warnings (LARGE_CHANGE, PL2_BELOW_PL1, ...) are amber rows and never block Apply.
 import { registerKind, KINDS } from "./apply.js";
 import { ensureTune } from "../tune.js";
 import { pushToast } from "../../store.js";

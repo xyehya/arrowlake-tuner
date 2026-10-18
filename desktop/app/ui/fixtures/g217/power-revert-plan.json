@@ -6,7 +6,7 @@
   "op": "power.plan"
  },
  "response": {
-  "id": "c9",
+  "id": "c12",
   "ok": true,
   "result": {
    "after": {
@@ -24,12 +24,40 @@
     "tau_s": 55.967744,
     "tau_us": 55967744
    },
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": null
+   },
    "expires_s": 600,
    "journal_new": false,
    "locked": false,
-   "nonce": "WQSO6D",
+   "nonce": "RBHFEI",
    "ops_needed": 0,
-   "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+   "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
    "revert": true,
    "steps": [
     {

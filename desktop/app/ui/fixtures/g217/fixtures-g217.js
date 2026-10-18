@@ -3,13 +3,13 @@ export default {
  "power-apply": {
   "request": {
    "args": {
-    "plan_id": "9d489fea3a27b2f3eba21f61100c55ddcc0bc2541bc625030170e1dfac850d52",
+    "plan_id": "40146c098c41a0e587bb4a236f663248e8980a0811f9f2aaf4754649e3207449",
     "typed": "CONFIRM <nonce>"
    },
    "op": "power.apply"
   },
   "response": {
-   "id": "c7",
+   "id": "c10",
    "ok": true,
    "result": {
     "after": {
@@ -24,7 +24,7 @@ export default {
     },
     "complete": true,
     "journal": "/var/lib/arltuner/power-journal.json",
-    "plan_id": "9d489fea3a27b2f3eba21f61100c55ddcc0bc2541bc625030170e1dfac850d52",
+    "plan_id": "40146c098c41a0e587bb4a236f663248e8980a0811f9f2aaf4754649e3207449",
     "readback": [
      {
       "expected": [
@@ -95,12 +95,12 @@ export default {
  "power-apply-events": [
   {
    "event": "state",
-   "op_id": "c6",
+   "op_id": "c9",
    "state": "idle"
   },
   {
    "event": "state",
-   "op_id": "c7",
+   "op_id": "c10",
    "state": "applying"
   }
  ],
@@ -116,7 +116,7 @@ export default {
    "op": "power.plan"
   },
   "response": {
-   "id": "c6",
+   "id": "c9",
    "ok": true,
    "result": {
     "after": {
@@ -134,12 +134,40 @@ export default {
      "tau_s": 127.926272,
      "tau_us": 127926272
     },
+    "cpu_limits": {
+     "E": {
+      "max_mv": 1355,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "P": {
+      "max_mv": 1625,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "caps_khz": null,
+     "offset_mv": [
+      -1000,
+      999
+     ],
+     "power": {
+      "locked": false,
+      "pl_max_w": 4095.875,
+      "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+     },
+     "ring": {
+      "max_mv": 1999,
+      "max_ratio": 85,
+      "source": "0x28/0x01 read"
+     },
+     "uncore_khz": null
+    },
     "expires_s": 600,
     "journal_new": true,
     "locked": false,
-    "nonce": "87QQRG",
+    "nonce": "9LIJBC",
     "ops_needed": 0,
-    "plan_id": "9d489fea3a27b2f3eba21f61100c55ddcc0bc2541bc625030170e1dfac850d52",
+    "plan_id": "40146c098c41a0e587bb4a236f663248e8980a0811f9f2aaf4754649e3207449",
     "revert": false,
     "steps": [
      {
@@ -186,11 +214,39 @@ export default {
   }
  },
  "power-read": {
-  "id": "c4",
+  "id": "c7",
   "ok": true,
   "result": {
    "available": true,
    "boot": null,
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": null
+   },
    "journal": "/var/lib/arltuner/power-journal.json",
    "locked": false,
    "msr": {
@@ -235,7 +291,7 @@ export default {
   }
  },
  "power-read-applied": {
-  "id": "c8",
+  "id": "c11",
   "ok": true,
   "result": {
    "available": true,
@@ -244,6 +300,34 @@ export default {
     "pl1_w": 250.0,
     "pl2_w": 295.0,
     "tau_s": 127.926272
+   },
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": null
    },
    "journal": "/var/lib/arltuner/power-journal.json",
    "locked": false,
@@ -289,7 +373,7 @@ export default {
   }
  },
  "power-read-reverted": {
-  "id": "c11",
+  "id": "c14",
   "ok": true,
   "result": {
    "available": true,
@@ -298,6 +382,111 @@ export default {
     "pl1_w": 250.0,
     "pl2_w": 295.0,
     "tau_s": 127.926272
+   },
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": null
+   },
+   "journal": "/var/lib/arltuner/power-journal.json",
+   "locked": false,
+   "msr": {
+    "info": {
+     "max_w": 0.0,
+     "min_w": 0.0,
+     "raw": "0x00000000000003e8",
+     "tdp_w": 125.0
+    },
+    "limit": {
+     "locked": false,
+     "pl1_clamp": true,
+     "pl1_enabled": true,
+     "pl1_w": 250.0,
+     "pl2_clamp": false,
+     "pl2_enabled": true,
+     "pl2_w": 295.0,
+     "raw": "0x00008938002387d0",
+     "tau_s": 127.926272,
+     "tau_us": 127926272
+    },
+    "units": {
+     "power_unit_w": 0.125,
+     "raw": "0xa0e03",
+     "time_unit_s": 0.0009765625
+    }
+   },
+   "msr_note": null,
+   "note": null,
+   "powercap": {
+    "max_power_uw": 125000000,
+    "pl1_uw": 250000000,
+    "pl1_w": 250.0,
+    "pl2_tau_us": 2440,
+    "pl2_uw": 295000000,
+    "pl2_w": 295.0,
+    "tau_s": 127.926272,
+    "tau_us": 127926272
+   },
+   "read_only_reason": null,
+   "writable": true
+  }
+ },
+ "power-read-unread": {
+  "id": "c1",
+  "ok": true,
+  "result": {
+   "available": true,
+   "boot": null,
+   "cpu_limits": {
+    "E": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "P": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "caps_khz": null,
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": false,
+     "pl_max_w": 4095.875,
+     "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+    },
+    "ring": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "uncore_khz": null
    },
    "journal": "/var/lib/arltuner/power-journal.json",
    "locked": false,
@@ -345,13 +534,13 @@ export default {
  "power-revert-apply": {
   "request": {
    "args": {
-    "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+    "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
     "typed": "CONFIRM <nonce>"
    },
    "op": "power.apply"
   },
   "response": {
-   "id": "c10",
+   "id": "c13",
    "ok": true,
    "result": {
     "after": {
@@ -366,7 +555,7 @@ export default {
     },
     "complete": true,
     "journal": "/var/lib/arltuner/power-journal.json",
-    "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+    "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
     "readback": [
      {
       "expected": [
@@ -449,7 +638,7 @@ export default {
     },
     "message": "there is nothing to revert to: no power value was written in this boot (no journal for this boot). Nothing was written."
    },
-   "id": "c1",
+   "id": "c4",
    "ok": false
   }
  },
@@ -461,7 +650,7 @@ export default {
    "op": "power.plan"
   },
   "response": {
-   "id": "c9",
+   "id": "c12",
    "ok": true,
    "result": {
     "after": {
@@ -479,12 +668,40 @@ export default {
      "tau_s": 55.967744,
      "tau_us": 55967744
     },
+    "cpu_limits": {
+     "E": {
+      "max_mv": 1355,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "P": {
+      "max_mv": 1625,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "caps_khz": null,
+     "offset_mv": [
+      -1000,
+      999
+     ],
+     "power": {
+      "locked": false,
+      "pl_max_w": 4095.875,
+      "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+     },
+     "ring": {
+      "max_mv": 1999,
+      "max_ratio": 85,
+      "source": "0x28/0x01 read"
+     },
+     "uncore_khz": null
+    },
     "expires_s": 600,
     "journal_new": false,
     "locked": false,
-    "nonce": "WQSO6D",
+    "nonce": "RBHFEI",
     "ops_needed": 0,
-    "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+    "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
     "revert": true,
     "steps": [
      {
@@ -532,13 +749,13 @@ export default {
  "runtime-apply": {
   "request": {
    "args": {
-    "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+    "plan_id": "6d2063a119fde3e1dea78a9c903f9c2319cf9490bf6f7e927c01ea390ee311a6",
     "typed": "CONFIRM <nonce>"
    },
    "op": "runtime.apply"
   },
   "response": {
-   "id": "c13",
+   "id": "c16",
    "ok": true,
    "result": {
     "after": {
@@ -563,7 +780,7 @@ export default {
     },
     "complete": true,
     "journal": "/var/lib/arltuner/runtime-journal.json",
-    "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+    "plan_id": "6d2063a119fde3e1dea78a9c903f9c2319cf9490bf6f7e927c01ea390ee311a6",
     "readback": [
      {
       "domain": "caps",
@@ -697,12 +914,12 @@ export default {
  "runtime-apply-events": [
   {
    "event": "state",
-   "op_id": "c12",
+   "op_id": "c15",
    "state": "idle"
   },
   {
    "event": "state",
-   "op_id": "c13",
+   "op_id": "c16",
    "state": "applying"
   }
  ],
@@ -720,14 +937,142 @@ export default {
    "op": "runtime.plan"
   },
   "response": {
-   "id": "c12",
+   "id": "c15",
    "ok": true,
    "result": {
+    "cpu_limits": {
+     "E": {
+      "max_mv": 1355,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "P": {
+      "max_mv": 1625,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "caps_khz": {
+      "0": [
+       800000,
+       5700000
+      ],
+      "1": [
+       800000,
+       5500000
+      ],
+      "10": [
+       800000,
+       4900000
+      ],
+      "11": [
+       800000,
+       4900000
+      ],
+      "12": [
+       800000,
+       4900000
+      ],
+      "13": [
+       800000,
+       4900000
+      ],
+      "14": [
+       800000,
+       4900000
+      ],
+      "15": [
+       800000,
+       4900000
+      ],
+      "16": [
+       800000,
+       4900000
+      ],
+      "17": [
+       800000,
+       4900000
+      ],
+      "18": [
+       800000,
+       4900000
+      ],
+      "19": [
+       800000,
+       4900000
+      ],
+      "2": [
+       800000,
+       5500000
+      ],
+      "20": [
+       800000,
+       4900000
+      ],
+      "21": [
+       800000,
+       4900000
+      ],
+      "22": [
+       800000,
+       4900000
+      ],
+      "23": [
+       800000,
+       4900000
+      ],
+      "3": [
+       800000,
+       5700000
+      ],
+      "4": [
+       800000,
+       5500000
+      ],
+      "5": [
+       800000,
+       5500000
+      ],
+      "6": [
+       800000,
+       5500000
+      ],
+      "7": [
+       800000,
+       5500000
+      ],
+      "8": [
+       800000,
+       4900000
+      ],
+      "9": [
+       800000,
+       4900000
+      ]
+     },
+     "offset_mv": [
+      -1000,
+      999
+     ],
+     "power": {
+      "locked": null,
+      "pl_max_w": null,
+      "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+     },
+     "ring": {
+      "max_mv": 1999,
+      "max_ratio": 85,
+      "source": "0x28/0x01 read"
+     },
+     "uncore_khz": [
+      800000,
+      4000000
+     ]
+    },
     "expires_s": 600,
     "journal_new": true,
-    "nonce": "TZ2HXR",
+    "nonce": "KC4PX7",
     "ops_needed": 0,
-    "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+    "plan_id": "6d2063a119fde3e1dea78a9c903f9c2319cf9490bf6f7e927c01ea390ee311a6",
     "revert": false,
     "steps": [
      {
@@ -815,6 +1160,11 @@ export default {
     "warnings": [
      "an E-cluster runs one ratio: the cap was also set on cpu 9, 10, 11 of the same cluster(s)",
      "cpu 8, 9, 10, 11: ratio 23 is unreachable by a cpufreq cap: capped at 22",
+     "LARGE_CHANGE: cpu 0: cap 57 -> 50 is a large single change (more than 4 bins); the kernel accepts it",
+     "LARGE_CHANGE: cpu 8: cap 49 -> 23 is a large single change (more than 4 bins); the kernel accepts it",
+     "LARGE_CHANGE: cpu 9: cap 49 -> 23 is a large single change (more than 4 bins); the kernel accepts it",
+     "LARGE_CHANGE: cpu 10: cap 49 -> 23 is a large single change (more than 4 bins); the kernel accepts it",
+     "LARGE_CHANGE: cpu 11: cap 49 -> 23 is a large single change (more than 4 bins); the kernel accepts it",
      "the values now in force are journaled before the first write of each key in this boot; \"revert\" puts them back",
      "these are runtime values: a reboot restores the firmware / kernel defaults"
     ],
@@ -836,7 +1186,7 @@ export default {
     "code": "BAD_REQUEST",
     "message": "core parking is not supported (held, D-pending)"
    },
-   "id": "c3",
+   "id": "c6",
    "ok": false
   }
  },
@@ -858,12 +1208,12 @@ export default {
     },
     "message": "max_ratio = 45 is outside the hardware's own uncore range 8..40 (initial_min/max_freq_khz). Nothing was written."
    },
-   "id": "c18",
+   "id": "c21",
    "ok": false
   }
  },
  "runtime-read": {
-  "id": "c5",
+  "id": "c8",
   "ok": true,
   "result": {
    "caps": [
@@ -873,6 +1223,7 @@ export default {
       "cap_khz": 5700000,
       "cap_ratio": 57.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -885,6 +1236,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -897,6 +1249,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -909,6 +1262,7 @@ export default {
       "cap_khz": 5700000,
       "cap_ratio": 57.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -921,6 +1275,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -933,6 +1288,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -945,6 +1301,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -957,6 +1314,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -969,6 +1327,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -981,6 +1340,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -993,6 +1353,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1005,6 +1366,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1017,6 +1379,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1029,6 +1392,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1041,6 +1405,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1053,6 +1418,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1065,6 +1431,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1077,6 +1444,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1089,6 +1457,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1101,6 +1470,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1113,6 +1483,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1125,6 +1496,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1137,6 +1509,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1149,6 +1522,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1156,6 +1530,134 @@ export default {
      "unit": "EC3"
     }
    ],
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": {
+     "0": [
+      800000,
+      5700000
+     ],
+     "1": [
+      800000,
+      5500000
+     ],
+     "10": [
+      800000,
+      4900000
+     ],
+     "11": [
+      800000,
+      4900000
+     ],
+     "12": [
+      800000,
+      4900000
+     ],
+     "13": [
+      800000,
+      4900000
+     ],
+     "14": [
+      800000,
+      4900000
+     ],
+     "15": [
+      800000,
+      4900000
+     ],
+     "16": [
+      800000,
+      4900000
+     ],
+     "17": [
+      800000,
+      4900000
+     ],
+     "18": [
+      800000,
+      4900000
+     ],
+     "19": [
+      800000,
+      4900000
+     ],
+     "2": [
+      800000,
+      5500000
+     ],
+     "20": [
+      800000,
+      4900000
+     ],
+     "21": [
+      800000,
+      4900000
+     ],
+     "22": [
+      800000,
+      4900000
+     ],
+     "23": [
+      800000,
+      4900000
+     ],
+     "3": [
+      800000,
+      5700000
+     ],
+     "4": [
+      800000,
+      5500000
+     ],
+     "5": [
+      800000,
+      5500000
+     ],
+     "6": [
+      800000,
+      5500000
+     ],
+     "7": [
+      800000,
+      5500000
+     ],
+     "8": [
+      800000,
+      4900000
+     ],
+     "9": [
+      800000,
+      4900000
+     ]
+    },
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": [
+     800000,
+     4000000
+    ]
+   },
    "held": null,
    "journal": null,
    "journal_path": "/var/lib/arltuner/runtime-journal.json",
@@ -1176,7 +1678,7 @@ export default {
   }
  },
  "runtime-read-applied": {
-  "id": "c14",
+  "id": "c17",
   "ok": true,
   "result": {
    "caps": [
@@ -1186,6 +1688,7 @@ export default {
       "cap_khz": 5000000,
       "cap_ratio": 50.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1198,6 +1701,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1210,6 +1714,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1222,6 +1727,7 @@ export default {
       "cap_khz": 5700000,
       "cap_ratio": 57.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1234,6 +1740,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1246,6 +1753,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1258,6 +1766,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1270,6 +1779,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1282,6 +1792,7 @@ export default {
       "cap_khz": 2201449,
       "cap_ratio": 22.01449,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1294,6 +1805,7 @@ export default {
       "cap_khz": 2201449,
       "cap_ratio": 22.01449,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1306,6 +1818,7 @@ export default {
       "cap_khz": 2201449,
       "cap_ratio": 22.01449,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1318,6 +1831,7 @@ export default {
       "cap_khz": 2201449,
       "cap_ratio": 22.01449,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1330,6 +1844,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1342,6 +1857,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1354,6 +1870,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1366,6 +1883,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1378,6 +1896,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1390,6 +1909,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1402,6 +1922,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1414,6 +1935,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1426,6 +1948,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1438,6 +1961,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1450,6 +1974,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1462,6 +1987,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1469,6 +1995,134 @@ export default {
      "unit": "EC3"
     }
    ],
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": {
+     "0": [
+      800000,
+      5700000
+     ],
+     "1": [
+      800000,
+      5500000
+     ],
+     "10": [
+      800000,
+      4900000
+     ],
+     "11": [
+      800000,
+      4900000
+     ],
+     "12": [
+      800000,
+      4900000
+     ],
+     "13": [
+      800000,
+      4900000
+     ],
+     "14": [
+      800000,
+      4900000
+     ],
+     "15": [
+      800000,
+      4900000
+     ],
+     "16": [
+      800000,
+      4900000
+     ],
+     "17": [
+      800000,
+      4900000
+     ],
+     "18": [
+      800000,
+      4900000
+     ],
+     "19": [
+      800000,
+      4900000
+     ],
+     "2": [
+      800000,
+      5500000
+     ],
+     "20": [
+      800000,
+      4900000
+     ],
+     "21": [
+      800000,
+      4900000
+     ],
+     "22": [
+      800000,
+      4900000
+     ],
+     "23": [
+      800000,
+      4900000
+     ],
+     "3": [
+      800000,
+      5700000
+     ],
+     "4": [
+      800000,
+      5500000
+     ],
+     "5": [
+      800000,
+      5500000
+     ],
+     "6": [
+      800000,
+      5500000
+     ],
+     "7": [
+      800000,
+      5500000
+     ],
+     "8": [
+      800000,
+      4900000
+     ],
+     "9": [
+      800000,
+      4900000
+     ]
+    },
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": [
+     800000,
+     4000000
+    ]
+   },
    "held": null,
    "journal": {
     "caps": {
@@ -1501,7 +2155,7 @@ export default {
   }
  },
  "runtime-read-reverted": {
-  "id": "c17",
+  "id": "c20",
   "ok": true,
   "result": {
    "caps": [
@@ -1511,6 +2165,7 @@ export default {
       "cap_khz": 5700000,
       "cap_ratio": 57.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1523,6 +2178,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1535,6 +2191,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1547,6 +2204,7 @@ export default {
       "cap_khz": 5700000,
       "cap_ratio": 57.0,
       "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1559,6 +2217,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1571,6 +2230,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1583,6 +2243,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1595,6 +2256,7 @@ export default {
       "cap_khz": 5500000,
       "cap_ratio": 55.0,
       "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "P",
@@ -1607,6 +2269,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1619,6 +2282,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1631,6 +2295,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1643,6 +2308,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1655,6 +2321,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1667,6 +2334,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1679,6 +2347,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1691,6 +2360,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1703,6 +2373,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1715,6 +2386,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1727,6 +2399,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1739,6 +2412,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1751,6 +2425,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1763,6 +2438,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1775,6 +2451,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1787,6 +2464,7 @@ export default {
       "cap_khz": 4900000,
       "cap_ratio": 49.0,
       "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
       "min_khz": 800000
      },
      "kind": "E",
@@ -1794,6 +2472,134 @@ export default {
      "unit": "EC3"
     }
    ],
+   "cpu_limits": {
+    "E": {
+     "max_mv": 1355,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "P": {
+     "max_mv": 1625,
+     "max_ratio": 120,
+     "source": "0x28/0x01 read"
+    },
+    "caps_khz": {
+     "0": [
+      800000,
+      5700000
+     ],
+     "1": [
+      800000,
+      5500000
+     ],
+     "10": [
+      800000,
+      4900000
+     ],
+     "11": [
+      800000,
+      4900000
+     ],
+     "12": [
+      800000,
+      4900000
+     ],
+     "13": [
+      800000,
+      4900000
+     ],
+     "14": [
+      800000,
+      4900000
+     ],
+     "15": [
+      800000,
+      4900000
+     ],
+     "16": [
+      800000,
+      4900000
+     ],
+     "17": [
+      800000,
+      4900000
+     ],
+     "18": [
+      800000,
+      4900000
+     ],
+     "19": [
+      800000,
+      4900000
+     ],
+     "2": [
+      800000,
+      5500000
+     ],
+     "20": [
+      800000,
+      4900000
+     ],
+     "21": [
+      800000,
+      4900000
+     ],
+     "22": [
+      800000,
+      4900000
+     ],
+     "23": [
+      800000,
+      4900000
+     ],
+     "3": [
+      800000,
+      5700000
+     ],
+     "4": [
+      800000,
+      5500000
+     ],
+     "5": [
+      800000,
+      5500000
+     ],
+     "6": [
+      800000,
+      5500000
+     ],
+     "7": [
+      800000,
+      5500000
+     ],
+     "8": [
+      800000,
+      4900000
+     ],
+     "9": [
+      800000,
+      4900000
+     ]
+    },
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": 1999,
+     "max_ratio": 85,
+     "source": "0x28/0x01 read"
+    },
+    "uncore_khz": [
+     800000,
+     4000000
+    ]
+   },
    "held": null,
    "journal": {
     "caps": {
@@ -1825,16 +2631,481 @@ export default {
    "uncore_note": null
   }
  },
+ "runtime-read-unread": {
+  "id": "c2",
+  "ok": true,
+  "result": {
+   "caps": [
+    {
+     "cpu": 0,
+     "cpufreq": {
+      "cap_khz": 5700000,
+      "cap_ratio": 57.0,
+      "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P0"
+    },
+    {
+     "cpu": 1,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P1"
+    },
+    {
+     "cpu": 2,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P2"
+    },
+    {
+     "cpu": 3,
+     "cpufreq": {
+      "cap_khz": 5700000,
+      "cap_ratio": 57.0,
+      "cpuinfo_max_khz": 5700000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P3"
+    },
+    {
+     "cpu": 4,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P4"
+    },
+    {
+     "cpu": 5,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P5"
+    },
+    {
+     "cpu": 6,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P6"
+    },
+    {
+     "cpu": 7,
+     "cpufreq": {
+      "cap_khz": 5500000,
+      "cap_ratio": 55.0,
+      "cpuinfo_max_khz": 5500000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "P",
+     "online": true,
+     "unit": "P7"
+    },
+    {
+     "cpu": 8,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC0"
+    },
+    {
+     "cpu": 9,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC0"
+    },
+    {
+     "cpu": 10,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC0"
+    },
+    {
+     "cpu": 11,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC0"
+    },
+    {
+     "cpu": 12,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC1"
+    },
+    {
+     "cpu": 13,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC1"
+    },
+    {
+     "cpu": 14,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC1"
+    },
+    {
+     "cpu": 15,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC1"
+    },
+    {
+     "cpu": 16,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC2"
+    },
+    {
+     "cpu": 17,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC2"
+    },
+    {
+     "cpu": 18,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC2"
+    },
+    {
+     "cpu": 19,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC2"
+    },
+    {
+     "cpu": 20,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC3"
+    },
+    {
+     "cpu": 21,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC3"
+    },
+    {
+     "cpu": 22,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC3"
+    },
+    {
+     "cpu": 23,
+     "cpufreq": {
+      "cap_khz": 4900000,
+      "cap_ratio": 49.0,
+      "cpuinfo_max_khz": 4900000,
+      "cpuinfo_min_khz": null,
+      "min_khz": 800000
+     },
+     "kind": "E",
+     "online": true,
+     "unit": "EC3"
+    }
+   ],
+   "cpu_limits": {
+    "E": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "P": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "caps_khz": {
+     "0": [
+      800000,
+      5700000
+     ],
+     "1": [
+      800000,
+      5500000
+     ],
+     "10": [
+      800000,
+      4900000
+     ],
+     "11": [
+      800000,
+      4900000
+     ],
+     "12": [
+      800000,
+      4900000
+     ],
+     "13": [
+      800000,
+      4900000
+     ],
+     "14": [
+      800000,
+      4900000
+     ],
+     "15": [
+      800000,
+      4900000
+     ],
+     "16": [
+      800000,
+      4900000
+     ],
+     "17": [
+      800000,
+      4900000
+     ],
+     "18": [
+      800000,
+      4900000
+     ],
+     "19": [
+      800000,
+      4900000
+     ],
+     "2": [
+      800000,
+      5500000
+     ],
+     "20": [
+      800000,
+      4900000
+     ],
+     "21": [
+      800000,
+      4900000
+     ],
+     "22": [
+      800000,
+      4900000
+     ],
+     "23": [
+      800000,
+      4900000
+     ],
+     "3": [
+      800000,
+      5700000
+     ],
+     "4": [
+      800000,
+      5500000
+     ],
+     "5": [
+      800000,
+      5500000
+     ],
+     "6": [
+      800000,
+      5500000
+     ],
+     "7": [
+      800000,
+      5500000
+     ],
+     "8": [
+      800000,
+      4900000
+     ],
+     "9": [
+      800000,
+      4900000
+     ]
+    },
+    "offset_mv": [
+     -1000,
+     999
+    ],
+    "power": {
+     "locked": null,
+     "pl_max_w": null,
+     "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+    },
+    "ring": {
+     "max_mv": null,
+     "max_ratio": null,
+     "source": "not read yet (0x28 / 0x01)"
+    },
+    "uncore_khz": [
+     800000,
+     4000000
+    ]
+   },
+   "held": null,
+   "journal": null,
+   "journal_path": "/var/lib/arltuner/runtime-journal.json",
+   "note": null,
+   "offline": [],
+   "uncore": {
+    "domain": "package_00_die_00",
+    "initial_max_khz": 4000000,
+    "initial_max_ratio": 40.0,
+    "initial_min_khz": 800000,
+    "initial_min_ratio": 8.0,
+    "max_khz": 4000000,
+    "max_ratio": 40.0,
+    "min_khz": 800000,
+    "min_ratio": 8.0
+   },
+   "uncore_note": null
+  }
+ },
  "runtime-revert-apply": {
   "request": {
    "args": {
-    "plan_id": "d08fd59b8543ca7d8379a5bcf1d1609d55b2442723c0fb5cfdab6684e059b75f",
+    "plan_id": "ce8488dbcb60beb6744f1459ecabab51a6ca0165da99d9e148a800e8438ab611",
     "typed": "CONFIRM <nonce>"
    },
    "op": "runtime.apply"
   },
   "response": {
-   "id": "c16",
+   "id": "c19",
    "ok": true,
    "result": {
     "after": {
@@ -1859,7 +3130,7 @@ export default {
     },
     "complete": true,
     "journal": "/var/lib/arltuner/runtime-journal.json",
-    "plan_id": "d08fd59b8543ca7d8379a5bcf1d1609d55b2442723c0fb5cfdab6684e059b75f",
+    "plan_id": "ce8488dbcb60beb6744f1459ecabab51a6ca0165da99d9e148a800e8438ab611",
     "readback": [
      {
       "domain": "caps",
@@ -2005,7 +3276,7 @@ export default {
     },
     "message": "there is nothing to revert to: no runtime value was written in this boot (no journal for this boot). Nothing was written."
    },
-   "id": "c2",
+   "id": "c5",
    "ok": false
   }
  },
@@ -2017,14 +3288,142 @@ export default {
    "op": "runtime.plan"
   },
   "response": {
-   "id": "c15",
+   "id": "c18",
    "ok": true,
    "result": {
+    "cpu_limits": {
+     "E": {
+      "max_mv": 1355,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "P": {
+      "max_mv": 1625,
+      "max_ratio": 120,
+      "source": "0x28/0x01 read"
+     },
+     "caps_khz": {
+      "0": [
+       800000,
+       5700000
+      ],
+      "1": [
+       800000,
+       5500000
+      ],
+      "10": [
+       800000,
+       4900000
+      ],
+      "11": [
+       800000,
+       4900000
+      ],
+      "12": [
+       800000,
+       4900000
+      ],
+      "13": [
+       800000,
+       4900000
+      ],
+      "14": [
+       800000,
+       4900000
+      ],
+      "15": [
+       800000,
+       4900000
+      ],
+      "16": [
+       800000,
+       4900000
+      ],
+      "17": [
+       800000,
+       4900000
+      ],
+      "18": [
+       800000,
+       4900000
+      ],
+      "19": [
+       800000,
+       4900000
+      ],
+      "2": [
+       800000,
+       5500000
+      ],
+      "20": [
+       800000,
+       4900000
+      ],
+      "21": [
+       800000,
+       4900000
+      ],
+      "22": [
+       800000,
+       4900000
+      ],
+      "23": [
+       800000,
+       4900000
+      ],
+      "3": [
+       800000,
+       5700000
+      ],
+      "4": [
+       800000,
+       5500000
+      ],
+      "5": [
+       800000,
+       5500000
+      ],
+      "6": [
+       800000,
+       5500000
+      ],
+      "7": [
+       800000,
+       5500000
+      ],
+      "8": [
+       800000,
+       4900000
+      ],
+      "9": [
+       800000,
+       4900000
+      ]
+     },
+     "offset_mv": [
+      -1000,
+      999
+     ],
+     "power": {
+      "locked": null,
+      "pl_max_w": null,
+      "source": "not read here (power.read reads MSR 0x610 / 0x606)"
+     },
+     "ring": {
+      "max_mv": 1999,
+      "max_ratio": 85,
+      "source": "0x28/0x01 read"
+     },
+     "uncore_khz": [
+      800000,
+      4000000
+     ]
+    },
     "expires_s": 600,
     "journal_new": false,
-    "nonce": "IRJB42",
+    "nonce": "7UUA4C",
     "ops_needed": 0,
-    "plan_id": "d08fd59b8543ca7d8379a5bcf1d1609d55b2442723c0fb5cfdab6684e059b75f",
+    "plan_id": "ce8488dbcb60beb6744f1459ecabab51a6ca0165da99d9e148a800e8438ab611",
     "revert": true,
     "steps": [
      {

@@ -2,10 +2,10 @@
 //   createMockTransport() returns wrapMockTransportG217(<the G-218 wrapper of the base mock>, options).
 // RECORDED (g217/gen_fixtures_g217.py, the SIMULATOR helper): the shape of power.read / power.plan / power.apply / runtime.read / runtime.plan / runtime.apply answers, the NO_JOURNAL and
 // UNCORE_RANGE refusals, the held parking BAD_REQUEST. INVENTED here (marked): the state that makes the answers follow what is asked (the mock CPU's PL1/PL2/tau, caps, uncore range and the boot
-// journal), the plans/results derived from the intent in the recorded shape, and `cpu_limits` (G-226 / D-049, not in the recorded helper yet): derived from the recorded tune.read hw_limits, the
-// recorded cpufreq rows and uncore bounds, and the 15-bit PL field of MSR 0x610 (32767 x 0.125 W). The refusals are the CPU rules of D-049 (a value outside what the CPU reports; CPU_LIMIT_UNREAD when the
-// limits were not read); they are shaped like the helper's {code: REFUSED, detail: {check, key}}. There is no policy anywhere in these answers.
-// Knobs (query string): `cpulimits=unread` (cpu_limits is null everywhere: the "Read CPU state first" path), `offline=<cpu>` (that CPU reads offline), `rtapply=mismatch` (the last read-back word differs),
+// journal) and the plans/results derived from the intent in the recorded shape. `cpu_limits` is RECORDED too (G-226 / D-049: the tune.read, power.read and runtime.read answers of the simulator,
+// each with the parts that read fills). The refusals are the CPU rules of D-049 (a value outside what the CPU reports; CPU_LIMIT_UNREAD when the limits were not read); they are shaped like the
+// helper's {code: REFUSED, detail: {check, key}}. There is no policy anywhere in these answers.
+// Knobs (query string): `cpulimits=unread` (the recorded "not read yet" shape: P / E / ring null, power and cpufreq / uncore parts null: the "Read CPU state first" path), `offline=<cpu>` (that CPU reads offline), `rtapply=mismatch` (the last read-back word differs),
 // `locked=1` (MSR 0x610 lock bit set: power is read-only).
 import F from "./fixtures.js";
 import G from "./g217/fixtures-g217.js";
@@ -18,7 +18,7 @@ const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 const param = (name) => new URLSearchParams(globalThis.location?.search ?? "").get(name);
 
-const PL_FIELD_MAX_W = 32767 * 0.125; // MSR 0x610 PL1/PL2: 15 bits of 1/8 W
+const PL_FIELD_MAX_W = G["power-read"].result.cpu_limits.power.pl_max_w; // recorded: MSR 0x610 PL1/PL2, 15 bits of 1/8 W (4095.875 W)
 const TIME_UNIT_S = 1 / 1024; // MSR 0x606 time unit (recorded: 0.0009765625 s)
 const BIN_KHZ = 100000;
 const TAU_NAMES = { pl1_w: "constraint_0_power_limit_uw", pl2_w: "constraint_1_power_limit_uw", tau_s: "constraint_0_time_window_us" };
@@ -71,21 +71,27 @@ export function wrapMockTransportG217(inner, options = {}) {
   const plans = new Map(); // plan_id -> {kind, plan, change}
   let planSeq = 0;
 
-  // ---- cpu_limits (G-226 contract; INVENTED here from recorded facts) ----
-  function cpuLimits() {
-    if (unread) return null;
-    const hw = F["tune-read"].result.hw_limits || {};
-    const kind = (k) => ({ max_mv: hw[k] ? hw[k].v_target_max_mv : null, max_ratio: hw[k] ? hw[k].ratio_max_oc : null, source: "OC mailbox 0x28 (voltage ceiling), 0x06 (OC ratio limit)" });
-    return {
-      P: kind("P"), E: kind("E"), ring: kind("P"),
-      offset_mv: hw.P ? hw.P.offset_mv.slice() : [-1000, 999],
-      power: { locked, pl_max_w: PL_FIELD_MAX_W },
-      caps_khz: Object.fromEntries(rt0.caps.map((r) => [String(r.cpu), [r.cpufreq.min_khz, r.cpufreq.cpuinfo_max_khz]])),
-      uncore_khz: [rt0.uncore.initial_min_khz, rt0.uncore.initial_max_khz],
-    };
+  // ---- cpu_limits (RECORDED: the helper's own shape, G-226 / D-049; the simulator's numbers) ----
+  // Per read, as the helper fills it: tune.read / tune.last carry P / E / ring + the offset field (power, caps_khz, uncore_khz null); power.read adds `power`; runtime.read adds
+  // `caps_khz` and `uncore_khz`. `cpulimits=unread` is the shape of a boot without a tune.read (P / E / ring null, "not read yet") and of a power / cpufreq / uncore part that could not be read.
+  const UNREAD = G["power-read-unread"].result.cpu_limits;
+  function cpuLimits(op) {
+    const base = clone(op === "tune" ? F["tune-read"].result.cpu_limits : op === "power" ? G["power-read"].result.cpu_limits : G["runtime-read"].result.cpu_limits);
+    if (op === "power") base.power.locked = locked;
+    if (unread) {
+      for (const k of ["P", "E", "ring"]) base[k] = clone(UNREAD[k]);
+      if (op === "power") base.power = { locked: null, pl_max_w: null, source: UNREAD.power.source };
+      if (op === "runtime") Object.assign(base, { caps_khz: null, uncore_khz: null });
+    }
+    return base;
   }
+  // The limits the plans check against (what the last runtime / power read carried); null = not read: the plan is refused with CPU_LIMIT_UNREAD.
+  const planLimits = (op) => {
+    const cl = cpuLimits(op);
+    return op === "power" ? (cl.power.pl_max_w === null ? null : cl) : cl.caps_khz === null || cl.uncore_khz === null ? null : cl;
+  };
   const decorateRead = (result) => {
-    if (isObj(result) && Array.isArray(result.units) && isObj(result.fused)) result.cpu_limits = cpuLimits();
+    if (isObj(result) && Array.isArray(result.units) && isObj(result.fused)) result.cpu_limits = cpuLimits("tune");
     return result;
   };
 
@@ -99,7 +105,7 @@ export function wrapMockTransportG217(inner, options = {}) {
     r.writable = !locked;
     r.read_only_reason = locked ? "MSR 0x610 is locked (bit 63): the package power limits cannot be changed until the next reset" : null;
     r.boot = state.bootPower ? { ...state.bootPower, note: "the values at the first power write of this boot (the journal), not necessarily the BIOS setup values" } : null;
-    r.cpu_limits = cpuLimits();
+    r.cpu_limits = cpuLimits("power");
     return r;
   }
 
@@ -108,7 +114,7 @@ export function wrapMockTransportG217(inner, options = {}) {
     if (keys.some((k) => k !== "power" && k !== "revert") || ("power" in a) === ("revert" in a)) return fail(id, "BAD_REQUEST", "power.plan needs exactly one of 'power' ({pl1_w, pl2_w, tau_s}) or 'revert' (true)");
     if ("revert" in a && a.revert !== true) return fail(id, "BAD_REQUEST", "'revert' must be true");
     if (locked) return fail(id, "REFUSED", "MSR 0x610 is locked (bit 63): the package power limits cannot be changed. Nothing was written.", { check: "POWER_LOCKED" });
-    if (!cpuLimits()) return fail(id, "REFUSED", "the CPU limits this value is checked against have not been read. Nothing was written.", { check: "CPU_LIMIT_UNREAD" });
+    if (!planLimits("power")) return fail(id, "REFUSED", "CPU_LIMIT_UNREAD: the CPU's power-limit bounds (MSR 0x610 / 0x606) were not read. Nothing was written.", { check: "CPU_LIMIT_UNREAD" });
     let target;
     const revert = a.revert === true;
     if (revert) {
@@ -133,9 +139,9 @@ export function wrapMockTransportG217(inner, options = {}) {
     const n = ++planSeq;
     const steps = change.map(([k, v], i) => ({ before: Math.round(state.power[k] * 1e6), expect: [Math.round(v * 1e6), Math.round(v * 1e6)], file: TAU_NAMES[k], key: k, n: i + 1, value: Math.round(v * 1e6) }));
     const warnings = base.warnings.filter((w) => revert ? !/journaled before the first write/.test(w) : true).filter((w) => change.some(([k]) => k === "tau_s") || !/^tau is rounded/.test(w));
-    if (after.pl2_w < after.pl1_w) warnings.unshift({ code: "PL2_BELOW_PL1", text: `PL2 (${after.pl2_w} W) is below PL1 (${after.pl1_w} W): the CPU takes the lower one as the effective limit.` });
+    if (after.pl2_w < after.pl1_w) warnings.unshift(`PL2_BELOW_PL1: PL2 (${after.pl2_w} W) would be below PL1 (${after.pl1_w} W); the kernel accepts it, the CPU's behaviour is not documented`); // the helper's "CODE: text" strings (ops_power.py)
     const big = change.filter(([k, v]) => k !== "tau_s" && Math.abs(state.power[k] - v) > 50);
-    if (big.length) warnings.unshift({ code: "LARGE_CHANGE", text: `${big.map(([k, v]) => `${k} ${state.power[k]} W -> ${v} W`).join(", ")}: a large single change. Allowed; check the cooling and the VRM.` });
+    if (big.length) warnings.unshift(`LARGE_CHANGE: ${big.map(([k, v]) => `${k}: ${state.power[k]} -> ${v} W`).join(", ")} is a large single change (more than 50 W); the CPU accepts it, take a stability and thermal check`);
     const plan = {
       ...base, plan_id: String(n).padStart(8, "0") + "c0ffee".repeat(9).slice(0, 56), nonce: "P" + String(n).padStart(5, "7"), revert, journal_new: !revert && !state.bootPower,
       before: { ...clone(pw0.powercap), pl1_w: state.power.pl1_w, pl2_w: state.power.pl2_w, tau_s: state.power.tau_s }, after: Object.fromEntries(Object.entries(after).map(([k, v]) => [k, v])),
@@ -176,7 +182,7 @@ export function wrapMockTransportG217(inner, options = {}) {
     const u = r.uncore;
     Object.assign(u, { min_ratio: state.uncore.min_ratio, max_ratio: state.uncore.max_ratio, min_khz: state.uncore.min_ratio * BIN_KHZ, max_khz: state.uncore.max_ratio * BIN_KHZ });
     r.journal = state.journalRt ? { caps: { ...state.journalRt.caps }, in_flight: false, uncore: { ...(state.journalRt.uncore || {}) } } : null;
-    r.cpu_limits = cpuLimits();
+    r.cpu_limits = cpuLimits("runtime");
     return r;
   }
 
@@ -188,8 +194,8 @@ export function wrapMockTransportG217(inner, options = {}) {
     const revert = a.revert === true;
     if (keys.some((k) => !["caps", "uncore", "revert"].includes(k)) || (revert && keys.length > 1) || !keys.length) return fail(id, "BAD_REQUEST", "runtime.plan needs {revert: true} alone, or caps and/or uncore");
     if (offlineCpu !== null) return fail(id, "REFUSED", `CPU ${offlineCpu} is offline: runtime writes are refused while any CPU is offline. Nothing was written.`, { check: "CPU_OFFLINE" });
-    const cl = cpuLimits();
-    if (!cl) return fail(id, "REFUSED", "the CPU limits this value is checked against have not been read. Nothing was written.", { check: "CPU_LIMIT_UNREAD" });
+    const cl = planLimits("runtime");
+    if (!cl) return fail(id, "REFUSED", "CPU_LIMIT_UNREAD: the cpufreq / uncore bounds were not read. Nothing was written.", { check: "CPU_LIMIT_UNREAD" });
     const steps = [];
     const warnings = [];
     const changes = { caps: {}, uncore: {} };

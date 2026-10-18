@@ -188,13 +188,18 @@ export function resultHeadline(s) {
 /** Plan warnings are {code, text} (a bare string is a NOTE). Same code table as web/app.js WARN_CODES. */
 const WARN_CODES = {
   CLAMPED: ["warn", "clamped"], E40_OFFSET: ["bad", "E 40× offset"], E_TARGET_WHEA: ["warn", "WHEA risk"], POSITIVE_OFFSET: ["warn", "positive offset"], NO_BASELINE: ["warn", "no baseline"],
-  TURBO_RAISE: ["warn", "turbo raise"], RING_NOT_RESTORED: ["warn", "ring not written"], NOTE: ["", ""],
+  TURBO_RAISE: ["warn", "turbo raise"], RING_NOT_RESTORED: ["warn", "ring not written"], LARGE_CHANGE: ["warn", "large change"], TURBO_NOT_MONOTONIC: ["warn", "turbo not monotonic"],
+  TURBO_BELOW_BASE: ["warn", "turbo below base"], PL2_BELOW_PL1: ["warn", "PL2 below PL1"], DEEP_WHOLE_CURVE: ["warn", "deep whole curve"], NOTE: ["", ""],
 };
+const CODED = /^([A-Z][A-Z0-9_]+): ([\s\S]+)$/;
+/** Warnings are never blocking: the Review shows them (amber) and Apply stays available. power.plan / runtime.plan send them as "CODE: text" strings, tune.plan as {code, text}. */
 export function planWarnings(plan) {
   const out = [];
   for (const w of Array.isArray(plan && plan.warnings) ? plan.warnings : []) {
-    const code = isObj(w) && typeof w.code === "string" ? w.code : "NOTE";
-    const text = isObj(w) ? w.text : w;
+    const m = typeof w === "string" ? CODED.exec(w) : null;
+    const coded = m && Object.prototype.hasOwnProperty.call(WARN_CODES, m[1]);
+    const code = isObj(w) && typeof w.code === "string" ? w.code : coded ? m[1] : "NOTE";
+    const text = isObj(w) ? w.text : coded ? m[2] : w;
     if (typeof text !== "string" || !text) continue;
     const [cls, label] = Object.prototype.hasOwnProperty.call(WARN_CODES, code) ? WARN_CODES[code] : WARN_CODES.NOTE;
     out.push({ code, text, cls, label });
@@ -348,12 +353,13 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
     const sec = get().sections[i];
     const spec = kinds[sec.kind];
     setSection(i, { status: "planning", error: null, plan: null });
-    const res = await bridge.call(spec.planOp, { intent: sec.intent });
+    const res = await bridge.call(spec.planOp, spec.planArgs ? spec.planArgs(sec.intent) : { intent: sec.intent });
     if (res.ok && isObj(res.result) && typeof res.result.plan_id === "string") {
       setSection(i, { status: "review", plan: res.result, issuedAt: now(), error: null });
       return true;
     }
-    const error = res.ok ? { code: "BAD_REPLY", message: "the helper's plan had no plan_id" } : res.error;
+    let error = res.ok ? { code: "BAD_REPLY", message: "the helper's plan had no plan_id" } : res.error;
+    if (spec.explain) error = { ...error, message: spec.explain(error) };
     setSection(i, { status: "failed", error: { ...error, located: spec.locate ? spec.locate(error, sec.intent) : null } });
     return false;
   }
@@ -654,8 +660,9 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       if (sec.error) node.append(h("p", { class: "apply-error", role: "alert", text: sec.error.message || sec.error.code }));
       return node;
     }
-    const rows = planRows(plan);
-    const changed = rows.filter((r) => r.changes > 0);
+    const custom = kinds[sec.kind] && kinds[sec.kind].view ? kinds[sec.kind].view(plan) : null;
+    const rows = custom ? [] : planRows(plan);
+    const changed = custom ? custom.units : rows.filter((r) => r.changes > 0);
     const writes = planWrites(plan);
     const finished = ["done", "failed", "cancelled", "stale"].includes(sec.status);
     const lead = h("p", { class: "apply-lead" },
@@ -674,7 +681,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       node.append(h("p", { class: "apply-vccia", text: "Predicted VccIA ≈ " + vc.predicted_v.toFixed(2) + " V" + (by ? ", " + by : "") + (isNum(vc.before_v) ? ", now ≈ " + vc.before_v.toFixed(2) + " V" : "") + (vc.label ? " (" + vc.label + ")" : "") + ". Lowering a unit that does not set the maximum does not lower Vcore." }));
     }
     const ops = isNum(plan.ops_needed) ? plan.ops_needed : null;
-    node.append(h("p", { class: "apply-ops", text: "Each request is a WRMSR, sent one transaction at a time and read back. " + writes + " write" + (writes === 1 ? "" : "s") + (isNum(plan.reads) ? " + " + plan.reads + " read-only requests" : "") + (ops !== null ? " · " + ops + " operations" : "") + (isNum(plan.ops_left) ? " of the " + plan.ops_left + " left this boot" : "") + "." }));
+    node.append(h("p", { class: "apply-ops", text: custom ? writes + " write" + (writes === 1 ? "" : "s") + " to root sysfs files, one at a time, each read back. Runtime values: a reboot restores the firmware / kernel defaults." : "Each request is a WRMSR, sent one transaction at a time and read back. " + writes + " write" + (writes === 1 ? "" : "s") + (isNum(plan.reads) ? " + " + plan.reads + " read-only requests" : "") + (ops !== null ? " · " + ops + " operations" : "") + (isNum(plan.ops_left) ? " of the " + plan.ops_left + " left this boot" : "") + "." }));
     if (plan.words_assumed === true) node.append(h("p", { class: "apply-warn-line", text: "Some words were not read in this session, so the plan assumed their current values. Read the CPU state first for a plan based on what the CPU holds." }));
     const warns = planWarnings(plan);
     if (warns.length) {
@@ -683,16 +690,21 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       node.append(h("details", { class: "apply-warnings-box", open: !finished }, h("summary", { text: plural(warns.length, "plan note") + (warns.some((w) => w.cls) ? " (warnings marked)" : "") }), ul));
     }
     // per-unit: before/after and status
-    const status = unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [] } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
+    const customStatus = (st) => Object.fromEntries((custom ? custom.units : []).map((u) => {
+      const rb = sec.summary ? sec.summary.readback.filter((x) => u.keys.includes(x.key)) : [];
+      return [u.unit, st || (sec.status === "done" ? (rb.length && rb.every((x) => x.match === true) ? "ok" : rb.length ? "mismatch" : "unverified") : sec.status === "applying" ? "writing" : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? "unverified" : "queued")];
+    }));
+    const status = custom ? customStatus() : unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [] } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
     const table = h("table", { class: "apply-units", "aria-label": "Units: before and after" }, h("thead", {}, h("tr", {}, h("th", { scope: "col", text: "Unit" }), h("th", { scope: "col", text: "Before → after" }), h("th", { scope: "col", text: "Status" }))));
     const body = h("tbody");
     const statusCells = new Map();
-    for (const u of unitOrder(plan)) {
+    for (const u of custom ? custom.units.map((x) => x.unit) : unitOrder(plan)) {
       const r = rows.find((x) => x.unit === u);
-      const lines = r ? r.rows.filter((x) => x.changed) : [];
+      const cu = custom ? custom.units.find((x) => x.unit === u) : null;
+      const lines = cu ? cu.lines : r ? r.rows.filter((x) => x.changed) : [];
       const cell = h("td", { class: "apply-status" });
       statusCells.set(u, cell);
-      body.append(h("tr", { dataset: { unit: u } }, h("th", { scope: "row", text: u }), h("td", { class: "apply-changes" }, lines.length ? lines.map((x) => h("div", { class: "mono", text: describeRow(x) })) : h("span", { class: "muted", text: u.startsWith("turbo") ? "turbo ratio table (see the Turbo ratios tab)" : "no change" })), cell));
+      body.append(h("tr", { dataset: { unit: u } }, h("th", { scope: "row", text: u }), h("td", { class: "apply-changes" }, lines.length ? lines.map((x) => h("div", { class: "mono", text: cu ? x : describeRow(x) })) : h("span", { class: "muted", text: u.startsWith("turbo") ? "turbo ratio table (see the Turbo ratios tab)" : "no change" })), cell));
     }
     table.append(body);
     node.append(h("div", { class: "scroll apply-scroll" }, table));
@@ -705,7 +717,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     };
     setStatus(status);
     // ordered writes
-    const steps = stepRows(plan);
+    const steps = custom ? custom.steps.map((label) => ({ kind: "step", conditional: false, label })) : stepRows(plan);
     if (steps.length) {
       const ol = h("ol", { class: "apply-steps" });
       for (const s of steps) ol.append(h("li", { dataset: { kind: s.kind }, class: s.conditional ? "conditional" : "" }, h("span", { class: "mono", text: s.label })));
@@ -713,9 +725,9 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
         plan.steps_truncated === true ? h("p", { class: "muted", text: "The step list is shortened to fit one message." }) : null));
     }
     live = live || { sections: new Map() };
-    live.sections.set(i, { prog, progText, setStatus, plan });
+    live.sections.set(i, { prog, progText, setStatus, plan, statusFn: custom ? () => customStatus("writing") : null });
     node.insertBefore(top, lead.nextSibling);
-    if (sec.status === "review" || sec.status === "stale") node.append(h("p", { class: "muted apply-revert", text: "Revert: cold boot the machine, or apply a stored profile. The CPU forgets these words at every cold boot." }));
+    if (sec.status === "review" || sec.status === "stale") node.append(h("p", { class: "muted apply-revert", text: custom ? "Revert: Revert to boot values on the tab, or reboot." : "Revert: cold boot the machine, or apply a stored profile. The CPU forgets these words at every cold boot." }));
     return node;
   }
 
@@ -823,7 +835,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       l.prog.max = Math.max(1, p ? p.of : 1);
       l.prog.value = p ? Math.min(p.step, l.prog.max) : 0;
       l.progText.textContent = progressText(p, elapsed);
-      l.setStatus(unitStatuses(l.plan, p, null));
+      l.setStatus(l.statusFn ? l.statusFn() : unitStatuses(l.plan, p, null));
     });
   }
 

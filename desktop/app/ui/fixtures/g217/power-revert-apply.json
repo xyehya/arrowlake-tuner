@@ -1,13 +1,13 @@
 {
  "request": {
   "args": {
-   "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+   "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
    "typed": "CONFIRM <nonce>"
   },
   "op": "power.apply"
  },
  "response": {
-  "id": "c10",
+  "id": "c13",
   "ok": true,
   "result": {
    "after": {
@@ -22,7 +22,7 @@
    },
    "complete": true,
    "journal": "/var/lib/arltuner/power-journal.json",
-   "plan_id": "fc373432549c66cf38be9da3e398c3c7dc9fc8d0b41f1ddd120d296ebf6b520d",
+   "plan_id": "15907b04a94312f0f6a0ac42846d9003f6b1491aa4810a052d649b35de33827e",
    "readback": [
     {
      "expected": [

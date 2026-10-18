@@ -1,4 +1,4 @@
-// views/tune/oc.js: the OC section of the inspector (PLAN §4.2): OC ratio (stock max + 1 ... policy ∩ CPU max), the adaptive target voltage (5 mV grid, <= policy ∩ CPU max), the "48x offset"
+// views/tune/oc.js: the OC section of the inspector (PLAN §4.2): OC ratio (stock max + 1 ... the CPU's OC ratio limit), the adaptive target voltage (5 mV grid, <= the CPU's max voltage), the "48x offset"
 // helper (G-150: the target as an offset from the fused top point's voltage) and the "no OC point" state. Static/override mode is never offered (D-016).
 // All state changes go through lib/draft.js (setOcRatio / setVt / setOcOffset); this file only shows them. The wording of the OC state is the web UI's (web/app.js:2733-2749, G-150).
 // A kind section (P or E) is edited on its own: P and E have separate OC ratios, so the inspector builds one of these per kind.
@@ -105,7 +105,7 @@ export function createOcSection(tc, section) {
     const vw = vtWindow(model, kind);
     const vNow = vtValue(model, draft, ids, true);
     const vRead = vtValue(model, draft, ids, false);
-    const vtReason = !lim.known ? "policy limits not reported" : !vw ? "your policy states no target-voltage ceiling" : !ocUnits.length ? "needs an OC ratio above the fused top (" + (us.length ? fusedTopOf(us[0]) + TIMES : DASH) + ")" : "";
+    const vtReason = !lim.known ? "the helper did not report the CPU limits" : !vw ? lim.vtWhy : !ocUnits.length ? "needs an OC ratio above the fused top (" + (us.length ? fusedTopOf(us[0]) + TIMES : DASH) + ")" : "";
     vtField.set({
       value: vNow.state === "same" ? vNow.value : null,
       mixed: vNow.state === "mixed" ? vNow : null,
@@ -131,7 +131,7 @@ export function createOcSection(tc, section) {
       pending: !eqAgg(offs, offsRead, sameMv),
       was: offsRead.state === "same" ? fmtMv(offsRead.value) : "",
       disabled: !ou.length || !vw,
-      reason: !ou.length ? "needs an OC ratio above the fused top (" + (us.length && isNum(fusedTopOf(us[0])) ? fusedTopOf(us[0]) + TIMES : DASH) + ")" : !vw ? "your policy states no target-voltage ceiling" : "",
+      reason: !ou.length ? "needs an OC ratio above the fused top (" + (us.length && isNum(fusedTopOf(us[0])) ? fusedTopOf(us[0]) + TIMES : DASH) + ")" : !vw ? lim.vtWhy || "the helper did not report the CPU limits" : "",
     });
     offTop.disabled = !ou.length || !vw;
     offField.el.title = "mV above the fused top point's voltage" + (isNum(topR) ? " (point at " + fmtRatio(topR) + ")" : "") + "; the CPU raises a lower target to it [MEASURED lnx 2026-10-11].";

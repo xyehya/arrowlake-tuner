@@ -57,7 +57,7 @@ export function createActionBar(store, { revertKind = null, canRevert = () => ""
   function update() {
     const s = store.get();
     const n = pendingCounts(s.rt).total;
-    const vf = s.pending ? s.pending.changes : 0; // the Tune V/F draft rides along in the same drawer
+    const vf = s.pending ? Math.max(0, s.pending.changes - n) : 0; // the Tune V/F draft rides along in the same drawer (pending.changes = V/F + runtime, views/tune.js setPendingAll)
     count.textContent = n || vf ? [n ? plural(n, "pending runtime change") : "", vf ? plural(vf, "pending V/F change") : ""].filter(Boolean).join(" · ") : "No pending changes";
     count.classList.toggle("on", n > 0 || vf > 0);
     review.disabled = (n === 0 && vf === 0) || s.link.state !== "connected";

@@ -1,9 +1,37 @@
 {
- "id": "c4",
+ "id": "c7",
  "ok": true,
  "result": {
   "available": true,
   "boot": null,
+  "cpu_limits": {
+   "E": {
+    "max_mv": 1355,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read"
+   },
+   "P": {
+    "max_mv": 1625,
+    "max_ratio": 120,
+    "source": "0x28/0x01 read"
+   },
+   "caps_khz": null,
+   "offset_mv": [
+    -1000,
+    999
+   ],
+   "power": {
+    "locked": false,
+    "pl_max_w": 4095.875,
+    "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606"
+   },
+   "ring": {
+    "max_mv": 1999,
+    "max_ratio": 85,
+    "source": "0x28/0x01 read"
+   },
+   "uncore_khz": null
+  },
   "journal": "/var/lib/arltuner/power-journal.json",
   "locked": false,
   "msr": {

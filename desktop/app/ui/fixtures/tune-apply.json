@@ -1,7 +1,7 @@
 {
  "request": {
   "args": {
-   "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
+   "plan_id": "112b8b9a955be9da3914d2b6adce281f0a559711082e8e502929e85c48068076",
    "typed": "CONFIRM <nonce>"
   },
   "op": "tune.apply"
@@ -14,7 +14,7 @@
    "cpufreq": [],
    "msr_writes": 0,
    "ops_used": 4,
-   "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
+   "plan_id": "112b8b9a955be9da3914d2b6adce281f0a559711082e8e502929e85c48068076",
    "readback": [
     {
      "actual": "0xfd800035",
@@ -39,8 +39,7 @@
     }
    ],
    "warnings": [
-    "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state",
-    "effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV"
+    "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state"
    ],
    "writes_sent": 1
   }

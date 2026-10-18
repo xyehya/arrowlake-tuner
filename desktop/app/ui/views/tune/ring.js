@@ -1,7 +1,7 @@
 // views/tune/ring.js: the "Ring & uncore" sub-tab of Tune (G-217; PLAN §4.2 / §6.2 / §6.3): the ring's V/F point offsets (the Cores inspector's curve editor on the ring unit; the offsets live in the Tune
 // draft and go out through tune.plan {ring: {points}}, G-212) and the uncore (ring) min / max ratio (runtime.plan {uncore: {min_ratio?, max_ratio?}}, kind "runtime" of the apply drawer).
 // The uncore ratios are sysfs writes through the root helper (intel_uncore_frequency/package_00_die_00/{min,max}_freq_khz), runtime only: lost on reboot. D-049: the window shown is the CPU's own
-// (`cpu_limits.uncore_khz` = the driver's initial_min/max_freq_khz), never a policy. Without that read the fields are disabled with "Read CPU state first".
+// (`cpu_limits.uncore_khz` = the driver's initial_min/max_freq_khz). Without that read the fields are disabled with "Read CPU state first".
 //   mount(el, ctx) / unmount();  ctx = subTabContext of views/tune.js.
 import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";

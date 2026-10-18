@@ -1,22 +1,23 @@
 // node --test "desktop/app/ui/tests/*.test.mjs"   (G-217: the Power / Ring & uncore / Ratio caps logic: intents validated by the helper's own parsers, the CPU-limit lib, the rt state, the drawer kinds, the mock)
 // The validators are src/arltuner/helper/ops_power.py _validate_power_plan and ops_runtime.py _validate_runtime_plan, run by /usr/bin/python3 -I with src/ on sys.path (stdlib only, no helper started,
-// no socket, no hardware). Fixtures are the simulator's recordings (fixtures/g217/); `cpu_limits` in the mock is INVENTED in the shape of the G-226 contract.
+// no socket, no hardware). Fixtures are the simulator's recordings (fixtures/g217/), `cpu_limits` included (G-226 / D-049: recorded as each read returns it).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import G from "../fixtures/g217/fixtures-g217.js";
+import FIX from "../fixtures/fixtures.js";
 import { Bridge } from "../bridge.js";
 import { createMockTransport } from "../fixtures/mock-backend.js";
 import { encodeTau } from "../fixtures/mock-backend-g217.js";
 import { createAppStore } from "../store.js";
 import { powerIntent, runtimeIntent, POWER_REVERT, RUNTIME_REVERT } from "../lib/intent.js";
-import { normCpuLimits, capWindow, uncoreWindow, capsLine, uncoreLine, powerLine, explainRefusal, cpuLimitLine, cpuOffsetCell, modelCpuLine, READ_FIRST } from "../lib/cpulimits.js";
+import { normCpuLimits, capWindow, uncoreWindow, capsLine, uncoreLine, powerLine, explainRefusal, powerRead, cpuOffsetCell, modelCpuLine, READ_FIRST } from "../lib/cpulimits.js";
 import { initialRt, powerCurrent, powerDisagrees, powerDisabledReason, powerRequest, capRows, uncoreState, runtimeRequest, pendingCounts, ensureRt, editRt } from "../lib/rtstate.js";
-import { ensureTune } from "../views/tune.js";
+import { ensureTune, requestReview as pendingBarReview, syncPending, setPendingAll, discardDraft } from "../views/tune.js";
 import { powerView, runtimeView, POWER_KIND, RUNTIME_KIND, registerRuntimeKinds, requestReview, revertRequest, PL_NAME } from "../views/tune/runtime-kinds.js";
-import { KINDS, createApplyController } from "../views/tune/apply.js";
+import { KINDS, createApplyController, planWarnings } from "../views/tune/apply.js";
 import { powerWarnings } from "../views/tune/power.js";
 import { unitWindow, capsDisabledReason } from "../views/tune/runtime.js";
 import { uncoreDisabledReason } from "../views/tune/ring.js";
@@ -45,7 +46,10 @@ function helperAccepts(cases) {
 
 const RT_READ = G["runtime-read"].result;
 const PW_READ = G["power-read"].result;
-const CL = { P: { max_mv: 1625, max_ratio: 120, source: "OC mailbox 0x28" }, E: { max_mv: 1355, max_ratio: 120, source: "OC mailbox 0x28" }, ring: { max_mv: 1625, max_ratio: 120, source: "x" }, offset_mv: [-1000, 999], power: { locked: false, pl_max_w: 4095.875 }, caps_khz: { 0: [800000, 5700000], 8: [800000, 4900000] }, uncore_khz: [800000, 4000000] };
+// the recorded cpu_limits of each read (simulator): power.read fills `power`, runtime.read fills caps_khz / uncore_khz, tune.read neither
+const CL = { ...structuredClone(RT_READ.cpu_limits), power: structuredClone(PW_READ.cpu_limits.power) };
+const UNREAD = G["power-read-unread"].result.cpu_limits;
+const TUNE_CL = FIX["tune-read"].result.cpu_limits;
 
 // ---- intents vs the helper's parsers ----
 test("intents: power and runtime intents are accepted by the helper's own parsers (top-level fields, not {intent})", () => {
@@ -84,22 +88,43 @@ test("intents: what the helper refuses, the builders refuse or never produce (pa
 });
 
 // ---- cpu_limits ----
-test("cpulimits: the contract shape is normalised; null stays null; lines name the CPU source, never a policy", () => {
+test("cpulimits: the recorded shape is normalised; null stays null; lines name the CPU source, never a policy", () => {
   assert.equal(normCpuLimits(null), null);
   const cl = normCpuLimits(CL);
   assert.deepEqual(cl.offsetMv, [-1000, 999]);
   assert.equal(cl.kinds.P.maxMv, 1625);
+  assert.equal(cl.kinds.ring.maxMv, 1999);
   assert.deepEqual(capWindow(cl, 0), { min: 8, max: 57, minKhz: 800000, maxKhz: 5700000 });
   assert.equal(capWindow(cl, 99), null);
   assert.deepEqual(uncoreWindow(cl), { min: 8, max: 40 });
   assert.equal(capsLine(cl, [0]), "cpufreq 800–5700 MHz (cpu0)");
   assert.match(uncoreLine(cl), /^uncore 8×–40×/);
   assert.match(powerLine(cl), /PL field maximum 4095\.875 W/);
+  assert.equal(powerRead(cl), true);
   assert.match(powerLine(normCpuLimits({ power: { locked: true, pl_max_w: 100 } })), /locked by firmware/);
-  for (const text of [capsLine(cl, [0]), uncoreLine(cl), powerLine(cl), cpuLimitLine({ ratioOc: 120, vtMaxV: 1.625, off: [-1000, 999] }, "vt"), cpuOffsetCell({ hw: { P: { off: [-1000, 999] } } }, "P")]) assert.doesNotMatch(text, /policy/i);
-  assert.equal(cpuOffsetCell({ hw: { P: { off: [-200, 200] } } }, "P"), "±200 · CPU");
-  assert.equal(modelCpuLine({ hw: { E: { ratioOc: 120 } } }, "E", "ratio"), "CPU limit: OC ratios up to 120×.");
-  assert.equal(modelCpuLine({ hw: null }, "P", "vt"), "");
+  const m = { cpuLimits: cl };
+  for (const text of [capsLine(cl, [0]), uncoreLine(cl), powerLine(cl), modelCpuLine(m, "P", "vt"), modelCpuLine(m, "E", "offset"), cpuOffsetCell(m, "P")]) assert.doesNotMatch(text, /policy/i);
+  assert.equal(cpuOffsetCell(m, "P"), "−1000…+999 · CPU");
+  assert.equal(modelCpuLine(m, "E", "ratio"), "CPU limit: OC ratios up to 120× (OC ratio limit, mailbox 0x01).");
+  assert.equal(modelCpuLine({ cpuLimits: null }, "P", "vt"), READ_FIRST + " (the CPU voltage ceiling, mailbox 0x28, has not been read).");
+});
+
+test("cpulimits: the per-op nulls of the real helper: tune.read has no power / cpufreq / uncore part; a null cpufreq minimum is not a number", () => {
+  const tune = normCpuLimits(TUNE_CL);
+  assert.equal(powerRead(tune), false);
+  assert.match(powerLine(tune), new RegExp("^" + READ_FIRST));
+  assert.equal(uncoreWindow(tune), null);
+  assert.equal(capWindow(tune, 0), null);
+  const unread = normCpuLimits(UNREAD);
+  assert.equal(unread.kinds.P.maxMv, null);
+  assert.equal(unread.kinds.ring.maxRatio, null);
+  assert.equal(powerRead(unread), true, "power.read reads MSR 0x610 on its own");
+  const nullMin = normCpuLimits({ caps_khz: { 0: [null, 5700000] } });
+  assert.deepEqual(capWindow(nullMin, 0), { min: null, max: 57, minKhz: null, maxKhz: 5700000 });
+  assert.equal(capsLine(nullMin, [0]), "cpufreq ?–5700 MHz (cpu0)");
+  assert.deepEqual(unitWindow(nullMin, [0]), { min: null, max: 57 });
+  assert.equal(normCpuLimits({ caps_khz: { 0: [800000, null] } }).capsKhz[0], undefined);
+  assert.equal(normCpuLimits({ power: { locked: null, pl_max_w: null } }).power.locked, null);
 });
 
 test("cpulimits: a CPU_LIMIT_UNREAD refusal says to read the CPU state; any other refusal shows the helper's own CPU rule", () => {
@@ -262,7 +287,7 @@ test("mock: refusals are CPU rules with the key; the wrapped {intent} shape is a
   assert.equal((await b.call("power.plan", { power: { pl1_w: 250.5 } })).error.code, "BAD_REQUEST");
   const lowPl2 = await b.call("power.plan", { power: { pl2_w: 249 } });
   assert.equal(lowPl2.ok, true, "PL2 below PL1 is a warning, not a refusal");
-  assert.equal(lowPl2.result.warnings[0].code, "PL2_BELOW_PL1");
+  assert.match(lowPl2.result.warnings[0], /^PL2_BELOW_PL1: /, "power.plan sends \"CODE: text\" strings");
   const cap = await b.call("runtime.plan", { caps: { 0: 99 } });
   assert.deepEqual([cap.error.detail.check, cap.error.detail.key], ["CPU_LIMIT", "cpu0"]);
   const unc = await b.call("runtime.plan", { uncore: { max_ratio: 45 } });
@@ -295,19 +320,43 @@ test("mock: runtime plan -> apply -> read -> revert; an E cluster is capped one 
   assert.deepEqual([capRows(after)[0].capRatio, uncoreState(after).max, after.journal], [57, 40, null]);
 });
 
-test("mock: ?cpulimits=unread -> cpu_limits is null and every write plan says CPU_LIMIT_UNREAD; tune.read carries cpu_limits otherwise", async () => {
+test("mock: ?cpulimits=unread -> the recorded not-read shape (null limits, source 'not read yet'); write plans say CPU_LIMIT_UNREAD; tune.read carries cpu_limits otherwise", async () => {
   let b = await mockBridge("&cpulimits=unread");
-  assert.equal((await run(b, "power.read")).result.cpu_limits, null);
-  assert.equal((await b.call("runtime.read")).result.cpu_limits, null);
+  const pw = (await run(b, "power.read")).result.cpu_limits;
+  assert.deepEqual([pw.P.max_mv, pw.ring.max_ratio, pw.power.pl_max_w, pw.power.locked], [null, null, null, null]);
+  assert.match(pw.P.source, /not read yet/);
+  const rt = (await b.call("runtime.read")).result.cpu_limits;
+  assert.deepEqual([rt.caps_khz, rt.uncore_khz], [null, null]);
   assert.equal((await b.call("power.plan", { power: { pl1_w: 230 } })).error.detail.check, "CPU_LIMIT_UNREAD");
   assert.equal((await b.call("runtime.plan", { caps: { 0: 50 } })).error.detail.check, "CPU_LIMIT_UNREAD");
-  assert.equal((await b.call("tune.last")).result.result.cpu_limits, null);
+  const unreadLast = (await b.call("tune.last")).result.result.cpu_limits;
+  assert.equal(unreadLast.P.max_mv, null);
+  assert.deepEqual(unreadLast.offset_mv, [-1000, 999], "the offset field is the encoding: always known");
   b = await mockBridge();
   const last = (await b.call("tune.last")).result.result;
   assert.deepEqual(last.cpu_limits.offset_mv, [-1000, 999]);
   assert.equal(last.cpu_limits.P.max_mv, 1625);
+  assert.equal(last.cpu_limits.caps_khz, null, "tune.last has no cpufreq part: that is runtime.read's");
   const read = await run(b, "tune.read");
-  assert.ok(read.result.cpu_limits && read.result.cpu_limits.caps_khz["0"]);
+  assert.equal(read.result.cpu_limits.ring.max_mv, 1999);
+  assert.equal((await run(b, "power.read")).result.cpu_limits.power.pl_max_w, 4095.875);
+  assert.ok((await b.call("runtime.read")).result.cpu_limits.caps_khz["0"]);
+});
+
+test("drawer: plan warnings are amber rows and never block Apply; \"CODE: text\" strings and {code, text} objects both carry their code", () => {
+  const w = planWarnings({
+    warnings: [
+      "LARGE_CHANGE: cpu 0: cap 57 -> 50 is a large single change", "PL2_BELOW_PL1: PL2 (200 W) would be below PL1 (250 W)",
+      { code: "TURBO_NOT_MONOTONIC", text: "P turbo table: bucket 1 is below bucket 2" }, { code: "TURBO_BELOW_BASE", text: "a bucket is below the base ratio" },
+      { code: "DEEP_WHOLE_CURVE", text: "whole-curve offset" }, { code: "POSITIVE_OFFSET", text: "positive" }, { code: "TURBO_RAISE", text: "raised" }, { code: "CLAMPED", text: "clamped" },
+      "the values now in force are journaled before the first write: not a code", "an E-cluster runs one ratio: not a code either",
+    ],
+  });
+  assert.deepEqual(w.map((x) => x.code), ["LARGE_CHANGE", "PL2_BELOW_PL1", "TURBO_NOT_MONOTONIC", "TURBO_BELOW_BASE", "DEEP_WHOLE_CURVE", "POSITIVE_OFFSET", "TURBO_RAISE", "CLAMPED", "NOTE", "NOTE"]);
+  assert.ok(w.slice(0, 8).every((x) => x.cls === "warn" && x.label), "marked as warnings");
+  assert.equal(w[0].text, "cpu 0: cap 57 -> 50 is a large single change", "the prefix is the badge, not repeated in the text");
+  assert.equal(w[8].cls, "");
+  assert.ok(planWarnings(G["runtime-plan"].response.result).some((x) => x.code === "LARGE_CHANGE"), "the simulator's own runtime plan carries LARGE_CHANGE");
 });
 
 test("controller: a power section is planned with the intent as the plan arguments and applied in sequence with the V/F section (stop on first failure)", async () => {
@@ -323,16 +372,80 @@ test("controller: a power section is planned with the intent as the plan argumen
   const ctl = createApplyController({ store, bridge: spy });
   const state = await ctl.review([{ kind: "power", intent: { power: { pl1_w: 230 } }, label: "Power limits" }, { kind: "runtime", intent: { caps: { 0: 50 } }, label: "Caps" }]);
   const planCalls = calls.filter(([op]) => op.endsWith(".plan"));
-  // apply.js sends the kind's own plan arguments only with the G-217 hooks (tests/apply-hooks.patch); without them it wraps {intent}: the helper (and this mock) refuse that shape, the first section fails and the rest is not planned
-  if (KINDS.power.planArgs && planCalls[0][1].power) {
-    assert.deepEqual(planCalls.map(([op]) => op), ["power.plan", "runtime.plan"]);
-    assert.deepEqual(planCalls[0][1], { power: { pl1_w: 230 } });
-    assert.equal(state, "review");
-    assert.equal(await ctl.apply(), true);
-    assert.deepEqual(ctl.state().sections.map((s) => s.status), ["done", "done"]);
-  } else {
-    assert.deepEqual(planCalls.map(([op]) => op), ["power.plan"]);
-    assert.deepEqual(planCalls[0][1], { intent: { power: { pl1_w: 230 } } });
-    assert.equal(state, "failed");
+  assert.deepEqual(planCalls.map(([op]) => op), ["power.plan", "runtime.plan"]);
+  assert.deepEqual(planCalls[0][1], { power: { pl1_w: 230 } }, "the plan arguments are the intent itself, not {intent}");
+  assert.deepEqual(planCalls[1][1], { caps: { 0: 50 } });
+  assert.equal(state, "review");
+  assert.equal(await ctl.apply(), true);
+  assert.deepEqual(ctl.state().sections.map((s) => s.status), ["done", "done"]);
+});
+
+test("controller: a refused plan shows the helper's CPU rule; an unread limit says Read CPU state first (explain hook)", async () => {
+  const b = await mockBridge();
+  const store = createAppStore();
+  store.set({ link: { state: "connected", kind: null, message: "", fix: null } });
+  ensureTune(store);
+  ensureRt(store);
+  registerRuntimeKinds();
+  const ctl = createApplyController({ store, bridge: b });
+  assert.equal(await ctl.review([{ kind: "runtime", intent: { uncore: { max_ratio: 45 } }, label: "Caps" }]), "failed");
+  assert.match(ctl.state().sections[0].error.message, /outside the hardware's own uncore range 8\.\.40/);
+  const b2 = await mockBridge("&cpulimits=unread");
+  const store2 = createAppStore();
+  store2.set({ link: { state: "connected", kind: null, message: "", fix: null } });
+  ensureTune(store2);
+  const ctl2 = createApplyController({ store: store2, bridge: b2 });
+  await ctl2.review([{ kind: "power", intent: { power: { pl1_w: 230 } }, label: "Power" }]);
+  assert.match(ctl2.state().sections[0].error.message, new RegExp("^" + READ_FIRST));
+});
+
+test("pending bar: the runtime edits are counted and one Review covers V/F + turbo + ring + power + caps; Discard drops them", () => {
+  const store = createAppStore();
+  ensureTune(store);
+  ensureRt(store);
+  store.set({ rt: readyRt() });
+  const got = [];
+  store.events.addEventListener("tune:review", (e) => got.push(e.detail));
+  assert.deepEqual(store.get().pending, { changes: 0, units: 0 });
+  editRt(store, (e) => ({ ...e, power: { pl1_w: 230, tau_s: 56 }, caps: { P0: 50, EC0: 23 }, uncore: { max_ratio: 38 } }));
+  assert.deepEqual(store.get().pending, { changes: 5, units: 4 }, "2 power values (1 unit), 2 cap units, 1 uncore value (1 unit)");
+  setPendingAll(store, 3, 2);
+  assert.deepEqual(store.get().pending, { changes: 8, units: 6 }, "a V/F draft of 3 changes on 2 units adds up");
+  syncPending(store);
+  assert.deepEqual(store.get().pending, { changes: 5, units: 4 });
+  const reqs = pendingBarReview(store);
+  assert.deepEqual(reqs.map((r) => r.kind), ["power", "runtime"]);
+  assert.deepEqual(got[0].requests, reqs, "one tune:review with the runtime requests");
+  assert.equal(store.get().tune.reviewSeq, 1);
+  discardDraft(store);
+  assert.deepEqual(store.get().rt.edits, { power: {}, caps: {}, uncore: {} });
+  assert.deepEqual(store.get().pending, { changes: 0, units: 0 });
+  pendingBarReview(store);
+  assert.equal(got.length, 2);
+  assert.deepEqual([got[1].changes, got[1].units, got[1].requests], [0, 0, undefined], "without runtime edits the event is the old {changes, units}");
+});
+
+test("no policy anywhere: the sources of the UI carry no policy wording in their code strings", async () => {
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const UI = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const files = [];
+  const walk = (d) => {
+    for (const n of readdirSync(d)) {
+      const f = join(d, n);
+      if (statSync(f).isDirectory()) {
+        if (!["tests", "fixtures", "icons"].includes(n)) walk(f);
+      } else if (/\.(js|html)$/.test(n)) files.push(f);
+    }
+  };
+  walk(UI);
+  files.push(join(UI, "fixtures", "mock-backend.js"), join(UI, "fixtures", "mock-backend-g217.js"), join(UI, "fixtures", "mock-backend-g218.js"));
+  assert.ok(files.length > 30);
+  const hits = [];
+  for (const f of files) {
+    readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+      const code = line.replace(/^\s*\/\/.*$/, "").replace(/\s\/\/ .*$/, "").replace(/\/\*.*?\*\//g, "");
+      if (/polic/i.test(code) && !/POLICY_RANGE/.test(code)) hits.push(f.slice(UI.length) + ":" + (i + 1));
+    });
   }
+  assert.deepEqual(hits, [], "policy wording in code: " + hits.join(", "));
 });

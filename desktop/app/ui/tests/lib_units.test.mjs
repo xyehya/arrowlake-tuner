@@ -2,12 +2,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import FIX from "../fixtures/fixtures.js";
+import G from "../fixtures/g217/fixtures-g217.js";
 import { modelFromRead, sections, unitsWithPoint, favoredIds, quickSelections, aboveTop, ocClass, ocRatioWindow, fusedTopOf, stockMaxOf, turboFloor, aggregate, sameMv, RING_ID } from "../lib/units.js";
-import { limitsFor, limitLine, clampOffset, offsetWindow, vtWindow, snapGrid, normLimits } from "../lib/limits.js";
+import { limitsFor, clampOffset, offsetWindow, vtWindow, snapGrid } from "../lib/limits.js";
+import { modelCpuLine, cpuOffsetCell, READ_FIRST } from "../lib/cpulimits.js";
 import { fmtMv, fmtV, fmtAgg, fmtRatio, MINUS } from "../lib/format.js";
 
 const READ = FIX["tune-read"].result;
 const model = (patch = {}) => modelFromRead({ ...structuredClone(READ), ...patch });
+/** The helper's cpu_limits of a boot without a tune.read: the voltage ceilings / OC ratio limits are null (recorded by the simulator, g217 fixtures). */
+const unreadModel = () => model({ cpu_limits: structuredClone(G["power-read-unread"].result.cpu_limits) });
 
 test("model: P0..P7, EC0..EC3 and the ring from the recorded read", () => {
   const m = model();
@@ -51,9 +55,9 @@ test("model: nothing to model is null, missing pieces are null not guesses", () 
   assert.equal(modelFromRead(null), null);
   assert.equal(modelFromRead({}), null);
   assert.equal(modelFromRead({ units: [] }), null);
-  const bare = model({ turbo: null, tables: null, fused: null, limits: null, hw_limits: null, ring: null });
+  const bare = model({ turbo: null, tables: null, fused: null, cpu_limits: null, ring: null });
   assert.equal(bare.turbo, null);
-  assert.equal(bare.limits, null);
+  assert.equal(bare.cpuLimits, null);
   assert.equal(bare.units.P0.fused, null);
   assert.equal(fusedTopOf(bare.units.P0), 57, "without 0x09 the highest read point stands in");
   assert.equal(stockMaxOf(bare.units.P0), null, "without the favored ratio the stock max is unknown");
@@ -118,12 +122,13 @@ test("OC model: E runs 48x above its 46x fused top with no OC point; OC ratio wi
   assert.equal(ocClass(m.units.P1, 56), "middle", "P1 favored 55: 56x is above stock but on a fused point");
   assert.equal(ocClass(m.units.P1, 58), "oc");
   const e = ocRatioWindow(m, ["EC0", "EC1"]);
-  assert.deepEqual([e.min, e.max, e.reason], [47, 49, null]);
+  assert.deepEqual([e.min, e.max, e.reason], [47, 120, null]);
   const p = ocRatioWindow(m, ["P0", "P1"]);
-  assert.deepEqual([p.min, p.max], [58, 60], "a group starts above its highest stock max");
+  assert.deepEqual([p.min, p.max], [58, 120], "a group starts above its highest stock max");
   assert.match(ocRatioWindow(m, ["P0", "EC0"]).reason, /separate/);
   assert.match(ocRatioWindow(m, [RING_ID]).reason, /no unit/);
-  assert.match(ocRatioWindow(model({ limits: null }), ["P0"]).reason, /not reported/);
+  assert.match(ocRatioWindow(model({ cpu_limits: null }), ["P0"]).reason, /did not report the CPU limits/);
+  assert.match(ocRatioWindow(unreadModel(), ["P0"]).reason, new RegExp(READ_FIRST), "an unread OC ratio limit says Read CPU state first");
 });
 
 test("turbo floor comes from the read's lowest point, not a literal", () => {
@@ -135,54 +140,67 @@ test("turbo floor comes from the read's lowest point, not a literal", () => {
 });
 
 // ---------------------------------------------------------------- limits
-test("limits: policy and CPU layers with the binding source; ring has no policy window", () => {
+test("limits: the CPU's own limits (cpu_limits), the ring has its own entry", () => {
   const m = model();
   const p = limitsFor(m, "P");
   assert.equal(p.known, true);
-  assert.deepEqual([p.offset.min, p.offset.max, p.offset.source], [-200, 200, "policy"]);
+  assert.equal(p.read, true);
+  assert.deepEqual([p.offset.min, p.offset.max], [-1000, 999]);
+  assert.match(p.offset.source, /CPU/);
   assert.equal(p.vt.max, 1.625);
-  assert.match(p.vt.source, /^policy \(auto/);
-  assert.equal(p.ratio.max, 60);
-  assert.equal(limitsFor(m, "E").ratio.max, 49);
+  assert.match(p.vt.source, /0x28/);
+  assert.equal(p.ratio.max, 120);
+  assert.match(p.ratio.source, /0x01/);
+  assert.equal(limitsFor(m, "E").vt.max, 1.355);
   const r = limitsFor(m, "R");
-  assert.equal(r.known, false);
-  assert.deepEqual([r.offset.min, r.offset.max], [-1000, 999]);
-  assert.match(r.offset.source, /ring's policy window is checked/);
-  assert.equal(r.vt, null);
+  assert.equal(r.known, true);
+  assert.equal(r.vt.max, 1.999, "the ring's own voltage ceiling, not the P-cores'");
+  assert.equal(r.ratio.max, 85);
 });
 
-test("limits: the stricter layer wins and is named; a missing policy disables (null), never a guess", () => {
-  const tight = model({ hw_limits: { ...structuredClone(READ.hw_limits), P: { offset_mv: [-100, 50], ratio_max_oc: 58, v_target_max_mv: 1500 } } });
-  const p = limitsFor(tight, "P");
-  assert.deepEqual([p.offset.min, p.offset.max, p.offset.source], [-100, 50, "CPU"]);
-  assert.deepEqual([p.ratio.max, p.ratio.source], [58, "CPU"]);
-  assert.deepEqual([p.vt.max, p.vt.source], [1.5, "CPU"]);
-  const none = model({ limits: null });
+test("limits: an unread limit is null with the reason 'Read CPU state first'; negative offsets stay editable, positive ones and raises are not", () => {
+  const m = unreadModel();
+  const p = limitsFor(m, "P");
+  assert.equal(p.known, true);
+  assert.equal(p.read, false);
+  assert.deepEqual([p.offset.min, p.offset.max], [-1000, 0]);
+  assert.match(p.offset.positive, new RegExp(READ_FIRST));
+  assert.equal(p.vt, null);
+  assert.equal(p.ratio, null);
+  assert.match(p.vtWhy, new RegExp(READ_FIRST));
+  assert.match(p.ratioWhy, new RegExp(READ_FIRST));
+  assert.equal(clampOffset(m, "P", -20), -20, "a negative offset is editable");
+  assert.equal(clampOffset(m, "P", 30), 0, "a positive one is clamped to 0 until the ceiling is read");
+  assert.equal(vtWindow(m, "P"), null);
+  const none = model({ cpu_limits: null });
   assert.equal(limitsFor(none, "P").known, false);
   assert.equal(offsetWindow(none, "P"), null);
   assert.equal(clampOffset(none, "P", -20), null);
   assert.equal(vtWindow(none, "P"), null);
-  assert.equal(normLimits({ offset_mv: { P: { min: -1 } } }), null);
 });
 
-test("limits: clampOffset rounds to whole mV and clamps; vt window and grid", () => {
+test("limits: clampOffset rounds to whole mV and clamps to the field; vt window and grid", () => {
   const m = model();
   assert.equal(clampOffset(m, "P", -20.4), -20);
-  assert.equal(clampOffset(m, "P", -500), -200);
-  assert.equal(clampOffset(m, "E", 999), 200);
+  assert.equal(clampOffset(m, "P", -5000), -1000);
+  assert.equal(clampOffset(m, "E", 5000), 999);
   assert.equal(clampOffset(m, "P", NaN), null);
   assert.deepEqual(vtWindow(m, "E"), { min: 0.9, max: 1.355, step: 0.005, source: vtWindow(m, "E").source });
   assert.equal(snapGrid(1.1563), 1.155);
   assert.equal(snapGrid(1.1), 1.1, "on the grid stays");
 });
 
-test("limits: provenance line names the policy file and what the CPU allows", () => {
+test("limits: the lines name the CPU register and never a policy", () => {
   const m = model();
-  assert.match(limitLine(m, "P", "offset"), /^Limit: −200…\+200 mV from your policy \(\/etc\/arltuner\/policy\.toml\) — editable; your CPU allows −1000…\+999 mV\.$/);
-  assert.match(limitLine(m, "E", "ratio"), /up to 49× from your policy.*OC ratios up to 120×/);
-  assert.match(limitLine(m, "P", "vt"), /up to 1\.625 V from your policy/);
-  assert.equal(limitLine(model({ limits: null }), "P", "offset"), "");
-  assert.match(limitLine(m, "R", "offset"), /ring's policy window/);
+  assert.equal(modelCpuLine(m, "P", "offset"), "CPU limit: " + MINUS + "1000…+999 mV (V/F offset field).");
+  assert.equal(modelCpuLine(m, "P", "vt"), "CPU limit: up to 1.625 V (CPU max voltage, mailbox 0x28).");
+  assert.equal(modelCpuLine(m, "E", "ratio"), "CPU limit: OC ratios up to 120× (OC ratio limit, mailbox 0x01).");
+  assert.match(modelCpuLine(unreadModel(), "P", "vt"), new RegExp("^" + READ_FIRST));
+  assert.match(modelCpuLine(unreadModel(), "P", "offset"), /Positive offsets: Read CPU state first/);
+  assert.equal(cpuOffsetCell(m, "P"), MINUS + "1000…+999 · CPU");
+  assert.equal(cpuOffsetCell(unreadModel(), "P"), MINUS + "1000…0 · CPU");
+  assert.equal(modelCpuLine(model({ cpu_limits: null }), "P", "offset"), "");
+  for (const t of [modelCpuLine(m, "P", "offset"), modelCpuLine(unreadModel(), "E", "ratio"), limitsFor(unreadModel(), "P").vtWhy]) assert.doesNotMatch(t, /polic/i);
 });
 
 // ---------------------------------------------------------------- format

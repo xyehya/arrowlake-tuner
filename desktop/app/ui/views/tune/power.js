@@ -1,14 +1,14 @@
 // views/tune/power.js: the Power sub-tab of Tune (G-217; PLAN §4.2 / §6.1): Processor Core Power Limit (PL1), Processor Core Turbo Power Limit (PL2), Turbo Boost Power Time Window (tau) in XTU's words.
 // Reads power.read (powercap files + MSR 0x610 lock bit + 0x614 info; plain reads, never the OC mailbox), edits the pending values in the store slice `rt` (lib/rtstate.js) and hands them to the apply
 // drawer (kind "power": power.plan {power: {pl1_w?, pl2_w?, tau_s?}} | {revert: true}, then power.apply). Writes go to the powercap files only, through the root helper; this module writes nothing.
-// D-049: the limits shown are the CPU's own (`cpu_limits.power` of the read: the PL field maximum and the 0x610 lock). Never the operator's policy. A value that breaks a CPU rule is refused by the helper
+// D-049: the limits shown are the CPU's own (`cpu_limits.power` of the read: the PL field maximum and the 0x610 lock). A value that breaks a CPU rule is refused by the helper
 // at plan time and the refusal is shown in the drawer; a PL2 below PL1 is only a warning here (the CPU accepts it).
 //   mount(el, ctx) / unmount();  ctx = subTabContext of views/tune.js ({store, bridge, ...}).
 import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum } from "../../lib/format.js";
 import { ensureRt, editRt, powerCurrent, powerDisagrees, powerDisabledReason } from "../../lib/rtstate.js";
-import { normCpuLimits, powerLine, READ_FIRST } from "../../lib/cpulimits.js";
+import { normCpuLimits, powerLine, powerRead, READ_FIRST } from "../../lib/cpulimits.js";
 import { loadRead, registerRuntimeKinds, PL_NAME } from "./runtime-kinds.js";
 import { ensureStyle, head, createReadBar, createActionBar, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
 
@@ -84,7 +84,7 @@ export function mount(el, ctx) {
     const cur = powerCurrent(result);
     const edit = s.rt.edits.power;
     const cl = normCpuLimits(result ? result.cpu_limits : null);
-    const why = powerDisabledReason(result) || (result && !cl ? READ_FIRST + " (the CPU's limits come from that read)" : "");
+    const why = powerDisabledReason(result) || (result && !powerRead(cl) ? READ_FIRST + " (the power limits' own bounds, MSR 0x610 lock and field width, come from that read)" : "");
     err.hidden = r.state !== "error";
     err.textContent = r.state === "error" ? "Power limits could not be read: " + r.error : "";
     for (const { f, stepper, now, boot, row } of inst.rows.values()) {

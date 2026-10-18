@@ -13,7 +13,7 @@
    },
    "message": "there is nothing to revert to: no power value was written in this boot (no journal for this boot). Nothing was written."
   },
-  "id": "c1",
+  "id": "c4",
   "ok": false
  }
 }
