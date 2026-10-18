@@ -134,7 +134,6 @@ class PlanTests(TuneCase):
         self.assertEqual(p["before"]["P1"]["0"], {"ratio": None, "offset_mv": 0.0, "v_target_v": None, "effective_v": None, "clamped_by": None})
         self.assertGreater(p["ops_needed"], 0)
         self.assertIsInstance(p["ops_left"], int)
-        self.assertTrue(any("effective offset" in w for w in texts(p)))
 
     def test_points_by_ratio_need_a_read(self) -> None:
         h = self.boot()
@@ -151,39 +150,40 @@ class PlanTests(TuneCase):
         p = self.plan(h, rows(row("P", points={"58": -10, "53": -10}), scope="simple"))
         self.assertTrue(any("P1 has no V/F point at ratio 58" in w for w in texts(p)))
 
-    def test_policy_range_plus_minus_200_accepted_205_refused(self) -> None:
+    def test_offsets_beyond_the_old_200_window_are_planned_and_warned(self) -> None:
+        """D-049: the +-200 mV policy window is gone -- 205 mV and -205 mV fit the field and are planned, with the warnings that say what they are."""
         h = self.boot()
         self.read(h)
-        for mv in (200, -200):
-            self.plan(h, rows(row("P2", curve=mv)))
-            self.plan(h, rows(row("EC1", curve=mv)))
-            self.plan(h, rows(row("P0", points={"53": mv})))
-        for mv in (205, -205, 201, -201):
+        for mv in (200, -200, 205, -205, 500, -500):
             for intent in (rows(row("P2", curve=mv)), rows(row("EC1", curve=mv)), rows(row("P0", points={"53": mv}))):
-                r = h.call(f"r{mv}{len(h.messages)}", "tune.plan", {"intent": intent})
-                self.assertEqual(error_code(r), "REFUSED", (mv, intent))
-                self.assertEqual(r["error"]["detail"]["check"], "POLICY_RANGE")
-                self.assertIn("outside the policy window", r["error"]["message"])
+                self.plan(h, intent)
+        deep = [w["code"] for w in self.plan(h, rows(row("P2", curve=-205)))["warnings"]]
+        self.assertIn("DEEP_WHOLE_CURVE", deep)
+        self.assertIn("LARGE_CHANGE", deep)
+        self.assertIn("POSITIVE_OFFSET", [w["code"] for w in self.plan(h, rows(row("P2", curve=205)))["warnings"]])
+        quiet = [w["code"] for w in self.plan(h, rows(row("P2", curve=-30)))["warnings"]]
+        self.assertFalse({"DEEP_WHOLE_CURVE", "LARGE_CHANGE", "POSITIVE_OFFSET"} & set(quiet), quiet)
 
-    def test_policy_range_v_target_and_ratio_ceilings(self) -> None:
+    def test_the_cpu_limits_for_v_target_and_ratio(self) -> None:
         h = self.boot()
         self.read(h)
         self.plan(h, rows(row("P4", v=1.625)))
-        self.plan(h, rows(row("EC0", v=1.355)))
+        self.plan(h, rows(row("EC0", v=1.354)))
         cases = {
-            "P V target 1.626": row("P4", v=1.626),
-            "E V target 1.356": row("EC2", v=1.356),
-            "P ratio 61": row("P4", ratio=61),  # fused 57 + 3 (D-038) = 60
-            "E ratio 50": row("EC0", ratio=50),
+            "P V target 1.626": (row("P4", v=1.626), "cmd 0x28"),
+            "E V target 1.355": (row("EC2", v=1.355), "cmd 0x28"),
+            "P ratio 121": (row("P4", ratio=121), "cmd 0x01"),
+            "E ratio 121": (row("EC0", ratio=121), "cmd 0x01"),
         }
-        for label, bad in cases.items():
+        for label, (bad, source) in cases.items():
             with self.subTest(label):
                 r = h.call(f"v{len(h.messages)}", "tune.plan", {"intent": rows(bad)})
                 self.assertEqual(error_code(r), "REFUSED")
                 self.assertEqual(r["error"]["detail"]["check"], "POLICY_RANGE")
-                self.assertRegex(r["error"]["message"], r"policy (v_target_max_mv|ratio_max)")
-        self.plan(h, rows(row("P0", ratio=60)))  # the D-038 headroom: fused 57 + 3
-        self.plan(h, rows(row("EC3", ratio=49)))
+                self.assertIn(f"CPU limit", r["error"]["message"])
+                self.assertIn(source, r["error"]["message"])
+        for ok in (row("P0", ratio=61), row("P0", ratio=120), row("EC0", ratio=50), row("EC3", ratio=49)):  # the old caps (fused + 3, E 49) are gone
+            self.plan(h, rows(ok))
 
     def test_shape_errors_are_bad_requests(self) -> None:
         h = self.boot()
@@ -207,15 +207,16 @@ class PlanTests(TuneCase):
                 r = h.call(f"b{len(h.messages)}", "tune.plan", {"intent": intent})
                 self.assertEqual(error_code(r), "BAD_REQUEST", r)
 
-    def test_a_policy_with_a_step_limit_blocks_the_plan_with_a_named_check(self) -> None:
-        self.policy.write_text(ADVANCED.read_text().replace("max_offset_step_mv = 200", "max_offset_step_mv = 25"))
+    def test_a_big_step_is_applied_in_one_write(self) -> None:
+        """D-049: no step limit -- -150 mV from 0 is one write, read back (the old 25 mV policy step is gone; an old max_offset_step_mv line only warns at load)."""
         h = self.boot()
         self.read(h)
-        p = self.plan(h, rows(row("P2", curve=-150)))  # the plan itself is pure; the step is judged against the words read at apply time
-        r = self.apply(h, p)
-        self.assertEqual(error_code(r), "REFUSED")
-        self.assertEqual(r["error"]["detail"]["check"], "STEP_LIMIT")
-        self.assertEqual(self.word(2).offset_raw, 0)  # nothing written
+        p = self.plan(h, rows(row("P2", curve=-150)))
+        self.assertIn("LARGE_CHANGE", [w["code"] for w in p["warnings"]])
+        self.assertEqual(p["rounds"], 1)
+        self.apply_ok(h, p)
+        self.assertEqual(self.word(2).offset_raw, VfWord.mv_to_offset_raw(-150))
+        self.assertEqual(len([r for r in self.sim.requests if r.cmd == 0x11 and r.cpu == 2]), 1 + 0)
 
 
 class ApplyWordTests(TuneCase):

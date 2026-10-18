@@ -17,7 +17,7 @@ class HookCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
-        policy = with_point_entries(policy_with(offset_ceiling_mv=200, effective_offset_floor_mv=-200, assumed_bios_offset_mv={"P": 0, "E": 0}))
+        policy = with_point_entries(policy_with())
         self.s = make_session(self.tmp, config=SimConfig.measured(per_point=True), policy=policy)
         self.profile = point_profile(point_entry("P", 0, 5, -60, 53), point_entry("P", 3, 5, -60, 53), name="hooks")
 

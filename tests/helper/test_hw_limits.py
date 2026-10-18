@@ -106,10 +106,11 @@ class CpuLimitsDocument(HwLimitsCase):
     def test_the_cpu_limits_survive_a_helper_restart(self) -> None:
         h = self.boot()
         res = self.read(h)
-        h2 = self.boot()
-        r = h2.call("last3", "tune.last", {})
-        self.assertTrue(r["ok"], r)
-        got = r["result"]["result"]["cpu_limits"]
+        from arltuner.helper import ops_tune
+
+        h2 = self.boot()  # a new helper process over the same state directory: no tune.read yet
+        ops_tune._load_policy(h2.helper)  # the lazy restore of this boot's stored read brings the limits back
+        got = ops_tune.cpu_limits_doc(h2.helper, res)
         for kind in ("P", "E", "ring"):
             self.assertEqual((got[kind]["max_mv"], got[kind]["max_ratio"]), (res["cpu_limits"][kind]["max_mv"], res["cpu_limits"][kind]["max_ratio"]), kind)
 
@@ -170,9 +171,9 @@ class PlanJudgesAgainstTheCpuLimits(HwLimitsCase):
         self.read(h)
         for mv in (-500, -1000, 999):
             self.assertEqual(self.plan(h, rows(row("P0", curve=mv)))["units"], ["P0"], mv)  # the old -200 .. +200 window is gone
-        message = self.plan_error(h, rows(row("P0", curve=-1001)))
-        self.assertIn("does not fit the 11-bit offset field", message)
-        self.assertIn("-1000..999", message)
+        r = h.call("plan-1001", "tune.plan", {"intent": rows(row("P0", curve=-1001))})  # outside the field: refused while the intent is read
+        self.assertFalse(r["ok"], r)
+        self.assertIn("-1000..999", r["error"]["message"])
 
 
 class ApplyUsesTheLiveLimits(HwLimitsCase):

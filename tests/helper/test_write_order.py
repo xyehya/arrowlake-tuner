@@ -60,12 +60,6 @@ def accepted_dir(tmp: Path, words: dict[int, list[int]], name: str = "accepted-s
 
 
 class SplitCase(TuneCase):
-    def policy_steps(self, **values: int) -> None:
-        text = self.policy.read_text()
-        for key, value in values.items():
-            text = text.replace(next(line for line in text.splitlines() if line.startswith(f"{key} =")), f"{key} = {value}")
-        self.policy.write_text(text)
-
     def restore(self, h: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         plan = self.plan(h, {"restore": "accepted"})
         return plan, self.apply_ok(h, plan)
@@ -102,22 +96,6 @@ class ColdBoot(SplitCase):
         again = self.read(h)
         self.assertTrue(all(c["match"] and not c.get("equivalent") for c in again["accepted_match"]), again["accepted_match"])
         self.assertEqual(len(again["accepted_match"]), len(split_words()))
-
-    def test_a_small_step_limit_splits_into_rounds_and_each_round_keeps_the_order(self) -> None:
-        self.policy_steps(max_offset_step_mv=10)  # point 6 needs -49.8 mV from the cold 0: five rounds
-        h = self.boot(COLD, accepted_dir=accepted_dir(self.tmp, split_words()))
-        self.read(h)
-        plan, result = self.restore(h)
-        self.assertGreater(plan["rounds"], 1)
-        self.assertTrue(result["complete"])
-        self.assert_expected(split_words())
-        for lead in LEADS:
-            for cpu in TOPO.unit_cpus(TOPO.unit_of_cpu(lead)):
-                log = self.vf_log(cpu)
-                self.assertEqual(log[0][0], 0, f"cpu {cpu}: the OC word is the first write")
-                self.assertEqual(VfWord.from_u32(log[0][1]).ratio, 48)
-                self.assertLessEqual({p2 for p2, _ in log}, {0, 6})
-                self.assertIn(6, [p2 for p2, _ in log])
 
     def test_before_the_restore_the_missing_seventh_point_is_not_a_difference_of_its_own(self) -> None:
         h = self.boot(COLD, accepted_dir=accepted_dir(self.tmp, split_words()))
