@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { join, extname, relative } from "node:path";
 
 import {
-  createStore, createAppStore, initialState, SERIES, SCREEN_IDS, HISTORY_CAP, applyHelperEvent, deriveMode, deriveAccepted, limitBadges, pushSample,
+  createStore, createAppStore, initialState, SERIES, SCREEN_IDS, HISTORY_CAP, applyHelperEvent, deriveMode, deriveAccepted, pushSample,
   setScreen, setPending, toggleSeries, setStrip, pushToast, dismissToast, MAX_TOASTS, openDrawer, closeDrawer, setLastRead, setPreflight,
 } from "../store.js";
 import { Bridge, normalizeLink, selectBridge, FIXES } from "../bridge.js";
@@ -155,7 +155,7 @@ test("fixture telemetry (unprivileged simulator) is all n/a with reasons, never 
     assert.equal(smp[def.key].value, null, def.key);
     assert.ok(smp[def.key].reason, `${def.key} carries its reason`);
   }
-  assert.equal(s.get().telemetry.limits.state, "na");
+  assert.equal(s.get().telemetry.throttle.state, "na");
 });
 
 test("series pickers: max of cores/sensors, summed DRAM, unavailable stays unavailable", () => {
@@ -165,7 +165,7 @@ test("series pickers: max of cores/sensors, summed DRAM, unavailable stays unava
     power: { package: { value: 90.5, status: "ok", unit: "W", source: "powercap" }, core: { value: null, status: "unavailable", reason: "no 'core' subdomain" } },
     vcore: { value: 1.21, status: "ok", unit: "V" },
     dram: { read: { value: 10, status: "ok" }, write: { value: null, status: "unavailable", reason: "nope" } },
-    limit_reasons_raw: { value: 0x10, status: "ok", source: "msr 0x6B0" },
+    limit_reasons: { value: { raw: 0x400, status: ["pl1"], log: [], unknown_bits: [] }, status: "ok", source: "msr 0x64F (decoded)" },
   };
   const s = createAppStore();
   applyHelperEvent(s, "telemetry", { values, t: 1 });
@@ -177,8 +177,9 @@ test("series pickers: max of cores/sensors, summed DRAM, unavailable stays unava
   assert.equal(smp.core_power.reason, "no 'core' subdomain");
   assert.equal(smp.vcore.value, 1.21);
   assert.equal(smp.dram.value, 10);
-  assert.deepEqual([s.get().telemetry.limits.state, s.get().telemetry.limits.raw], ["raw", 16]);
-  assert.equal(limitBadges({ limit_reasons_raw: { value: 0, status: "ok" } }).state, "none");
+  const thr = s.get().telemetry.throttle;
+  assert.equal(thr.state, "ok");
+  assert.deepEqual(thr.groups.filter((g) => g.state === "yes").map((g) => g.key), ["power"]); // 0x64F bit 10 = PL1, not the retired raw 0x6B0 word
 });
 
 test("history is capped and keeps gaps as null", () => {

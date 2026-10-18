@@ -133,7 +133,8 @@ class TestScreens(unittest.TestCase):
                 self.assertIn("n/a", tile.get_attribute("title"))
                 self.assertRegex(tile.locator(".tile-sub").inner_text(), r"^n/a · .{4,}", key)  # the reason is visible, not only a tooltip
             self.assertIn("energy_uj missing", page.locator(".tile[data-series='pkg_power'] .tile-sub").inner_text())
-            self.assertEqual(page.locator(".tile[data-series='limits'] .tile-value").inner_text(), "n/a")
+            self.assertRegex(page.locator(".tile[data-series='limits'] .tile-sub").inner_text(), r"^n/a · .{4,}")  # no hex, the reason
+            self.assertEqual(page.locator(".tile[data-series='limits'] .chip").all_inner_texts(), ["Power: n/a", "Current/EDP: n/a", "Thermal: n/a", "VR thermal: n/a", "Max turbo: n/a"])
             # core map: topology comes from preflight (8 P incl. 2 favored stars, 4 clusters of 4 CPUs)
             self.assertEqual(page.locator(".cm-tile").count(), 12)
             self.assertEqual(page.locator(".cm-tile.p").count(), 8)
@@ -196,8 +197,8 @@ class TestScreens(unittest.TestCase):
             # unavailable stays unavailable even with motion
             for key in ("dram", "core_power"):
                 self.assertEqual(page.locator(f".dash-tiles .tile[data-series='{key}'] .tile-value").inner_text(), "n/a", key)
-            # the limit tile shows the invented raw word or "none"
-            self.assertRegex(page.locator(".tile[data-series='limits'] .tile-value").inner_text(), r"^(none|0x[0-9A-F]+)$")
+            # the mock invents no 0x64F word: the throttle chips stay n/a (G-229: injected frames are tested in test_dashboard_throttle_chips_popover_and_events)
+            self.assertEqual(page.locator(".tile[data-series='limits'] .chip").first.inner_text(), "Power: n/a")
             # chart window selector
             page.click("#dash-charts .seg [data-value='900']")
             self.assertIn("15 min ago", page.locator(".chart-x").first.inner_text())
@@ -218,6 +219,109 @@ class TestScreens(unittest.TestCase):
             self.assert_clean(page, logs)
 
     # ------------------------------------------------------------------ system
+    # ------------------------------------------------------------------ throttle indicators (G-229)
+    THROTTLE_JS = """
+    async ([frames, events]) => {
+      const st = await import('/store.js');
+      const { store, bridge } = window.__arltuner;
+      await bridge.call('telemetry.stop', {});  // the mock replays raw frames every tick: stop it so only the injected frames are on screen
+      await new Promise((r) => setTimeout(r, 200));
+      window.__tailCalls = [];
+      bridge.call = async (op, args) => {
+        window.__tailCalls.push([op, args]);
+        return op === 'throttle.tail' ? { ok: true, result: { path: '/x/throttle.jsonl', records: events, truncated: false } } : { ok: false, error: { message: 'not in this test' } };
+      };
+      window.__feed = (i) => st.applyHelperEvent(store, 'telemetry', frames[i]);
+    }
+    """
+
+    @staticmethod
+    def thr_frame(t, groups, bit_duty, **over):
+        base = {"power": ["Power limit", False, 0, []], "current": ["Current / EDP", False, 0, []], "thermal": ["Thermal", False, 0, []], "vr_thermal": ["VR thermal", False, 0, []], "max_turbo": ["Max turbo cap", False, 0, []]}
+        base.update(groups)
+        win = {"samples": 10, "failed": 0, "window_s": 1.0, "or_word": 0, "bit_duty": bit_duty, "info_bits": [], "unknown_bits": [], "groups": {k: {"label": v[0], "active": v[1], "duty": v[2], "bits": v[3]} for k, v in base.items()}, **over}
+        leaf = lambda v, src: {"value": v, "status": "ok", "unit": "", "source": src}  # noqa: E731
+        return {"t": t, "values": {
+            "throttle": leaf(win, "msr 0x64F status bits, oversampled"),
+            "limit_reasons": leaf({"raw": 0x1DC20C00, "status": ["pl1", "pl2"], "log": ["thermal", "pl1"], "unknown_bits": []}, "msr 0x64F (decoded)"),
+            "limit_reasons_gfx": leaf({"raw": 0x01000000, "status": [], "log": ["other"], "unknown_bits": []}, "msr 0x6B0 (decoded)"),
+            "kernel_thermal": leaf({"core_count": 0, "package_count": 0, "core_delta": 0, "package_delta": 0}, "sysfs cpu*/thermal_throttle"),
+        }}
+
+    @browser
+    def test_dashboard_throttle_chips_popover_and_events(self):
+        logs: list = []
+        events = [
+            {"group": "power", "label": "Power limit", "bits": ["pl1", "pl2"], "t_on": 1700000000, "t_off": 1700000062, "dur_ms": 62000, "duty": 0.4, "peak_temp_c": 91, "peak_pkg_w": 253.2, "peak_mhz": 5700, "kernel_thermal_delta": 0, "tuning_id": "accepted-2026-10-15"},
+            {"group": "thermal", "label": "Thermal", "bits": ["thermal"], "t_on": 1700000100, "t_off": 1700000103, "dur_ms": 3000, "duty": 1.0, "peak_temp_c": 100, "peak_pkg_w": 180.0, "peak_mhz": 4100, "kernel_thermal_delta": 1, "tuning_id": None},
+        ]
+        frames = [
+            self.thr_frame(10, {"max_turbo": ["Max turbo cap", True, 1.0, ["max_turbo_limit"]]}, {"max_turbo_limit": 1.0}),
+            self.thr_frame(11, {"power": ["Power limit", True, 0.3, ["pl1", "pl2"]], "max_turbo": ["Max turbo cap", True, 1.0, ["max_turbo_limit"]]}, {"pl1": 0.2, "pl2": 0.1, "max_turbo_limit": 1.0}, unknown_bits=[14]),
+            self.thr_frame(12, {"thermal": ["Thermal", True, 1.0, ["thermal"]]}, {"thermal": 1.0}),
+        ]
+        with self.page("?bridge=mock&tick=50", logs) as page:
+            self.mount(page, "dashboard", "dashboardView")
+            page.evaluate(self.THROTTLE_JS, [frames, events])
+            tile = page.locator(".tile[data-series='limits']")
+            expect(tile.locator(".chip").first).to_have_text("Power: n/a", timeout=5000)
+            # the events list reads throttle.tail with a bounded n, newest first (the mock has no such op: the stub above answers the Refresh)
+            page.click("#thr-events-refresh")
+            expect(page.locator("#dash-throttle .thr-events tbody tr")).to_have_count(2, timeout=5000)
+            self.assertEqual(page.evaluate("window.__tailCalls[0]"), ["throttle.tail", {"n": 50}])
+            self.assertIn("Thermal", page.locator("#dash-throttle .thr-events tbody tr").first.inner_text())
+            self.assertIn("accepted-2026-10-15", page.locator("#dash-throttle .thr-events tbody tr").nth(1).inner_text())
+            # quiet frame: only the grey max-turbo cap says Yes; no amber, no hex
+            page.evaluate("window.__feed(0)")
+            self.assertEqual(tile.locator(".chip").all_inner_texts(), ["Power: No", "Current/EDP: No", "Thermal: No", "VR thermal: No", "Max turbo: Yes · 100 %"])
+            self.assertEqual(tile.locator(".chip[data-state='ok']").count(), 4)
+            self.assertEqual(tile.locator(".chip[data-state='info']").count(), 1)
+            self.assertNotRegex(tile.inner_text(), r"0x[0-9A-Fa-f]{3,}")
+            self.assertIn("no limit active", tile.locator(".tile-sub").inner_text())
+            # power throttled 30 % of the window: the chip flips to amber with the duty, the strip chip follows
+            page.evaluate("window.__feed(1)")
+            power = tile.locator(".chip[data-group='power']")
+            expect(power).to_have_text("Power: Yes · 30 %")
+            self.assertEqual(power.get_attribute("data-state"), "warn")
+            self.assertEqual(page.locator("#limit-badges .chip[data-group='power']").inner_text(), "Power: Yes · 30 %")
+            self.assertIn("Power limit", tile.locator(".tile-sub").inner_text())
+            # popover: every active bit with its SDM name and source word, unknown bit by number, raw words only here
+            power.click()
+            pop = tile.locator(".thr-pop")
+            expect(pop).to_be_visible()
+            txt = pop.inner_text()
+            for want in ("bit 10 · Package power limit PL1 · Power limit · 20 % of samples · 0x64F", "bit 11 · Package power limit PL2", "bit 12 · Max turbo limit (multi-core)", "bit 14 · not named by the SDM", "0x64F = 0x1DC20C00", "cleared by XTU on Windows"):
+                self.assertIn(want, txt)
+            # thermal: red; the popover follows the live frame; Reset clears the app counters only (and the popover stays open)
+            page.evaluate("window.__feed(2)")
+            self.assertEqual(tile.locator(".chip[data-group='thermal']").get_attribute("data-state"), "error")
+            self.assertIn("Thermal: Yes · 100 %", tile.locator(".thr-pop").inner_text() + tile.inner_text())
+            calls_before = page.evaluate("window.__tailCalls.length")
+            pop.get_by_role("button", name="Reset indicators").click()
+            expect(pop).to_be_visible()
+            self.assertEqual(page.evaluate("window.__arltuner.store.get().throttleSession.seconds.power"), 0)
+            expect(page.locator("#dash-throttle .thr-events tbody tr")).to_have_count(0)  # nothing newer than the reset
+            page.click("#thr-events-all")
+            expect(page.locator("#dash-throttle .thr-events tbody tr")).to_have_count(2)
+            # Escape closes, outside click closes
+            page.keyboard.press("Escape")
+            expect(pop).to_be_hidden()
+            tile.locator(".chip[data-group='thermal']").click()
+            expect(pop).to_be_visible()
+            page.click(".screen-head h1")
+            expect(pop).to_be_hidden()
+            self.assertGreaterEqual(page.evaluate("window.__tailCalls.length"), calls_before)
+            self.shot(page, "throttle", tall=True)
+            self.assert_clean(page, logs)
+
+    @browser
+    def test_dashboard_throttle_events_unavailable_without_the_op(self):
+        logs: list = []
+        with self.page("?bridge=mock&tick=50", logs) as page:
+            self.mount(page, "dashboard", "dashboardView")
+            expect(page.locator("#dash-throttle #thr-events-body")).to_contain_text("n/a ·", timeout=5000)  # the mock helper has no throttle.tail: reason shown, no crash
+            self.assert_clean(page, logs)
+
     @browser
     def test_system_preflight_limits_helper_and_topology(self):
         logs: list = []
