@@ -19,7 +19,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 297,
-     "ts": "2026-10-18T08:58:27.045+00:00"
+     "ts": "2026-10-18T09:45:53.792+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -33,7 +33,7 @@ export default {
      "purpose": "ring read: V/F point 5 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 298,
-     "ts": "2026-10-18T08:58:27.045+00:00"
+     "ts": "2026-10-18T09:45:53.792+00:00"
     },
     {
      "cmd": "0x10",
@@ -48,7 +48,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 299,
-     "ts": "2026-10-18T08:58:27.055+00:00"
+     "ts": "2026-10-18T09:45:53.802+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -62,7 +62,7 @@ export default {
      "purpose": "ring read: V/F point 6 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 300,
-     "ts": "2026-10-18T08:58:27.055+00:00"
+     "ts": "2026-10-18T09:45:53.802+00:00"
     },
     {
      "cmd": "0x10",
@@ -77,7 +77,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 301,
-     "ts": "2026-10-18T08:58:27.065+00:00"
+     "ts": "2026-10-18T09:45:53.812+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -91,7 +91,7 @@ export default {
      "purpose": "ring read: V/F point 7 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 302,
-     "ts": "2026-10-18T08:58:27.065+00:00"
+     "ts": "2026-10-18T09:45:53.812+00:00"
     },
     {
      "cmd": "0x10",
@@ -106,7 +106,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 303,
-     "ts": "2026-10-18T08:58:27.075+00:00"
+     "ts": "2026-10-18T09:45:53.822+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -120,7 +120,7 @@ export default {
      "purpose": "ring read: V/F point 8 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 304,
-     "ts": "2026-10-18T08:58:27.075+00:00"
+     "ts": "2026-10-18T09:45:53.822+00:00"
     },
     {
      "cmd": "0x10",
@@ -135,7 +135,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 305,
-     "ts": "2026-10-18T08:58:27.085+00:00"
+     "ts": "2026-10-18T09:45:53.832+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -149,7 +149,7 @@ export default {
      "purpose": "ring read: V/F point 9 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 306,
-     "ts": "2026-10-18T08:58:27.085+00:00"
+     "ts": "2026-10-18T09:45:53.832+00:00"
     },
     {
      "cmd": "0x10",
@@ -164,7 +164,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 307,
-     "ts": "2026-10-18T08:58:27.095+00:00"
+     "ts": "2026-10-18T09:45:53.842+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -178,7 +178,7 @@ export default {
      "purpose": "ring read: V/F point 10 of the ring (domain P1=2) via cpu 0",
      "req_data": "0x00000000",
      "seq": 308,
-     "ts": "2026-10-18T08:58:27.095+00:00"
+     "ts": "2026-10-18T09:45:53.842+00:00"
     },
     {
      "cmd": "0x10",
@@ -193,7 +193,7 @@ export default {
      "rc_name": "UNKNOWN_0x11",
      "req_data": "0x00000000",
      "seq": 309,
-     "ts": "2026-10-18T08:58:27.105+00:00"
+     "ts": "2026-10-18T09:45:53.852+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -207,7 +207,7 @@ export default {
      "purpose": "apply: read PerCore Voltage Enable state (0x14) before any write",
      "req_data": "0x00000000",
      "seq": 310,
-     "ts": "2026-10-18T08:58:27.105+00:00"
+     "ts": "2026-10-18T09:45:53.852+00:00"
     },
     {
      "cmd": "0x14",
@@ -222,7 +222,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 311,
-     "ts": "2026-10-18T08:58:27.115+00:00"
+     "ts": "2026-10-18T09:45:53.862+00:00"
     },
     {
      "boot_id": "00000000-0000-4000-8000-000000000000",
@@ -236,7 +236,7 @@ export default {
      "purpose": "apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 0",
      "req_data": "0x00000000",
      "seq": 312,
-     "ts": "2026-10-18T08:58:27.115+00:00"
+     "ts": "2026-10-18T09:45:53.862+00:00"
     },
     {
      "cmd": "0x10",
@@ -251,7 +251,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 313,
-     "ts": "2026-10-18T08:58:27.125+00:00"
+     "ts": "2026-10-18T09:45:53.872+00:00"
     },
     {
      "baseline": "0x00000035",
@@ -266,7 +266,7 @@ export default {
      "purpose": "apply: write V/F point 5 offset (0x11 P2=5) of P-Core 0: point 5 offset -20 mV (expects ratio 53)",
      "req_data": "0xFD800035",
      "seq": 314,
-     "ts": "2026-10-18T08:58:27.125+00:00"
+     "ts": "2026-10-18T09:45:53.872+00:00"
     },
     {
      "baseline": "0x00000035",
@@ -282,7 +282,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0xFD800035",
      "seq": 315,
-     "ts": "2026-10-18T08:58:27.135+00:00"
+     "ts": "2026-10-18T09:45:53.882+00:00"
     },
     {
      "cmd": "0x10",
@@ -298,7 +298,7 @@ export default {
      "rc_name": "Pass",
      "req_data": "0x00000000",
      "seq": 316,
-     "ts": "2026-10-18T08:58:27.145+00:00",
+     "ts": "2026-10-18T09:45:53.892+00:00",
      "verified": true
     }
    ],
@@ -538,7 +538,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313896.5848358,
+    "t": 1792316743.3374634,
     "values": {
      "cores": {
       "0": {
@@ -1302,6 +1302,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -1336,7 +1350,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313896.5848358,
+     "ts": 1792316743.3374634,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -1356,7 +1370,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313897.5851007,
+    "t": 1792316744.337802,
     "values": {
      "cores": {
       "0": {
@@ -2120,6 +2134,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -2154,7 +2182,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313897.5851007,
+     "ts": 1792316744.337802,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -2167,7 +2195,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313898.5852919,
+    "t": 1792316745.338189,
     "values": {
      "cores": {
       "0": {
@@ -2931,823 +2959,19 @@ export default {
        "value": null
       }
      },
-     "limit_reasons_raw": {
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
       "status": "unavailable",
-      "unit": "raw",
+      "unit": "",
       "value": null
-     },
-     "power": {
-      "core": {
-       "reason": "no 'core' subdomain",
-       "source": "powercap intel-rapl:0:0",
-       "status": "unavailable",
-       "unit": "W",
-       "value": null
-      },
-      "package": {
-       "reason": "energy_uj missing or unreadable (root-only since 5.10)",
-       "source": "powercap intel-rapl:0/energy_uj",
-       "status": "unavailable",
-       "unit": "W",
-       "value": null
-      }
-     },
-     "temps": {
-      "Package": {
-       "cpu": null,
-       "name": "Package",
-       "reason": "no coretemp device and no MSR access (needs root)",
-       "source": "hwmon coretemp",
-       "status": "unavailable",
-       "unit": "C",
-       "value": null
-      }
-     },
-     "ts": 1792313898.5852919,
-     "vcore": {
-      "reason": "no hwmon device 'nct6686' with label 'VIN16'",
-      "source": "hwmon",
-      "status": "unavailable",
-      "unit": "V",
-      "value": null
-     }
-    }
-   },
-   {
-    "event": "heartbeat",
-    "op_id": null,
-    "ops_budget": 100000,
-    "ops_used": 0,
-    "state": "idle"
-   },
-   {
-    "event": "telemetry",
-    "op_id": "c2",
-    "t": 1792313899.585549,
-    "values": {
-     "cores": {
-      "0": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 0",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "1": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 1",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "10": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 2",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "11": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 3",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "12": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 4",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "13": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 5",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "14": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 6",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "15": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 7",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "16": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 8",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "17": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 9",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "18": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 10",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "19": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 11",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "2": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 2",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "20": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 12",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "21": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 13",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "22": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 14",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "23": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 15",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "3": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 3",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "4": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 4",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "5": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 5",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "6": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 6",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "7": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 7",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "8": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 0",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "9": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 1",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      }
-     },
-     "dram": {
-      "read": {
-       "reason": "IMC sampling not enabled",
-       "source": "perf stat",
-       "status": "unavailable",
-       "unit": "GB/s",
-       "value": null
-      },
-      "write": {
-       "reason": "IMC sampling not enabled",
-       "source": "perf stat",
-       "status": "unavailable",
-       "unit": "GB/s",
-       "value": null
-      }
      },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
@@ -3783,818 +3007,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313899.585549,
-     "vcore": {
-      "reason": "no hwmon device 'nct6686' with label 'VIN16'",
-      "source": "hwmon",
-      "status": "unavailable",
-      "unit": "V",
-      "value": null
-     }
-    }
-   },
-   {
-    "event": "telemetry",
-    "op_id": "c2",
-    "t": 1792313900.585761,
-    "values": {
-     "cores": {
-      "0": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 0",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "1": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 1",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "10": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 2",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "11": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 3",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "12": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 4",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "13": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 5",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "14": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 6",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "15": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 7",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "16": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 8",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "17": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 9",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "18": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 10",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "19": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 11",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "2": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 2",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "20": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 12",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "21": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 13",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "22": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 14",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "23": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 15",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "3": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 3",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "4": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 4",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "5": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 5",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "6": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 6",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "7": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "P-Core 7",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "8": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 0",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      },
-      "9": {
-       "busy": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "mhz": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0xE8/0xE7",
-        "status": "unavailable",
-        "unit": "MHz",
-        "value": null
-       },
-       "name": "E-Core 1",
-       "ratio": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "x",
-        "value": null
-       },
-       "vid": {
-        "reason": "no MSR access (needs root)",
-        "source": "msr 0x198",
-        "status": "unavailable",
-        "unit": "V",
-        "value": null
-       }
-      }
-     },
-     "dram": {
-      "read": {
-       "reason": "IMC sampling not enabled",
-       "source": "perf stat",
-       "status": "unavailable",
-       "unit": "GB/s",
-       "value": null
-      },
-      "write": {
-       "reason": "IMC sampling not enabled",
-       "source": "perf stat",
-       "status": "unavailable",
-       "unit": "GB/s",
-       "value": null
-      }
-     },
-     "limit_reasons_raw": {
-      "reason": "no MSR access (needs root)",
-      "source": "msr 0x6B0",
-      "status": "unavailable",
-      "unit": "raw",
-      "value": null
-     },
-     "power": {
-      "core": {
-       "reason": "no 'core' subdomain",
-       "source": "powercap intel-rapl:0:0",
-       "status": "unavailable",
-       "unit": "W",
-       "value": null
-      },
-      "package": {
-       "reason": "energy_uj missing or unreadable (root-only since 5.10)",
-       "source": "powercap intel-rapl:0/energy_uj",
-       "status": "unavailable",
-       "unit": "W",
-       "value": null
-      }
-     },
-     "temps": {
-      "Package": {
-       "cpu": null,
-       "name": "Package",
-       "reason": "no coretemp device and no MSR access (needs root)",
-       "source": "hwmon coretemp",
-       "status": "unavailable",
-       "unit": "C",
-       "value": null
-      }
-     },
-     "ts": 1792313900.585761,
+     "ts": 1792316745.338189,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -4614,7 +3027,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313901.585977,
+    "t": 1792316746.3388424,
     "values": {
      "cores": {
       "0": {
@@ -5378,6 +3791,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -5412,7 +3839,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313901.585977,
+     "ts": 1792316746.3388424,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -5425,7 +3852,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313902.5862718,
+    "t": 1792316747.3396437,
     "values": {
      "cores": {
       "0": {
@@ -6189,6 +4616,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -6223,7 +4664,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313902.5862718,
+     "ts": 1792316747.3396437,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -6243,7 +4684,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313903.5864804,
+    "t": 1792316748.3399615,
     "values": {
      "cores": {
       "0": {
@@ -7007,6 +5448,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -7041,7 +5496,7 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313903.5864804,
+     "ts": 1792316748.3399615,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -7054,7 +5509,7 @@ export default {
    {
     "event": "telemetry",
     "op_id": "c2",
-    "t": 1792313904.5866842,
+    "t": 1792316749.3408039,
     "values": {
      "cores": {
       "0": {
@@ -7818,6 +6273,20 @@ export default {
        "value": null
       }
      },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
      "limit_reasons_raw": {
       "reason": "no MSR access (needs root)",
       "source": "msr 0x6B0",
@@ -7852,7 +6321,1664 @@ export default {
        "value": null
       }
      },
-     "ts": 1792313904.5866842,
+     "ts": 1792316749.3408039,
+     "vcore": {
+      "reason": "no hwmon device 'nct6686' with label 'VIN16'",
+      "source": "hwmon",
+      "status": "unavailable",
+      "unit": "V",
+      "value": null
+     }
+    }
+   },
+   {
+    "event": "heartbeat",
+    "op_id": null,
+    "ops_budget": 100000,
+    "ops_used": 0,
+    "state": "idle"
+   },
+   {
+    "event": "telemetry",
+    "op_id": "c2",
+    "t": 1792316750.3413744,
+    "values": {
+     "cores": {
+      "0": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 0",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "1": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 1",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "10": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 2",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "11": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 3",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "12": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 4",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "13": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 5",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "14": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 6",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "15": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 7",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "16": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 8",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "17": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 9",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "18": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 10",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "19": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 11",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "2": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 2",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "20": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 12",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "21": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 13",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "22": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 14",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "23": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 15",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "3": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 3",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "4": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 4",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "5": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 5",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "6": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 6",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "7": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 7",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "8": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 0",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "9": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 1",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      }
+     },
+     "dram": {
+      "read": {
+       "reason": "IMC sampling not enabled",
+       "source": "perf stat",
+       "status": "unavailable",
+       "unit": "GB/s",
+       "value": null
+      },
+      "write": {
+       "reason": "IMC sampling not enabled",
+       "source": "perf stat",
+       "status": "unavailable",
+       "unit": "GB/s",
+       "value": null
+      }
+     },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_raw": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "raw",
+      "value": null
+     },
+     "power": {
+      "core": {
+       "reason": "no 'core' subdomain",
+       "source": "powercap intel-rapl:0:0",
+       "status": "unavailable",
+       "unit": "W",
+       "value": null
+      },
+      "package": {
+       "reason": "energy_uj missing or unreadable (root-only since 5.10)",
+       "source": "powercap intel-rapl:0/energy_uj",
+       "status": "unavailable",
+       "unit": "W",
+       "value": null
+      }
+     },
+     "temps": {
+      "Package": {
+       "cpu": null,
+       "name": "Package",
+       "reason": "no coretemp device and no MSR access (needs root)",
+       "source": "hwmon coretemp",
+       "status": "unavailable",
+       "unit": "C",
+       "value": null
+      }
+     },
+     "ts": 1792316750.3413744,
+     "vcore": {
+      "reason": "no hwmon device 'nct6686' with label 'VIN16'",
+      "source": "hwmon",
+      "status": "unavailable",
+      "unit": "V",
+      "value": null
+     }
+    }
+   },
+   {
+    "event": "telemetry",
+    "op_id": "c2",
+    "t": 1792316751.341626,
+    "values": {
+     "cores": {
+      "0": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 0",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "1": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 1",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "10": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 2",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "11": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 3",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "12": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 4",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "13": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 5",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "14": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 6",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "15": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 7",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "16": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 8",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "17": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 9",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "18": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 10",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "19": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 11",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "2": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 2",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "20": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 12",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "21": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 13",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "22": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 14",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "23": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 15",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "3": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 3",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "4": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 4",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "5": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 5",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "6": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 6",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "7": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "P-Core 7",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "8": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 0",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      },
+      "9": {
+       "busy": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "mhz": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0xE8/0xE7",
+        "status": "unavailable",
+        "unit": "MHz",
+        "value": null
+       },
+       "name": "E-Core 1",
+       "ratio": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "x",
+        "value": null
+       },
+       "vid": {
+        "reason": "no MSR access (needs root)",
+        "source": "msr 0x198",
+        "status": "unavailable",
+        "unit": "V",
+        "value": null
+       }
+      }
+     },
+     "dram": {
+      "read": {
+       "reason": "IMC sampling not enabled",
+       "source": "perf stat",
+       "status": "unavailable",
+       "unit": "GB/s",
+       "value": null
+      },
+      "write": {
+       "reason": "IMC sampling not enabled",
+       "source": "perf stat",
+       "status": "unavailable",
+       "unit": "GB/s",
+       "value": null
+      }
+     },
+     "limit_reasons": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x64F",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_gfx": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "",
+      "value": null
+     },
+     "limit_reasons_raw": {
+      "reason": "no MSR access (needs root)",
+      "source": "msr 0x6B0",
+      "status": "unavailable",
+      "unit": "raw",
+      "value": null
+     },
+     "power": {
+      "core": {
+       "reason": "no 'core' subdomain",
+       "source": "powercap intel-rapl:0:0",
+       "status": "unavailable",
+       "unit": "W",
+       "value": null
+      },
+      "package": {
+       "reason": "energy_uj missing or unreadable (root-only since 5.10)",
+       "source": "powercap intel-rapl:0/energy_uj",
+       "status": "unavailable",
+       "unit": "W",
+       "value": null
+      }
+     },
+     "temps": {
+      "Package": {
+       "cpu": null,
+       "name": "Package",
+       "reason": "no coretemp device and no MSR access (needs root)",
+       "source": "hwmon coretemp",
+       "status": "unavailable",
+       "unit": "C",
+       "value": null
+      }
+     },
+     "ts": 1792316751.341626,
      "vcore": {
       "reason": "no hwmon device 'nct6686' with label 'VIN16'",
       "source": "hwmon",
@@ -7894,7 +8020,7 @@ export default {
  "tune-apply": {
   "request": {
    "args": {
-    "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
+    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
     "typed": "CONFIRM <nonce>"
    },
    "op": "tune.apply"
@@ -7907,7 +8033,7 @@ export default {
     "cpufreq": [],
     "msr_writes": 0,
     "ops_used": 4,
-    "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
+    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
     "readback": [
      {
       "actual": "0xfd800035",
@@ -7974,8 +8100,8 @@ export default {
   "id": "c9",
   "ok": true,
   "result": {
-   "applied_at": 1792313905.864326,
-   "at": 1792313905.840878,
+   "applied_at": 1792316752.4838252,
+   "at": 1792316752.4727194,
    "available": true,
    "boot_id": "00000000-0000-4000-8000-000000000000",
    "result": {
@@ -8065,6 +8191,9 @@ export default {
       "v_target_max_mv": 1625
      }
     },
+    "intent_features": [
+     "ring"
+    ],
     "limits": {
      "offset_mv": {
       "E": {
@@ -8100,7 +8229,7 @@ export default {
     "ops_ring": 11,
     "ops_words": 112,
     "problems": [],
-    "read_at": "2026-10-18T08:58:25Z",
+    "read_at": "2026-10-18T09:45:52Z",
     "ring": {
      "cpu": 0,
      "end": "rc 0x11 at P2=10",
@@ -10482,10 +10611,10 @@ export default {
     "complete": false,
     "expires_s": 600,
     "name": "tune-7c3ceb84",
-    "nonce": "QUXZWT",
+    "nonce": "6YK4BQ",
     "ops_left": 99849,
     "ops_needed": 6,
-    "plan_id": "f9a0a750f8eb88682ead92679f61f6b72adf795313ecc517c51b63668319f859",
+    "plan_id": "57acfde2d2905f0ac2d18cad743502695707fb637c0db5e229b968319f525045",
     "predicted": null,
     "reads": 2,
     "rounds": 1,
@@ -10620,6 +10749,9 @@ export default {
      "v_target_max_mv": 1625
     }
    },
+   "intent_features": [
+    "ring"
+   ],
    "limits": {
     "offset_mv": {
      "E": {
@@ -10655,7 +10787,7 @@ export default {
    "ops_ring": 11,
    "ops_words": 112,
    "problems": [],
-   "read_at": "2026-10-18T08:58:25Z",
+   "read_at": "2026-10-18T09:45:52Z",
    "ring": {
     "cpu": 0,
     "end": "rc 0x11 at P2=10",

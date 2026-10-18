@@ -13,13 +13,14 @@ import { createPendingBar } from "./components/pending-bar.js";
 import { createToaster } from "./components/toast.js";
 import { createDrawer } from "./components/drawer.js";
 import { placeholderView } from "./components/placeholder.js";
+import { tuneView, discardDraft, requestReview } from "./views/tune.js";
 
 import { dashboardView } from "./views/dashboard.js";
 import { systemView } from "./views/system.js";
 import { auditView } from "./views/audit.js";
 
 // Screens that have landed; the rest stay placeholders until their task merges (the orchestrator wires each one here).
-const LANDED = { dashboard: dashboardView, system: systemView, audit: auditView };
+const LANDED = { dashboard: dashboardView, tune: tuneView, system: systemView, audit: auditView };
 const VIEWS = Object.fromEntries(SCREENS.map((s) => [s.id, LANDED[s.id] || (() => placeholderView(s.id))]));
 
 const TELEMETRY_INTERVAL_S = 1.0;
@@ -66,11 +67,13 @@ export async function boot(doc = document) {
   createToaster(doc.getElementById("toasts"), store);
   createPendingBar(doc.getElementById("pending-bar"), store, {
     onDiscard: () => {
+      discardDraft(store); // empties the Tune draft (which re-counts the pending bar)
       setPending(store, 0, 0);
       toast("info", "Pending changes discarded.");
     },
-    // G-210 replaces this with the real plan + apply drawer.
+    // G-208 fires "tune:review" on store.events; G-210 replaces this placeholder with the real plan + apply drawer.
     onReview: () => {
+      requestReview(store);
       drawer.setContent(h("p", { class: "muted", text: "The ordered write list and the Apply button arrive with the apply drawer (G-210)." }));
       openDrawer(store, "Review & Apply");
     },

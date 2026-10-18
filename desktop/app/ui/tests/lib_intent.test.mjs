@@ -43,7 +43,7 @@ const built = (m, d) => {
 };
 
 // ---- the golden intents ----------------------------------------------------------------------------------------------------------------
-const m = model();
+const m = model({ intent_features: undefined }); // a helper that reports no features (the fixture itself now carries "ring", G-208)
 const mRing = model({ intent_features: ["ring"] });
 const GOLDEN = {};
 

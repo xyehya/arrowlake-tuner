@@ -2,8 +2,8 @@
  "id": "c9",
  "ok": true,
  "result": {
-  "applied_at": 1792313905.864326,
-  "at": 1792313905.840878,
+  "applied_at": 1792316752.4838252,
+  "at": 1792316752.4727194,
   "available": true,
   "boot_id": "00000000-0000-4000-8000-000000000000",
   "result": {
@@ -93,6 +93,9 @@
      "v_target_max_mv": 1625
     }
    },
+   "intent_features": [
+    "ring"
+   ],
    "limits": {
     "offset_mv": {
      "E": {
@@ -128,7 +131,7 @@
    "ops_ring": 11,
    "ops_words": 112,
    "problems": [],
-   "read_at": "2026-10-18T08:58:25Z",
+   "read_at": "2026-10-18T09:45:52Z",
    "ring": {
     "cpu": 0,
     "end": "rc 0x11 at P2=10",
