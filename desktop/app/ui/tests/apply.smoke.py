@@ -272,14 +272,14 @@ class TestApply(unittest.TestCase):
     @browser
     def test_plan_error_lands_on_the_offending_field(self):
         with self.page() as page:
-            self.edit(page, 48, "-180")  # inside the editor's own -200 clamp, outside the mock policy (-150)
+            self.edit(page, 48, "-180")  # inside the CPU's offset field (-1000..+999), outside the mock CPU limit (-150)
             page.click("#pending-review")
             page.wait_for_selector("#apply-plan-error", timeout=5000)
             self.assertIn("P0: offset -180 mV", page.inner_text("#apply-plan-error"))
             self.assertEqual(page.locator("#apply-go").count(), 0, "there is nothing to apply")
             field = page.locator(".insp-section tr[data-ratio='48'] input").first
             self.assertEqual(field.get_attribute("aria-invalid"), "true")
-            self.assertIn("outside the policy window", page.inner_text(".insp-section tr[data-ratio='48'] .field-error-note"))
+            self.assertIn("outside the CPU limit", page.inner_text(".insp-section tr[data-ratio='48'] .field-error-note"))
             self.assertEqual(page.evaluate("document.activeElement === document.querySelector(\".insp-section tr[data-ratio='48'] input\")"), True)
             self.assertTrue(page.locator(".tile[data-unit='P0']").evaluate("e => e.classList.contains('plan-error')"))
             # the mark survives a re-render of the inspector ...

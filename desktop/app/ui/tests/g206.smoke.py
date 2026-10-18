@@ -336,13 +336,15 @@ class TestScreens(unittest.TestCase):
             self.assertIn("mailbox requests", page.inner_text("#sys-banner").lower() + "mailbox requests")  # banner exists for writes_allowed=false
             self.assertFalse(page.is_hidden("#sys-banner"))
             self.assertIn("arl-s", page.inner_text("#sys-summary"))
-            # limits come from tune.last, with their source and both columns
-            expect(page.locator("#sys-limits-body tr")).to_have_count(6, timeout=5000)
+            # the limits are the CPU's own (cpu_limits of tune.last), each with its register
+            expect(page.locator("#sys-limits-body tr")).to_have_count(10, timeout=5000)
             txt = page.inner_text("#sys-limits-body")
-            self.assertIn("−200…+200 mV", txt)
-            self.assertIn("up to 1.625 V", txt)
-            self.assertIn("auto", txt)
-            self.assertIn("/etc/arltuner/policy.toml", page.inner_text("#sys-limits-note"))
+            self.assertIn("−1000…+999 mV", txt)
+            self.assertIn("1.625 V", txt)
+            self.assertIn("OC mailbox 0x28", txt)
+            self.assertIn("120×", txt)
+            self.assertIn("Read CPU state first", txt)  # power / cpufreq / uncore come from their own reads
+            self.assertNotRegex(page.inner_text("#sys-limits-card").lower(), r"polic")
             # helper & link
             self.assertIn("connected", page.inner_text("#sys-helper"))
             self.assertIn("mock", page.inner_text("#sys-helper"))

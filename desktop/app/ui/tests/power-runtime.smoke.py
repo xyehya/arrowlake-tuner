@@ -2,8 +2,8 @@
 
 Run:  ARLTUNER_BROWSER_TESTS=1 /usr/bin/python3 desktop/app/ui/tests/power-runtime.smoke.py   (or add --browser; needs playwright for Python + google-chrome / ARLTUNER_CHROME)
 Without the opt-in the browser tests are skipped. Same loopback server and CSP as tune.smoke.py. No hardware, no helper: the mock bridge answers power.* / runtime.* from the recorded simulator
-shapes (mock-backend-g217.js; its cpu_limits and state are INVENTED there, marked). Knobs: `&cpulimits=unread`, `&offline=<cpu>`, `&rtapply=mismatch`, `&locked=1`.
-The drawer tests need the apply.js hooks of tests/apply-hooks.patch (planArgs / view / explain); without them they are skipped and the Review dispatch is what is checked.
+shapes (mock-backend-g217.js: cpu_limits is recorded too; only the state that follows what is asked is invented there, marked). Knobs: `&cpulimits=unread`, `&offline=<cpu>`, `&rtapply=mismatch`, `&locked=1`.
+The drawer tests run the real apply drawer (views/tune/apply.js planArgs / view / explain hooks): plan, review rows, amber plan warnings, apply, read-back, revert.
 """
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ if "--browser" in sys.argv:
 UI = Path(__file__).resolve().parents[1]
 CSP = json.loads((UI.parent / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))["app"]["security"]["csp"]
 CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or shutil.which("chromium") or ""
-HOOKS = "planArgs" in (UI / "views" / "tune" / "apply.js").read_text(encoding="utf-8")
 INIT_JS = """
 window.__csp = [];
 document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));
@@ -69,10 +68,6 @@ def browser(test):
     return unittest.skipUnless(os.environ.get("ARLTUNER_BROWSER_TESTS") == "1" and sync_playwright and CHROME, "set ARLTUNER_BROWSER_TESTS=1 (needs playwright + chrome)")(test)
 
 
-def drawer(test):
-    return unittest.skipUnless(HOOKS, "apply.js lacks the G-217 hooks (tests/apply-hooks.patch)")(test)
-
-
 class TestStatic(unittest.TestCase):
     def test_files_exist_and_use_no_inline_style_or_handler(self):
         for rel in ("views/tune/power.js", "views/tune/ring.js", "views/tune/runtime.js", "views/tune/runtime-kinds.js", "views/tune/rt-common.js", "lib/cpulimits.js", "lib/rtstate.js", "styles/runtime.css"):
@@ -105,7 +100,7 @@ class TestTabs(unittest.TestCase):
                 page.wait_for_selector(".tile[data-unit='P0']", timeout=5000)
                 page.evaluate(CAPTURE_JS)
                 page.click(f"#subtab-{tab}")
-                if tab != "cores":
+                if tab in ("power", "ring", "ratios"):
                     page.wait_for_selector(".rt-read-text[data-state='ready']", timeout=5000)  # power.read / runtime.read answered
                 self.logs = logs
                 yield page
@@ -122,6 +117,14 @@ class TestTabs(unittest.TestCase):
         field = page.get_by_label(label, exact=True)
         field.fill(value)
         field.press("Enter")
+
+    @staticmethod
+    def type_point(page, ratio: int, value: str):
+        field = page.locator(f".insp-section[data-kind='P'] tr[data-ratio='{ratio}'] input")
+        field.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type(value)
+        page.keyboard.press("Enter")
 
     # ---- Power ----
     @browser
@@ -187,7 +190,6 @@ class TestTabs(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
-    @drawer
     def test_power_review_apply_revert_through_the_drawer(self):
         with self.page("power") as page:
             page.wait_for_selector(".rt-table tr[data-key='pl1_w']")
@@ -217,7 +219,6 @@ class TestTabs(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
-    @drawer
     def test_drawer_shows_the_plan_warnings_amber_and_a_refusal_names_the_cpu_rule(self):
         with self.page("power") as page:
             page.wait_for_selector(".rt-table tr[data-key='pl1_w']")
@@ -277,7 +278,6 @@ class TestTabs(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
-    @drawer
     def test_uncore_review_apply_revert_through_the_drawer(self):
         with self.page("ring") as page:
             page.wait_for_selector("tr[data-key='max_ratio']")
@@ -334,7 +334,6 @@ class TestTabs(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
-    @drawer
     def test_caps_review_shows_the_capped_at_note_from_the_plan_then_applies_and_reverts(self):
         with self.page("ratios") as page:
             page.wait_for_selector(".rt-table tr[data-unit='P0']")
@@ -381,6 +380,119 @@ class TestTabs(unittest.TestCase):
         with self.page("cores") as page:
             self.assertNotRegex(page.inner_text(".insp-body"), r"your policy|policy\.toml")
             self.assertIn("The CPU's own offset range", page.get_attribute(".vf-table th.c-lim", "title"))
+            self.assert_clean(page)
+
+    # ---- the pending bar covers everything; the limits are the CPU's ----
+    @browser
+    def test_pending_bar_counts_the_runtime_edits_and_one_review_covers_vf_power_and_caps(self):
+        with self.page("power") as page:
+            page.wait_for_selector(".rt-table tr[data-key='pl1_w']")
+            self.assertTrue(page.locator("#pending-bar").is_hidden())
+            self.edit(page, "Processor Core Power Limit (PL1)", "230")
+            self.assertEqual(page.inner_text("#pending-text"), "1 change on 1 unit")
+            page.click("#subtab-ratios")
+            page.wait_for_selector(".rt-table tr[data-unit='P0']")
+            self.edit(page, "Maximum ratio of P0", "50")
+            self.assertEqual(page.inner_text("#pending-text"), "2 changes on 2 units")
+            page.click("#subtab-cores")
+            page.click(".tile[data-unit='P0']")
+            self.type_point(page, 53, "-30")  # the read holds -19.5 mV there; -20 would round to it
+            self.assertEqual(page.inner_text("#pending-text"), "3 changes on 3 units")
+            page.click("#pending-review")
+            kinds = page.evaluate("window.__reviews[0].requests.map(r => typeof r === 'string' ? r : r.kind)")
+            self.assertEqual(kinds, ["tune", "power", "runtime"])
+            page.wait_for_selector("#apply-go", timeout=8000)
+            self.assertEqual(page.locator(".apply-section").count(), 3)
+            self.assertEqual(page.locator(".apply-section").evaluate_all("els => els.map(e => e.dataset.kind)"), ["tune", "power", "runtime"])
+            page.click("#apply-go")
+            page.wait_for_selector(".apply-section[data-kind='runtime'][data-status='done']", timeout=15000)
+            self.assertEqual(page.locator(".apply-section[data-status='done']").count(), 3)
+            self.assert_clean(page)
+
+    @browser
+    def test_pending_bar_discard_drops_the_runtime_edits_too(self):
+        with self.page("power") as page:
+            page.wait_for_selector(".rt-table tr[data-key='pl1_w']")
+            self.edit(page, "Processor Core Power Limit (PL1)", "230")
+            page.click("#pending-discard")
+            self.assertEqual(page.inner_text(".rt-pending"), "No pending changes")
+            self.assertTrue(page.locator("#pending-bar").is_hidden())
+            self.assert_clean(page)
+
+    @browser
+    def test_drawer_amber_rows_for_a_large_cap_change_and_pl2_below_pl1(self):
+        with self.page("ratios") as page:
+            page.wait_for_selector(".rt-table tr[data-unit='P0']")
+            self.edit(page, "Maximum ratio of P0", "20")
+            page.click("#rt-review")
+            page.wait_for_selector("#apply-go")
+            warn = page.locator(".apply-warnings li[data-code='LARGE_CHANGE']")
+            self.assertGreaterEqual(warn.count(), 1)
+            self.assertIn("warn", warn.first.get_attribute("class"))
+            self.assertIn("large change", warn.first.inner_text())
+            self.assertFalse(page.locator("#apply-go").is_disabled(), "a warning never blocks Apply")
+            self.assert_clean(page)
+
+    @browser
+    def test_unread_voltage_ceiling_negative_offsets_stay_editable_positive_and_raises_say_read_cpu_state_first(self):
+        with self.page("cores", "&cpulimits=unread") as page:
+            page.click(".tile[data-unit='P0']")
+            self.type_point(page, 53, "-30")  # the read holds -19.5 mV there; -20 would round to it
+            self.assertEqual(page.inner_text("#pending-text"), "1 change on 1 unit", "a negative offset is editable")
+            page.click("#pending-discard")
+            self.type_point(page, 48, "20")  # positive: clamped to 0, which is what the CPU holds at 48x: nothing pending
+            self.assertTrue(page.locator("#pending-bar").is_hidden())
+            text = page.inner_text(".insp-body")
+            self.assertIn("Read CPU state first", text)
+            self.assertNotRegex(text, r"polic")
+            self.assert_clean(page)
+        with self.page("turbo", "&cpulimits=unread") as page:
+            expect(page.locator("#tune-panel")).to_contain_text("Read CPU state first", timeout=5000)  # the OC ratio limit is unread: no bucket may be raised
+            self.assertNotRegex(page.inner_text("#tune-panel"), r"(?i)polic")
+            self.assert_clean(page)
+
+    @browser
+    def test_system_screen_shows_the_cpu_limits_and_fills_power_and_caps_from_their_reads(self):
+        with self.page("power") as page:
+            page.evaluate("location.hash = '#/system'")
+            page.wait_for_selector("#sys-limits-body tr", timeout=5000)
+            text = page.inner_text("#sys-limits")
+            self.assertEqual(page.locator("#sys-limits-body tr").count(), 10)
+            self.assertIn("1.625 V", text)
+            self.assertIn("1.999 V", text)
+            self.assertIn("120×", text)
+            self.assertIn("−1000…+999 mV", text)
+            self.assertIn("OC mailbox 0x28", text)
+            self.assertIn("writable, field maximum 4095.875 W", text, "the power read of this session fills the power row")
+            self.assertIn("Read CPU state first", text, "no runtime.read yet: cpufreq / uncore are not read")
+            self.assertNotRegex(page.inner_text("#sys-limits-card").lower(), r"polic")
+            self.assert_clean(page)
+
+    @browser
+    def test_no_policy_word_in_the_rendered_app_text_or_tooltips(self):
+        grab = "() => document.body.innerText + ' ' + [...document.querySelectorAll('[title],[aria-label],[placeholder]')].map((e) => [e.title, e.getAttribute('aria-label'), e.getAttribute('placeholder')].join(' ')).join(' ')"
+        with self.page("cores") as page:
+            seen = []
+            page.click(".tile[data-unit='P0']")
+            page.click(".tile[data-unit='EC0'] ", modifiers=["Control"])
+            seen.append(page.evaluate(grab))
+            for tab in ("turbo", "power", "ring", "ratios"):
+                page.click(f"#subtab-{tab}")
+                page.wait_for_timeout(300)
+                seen.append(page.evaluate(grab))
+            self.edit(page, "Maximum ratio of P0", "20")
+            page.click("#rt-review")
+            page.wait_for_selector("#apply-go")
+            seen.append(page.evaluate(grab))
+            page.click("#apply-close")
+            page.evaluate("location.hash = '#/system'")
+            page.wait_for_selector("#sys-limits-body tr", timeout=5000)
+            seen.append(page.evaluate(grab))
+            page.evaluate("location.hash = '#/profiles'")
+            page.wait_for_timeout(500)
+            seen.append(page.evaluate(grab))
+            for text in seen:
+                self.assertNotRegex(text, r"(?i)polic", text[:300])
             self.assert_clean(page)
 
 

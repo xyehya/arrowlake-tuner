@@ -222,24 +222,24 @@ class TestTune(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
-    def test_typed_values_are_clamped_by_the_policy_window_and_garbage_is_refused(self):
+    def test_typed_values_are_clamped_by_the_cpu_offset_field_and_garbage_is_refused(self):
         with self.page() as page:
             page.click(".tile[data-unit='P0']")
             field = self.field(page, 48)
             field.click()
-            page.keyboard.type("-999")
+            page.keyboard.type("-5000")
             page.keyboard.press("Enter")
-            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -200})  # policy window -200..+200
+            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -1000})  # the CPU's offset field: -1000..+999 mV (cpu_limits.offset_mv)
             field.click()
             page.keyboard.type("abc")
             page.keyboard.press("Enter")
             self.assertEqual(field.get_attribute("aria-invalid"), "true")
-            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -200})
+            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -1000})
             page.keyboard.press("Escape")
-            self.assertEqual(field.input_value(), f"{MINUS}200")
+            self.assertEqual(field.input_value(), f"{MINUS}1000")
             field.focus()
-            page.keyboard.press("ArrowDown")  # already at the window's edge: nothing changes
-            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -200})
+            page.keyboard.press("ArrowDown")  # already at the field's edge: nothing changes
+            self.assertEqual(self.draft(page)["units"]["P0"]["pts"], {"48": -1000})
             self.assert_clean(page)
 
     # ---- multi-select and mixed ----

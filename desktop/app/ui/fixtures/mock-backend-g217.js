@@ -248,6 +248,12 @@ export function wrapMockTransportG217(inner, options = {}) {
       }
     }
     if (!steps.length) return fail(id, "BAD_REQUEST", "the runtime intent changes nothing", { check: "NOTHING_TO_DO" });
+    if (!revert) { // the helper's D-049 warnings (caps.py / uncore.py): a limit that moves by more than 4 bins in one apply
+      for (const s of steps) {
+        const to = s.domain === "caps" ? s.ratio : s.value / BIN_KHZ;
+        if (Math.abs(ratioOf(s.before) - to) > 4) warnings.push(s.domain === "caps" ? `LARGE_CHANGE: cpu ${s.key.replace("cpu", "")}: cap ${ratioOf(s.before)} -> ${to} is a large single change (more than 4 bins); the kernel accepts it` : `LARGE_CHANGE: uncore ${s.key}: ${ratioOf(s.before)} -> ${to} is a large single change (more than 4 bins); the driver accepts it`);
+      }
+    }
     warnings.push(revert ? "these are runtime values: a reboot restores the firmware / kernel defaults" : "the values now in force are journaled before the first write of each key in this boot; \"revert\" puts them back", "these are runtime values: a reboot restores the firmware / kernel defaults");
     const n = ++planSeq;
     const base = clone(G["runtime-plan"].response.result);
