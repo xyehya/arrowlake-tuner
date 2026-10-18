@@ -118,7 +118,8 @@ mod tests {
         for p in cap["permissions"].as_array().unwrap() {
             let p = p.as_str().unwrap();
             assert!(
-                p.starts_with("core:") || p == "allow-app-version",
+                p.starts_with("core:")
+                    || matches!(p, "allow-app-version" | "allow-helper-status" | "allow-helper-connect" | "allow-helper-call"),
                 "unexpected permission {p}"
             );
         }

@@ -7,7 +7,7 @@ fn main() {
     }
 
     // App commands are listed here so capabilities can grant them one by one.
-    let app = tauri_build::AppManifest::new().commands(&["app_version"]);
+    let app = tauri_build::AppManifest::new().commands(&["app_version", "helper_status", "helper_connect", "helper_call"]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))
         .expect("tauri build script failed");
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-helper-status"
+description = "Enables the helper_status command without any pre-configured scope."
+commands.allow = ["helper_status"]
+
+[[permission]]
+identifier = "deny-helper-status"
+description = "Denies the helper_status command without any pre-configured scope."
+commands.deny = ["helper_status"]
