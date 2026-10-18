@@ -269,7 +269,7 @@ test("bridge(mock): connect, status, short ops return the recorded responses", a
   assert.deepEqual(pre.result.topology.units.map((u) => u.id).slice(0, 2), ["P0", "P1"]);
   assert.equal(pre.result.board, "Simulated board");
   for (const op of ["tune.last", "profiles.list", "audit.tail"]) assert.equal((await b.call(op)).ok, true, op);
-  const unk = await b.call("vf.measure", {});
+  const unk = await b.call("nope.op", {}); // vf.measure is simulated since G-218
   assert.deepEqual([unk.ok, unk.error.code], [false, "UNKNOWN_OP"]);
   await assert.rejects(() => b.call("", {}), TypeError);
   await assert.rejects(() => b.call("preflight", [1]), TypeError);

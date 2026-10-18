@@ -31,3 +31,5 @@ it got, then deletes the temp dir. Re-run it to refresh; ids, timestamps and the
   `ipc: http://ipc.localhost`; a JS module is governed by `script-src 'self'`. This way the mock runs under the exact shipped CSP. `tests/shell.test.mjs` fails if `fixtures.js`
   and the JSON files drift apart.
 - The directory ships inside the AppImage with the rest of `ui/` (`frontendDist: "../ui"`). Only `mock-backend.js` / `fixtures.js` are loaded, and only for `?bridge=mock`.
+
+- Curves/Stress fixtures and the run-simulating wrapper: see `g218/README.md` (G-218).

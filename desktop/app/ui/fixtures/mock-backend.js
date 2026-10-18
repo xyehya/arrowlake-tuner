@@ -139,7 +139,7 @@ function synthPlan(intent) {
 
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
  *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off), applyMode ('mismatch' | 'stale' | null; `?apply=`; see synthPlan above). */
-export function createMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply") } = {}) {
+function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply") } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -355,4 +355,12 @@ export function createMockTransport({ intervalMs = 1000, stepMs = stepParam() ??
       listeners.clear();
     },
   };
+}
+
+// G-218: Curves/Stress fixtures and run simulation are layered on top of the base transport.
+import { wrapMockTransport } from "./mock-backend-g218.js";
+export function createMockTransport(opts = {}) {
+  // the recorded simulator curves seed the library (incl. a baseline for Tune predictions) unless ?nobaseline asks for none
+  const seed = opts.seed ?? (noBaselineParam() ? "none" : "recorded");
+  return wrapMockTransport(createBaseMockTransport(opts), { ...opts, seed });
 }

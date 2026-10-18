@@ -20,9 +20,11 @@ import { tuneView, discardDraft, requestReview } from "./views/tune.js";
 import { dashboardView } from "./views/dashboard.js";
 import { systemView } from "./views/system.js";
 import { auditView } from "./views/audit.js";
+import { curvesView } from "./views/curves.js";
+import { stressView } from "./views/stress.js";
 
 // Screens that have landed; the rest stay placeholders until their task merges (the orchestrator wires each one here).
-const LANDED = { dashboard: dashboardView, tune: tuneView, system: systemView, audit: auditView };
+const LANDED = { dashboard: dashboardView, tune: tuneView, curves: curvesView, stress: stressView, system: systemView, audit: auditView };
 const VIEWS = Object.fromEntries(SCREENS.map((s) => [s.id, LANDED[s.id] || (() => placeholderView(s.id))]));
 
 const TELEMETRY_INTERVAL_S = 1.0;
