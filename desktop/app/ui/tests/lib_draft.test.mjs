@@ -88,7 +88,7 @@ test("whole curve then a point: the curve spreads over the points first", () => 
 });
 
 test("ring: refused (draft unchanged) without the intent feature, by point number with it", () => {
-  const off = model();
+  const off = model({ intent_features: undefined }); // the fixture carries "ring" since G-208
   const d0 = emptyDraft();
   assert.equal(setRingPoint(off, d0, 2, -5), d0);
   assert.equal(setCurve(off, d0, [RING_ID], -5).units[RING_ID], undefined);

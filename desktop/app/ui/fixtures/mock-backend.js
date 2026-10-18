@@ -51,8 +51,26 @@ function invent(values, tick) {
   return v;
 }
 
-/** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12), motion (see invent), helper ('ok' | key of LINK_FAILURES), now. */
-export function createMockTransport({ intervalMs = 1000, stepMs = 12, motion = false, helper = "ok", now = () => Date.now() } = {}) {
+// INVENTED, not from any hardware and not from the simulator (the simulator's curve store is empty): a stock-baseline curve for the Tune predictions (G-208).
+// Per unit a straight ramp that ends at the fused top voltage of the recorded read (0.0105 V per ratio step), `status: "ok"` on every read point. It is what
+// `curves.list` / `curves.get` answer in the mock; `?bridge=mock&baseline=none` answers an empty library (the "no baseline curve" path).
+function inventedBaseline() {
+  const units = {};
+  for (const u of tuneRead.result.units) {
+    const cpu = u.cpus[0];
+    const top = tuneRead.result.fused[String(cpu.cpu)];
+    const ratios = cpu.points.map((p) => p.ratio);
+    const topRatio = top ? top.ratio : Math.max(...ratios);
+    const topV = top ? top.v : 1.1;
+    units[u.id] = { points: ratios.map((r) => ({ ratio: r, status: "ok", vid_v: Math.round((topV - (topRatio - r) * 0.0105) * 10000) / 10000 })) };
+  }
+  return { id: "mock-baseline", name: "Mock stock baseline (invented)", baseline: true, created: "2026-01-01T00:00:00Z", units };
+}
+const noBaselineParam = () => new URLSearchParams(globalThis.location?.search ?? "").get("baseline") === "none";
+
+/** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
+ *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off). */
+export function createMockTransport({ intervalMs = 1000, stepMs = 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam() } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -133,6 +151,11 @@ export function createMockTransport({ intervalMs = 1000, stepMs = 12, motion = f
           if (r.available) r.at = now() / 1000 - 60; // pretend the recorded read happened a minute ago
           return ok(id, r);
         }
+        case "curves.list":
+          return ok(id, { curves: baseline ? [{ id: "mock-baseline", name: "Mock stock baseline (invented)", baseline: true, created: "2026-01-01T00:00:00Z" }] : [], no_turbo: false });
+        case "curves.get":
+          if (!baseline || args.id !== "mock-baseline") return fail(id, "NOT_FOUND", "no such curve in the mock");
+          return ok(id, inventedBaseline());
         case "profiles.list":
           return ok(id, clone(profilesList.result));
         case "audit.tail":

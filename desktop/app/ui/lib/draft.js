@@ -182,6 +182,20 @@ export function setOcRatio(model, draft, ids, ratio) {
   return next;
 }
 
+/** G-208: back to what was read for the OC ratio AND its target of these units (a target with no OC ratio is not retained, D-035, so one is never left behind). */
+export function clearOcEdits(model, draft, ids) {
+  const next = clone(draft);
+  for (const id of liveIds(model, ids)) {
+    const d = next.units[id];
+    if (!d) continue;
+    delete d.ratio;
+    delete d.vt;
+    delete d.vtAuto;
+    tidy(next, id);
+  }
+  return next;
+}
+
 // G-150 "48x offset": the OC ratio's voltage as an offset from the fused top point's voltage (0x09). A target below the top fused point is raised to it by the CPU
 // [MEASURED lnx 2026-10-11, 2026-10-13], so offsets below the top point's own are not offered (clamped). Everything goes through setOcRatio / setVt.
 function ocOffUnit(model, draft, unit) {

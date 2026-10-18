@@ -222,9 +222,15 @@ class TestShell(unittest.TestCase):
         logs: list = []
         with self.page("?bridge=mock", logs) as page:
             self.assertTrue(page.locator("#pending-bar").is_hidden())
-            page.evaluate("import('/store.js').then((m) => m.setPending(window.__arltuner.store, 3, 2))")
+            # since G-208 the count is derived from the Tune draft: make two real edits (P0 48x, EC0 15x) on the Tune screen
+            page.click("#nav-tune")
+            page.wait_for_selector(".tile[data-unit='P0']")
+            page.evaluate(
+                "Promise.all([import('/views/tune.js'), import('/lib/draft.js')]).then(([t, d]) => { const s = window.__arltuner.store; const tn = s.get().tune;"
+                " t.patchTune(s, {draft: d.setPoint(tn.model, d.setPoint(tn.model, tn.draft, ['P0'], 48, -20), ['EC0'], 15, -5)}); })"
+            )
             page.wait_for_selector("#pending-bar:not([hidden])")
-            self.assertEqual(page.inner_text("#pending-text"), "3 changes on 2 units")
+            self.assertEqual(page.inner_text("#pending-text"), "2 changes on 2 units")
             # Review & Apply opens the drawer (non-modal: the rail still works behind it)
             page.click("#pending-review")
             page.wait_for_selector("#drawer.open")

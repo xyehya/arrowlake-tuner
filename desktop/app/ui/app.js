@@ -13,8 +13,9 @@ import { createPendingBar } from "./components/pending-bar.js";
 import { createToaster } from "./components/toast.js";
 import { createDrawer } from "./components/drawer.js";
 import { placeholderView } from "./components/placeholder.js";
+import { tuneView, discardDraft, requestReview } from "./views/tune.js";
 
-const VIEWS = Object.fromEntries(SCREENS.map((s) => [s.id, () => placeholderView(s.id)]));
+const VIEWS = { ...Object.fromEntries(SCREENS.map((s) => [s.id, () => placeholderView(s.id)])), tune: tuneView };
 
 const TELEMETRY_INTERVAL_S = 1.0;
 
@@ -60,11 +61,13 @@ export async function boot(doc = document) {
   createToaster(doc.getElementById("toasts"), store);
   createPendingBar(doc.getElementById("pending-bar"), store, {
     onDiscard: () => {
+      discardDraft(store); // empties the Tune draft (which re-counts the pending bar)
       setPending(store, 0, 0);
       toast("info", "Pending changes discarded.");
     },
-    // G-210 replaces this with the real plan + apply drawer.
+    // G-208 fires "tune:review" on store.events; G-210 replaces this placeholder with the real plan + apply drawer.
     onReview: () => {
+      requestReview(store);
       drawer.setContent(h("p", { class: "muted", text: "The ordered write list and the Apply button arrive with the apply drawer (G-210)." }));
       openDrawer(store, "Review & Apply");
     },

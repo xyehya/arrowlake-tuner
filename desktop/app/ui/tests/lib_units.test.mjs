@@ -39,8 +39,9 @@ test("model: the ring is keyed by P2 point number; its OC slot (P2 = 9) is marke
 });
 
 test("model: the ring intent feature comes from intent_features, never assumed (G-212)", () => {
-  assert.equal(READ.intent_features, undefined, "the recorded fixture predates G-212");
-  assert.equal(model().features.ring, false);
+  assert.deepEqual(READ.intent_features, ["ring"], "the fixture is re-recorded from a G-212 helper (G-208)");
+  assert.equal(model().features.ring, true);
+  assert.equal(model({ intent_features: undefined }).features.ring, false, "a helper that reports no features: no ring editing");
   assert.equal(model({ intent_features: ["ring"] }).features.ring, true);
   assert.equal(model({ intent_features: ["ring"], ring: null }).features.ring, false, "feature without a ring read: nothing to edit");
   assert.deepEqual(model({ intent_features: ["ring", "x"] }).intentFeatures, ["ring", "x"]);
