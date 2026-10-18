@@ -478,7 +478,12 @@ class StateMachineTests(TuneCase):
         self.read(h)
         plan = self.plan(h, rows(row("P2", curve=-30)))
         self.apply_ok(h, plan)
+        # the helper answers the apply, then emits the transition back to idle: wait for it (bounded) instead of racing it under suite load
+        deadline = time.monotonic() + 3.0
         states = [e["state"] for e in h.events("state")]
+        while states[-1:] != ["idle"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+            states = [e["state"] for e in h.events("state")]
         self.assertIn("applying", states)
         self.assertEqual(states[-1], "idle")
 
