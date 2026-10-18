@@ -338,7 +338,8 @@ def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], 
             continue
         if values[cpu] > freq.max_khz:
             raise Refused("CAPS_RANGE", f"the journaled cap of cpu {cpu} ({values[cpu]} kHz) is above the CPU's own maximum ({freq.max_khz} kHz)", f"cpu{cpu}")
-        tol = _tolerance(topology, cpu)
-        if not _same(values[cpu], freq.cap_khz, tol):
-            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], tol))
+        # exact compare, no topology: the journal holds the kernel's own read-back of the boot value and that read-back is exact
+        # (docs/knowledge/power-profile-capping.md §6); a renumbered topology must not change how a CPU number is restored.
+        if values[cpu] != freq.cap_khz:
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], 0))
     return steps, notes
