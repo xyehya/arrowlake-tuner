@@ -14,7 +14,13 @@ import { createToaster } from "./components/toast.js";
 import { createDrawer } from "./components/drawer.js";
 import { placeholderView } from "./components/placeholder.js";
 
-const VIEWS = Object.fromEntries(SCREENS.map((s) => [s.id, () => placeholderView(s.id)]));
+import { dashboardView } from "./views/dashboard.js";
+import { systemView } from "./views/system.js";
+import { auditView } from "./views/audit.js";
+
+// Screens that have landed; the rest stay placeholders until their task merges (the orchestrator wires each one here).
+const LANDED = { dashboard: dashboardView, system: systemView, audit: auditView };
+const VIEWS = Object.fromEntries(SCREENS.map((s) => [s.id, LANDED[s.id] || (() => placeholderView(s.id))]));
 
 const TELEMETRY_INTERVAL_S = 1.0;
 
