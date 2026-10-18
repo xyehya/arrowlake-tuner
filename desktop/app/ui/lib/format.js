@@ -1,4 +1,4 @@
-// format.js: number/label formatting shared by the Tune logic (G-207). Pure; no DOM. Ported from web/app.js fmtMv / MINUS / mixed text.
+// format.js: number/label formatting shared by the Tune logic (G-207). Pure; no DOM. Ported from web/app.js fmtMv / MINUS / mixed text (web/app.js:1225-1233).
 // Values are shown with their unit; a missing value is an en dash, never a guess.
 
 export const MINUS = "−";

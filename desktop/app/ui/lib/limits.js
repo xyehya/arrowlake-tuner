@@ -1,4 +1,5 @@
-// limits.js: the limits of a tune.read result with their sources (G-207). Ported from web/app.js normLimits / normHw / limitLine (G-133, D-038/D-039).
+// limits.js: the limits of a tune.read result with their sources (G-207). Ported from web/app.js normLimits / normHw / limitLine (G-133, D-038/D-039):
+// web/app.js:2971-3001 (grids, windows), 3680-3717 (normLimits, normHw, limitLine).
 //
 // Two layers, never invented here: `limits` = the operator's policy (/etc/arltuner/policy.toml) as the helper resolved it, and `hw_limits` = what the CPU itself reports.
 // The effective ceiling is the stricter of the two; every limit says which one binds. A limit the policy does not state is `null`: the control is disabled with a

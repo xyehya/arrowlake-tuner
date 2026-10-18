@@ -1,4 +1,5 @@
-// draft.js: the pending edits over a units model (G-207). Ported from web/app.js T.draft / setCurve / setPoint / setVt / setRatio / setOcOffset / setBucket / unitsChanged.
+// draft.js: the pending edits over a units model (G-207). Ported from web/app.js T.draft / setCurve / setPoint / setVt / setRatio / setOcOffset / setBucket / unitsChanged:
+// web/app.js:2655-2690 (effective values, aggregates), 2847-2944 (turbo, editing, 48x offset), 3086-3112 (ratio options).
 //
 // A draft is plain data and every edit returns a NEW draft (store-friendly, no mutation):
 //   { units: { <id>: { curveMv?, pts: { <ratio | ring point no>: mV }, ratio?, vt?, vtAuto? } }, turbo: { P?: [8 ratios], E?: [8 ratios] } }

@@ -1,5 +1,5 @@
 // intent.js: the draft -> `tune.plan` intent, exactly the helper's schema (G-207). Source of truth: src/arltuner/helper/ops_tune.py canonical_intent / _canonical_row /
-// _canonical_turbo / _canonical_ring (G-212). Ported from web/app.js buildIntent / turboIntent.
+// _canonical_turbo / _canonical_ring (G-212; ops_tune.py:1222-1350). Ported from web/app.js buildIntent / turboIntent (web/app.js:2850-2857, 2945-2970).
 //
 //   { scope: "unit", rows: [{target: "P0"|"EC1", offset: null | {kind:"curve", mv:int} | {kind:"points", mv:{"<ratio>": int}}, v_target_v: null|volts, ratio: null|int}],
 //     turbo?: {P?: [8 ratios], E?: [8 ratios]}, ring?: {points: {"<P2 point number>": int mV}} }

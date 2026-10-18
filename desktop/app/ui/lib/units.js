@@ -1,4 +1,5 @@
-// units.js: the units model of a tune.read result (G-207). Ported from web/app.js normWords / fusedTopOf / stockMaxOf / ocClass / runsUpTo (G-112, G-125, G-133, G-150).
+// units.js: the units model of a tune.read result (G-207). Ported from web/app.js normWords / fusedTopOf / stockMaxOf / ocClass / runsUpTo (G-112, G-125, G-133, G-150):
+// web/app.js:1156-1234 (units), 2664-2745 (curPts, OC model), 3086-3112 (OC ratio window), 3619-3680 (normPoint, normWords).
 //
 // Units: P0..P7 (kind "P"), EC0..EC3 (kind "E", four CPUs sharing one ratio), and the ring (id "ring", kind "R", package-level; its points are keyed by the P2 point NUMBER,
 // not by ratio). `modelFromRead(result)` is pure and total: a missing piece (fused words, turbo tables, ring, limits) becomes null, never a guess; the editors then disable.

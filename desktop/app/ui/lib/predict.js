@@ -1,5 +1,5 @@
 // predict.js: predicted voltage per V/F point from a baseline voltage + the (drafted) offset, with the hardware's V(n) >= V(n-1) clamp (G-207).
-// Ported from web/app.js baseVid / predictUnit / predAt / predFlat (F4, G-133, G-150).
+// Ported from web/app.js baseVid / predictUnit / predAt / predFlat (F4, G-133, G-150): web/app.js:2777-2846, 4391-4399.
 //
 // The tune.read alone knows ONE voltage per unit: the fused top point (0x09 word: ratio + volts). Lower points have no readable voltage, so without a baseline they are `null`
 // (never guessed). A baseline is injected: `base(unitId, ratio)` -> {v, src} | null, or {unitId: {ratio: {v, src}}} (e.g. from a measured stock curve, src "baseline").
