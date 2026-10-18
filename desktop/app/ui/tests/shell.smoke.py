@@ -186,7 +186,7 @@ class TestShell(unittest.TestCase):
             for v in page.locator("#strip .strip-value").all_inner_texts():
                 self.assertEqual(v, "n/a")
             self.assertIn("energy_uj missing", page.locator("#strip .strip-cell[data-series='pkg_power']").get_attribute("title"))
-            self.assertEqual(page.inner_text("#limit-badges"), "limits n/a")
+            self.assertEqual(page.locator("#limit-badges .chip").all_inner_texts(), ["Power: n/a", "Current/EDP: n/a", "Thermal: n/a", "VR thermal: n/a", "Max turbo: n/a"])
             self.assert_clean(page, logs)
 
     @browser

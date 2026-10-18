@@ -8,6 +8,7 @@
 import { h, svg, clear } from "../components/dom.js";
 import { fmtNum, fmtClock, NA } from "../components/fmt.js";
 import { SERIES } from "../store.js";
+import { createThrottleChips, createThrottleEvents } from "../components/throttle.js";
 import { createSpark, installStyles, installScreenStyles, segmented } from "../components/spark.js";
 import { createChart } from "../components/chart.js";
 import { createCoreMap, METRICS, METRIC_KEYS } from "../components/coremap.js";
@@ -44,20 +45,16 @@ export function tileModel(def, sample, history = []) {
   };
 }
 
-/** The limit-reasons tile from store.telemetry.limits ({state: 'na'|'none'|'raw', raw, reason, source}). Named reasons arrive with the power controls (PLAN §6.1). */
-export function limitTileModel(l) {
-  if (!l || l.state === "na") {
-    const reason = (l && l.reason) || "no telemetry yet";
-    return { na: true, tone: "", text: NA, sub: reason, title: `Limit reasons: n/a · ${reason}${l && l.source ? " (" + l.source + ")" : ""}` };
+/** The Throttling tile (G-229): the chips live in the tile; this is its text. `t` = store.telemetry.throttle (store.deriveThrottle). */
+export function throttleTileModel(t) {
+  if (!t || t.state === "na") {
+    const reason = (t && t.reason) || "no telemetry yet";
+    return { na: true, tone: "", sub: `n/a · ${reason}`, title: `Throttling: n/a · ${reason}${t && t.source ? " (" + t.source + ")" : ""}` };
   }
-  if (l.state === "none") return { na: false, tone: "ok", text: "none", sub: "no limit active", title: `No limit bit set (${l.source || "limit-reason word"})` };
-  return {
-    na: false,
-    tone: "warn",
-    text: `0x${l.raw.toString(16).toUpperCase()}`,
-    sub: "raw limit bits (named reasons come with the power controls)",
-    title: `Raw ${l.source || "limit-reason"} word`,
-  };
+  const on = t.groups.filter((g) => g.state === "yes" && !g.info);
+  const turbo = t.groups.find((g) => g.info && g.state === "yes");
+  const sub = on.length ? `limiting now: ${on.map((g) => g.label).join(", ")}` : turbo ? "no limit active (all-core turbo cap only)" : "no limit active";
+  return { na: false, tone: on.length ? "warn" : "ok", sub: t.simulated ? `${sub} · simulated words` : sub, title: `${t.source}${t.samples > 1 ? ` · ${t.samples} samples/s` : ""} · click a chip for the bits` };
 }
 
 /** Append the newest telemetry to the chart buffer: [{t, v:{series key: number|null}}], capped to HISTORY_S seconds, one entry per sample time. */
@@ -150,6 +147,8 @@ const CSS = `
 .tile.na .tile-value { font-size: var(--fs-lg); font-weight: 500; color: var(--text-faint); }
 .tile[data-tone="ok"] .tile-value { color: var(--ok); }
 .tile[data-tone="warn"] .tile-value { color: var(--warn); }
+.tile-chips { display: flex; min-height: 30px; align-items: center; }
+.tile.tile-throttle { grid-column: span 2; }
 .tile-sub { font-size: var(--fs-xs); color: var(--text-faint); line-height: 1.3; min-height: 2.6em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .dash-main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--space-4); align-items: start; }
 .dash-side { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -205,10 +204,12 @@ export function dashboardView() {
         tiles.set(def.key, { tile, value, unit, sub, spark });
         tilesBox.append(tile);
       }
-      const limVal = el("span", "tile-value num", NA);
+      const thr = createThrottleChips(store);
       const limSub = el("div", "tile-sub", "");
-      const limTile = h("div", { class: "tile", dataset: { series: "limits" } }, el("div", "tile-label", "Limit reasons"), h("div", { class: "tile-read" }, limVal), limSub);
+      const limTile = h("div", { class: "tile tile-throttle", dataset: { series: "limits" } }, el("div", "tile-label", "Throttling"), h("div", { class: "tile-chips" }, thr.el), limSub);
       tilesBox.append(limTile);
+      const thrEvents = createThrottleEvents(store, bridge);
+      const eventsCard = h("section", { class: "dcard", id: "dash-throttle" }, thrEvents.el);
 
       // ---- core map
       const map = createCoreMap();
@@ -251,7 +252,7 @@ export function dashboardView() {
       const memBtn = h("button", { type: "button", class: "btn", id: "mem-read", text: "Read memory", on: { click: () => readMemory() } });
       const memCard = h("section", { class: "dcard", id: "dash-mem" }, h("div", { class: "dcard-head" }, h("h2", { text: "Memory" }), h("span", { class: "spacer" }), memBtn), memBody);
 
-      root.append(h("div", { class: "sc dash" }, head, tilesBox, h("div", { class: "dash-main" }, mapCard, h("div", { class: "dash-side" }, opsCard)), chartCard, memCard));
+      root.append(h("div", { class: "sc dash" }, head, tilesBox, h("div", { class: "dash-main" }, mapCard, h("div", { class: "dash-side" }, opsCard)), eventsCard, chartCard, memCard));
 
       // ---- drawing
       const drawTiles = (st) => {
@@ -266,8 +267,7 @@ export function dashboardView() {
           c.tile.title = m.title;
           c.spark.draw(m.values);
         }
-        const lm = limitTileModel(t.limits);
-        limVal.textContent = lm.text;
+        const lm = throttleTileModel(t.throttle);
         limSub.textContent = lm.sub;
         limTile.classList.toggle("na", lm.na);
         limTile.dataset.tone = lm.tone;
@@ -340,6 +340,8 @@ export function dashboardView() {
       }
 
       subs.push(
+        () => thr.dispose(),
+        () => thrEvents.dispose(),
         store.watch((s) => s.telemetry, (_t, st) => { drawTiles(st); drawCharts(st); drawMap(); drawMeta(); }),
         store.watch((s) => s.preflight, () => drawMap()),
         store.watch((s) => s.helperOp, (_o, st) => drawOps(st)),

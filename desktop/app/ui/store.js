@@ -84,14 +84,103 @@ export function seriesByKey(key) {
   return SERIES.find((s) => s.key === key);
 }
 
-/** limit_reasons_raw -> {state:'na'|'none'|'raw', raw, reason}. Named badges arrive with the 0x64F/0x6B0 decode (PLAN §6.1); until then the raw word. */
-export function limitBadges(values) {
-  const r = values?.limit_reasons_raw;
-  if (!r || r.value === null || r.value === undefined || r.status === "unavailable") {
-    return { state: "na", raw: null, reason: (r && r.reason) || "not reported", source: (r && r.source) || "" };
+// ---- throttle indicators (G-229; docs/knowledge/throttling.md section B): the XTU-style Power / Current-EDP / Thermal chips from the 0x64F STATUS bits ----
+// The helper's sampler oversamples 0x64F at ~10 Hz and publishes `throttle` (per group {active, duty, bits}); when that key is absent (an older helper, a recorded
+// fixture) the point-in-time `limit_reasons` word is used with no duty. Nothing here is a hardware write, and "reset" only clears the app's own counters.
+// group: which chip a status bit lights. Bits 4 / 13 are informational (popover only); a bit missing here is shown by number, never named.
+export const LIMIT_BITS = {
+  0: { key: "prochot", label: "PROCHOT", group: "thermal" },
+  1: { key: "thermal", label: "Thermal", group: "thermal" },
+  4: { key: "residency_state_regulation", label: "Residency state regulation", group: null },
+  5: { key: "ratl", label: "Running average thermal limit", group: "thermal" },
+  6: { key: "vr_therm_alert", label: "VR thermal alert", group: "vr_thermal" },
+  7: { key: "vr_tdc", label: "VR thermal design current", group: "current" },
+  8: { key: "other", label: "Other (electrical or other)", group: "current" },
+  10: { key: "pl1", label: "Package power limit PL1", group: "power" },
+  11: { key: "pl2", label: "Package power limit PL2", group: "power" },
+  12: { key: "max_turbo_limit", label: "Max turbo limit (multi-core)", group: "max_turbo" },
+  13: { key: "turbo_transition_attenuation", label: "Turbo transition attenuation", group: null },
+};
+const BIT_OF_KEY = Object.fromEntries(Object.entries(LIMIT_BITS).map(([b, v]) => [v.key, Number(b)]));
+// names of the keys the other words use (0x6B0 graphics adds inefficient_operation; 0x1B1 has its own SDM names)
+const KEY_LABEL = {
+  ...Object.fromEntries(Object.values(LIMIT_BITS).map((v) => [v.key, v.label])),
+  inefficient_operation: "Inefficient operation",
+  critical_temp: "Critical temperature",
+  threshold1: "Thermal threshold 1",
+  threshold2: "Thermal threshold 2",
+  power_limit: "Package power limit notification",
+  pmax_log: "Pmax log (unverified on Arrow Lake)",
+};
+export const THROTTLE_GROUPS = [
+  { key: "power", label: "Power limit", chip: "Power", severity: "warn" },
+  { key: "current", label: "Current / EDP", chip: "Current/EDP", severity: "warn" },
+  { key: "thermal", label: "Thermal", chip: "Thermal", severity: "error" },
+  { key: "vr_thermal", label: "VR thermal", chip: "VR thermal", severity: "error" },
+  { key: "max_turbo", label: "Max turbo cap", chip: "Max turbo", severity: "info", info: true },
+];
+// the words the popover lists: telemetry key, MSR, scope, and whether Windows XTU can clear its sticky log bits (the kernel clears the 0x1B1 ones itself)
+export const LIMIT_WORDS = [
+  { value: "limit_reasons", msr: "0x64F", name: "Core limit reasons", xtuClears: true },
+  { value: "limit_reasons_ring", msr: "0x6B1", name: "Ring limit reasons", xtuClears: true },
+  { value: "limit_reasons_gfx", msr: "0x6B0", name: "Graphics limit reasons (iGPU)", xtuClears: true },
+  { value: "pkg_therm_status", msr: "0x1B1", name: "Package thermal status", xtuClears: false },
+];
+
+const readingOk = (r) => r && typeof r === "object" && r.status !== "unavailable" && r.value !== null && r.value !== undefined && typeof r.value === "object";
+const keyLabel = (k) => KEY_LABEL[k] || k;
+const hex = (n) => `0x${Number(n).toString(16).toUpperCase()}`;
+
+/** helper `values` -> the throttle model the chips, strip and popover draw. Unavailable stays unavailable ('na' + the reason); never a guess. */
+export function deriveThrottle(values) {
+  const thr = values?.throttle;
+  const core = values?.limit_reasons;
+  const win = readingOk(thr) && thr.value.groups ? thr.value : null;
+  const point = !win && readingOk(core) ? core.value : null;
+  const words = [];
+  for (const w of LIMIT_WORDS) {
+    const r = values?.[w.value];
+    if (!readingOk(r)) continue;
+    const status = (r.value.status || []).map((k) => ({ key: k, label: keyLabel(k) }));
+    const log = (r.value.log || []).map((k) => ({ key: k, label: keyLabel(k) }));
+    words.push({ ...w, raw: Number(r.value.raw), rawText: hex(r.value.raw), status, log, unknown: r.value.unknown_bits || [] });
   }
-  const raw = Number(r.value);
-  return { state: raw === 0 ? "none" : "raw", raw, reason: null, source: r.source || "" };
+  const simulated = /simulated/i.test(String(core?.source || ""));
+  const base = { words, simulated, kernel: readingOk(values?.kernel_thermal) ? values.kernel_thermal.value : null, logFile: win?.log || null };
+  if (!win && !point) {
+    const why = !values ? "no telemetry yet" : (thr && thr.reason) || (core && core.reason) || "not reported";
+    return { ...base, state: "na", reason: why, source: (thr && thr.source) || (core && core.source) || "msr 0x64F", groups: THROTTLE_GROUPS.map((g) => ({ ...g, state: "na", duty: null, bits: [] })), alert: false, active: [], info: [], unknown: [], samples: 0, windowS: null };
+  }
+  const bitKeys = win ? Object.keys(win.bit_duty || {}) : point.status || [];
+  const dutyOf = (k) => (win && win.bit_duty && typeof win.bit_duty[k] === "number" ? win.bit_duty[k] : null);
+  const active = bitKeys.filter((k) => BIT_OF_KEY[k] !== undefined).map((k) => ({ bit: BIT_OF_KEY[k], key: k, label: keyLabel(k), group: LIMIT_BITS[BIT_OF_KEY[k]].group, duty: dutyOf(k), msr: "0x64F" }));
+  const groups = THROTTLE_GROUPS.map((g) => {
+    const wg = win?.groups?.[g.key];
+    const mine = active.filter((a) => a.group === g.key);
+    const on = wg ? !!wg.active : mine.length > 0;
+    return { ...g, state: on ? "yes" : "no", duty: wg && typeof wg.duty === "number" ? wg.duty : null, bits: mine };
+  });
+  const info = active.filter((a) => a.group === null || a.group === "max_turbo");
+  const unknown = win ? win.unknown_bits || [] : point.unknown_bits || [];
+  return {
+    ...base, state: "ok", reason: null, source: win ? thr.source || "msr 0x64F" : core.source || "msr 0x64F", groups, active,
+    alert: groups.some((g) => g.state === "yes" && !g.info), info, unknown: unknown.filter((b) => b < 16), samples: win ? win.samples : 1, windowS: win ? win.window_s : null,
+  };
+}
+
+export const THROTTLE_SESSION_GAP_S = 10; // a gap between telemetry events longer than this (helper paused) adds no time
+
+export function freshThrottleSession(now = Date.now() / 1000) {
+  return { since: now, lastT: null, seconds: Object.fromEntries(THROTTLE_GROUPS.map((g) => [g.key, 0])), resetAt: null };
+}
+
+/** Add this telemetry tick to the session counters: seconds ~ duty x elapsed (a point-in-time word without a duty counts as the whole tick). */
+export function accumulateThrottle(session, model, t) {
+  if (!Number.isFinite(t)) return session;
+  const dt = session.lastT !== null && t > session.lastT && t - session.lastT <= THROTTLE_SESSION_GAP_S ? t - session.lastT : 0;
+  const seconds = { ...session.seconds };
+  if (model.state === "ok") for (const g of model.groups) if (g.state === "yes") seconds[g.key] = (seconds[g.key] || 0) + dt * (g.duty ?? 1);
+  return { ...session, lastT: t, seconds };
 }
 
 export function pushSample(history, samples, cap = HISTORY_CAP) {
@@ -133,7 +222,9 @@ export function initialState() {
     accepted: deriveAccepted(null),
     lastReadAt: null, // ISO string of the last tune.read / tune.last, or null (no read this boot)
     helperOp: { state: "idle", opId: null, opsUsed: 0, opsBudget: 0 },
-    telemetry: { values: null, t: null, samples: null, history: {}, limits: { state: "na", raw: null, reason: "no telemetry yet", source: "" } },
+    telemetry: { values: null, t: null, samples: null, history: {}, throttle: deriveThrottle(null) },
+    throttleSession: freshThrottleSession(),
+    throttleEvents: { state: "idle", records: [], error: null, path: null, truncated: false, at: null },
     strip: { collapsed: false, series: SERIES.map((s) => s.key) },
     pending: { changes: 0, units: 0 },
     drawer: { open: false, title: "" },
@@ -185,6 +276,16 @@ export function toggleSeries(store, key) {
   });
 }
 
+/** "Reset indicators": clears the app's own session counters and hides older events in the list. It writes no register (throttling.md section C). */
+export function resetThrottle(store, now = Date.now() / 1000) {
+  store.update((s) => ({ throttleSession: { ...freshThrottleSession(now), lastT: s.throttleSession.lastT, resetAt: now } }));
+}
+
+/** state: 'loading' | 'ok' | 'error'; `records` are throttle.jsonl events, oldest first. */
+export function setThrottleEvents(store, patch) {
+  store.update((s) => ({ throttleEvents: { ...s.throttleEvents, ...patch } }));
+}
+
 export function openDrawer(store, title) {
   store.set({ drawer: { open: true, title: title || "" } });
 }
@@ -220,8 +321,10 @@ export function applyHelperEvent(store, name, payload) {
     const values = p.values || null;
     const samples = {};
     for (const s of SERIES) samples[s.key] = s.pick(values);
+    const throttle = deriveThrottle(values);
     store.update((st) => ({
-      telemetry: { values, t: p.t ?? null, samples, history: pushSample(st.telemetry.history, samples), limits: limitBadges(values) },
+      telemetry: { values, t: p.t ?? null, samples, history: pushSample(st.telemetry.history, samples), throttle },
+      throttleSession: accumulateThrottle(st.throttleSession, throttle, p.t),
     }));
     return true;
   }

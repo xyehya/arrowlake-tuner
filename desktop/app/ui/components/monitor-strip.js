@@ -1,17 +1,12 @@
-// components/monitor-strip.js: the always-visible bottom strip, PLAN §4.1: selectable live series as sparklines + numbers, limit-reason badges, collapsible.
+// components/monitor-strip.js: the always-visible bottom strip, PLAN §4.1: selectable live series as sparklines + numbers, throttle chips (G-229), collapsible.
 // The sparkline here is the strip's own minimal one; the dashboard's chart/spark components belong to G-206.
 import { h, svg, icon, clear } from "./dom.js";
 import { fmtNum, sparkSegments } from "./fmt.js";
 import { SERIES, toggleSeries, setStrip } from "../store.js";
+import { createThrottleChips } from "./throttle.js";
 
 const W = 96;
 const H = 26;
-
-function limitText(l) {
-  if (l.state === "na") return "limits n/a";
-  if (l.state === "none") return "no limit active";
-  return `limit bits 0x${l.raw.toString(16).toUpperCase()}`;
-}
 
 export function createMonitorStrip(root, store) {
   clear(root);
@@ -26,8 +21,9 @@ export function createMonitorStrip(root, store) {
     chips.set(s.key, c);
     chipBox.append(c);
   }
-  const badge = h("span", { class: "chip", id: "limit-badges" });
-  const head = h("div", { class: "strip-head" }, h("strong", { class: "strip-title", text: "Monitoring" }), chipBox, h("span", { class: "spacer" }), badge, collapse);
+  const throttle = createThrottleChips(store, { up: true }); // Power · Current/EDP · Thermal · VR thermal · Max turbo, click for the details (G-229)
+  throttle.el.id = "limit-badges";
+  const head = h("div", { class: "strip-head" }, h("strong", { class: "strip-title", text: "Monitoring" }), chipBox, h("span", { class: "spacer" }), throttle.el, collapse);
 
   const cells = new Map();
   const body = h("div", { class: "strip-body", id: "strip-body" });
@@ -62,14 +58,6 @@ export function createMonitorStrip(root, store) {
   const unsubs = [
     store.watch((s) => s.telemetry, (_t, st) => draw(st)),
     store.watch(
-      (s) => s.telemetry.limits,
-      (l) => {
-        badge.textContent = limitText(l);
-        badge.dataset.state = l.state === "raw" ? "warn" : l.state === "none" ? "ok" : "unknown";
-        badge.title = l.state === "na" ? `Limit reasons: n/a${l.reason ? " · " + l.reason : ""}` : `Raw ${l.source || "limit-reason"} word; named reasons (PL1, PL2, thermal, current) arrive with the power controls.`;
-      },
-    ),
-    store.watch(
       (s) => s.strip,
       (strip) => {
         root.classList.toggle("collapsed", strip.collapsed);
@@ -80,5 +68,8 @@ export function createMonitorStrip(root, store) {
       },
     ),
   ];
-  return () => unsubs.forEach((u) => u());
+  return () => {
+    unsubs.forEach((u) => u());
+    throttle.dispose();
+  };
 }
