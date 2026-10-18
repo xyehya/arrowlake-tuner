@@ -17,13 +17,17 @@ Measured values below are from the reference 285K / ASRock Z890 (`examples/refer
 | Core power | powercap `intel-rapl:0:N` where `name == core` | root | linux | G (subdomain presence on ARL [UNVERIFIED]) | [DOC] |
 | Package power (fallback) | MSR 0x611 `[31:0]` x 2^-ESU J, ESU = 0x606 `[12:8]` (14) | root | linux | G | 0x611 [DOC SDM]; 0x606 units [MEASURED lnx 2026-09-29] |
 | Vcore | hwmon `nct6686` (kernel driver `nct6683`, ASRock NCT6686D), `in0` label **`VIN16`**, `in*_input` mV, 16 mV step = board VccIA/VCCCORE VR VOUT before the DLVRs (always above the highest VID). **Not** `in1`/`VIN0` (a CPU-0-activity-gated signal; never a metric, never Vcore). `in5`/`VIN6` = VccSA sense | none (sysfs) | linux | P (ASRock Z890 Steel Legend WiFi; other boards need their own row, keyed by DMI board name, D-036) | [MEASURED lnx 2026-10-11]: VIN16 tracks load above the max VID, VIN6 matches the BIOS VccSA setting; the Super-I/O labels are generic (`VINn`), no `Vcore` label exists |
-| Limit reasons | MSR 0x6B0 raw word, **not decoded** | root | linux | P | raw read [MEASURED]; decode open (registers.md) |
+| Limit reasons (core) | MSR 0x64F decoded (`limits.decode_core_64f`): `[15:0]` status, `[31:16]` log; snapshot value `{raw,status,log,unknown_bits}` | root | linux | P (bit table is the Skylake+ SDM one; ARL semantics [UNVERIFIED]) | bit meanings [DOC SDM vol 4 via edk2 `SkylakeMsr.h`] (registers.md "Limit reasons"); word `0x1DC21000` [MEASURED lnx 2026-10-13] |
+| Limit reasons (graphics) | MSR 0x6B0 decoded (`limits.decode_graphics_6b0`), same layout. **0x6B0 is the iGPU word, not a package word** (Linux `MSR_GFX_PERF_LIMIT_REASONS`) | root | linux | P | [DOC SDM vol 4 / Linux msr-index.h] (registers.md "Limit reasons") |
+| Limit reasons (raw, compat) | MSR 0x6B0 raw word, undecoded -- kept as `limit_reasons_raw` for one release (previously mislabelled "package") | root | linux | P | raw read [MEASURED lnx 2026-09-29] |
 | DRAM read/write GB/s | ONE long-lived `perf stat -a -I 1000 -x , -e uncore_imc_free_running/data_read/,.../data_write/`; stderr merged; MiB x 1.048576/1000 / interval | root (or perf_event_paranoid <= -1) | perf (linux-tools) | P (IMC PMU) | unit/scale [MEASURED lnx 2026-10-03]; CSV layout [DOC perf-stat(1)]; event spelling `uncore_imc_free_running/data_read/` (merged over `_0`/`_1`) [MEASURED lnx 2026-10-11, root perf 6.x: ~1 GB/s read idle] |
 | GPU | nvidia-smi dmon — **not implemented in G-104** (optional, SPEC §8) | user | nvidia-utils | G | [MEASURED lnx 2026-10-03] |
 
 Design: reads go through `TelemetryMsr` (rdmsr only; refuses anything outside `TELEMETRY_MSRS`, incl. 0x150; no `wrmsr` attribute).
 The telemetry package imports nothing from mailbox/guard/msr.transport (AST test `tests/telemetry/test_isolation.py`). Sample thread 1 Hz default.
 Idle core (MPERF flat): MHz unavailable, busy 0. First sample of any delta reader: unavailable ("need two").
+Snapshot keys for the limit words: `limit_reasons` = decoded 0x64F (CPU 0), `limit_reasons_gfx` = decoded 0x6B0; each is a `Reading` whose
+`value` is the decoder dict `{raw,status,log,unknown_bits}`. `limit_reasons_raw` (raw 0x6B0 word) stays unchanged for one release.
 
 ## Telemetry read rows (applied: `TELEMETRY_MSRS`, D-026; mirrored in registers.md "Telemetry read allowlist")
 Read kind = RDMSR only, any CPU, no mailbox involvement.
@@ -39,8 +43,8 @@ Read kind = RDMSR only, any CPU, no mailbox involvement.
 | 0x1B1 IA32_PACKAGE_THERM_STATUS | `[31]` valid, `[22:16]` readout | read | [DOC SDM vol 4]; ARL [UNVERIFIED] |
 | 0x606 RAPL_POWER_UNIT | `[12:8]` ESU (`[3:0]` PU, `[19:16]` TU not used) | read | [MEASURED lnx 2026-09-29] |
 | 0x611 PKG_ENERGY_STATUS | `[31:0]` | read | [DOC SDM vol 4] |
-| 0x64F live limit word | raw, not decoded (listed in `TELEMETRY_MSRS` for a planned throttle-reason tile, no reader yet) | read | [MEASURED lnx 2026-09-29] raw |
-| 0x6B0 PKG_PERF_LIMIT_REASONS | raw, not decoded | read | [MEASURED lnx 2026-09-29] raw; 0x690 is EIO — never read |
+| 0x64F CORE_PERF_LIMIT_REASONS (SDM Skylake+ core word; Linux `msr-index.h` names 0x64F `MSR_PERF_LIMIT_REASONS`) | `[15:0]` status, `[31:16]` log; decoded by `limits.decode_core_64f` | read | bit table [DOC SDM vol 4 via edk2 `SkylakeMsr.h`]; word `0x1DC21000` on CPUs 0,1,2,4,7,8,16 [MEASURED lnx 2026-10-13] |
+| 0x6B0 GFX_PERF_LIMIT_REASONS (**graphics**, not package; SDM `MSR_GRAPHICS_PERF_LIMIT_REASONS`) | `[15:0]` status, `[31:16]` log; decoded by `limits.decode_graphics_6b0`, raw kept as `limit_reasons_raw` | read | [DOC SDM vol 4; Linux msr-index.h `MSR_GFX_PERF_LIMIT_REASONS`]; raw word [MEASURED lnx 2026-09-29]; 0x690 is EIO — never read |
 
 ## Other sources (not sampled by the app)
 | Value | Source | Evidence |

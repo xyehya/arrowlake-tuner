@@ -29,7 +29,7 @@ class SamplerTests(unittest.TestCase):
         clk = Clock()
         port = FakeMsrPort(default={0xCE: 0x2500, 0x198: (0x2000 << 32) | (0x30 << 8), 0xE7: 0, 0xE8: 0,
                                     0x1A2: 0x80691400, 0x19C: (1 << 31) | (20 << 16), 0x1B1: (1 << 31) | (25 << 16),
-                                    0x606: 0xE0E03, 0x611: 0, 0x6B0: 0})
+                                    0x606: 0xE0E03, 0x611: 0, 0x6B0: 0, 0x64F: 0x1DC21000})
         with tempfile.TemporaryDirectory() as td:
             s = Sampler(TelemetryMsr(port), hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", clock=clk, topology=arl_s_285k())
             s.collect()
@@ -46,6 +46,47 @@ class SamplerTests(unittest.TestCase):
         self.assertEqual((snap["temps"]["cpu3"]["name"], snap["temps"]["cpu3"]["cpu"]), ("P-Core 3", 3))  # MSR fallback names
         self.assertEqual((snap["temps"]["Package"]["name"], snap["temps"]["Package"]["cpu"]), ("Package", None))
         self.assertEqual([m for _, m in port.reads if m == 0x150], [])
+
+    def test_limit_reason_keys(self):
+        clk = Clock()
+        port = FakeMsrPort(default={0xCE: 0x2500, 0x198: 0, 0xE7: 0, 0xE8: 0, 0x1A2: 0x80691400,
+                                    0x19C: (1 << 31), 0x1B1: (1 << 31), 0x606: 0xE0E03, 0x611: 0,
+                                    0x64F: 0x1DC21000, 0x6B0: 0x10001000})
+        with tempfile.TemporaryDirectory() as td:
+            s = Sampler(TelemetryMsr(port), hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", clock=clk, topology=arl_s_285k())
+            snap = s.collect()
+        json.dumps(snap)
+        core = snap["limit_reasons"]
+        self.assertEqual(core["status"], "ok")
+        self.assertEqual(core["value"], {"raw": 0x1DC21000, "status": ["max_turbo_limit"],
+                                         "log": ["thermal", "vr_therm_alert", "vr_tdc", "other", "pl1", "pl2", "max_turbo_limit"],
+                                         "unknown_bits": []})
+        gfx = snap["limit_reasons_gfx"]
+        self.assertEqual(gfx["status"], "ok")
+        self.assertEqual(gfx["value"], {"raw": 0x10001000, "status": ["inefficient_operation"], "log": ["inefficient_operation"],
+                                        "unknown_bits": []})
+        self.assertEqual(snap["limit_reasons_raw"]["value"], 0x10001000)  # compat key: raw 0x6B0, unchanged
+        self.assertEqual(snap["limit_reasons_raw"]["unit"], "raw")
+        self.assertEqual([(c, m) for c, m in port.reads if m in (0x64F, 0x6B0)][:2], [(0, 0x64F), (0, 0x6B0)])  # CPU 0 only
+
+    def test_limit_reasons_unavailable_cases(self):
+        # 0x64F unreadable but 0x6B0 readable: one degraded value must not take the other down, and nothing is guessed
+        port = FakeMsrPort(default={0xCE: 0x2500, 0x198: 0, 0xE7: 0, 0xE8: 0, 0x1A2: 0x80691400,
+                                    0x19C: (1 << 31), 0x1B1: (1 << 31), 0x606: 0xE0E03, 0x611: 0, 0x6B0: 1})
+        with tempfile.TemporaryDirectory() as td:
+            snap = Sampler(TelemetryMsr(port), hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p",
+                           topology=arl_s_285k()).collect()
+            no_msr = Sampler(None, hwmon_root=Path(td) / "h", powercap_root=Path(td) / "p", topology=arl_s_285k()).collect()
+        self.assertEqual(snap["limit_reasons"]["status"], "unavailable")
+        self.assertIsNone(snap["limit_reasons"]["value"])
+        self.assertIn("0x64f", snap["limit_reasons"]["reason"])
+        self.assertEqual(snap["limit_reasons_gfx"]["status"], "ok")
+        self.assertEqual(snap["limit_reasons_gfx"]["value"]["status"], ["prochot"])
+        self.assertEqual(snap["limit_reasons_gfx"]["value"]["raw"], 1)
+        for key in ("limit_reasons", "limit_reasons_gfx", "limit_reasons_raw"):
+            self.assertEqual(no_msr[key]["status"], "unavailable")
+            self.assertIsNone(no_msr[key]["value"])
+            self.assertEqual(no_msr[key]["reason"], "no MSR access (needs root)")
 
     def test_temp_names_from_core_id(self):
         # [MEASURED lnx 2026-10-11] CPU -> sysfs core_id; coretemp "Core N" labels carry the core_id

@@ -96,6 +96,8 @@ class Sampler:
             "ts": time.time(), "cores": cores, "temps": temps, "vcore": read_vcore(self._hwmon, self._sensors.vcore_hwmon_name, self._sensors.vcore_hwmon_label).to_json(),
             "power": {"package": pkg.to_json(), "core": core_w.to_json()},
             "dram": {"read": rd.to_json(), "write": wr.to_json()},
+            "limit_reasons": (cpumod.read_limit_reasons(msr).to_json() if msr else no("msr 0x64F").to_json()),
+            "limit_reasons_gfx": (cpumod.read_limit_reasons_gfx(msr).to_json() if msr else no("msr 0x6B0").to_json()),
             "limit_reasons_raw": (cpumod.read_limit_reasons_raw(msr).to_json() if msr else no("msr 0x6B0", "raw").to_json()),
         }
 
