@@ -1,0 +1,48 @@
+{
+ "request": {
+  "args": {
+   "plan_id": "78bb257c26a2b0adfce878a664316a3bba8e637ba26300ac96f60bb8acb7f463",
+   "typed": "CONFIRM <nonce>"
+  },
+  "op": "tune.apply"
+ },
+ "response": {
+  "id": "c6",
+  "ok": true,
+  "result": {
+   "complete": true,
+   "cpufreq": [],
+   "msr_writes": 0,
+   "ops_used": 4,
+   "plan_id": "78bb257c26a2b0adfce878a664316a3bba8e637ba26300ac96f60bb8acb7f463",
+   "readback": [
+    {
+     "actual": "0xfd800035",
+     "cpu": 0,
+     "expected": "0xfd800035",
+     "match": true,
+     "point": 5,
+     "unit": "P0"
+    }
+   ],
+   "residual": [],
+   "revert_plan": 1,
+   "ring_refused": [],
+   "steps": [
+    {
+     "cpu": 0,
+     "kind": "write_vf_point",
+     "n": 3,
+     "point": 5,
+     "status": "ok",
+     "unit": "P0"
+    }
+   ],
+   "warnings": [
+    "per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state",
+    "effective offset = assumed BIOS offset (P +0 mV, E +0 mV; not readable through the mailbox) + runtime offset (the runtime offset adds to the BIOS one); the policy floors the effective offset at -200 mV"
+   ],
+   "writes_sent": 1
+  }
+ }
+}
