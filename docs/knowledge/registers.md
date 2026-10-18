@@ -126,8 +126,50 @@ Raw tables: baseline words `src/arltuner/msr/measured_baseline.py`, write sequen
 ### Telemetry read allowlist (G-104, D-026) — `rdmsr` only, code `telemetry/msrio.py` `TELEMETRY_MSRS`; bits/decoding in `telemetry-sources.md`
 0xE7 MPERF, 0xE8 APERF `[DOC SDM]` · 0xCE PLATFORM_INFO [15:8] `measured` · 0x198 PERF_STATUS [47:32] V, [15:8] ratio `measured` ·
 0x19C / 0x1B1 THERM_STATUS [31] valid, [22:16] readout `[DOC SDM]`, ARL `[UNVERIFIED]` · 0x1A2 [23:16] Tjmax `measured` · 0x606 [12:8] energy unit
-`measured` · 0x611 PKG_ENERGY [31:0] `[DOC SDM]` · 0x64F, 0x6B0 limit reasons: raw only, decode open. Separate from the guard's `PLAIN_MSR_READABLE`
-(unchanged). 0x150 (mailbox) refused by `TelemetryMsr`.
+`measured` · 0x611 PKG_ENERGY [31:0] `[DOC SDM]` · 0x64F core / 0x6B0 **graphics** limit reasons: bit tables in "Limit reasons" below (decoder
+`telemetry/limits.py`). Separate from the guard's `PLAIN_MSR_READABLE` (unchanged). 0x150 (mailbox) refused by `TelemetryMsr`.
+
+### Limit reasons — 0x64F (core) and 0x6B0 (graphics) (G-215) `host lnx`, decoder `src/arltuner/telemetry/limits.py`
+**Names (resolves a repo mislabel).** Linux `arch/x86/include/asm/msr-index.h`: `MSR_PERF_LIMIT_REASONS = 0x64F` (under "Hardware P state interface"),
+`MSR_CORE_PERF_LIMIT_REASONS = 0x690`, `MSR_GFX_PERF_LIMIT_REASONS = 0x6B0`, `MSR_RING_PERF_LIMIT_REASONS = 0x6B1`
+`[DOC https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/include/asm/msr-index.h]`. The SDM names for the Skylake-and-later client
+parts are `MSR_CORE_PERF_LIMIT_REASONS` = **0x64F**, `MSR_GRAPHICS_PERF_LIMIT_REASONS` = **0x6B0**, `MSR_RING_PERF_LIMIT_REASONS` = **0x6B1**, all "Package"
+scope (SDM Vol 4, May 2018, as transcribed in EDK2 `MdePkg/Include/Register/Intel/Msr/SkylakeMsr.h`, `MSR_SKYLAKE_*_PERF_LIMIT_REASONS`)
+`[DOC https://raw.githubusercontent.com/tianocore/edk2/master/MdePkg/Include/Register/Intel/Msr/SkylakeMsr.h]`. So **0x6B0 is the iGPU word, not "PKG"**;
+the `PKG_PERF_LIMIT_REASONS` label in `msrio.py` / `telemetry-sources.md` / the "Limit reasons (raw 0x6B0)" tile is wrong (not edited by G-215; orchestrator to rename).
+Linux's 0x690 is the Haswell-era address of the core word; it is EIO on this CPU `[MEASURED lnx 2026-09-29]` (telemetry-sources.md) — never read.
+turbostat decodes the Haswell 0x690/0x6B0/0x6B1 trio (`print_perf_limit()`, gated by `plr_msrs` per platform; the entries seen were Haswell-class, ARL not
+checked) and its core-word bit names differ from the Skylake 0x64F table — **do not** mix them.
+
+**Layout (both words).** Bits 15:0 = live status ("frequency is reduced below the OS request because ..."); bits 31:16 = log of the same condition,
+log bit = status bit + 16, set when the status asserted since last cleared, cleared by software writing 0 (R/W); bits 63:32 reserved. Decode reads only.
+
+| Status bit | 0x64F core (Skylake+ SDM) | 0x6B0 graphics (SDM) |
+|---|---|---|
+| 0 | PROCHOT (external) | PROCHOT |
+| 1 | Thermal event | Thermal |
+| 4 | Residency state regulation | reserved |
+| 5 | Running average thermal limit (RATL) | RATL |
+| 6 | VR thermal alert | VR thermal alert |
+| 7 | VR thermal design current (TDC) | VR TDC |
+| 8 | Other (electrical or other constraints) | Other |
+| 10 | Package/platform PL1 | PL1 |
+| 11 | Package/platform PL2/PL3 | PL2 |
+| 12 | Max turbo limit (multi-core turbo limits) | Inefficient operation |
+| 13 | Turbo transition attenuation | reserved |
+| 2, 3, 9, 14, 15 | reserved | 2, 3, 4, 9, 13, 14, 15 reserved |
+
+Evidence: every row above is `[DOC SDM Vol 4 via edk2 SkylakeMsr.h]` (URL above); log bits identical positions +16. 0x6B1 (ring) has the same set as
+0x6B0 without bit 12 — documented there, **not decoded**: 0x6B1 is not in `TELEMETRY_MSRS`.
+**Arrow Lake specifics are `[UNVERIFIED]`:** the SDM tables above are the Skylake-and-later generation; no ARL-specific SDM table was found. What is
+consistent on this CPU: `0x64F = 0x1DC21000` on CPUs 0,1,2,4,7,8,16 `[MEASURED lnx 2026-10-13 captures/lnx/perf-limit-reasons-20261013T155847Z.txt]` —
+identical on P and E CPUs (package scope), every set bit (12, 17, 22, 23, 24, 26, 27, 28) lands on a documented position, none on a reserved one.
+That proves scope and no-reserved-bits at that instant, not that the semantics are unchanged on ARL.
+
+**Not decoded in code (named only here).** `[COMMUNITY https://github.com/cyring/CoreFreq/discussions/333]` a user reports 64F bit 14 as Thermal Velocity
+Boost (via HWiNFO); the SDM calls bits 14–15 reserved → `[UNVERIFIED]`, reported by the decoder as `unknown_bits`. Haswell-era Intel-forum posts reading bit 14/15 as "max n-core turbo" concern the old 0x690 layout `[COMMUNITY https://community.intel.com/t5/Software-Tuning-Performance/MSR-CORE-PERF-LIMIT-REASONS-Set/m-p/1085194]`.
+CoreFreq notes bit 24 "Other" was "Electrical Design Point" on Haswell. **Interpretation:** a live `max_turbo_limit` (bit 12) means the multi-core turbo
+ratio limit is the cap — normal under load, not a fault. Log bits accumulate until cleared; this app never clears them.
 
 ## MMIO
 MCHBAR 0x59A0 / 0x59A4 / 0x59B0 = PL1 / PL2 / PL4 (INT340X RAPL `ARL_S_THERMAL`, `processor_thermal_rapl.c`) `doc`, PL4 on ARL-S untested. IPF DSP `decomp`: also 0x59A8/0x59AC (PP0/PP1), 0x5938/0x5930/0x593C; **base = mapped BAR of the processor-thermal PCI device**; PCU mailbox 0x5810/0x5814/0x5818 (not the OC mailbox); ref-clock 0x5F60/0x5F64. Per-core HWP request `0x774` `[15:8]`/`[23:16]` fields are used per CPU ·
