@@ -951,11 +951,10 @@ RUNTIME_RATIO_MAX = 255
 class RuntimePolicy:
     """G-216 ``[runtime]``: what the runtime sysfs controls may do. **Every key is optional and absent means refused** (the refusal names the key): ``cap_ratio_min`` is the lowest
     per-CPU ratio cap that may be written (the highest is always the CPU's own ``cpuinfo_max_freq``); ``uncore_ratio = [min, max]`` bounds the uncore (ring) ratio limits, inside the
-    hardware's ``initial_min/max``; ``parking = true`` allows taking a CPU offline (unparking is always allowed; ``false`` says no)."""
+    hardware's ``initial_min/max``. (Core parking is held out of G-216: there is no ``parking`` key.)"""
 
     cap_ratio_min: int | None = None
     uncore_ratio: tuple[int, int] | None = None
-    parking: bool | None = None
 
     def __post_init__(self) -> None:
         if self.cap_ratio_min is not None:
@@ -969,8 +968,6 @@ class RuntimePolicy:
             if value[0] > value[1]:
                 raise PolicyError(f"runtime.uncore_ratio = {list(value)!r} must satisfy min <= max")
             object.__setattr__(self, "uncore_ratio", (int(value[0]), int(value[1])))
-        if self.parking is not None and not isinstance(self.parking, bool):
-            raise PolicyError(f"runtime.parking must be true or false, got {self.parking!r}")
 
 
 @dataclass(frozen=True)
@@ -1018,7 +1015,7 @@ class Policy:
     hw_v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own V target limit per kind (0x28 - 1 LSB), whole mV
     source: str | None = field(default=None, compare=False)  # the policy file this policy was loaded from (named in every refusal that quotes a policy limit)
     power: PowerPolicy | None = None  # G-214: the ``[power]`` table; ``None`` = absent = no package power limit may be written
-    runtime: RuntimePolicy | None = None  # G-216: the ``[runtime]`` table; ``None`` = absent = no cap / uncore limit / parking may be written
+    runtime: RuntimePolicy | None = None  # G-216: the ``[runtime]`` table; ``None`` = absent = no cap / uncore limit may be written
 
     @property
     def where(self) -> str:
@@ -1245,7 +1242,7 @@ _TOP_KEYS = frozenset(
     }
 )
 _POWER_KEYS = frozenset({"pl1_w", "pl2_w", "tau_s", "max_step_w"})
-_RUNTIME_KEYS = frozenset({"cap_ratio_min", "uncore_ratio", "parking"})
+_RUNTIME_KEYS = frozenset({"cap_ratio_min", "uncore_ratio"})
 _KIND_TABLE_KEYS = ("ratio_max", "v_target_max_mv")
 _SCALAR_KEYS = ("offset_ceiling_mv", "max_ratio_step", "max_v_step_mv", "max_offset_step_mv")
 _ENTRY_KEYS = frozenset({"name", "cmd", "p1", "p2", "kind", "check", "params"})

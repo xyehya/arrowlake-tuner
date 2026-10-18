@@ -1,9 +1,10 @@
-"""G-216: per-CPU maximum-ratio caps (``cpufreq/scaling_max_freq``), plus the pieces the three runtime controls (caps, parking, uncore) share -- the sysfs file access, the step, the
-refusal. Pure apart from the files it is given.
+"""G-216: per-CPU maximum-ratio caps (``cpufreq/scaling_max_freq``), plus the pieces the runtime controls (caps, uncore) share -- the sysfs file access, the step, the
+refusal. Pure apart from the files it is given. (Core parking is held out of G-216: a parked CPU renumbers the live topology, see ``ops_runtime.refuse_if_cpu_offline``.)
 
 Facts (``[MEASURED lnx 2026-10-18]``): intel_pstate is active (HWP); ``cpu<N>/cpufreq/cpuinfo_max_freq`` of cpu0 is 5700000 kHz; ``scaling_max_freq`` is the user's cap. The XTU
-analogue is a per-core max-ratio: effective ratio = min(turbo table, cap). One ratio = 100000 kHz here (the orchestrator's rule for G-216; ``ops_stress._cap_khz`` maps an E-core
-ratio through the kernel's own table instead, G-152 -- the hardware gate H5 shows which one the silicon wants).
+analogue is a per-core max-ratio: effective ratio = min(turbo table, cap). A P-core cap is ratio x 100000 kHz. An E-core ratio goes through the caller's ``khz_of`` (the kernel's own
+perf map, ``ops_stress._cap_khz`` fed with the unit's fused top ratio, G-152: E 46x needs 4.7 GHz, not 4.6 ``[MEASURED lnx 2026-10-14]``); the kernel rounds an E cap to a perf step, so an E
+read-back is judged within ``E_TOLERANCE_KHZ`` of the value written.
 
 The four E-cores of a cluster run one ratio, so a cap on one of them does not hold: a cap on an E CPU is written to all CPUs of its cluster (topology from the live read,
 never hard-coded; the G-152 rule). Nothing here has a default floor: ``policy.runtime.cap_ratio_min`` says how low a cap may go and an absent key refuses naming itself; the
@@ -12,17 +13,18 @@ ceiling is always the CPU's own ``cpuinfo_max_freq``.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from arltuner.guard.policy import Policy
-from arltuner.topology import Topology
+from arltuner.topology import Topology, UnknownCore
 
 __all__ = [
     "CAP_ATTR",
     "CPU_ROOT",
+    "E_TOLERANCE_KHZ",
     "JOURNAL_KHZ_MAX",
     "KHZ_PER_RATIO",
     "MAX_ATTR",
@@ -46,6 +48,8 @@ MAX_ATTR = "cpuinfo_max_freq"
 KHZ_PER_RATIO = 100_000
 #: the largest frequency a journal may hold (kHz): 25.5 GHz = ratio 255, the byte the policy's ratio fields are bounded by
 JOURNAL_KHZ_MAX = 255 * KHZ_PER_RATIO
+#: an E-core's ``scaling_max_freq`` reads back the perf step the kernel rounded to (at most half a step ~ 36 MHz off): within this of the value written is the same cap
+E_TOLERANCE_KHZ = 50_000
 
 
 class SysfsError(Exception):
@@ -112,8 +116,8 @@ class RuntimeFiles:
 
 @dataclass(frozen=True)
 class RuntimeStep:
-    """One sysfs file write. ``domain`` is ``caps`` / ``parking`` / ``uncore``; ``key`` the intent item (``cpu8``, ``min_ratio``); ``file`` the name relative to the root; ``before`` /
-    ``value`` in the file's unit (kHz for caps and uncore, 0 / 1 for ``online``); ``expect`` the ``(low, high)`` a read-back may show -- both ends equal ``value``: exact."""
+    """One sysfs file write. ``domain`` is ``caps`` / ``uncore``; ``key`` the intent item (``cpu8``, ``min_ratio``); ``file`` the name relative to the root; ``before`` /
+    ``value`` in the file's unit (kHz); ``expect`` the ``(low, high)`` a read-back may show -- both ends equal ``value``: exact."""
 
     number: int
     domain: str
@@ -210,15 +214,32 @@ def expand(intent: Mapping[int, int], topology: Topology) -> dict[int, int]:
     return out
 
 
+def _tolerance(topology: Topology, cpu: int) -> int:
+    try:
+        return E_TOLERANCE_KHZ if topology.by_cpu(cpu).kind == "E" else 0
+    except UnknownCore:
+        return 0
+
+
+def _same(a: int, b: int, tolerance: int) -> bool:
+    return a == b if tolerance == 0 else abs(a - b) < tolerance
+
+
+def _step(number: int, cpu: int, before: int, value: int, tolerance: int) -> RuntimeStep:
+    return RuntimeStep(number, "caps", f"cpu{cpu}", cap_file(cpu), before, value, (value - tolerance, value + tolerance))
+
+
 def plan(
-    intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, parked: frozenset[int] = frozenset(), held: str | None = None,
+    intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, held: str | None = None,
+    unit_top: Mapping[str, int] | None = None, khz_of: Callable[[int, int | None, int | None], int] | None = None,
 ) -> list[RuntimeStep]:
     """The write steps for ``intent`` (``{cpu: ratio}``) over the caps in force, or :class:`Refused` -- nothing is written by planning.
 
     Checks, in order (each refusal names its check): the policy key ``cap_ratio_min`` (``RUNTIME_POLICY_MISSING``), a measure / stress run or journal that owns the caps (``CAPS_CONFLICT``:
-    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``), being parked in the same intent (``CAPS_PARKED``), no cpufreq
-    directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling ``cpuinfo_max_freq`` (``CAPS_RANGE``), the CPU's own ``scaling_min_freq`` (``CAPS_BELOW_MIN``).
-    Steps that change nothing are dropped. ``parked``: the CPUs the same intent takes offline.
+    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``), no cpufreq
+    directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling (``CAPS_RANGE``), the CPU's own ``scaling_min_freq`` (``CAPS_BELOW_MIN``).
+    The ceiling is the CPU's own ``cpuinfo_max_freq`` and, for an E CPU whose unit's fused top ratio is in ``unit_top``, that ratio. ``khz_of(ratio, top, cpuinfo_khz)`` is the E-core kHz
+    (``ops_stress._cap_khz``); without it, or a P CPU, a ratio is ratio x 100 MHz. Steps that change nothing are dropped.
     """
     if not intent:
         raise Refused("NOTHING_TO_DO", "the caps intent changes nothing (set caps {cpu: ratio})")
@@ -232,26 +253,29 @@ def plan(
         key = f"cpu{cpu}"
         if not policy.cpu_allowed(cpu):  # the policy's CPU allowlist also bounds the CPUs an E-cluster expansion adds
             raise Refused("CAPS_CPU_NOT_ALLOWED", f"cpu {cpu} is not in the policy's cpus ({policy.where}): its frequency cap may not be changed", key)
-        if cpu in parked:
-            raise Refused("CAPS_PARKED", f"cpu {cpu} is being parked in the same intent: an offline CPU has no frequency cap to set", key)
         freq = state.get(cpu)
         if freq is None:
-            raise Refused("CAPS_NO_FILE", f"cpu {cpu} has no cpufreq directory (is it offline? unpark it first, in a separate apply)", key)
-        khz = ratio * KHZ_PER_RATIO
+            raise Refused("CAPS_NO_FILE", f"cpu {cpu} has no cpufreq directory (is it offline?)", key)
+        tol = _tolerance(topology, cpu)
+        top = unit_top.get(topology.unit_of_cpu(cpu)) if tol and unit_top else None
+        khz = khz_of(ratio, top, freq.max_khz) if tol and khz_of is not None else ratio * KHZ_PER_RATIO
         if ratio < floor:
             raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is below [runtime] cap_ratio_min = {floor} ({policy.where})", key)
+        if top is not None and ratio > top:
+            raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is above the maximum ratio of its unit ({top})", key)
         if khz > freq.max_khz:
             raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is above the CPU's own maximum (cpuinfo_max_freq {freq.max_khz} kHz = ratio {freq.max_khz / KHZ_PER_RATIO:g})", key)
         if freq.min_khz is not None and khz < freq.min_khz:
             raise Refused("CAPS_BELOW_MIN", f"cpu {cpu}: ratio {ratio} is below the CPU's scaling_min_freq ({freq.min_khz} kHz): the kernel would refuse it", key)
-        if khz != freq.cap_khz:
-            steps.append(RuntimeStep(len(steps) + 1, "caps", key, cap_file(cpu), freq.cap_khz, khz, (khz, khz)))
+        if not _same(khz, freq.cap_khz, tol):
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, khz, tol))
     return steps
 
 
-def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None]) -> tuple[list[RuntimeStep], list[str]]:
+def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], topology: Topology) -> tuple[list[RuntimeStep], list[str]]:
     """The writes that put the journaled caps back (``values`` = ``{cpu: kHz}``): ``(steps, notes)``. The policy does not apply (this restores a recorded state); a CPU without a
-    cpufreq directory (offline now) is skipped with a note -- its cap is whatever the kernel gave it back at the unpark; a value above the CPU's maximum is :class:`Refused`."""
+    cpufreq directory (offline now) is skipped with a note -- a note means something was *not* restored, and the caller keeps the journal's in-flight mark; a value above the CPU's
+    maximum is :class:`Refused`."""
     steps: list[RuntimeStep] = []
     notes: list[str] = []
     for cpu in sorted(values):
@@ -261,6 +285,7 @@ def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None]) 
             continue
         if values[cpu] > freq.max_khz:
             raise Refused("CAPS_RANGE", f"the journaled cap of cpu {cpu} ({values[cpu]} kHz) is above the CPU's own maximum ({freq.max_khz} kHz)", f"cpu{cpu}")
-        if values[cpu] != freq.cap_khz:
-            steps.append(RuntimeStep(len(steps) + 1, "caps", f"cpu{cpu}", cap_file(cpu), freq.cap_khz, values[cpu], (values[cpu], values[cpu])))
+        tol = _tolerance(topology, cpu)
+        if not _same(values[cpu], freq.cap_khz, tol):
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], tol))
     return steps, notes

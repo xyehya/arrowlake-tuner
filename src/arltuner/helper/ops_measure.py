@@ -30,6 +30,7 @@ from arltuner.guard.policy import fused_top_ratio
 from arltuner.mailbox.vf import VfWord
 from arltuner.topology import Topology
 
+from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only, _trust, helper_topology
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, OpError
 from .state import State
@@ -752,6 +753,7 @@ def _better(new: dict[str, Any], old: dict[str, Any]) -> bool:
 
 
 def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    refuse_if_cpu_offline(helper, "vf.measure")
     w = _wiring(helper)
     topo = helper_topology(helper)
     mode, name, want_baseline = args["mode"], args["name"], args["baseline"]

@@ -102,6 +102,7 @@ from arltuner.profiles.store import NAME_RE, ProfileStore, ProfileStoreError
 from arltuner.topology import Topology, TopologyError, UnknownCore
 from arltuner.vfmodel import CurvePoint, check_turbo_order, complete_baseline, effective_curve, predict_vccia, voltage_at
 
+from .cpu_online import refuse_if_cpu_offline
 from .ops import (
     OpContext,
     OpSpec,
@@ -2603,6 +2604,7 @@ def _lift_cpufreq(
 
 
 def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    refuse_if_cpu_offline(helper, "tune.apply")
     st = _state(helper)
     plan = st.plans.claim(args["plan_id"], args["typed"])
     topology = _topology(helper)

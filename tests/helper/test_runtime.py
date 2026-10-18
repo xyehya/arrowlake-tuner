@@ -1,12 +1,11 @@
 """G-216: ``runtime.read`` / ``runtime.plan`` / ``runtime.apply`` through the real helper loop on the simulator. The kernel is ``SimRuntimeFiles`` (per-CPU cpufreq over the shared simulated
-cpufreq, ``online`` without cpu0, the uncore limits) or a fake sysfs tree; the journal and the audit log are in a temp directory. No hardware, no /sys, no /run."""
+cpufreq, ``online`` without cpu0, the uncore limits) or a fake sysfs tree; the journal and the audit log are in a temp directory. No hardware, no /sys, no /run. Core parking is held out of G-216: no ``online`` file is ever written."""
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import tempfile
-import types
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -15,16 +14,17 @@ from arltuner.controls import caps as cp
 from arltuner.guard import read_state
 from arltuner.helper import ops_runtime
 from arltuner.helper.measure_sim import SimCpufreq
+from arltuner.helper.ops_measure import sim_wiring
 from arltuner.helper.ops_runtime import RuntimeWiring, SimRuntimeFiles
 from arltuner.helper.state import State
 
 from tests.fakesys import make_runtime_sysfs
 
-from ._support import HelperCase
+from ._support import Harness, HelperCase
 
 BOOT = "11111111-2222-3333-4444-555555555555"
 BASE = 'cpus = ["0-23"]\nmax_operations_per_session = 300\nmax_operations_per_boot = 400\nmin_dwell_s = 0.0\n'
-RUNTIME = "\n[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\nparking = true\n"
+RUNTIME = "\n[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\n"
 P_MAX = 5_700_000  # SimModel.max_khz(cpu 0)
 
 
@@ -37,14 +37,22 @@ class RuntimeCase(HelperCase):
 
     def boot(self, policy: str = BASE + RUNTIME, files: SimRuntimeFiles | None = None, **cfg: Any) -> Any:
         self.policy.write_text(policy, encoding="utf-8", newline="\n")
-        self.cpufreq = SimCpufreq()
-        self.files = files or SimRuntimeFiles(self.cpufreq, range(24))
-        self.journal = self.tmp / "runtime-journal.json"
         self.measure_journal = self.tmp / "measure-journal.json"
+        self.journal = self.tmp / "runtime-journal.json"
         h = self.start(self.config(**cfg) if cfg else None)
-        h.helper.runtime_wiring = RuntimeWiring(self.files, self.journal)
-        h.helper.measure_wiring = types.SimpleNamespace(journal_path=self.measure_journal, cpufreq=self.cpufreq)
+        self.call(h, "runtime.read")  # an answer means Helper.start (and its journal recovery) is over: nothing races the wiring below (this one is INTERNAL: not wired yet)
+        self.wire(h, files)
         return h
+
+    def wire(self, h: Any, files: Any = None) -> None:
+        """The runtime files and a real simulated measure wiring (its turbo tables give the E units' fused top ratio) over the same cpufreq."""
+        mw = sim_wiring(self.tmp / "mstate")
+        mw.journal_path = self.measure_journal
+        self.files = files or SimRuntimeFiles(mw.cpufreq, range(24))
+        self.cpufreq = getattr(self.files, "cpufreq", mw.cpufreq)
+        mw.cpufreq = self.cpufreq
+        h.helper.runtime_wiring = RuntimeWiring(self.files, self.journal)
+        h.helper.measure_wiring = mw
 
     def call(self, h: Any, op: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         self.n += 1
@@ -95,18 +103,18 @@ class Read(RuntimeCase):
         r = self.ok(h, "runtime.read")
         self.assertEqual(len(r["caps"]), 24)
         cpu0, cpu8 = r["caps"][0], r["caps"][8]
-        self.assertEqual((cpu0["kind"], cpu0["online"], cpu0["can_park"], cpu0["cpufreq"]["cap_khz"]), ("P", True, False, P_MAX))
-        self.assertEqual((cpu8["kind"], cpu8["unit"], cpu8["can_park"]), ("E", "EC0", True))
-        self.assertIsNone(r["parking"]["0"])
-        self.assertTrue(r["parking"]["5"])
+        self.assertEqual((cpu0["kind"], cpu0["online"], cpu0["cpufreq"]["cap_khz"]), ("P", True, P_MAX))
+        self.assertEqual((cpu8["kind"], cpu8["unit"], cpu8["online"]), ("E", "EC0", True))
+        self.assertEqual(r["offline"], [])
+        self.assertNotIn("parking", r)
         self.assertEqual((r["uncore"]["min_khz"], r["uncore"]["max_khz"], r["uncore"]["initial_max_khz"]), (800_000, 4_000_000, 4_000_000))
-        self.assertEqual(r["policy"], {"source": str(self.policy), "cap_ratio_min": 8, "uncore_ratio": [10, 38], "parking": True})
+        self.assertEqual(r["policy"], {"source": str(self.policy), "cap_ratio_min": 8, "uncore_ratio": [10, 38]})
         self.assertEqual((r["held"], r["journal"]), (None, None))
 
     def test_an_absent_runtime_table_is_all_null(self) -> None:
         h = self.boot(BASE)
         p = self.ok(h, "runtime.read")["policy"]
-        self.assertEqual((p["cap_ratio_min"], p["uncore_ratio"], p["parking"]), (None, None, None))
+        self.assertEqual((p["cap_ratio_min"], p["uncore_ratio"]), (None, None))
 
     def test_the_read_names_what_holds_the_caps(self) -> None:
         h = self.boot()
@@ -134,7 +142,7 @@ class Read(RuntimeCase):
         make_runtime_sysfs(root, offline=[9])
         h = self.boot(files=cp.RuntimeFiles(root))  # type: ignore[arg-type]
         r = self.ok(h, "runtime.read")
-        self.assertEqual((r["caps"][0]["can_park"], r["caps"][9]["online"], r["caps"][9]["cpufreq"]), (False, False, None))
+        self.assertEqual((r["caps"][9]["online"], r["caps"][9]["cpufreq"], r["offline"]), (False, None, [9]))  # reported, read only
         self.assertEqual(r["uncore"]["domain"], "package_00_die_00")
 
 
@@ -152,7 +160,7 @@ class Caps(RuntimeCase):
         self.assertEqual(res["after"]["caps"], {"3": 4_500_000})
         self.assertEqual(self.cap(3), 4_500_000)
         doc = self.journal_doc()
-        self.assertEqual((doc["boot_id"], doc["caps"], doc["online"], doc["uncore"], doc["in_flight"]), (BOOT, {"3": P_MAX}, {}, {}, False))
+        self.assertEqual((doc["boot_id"], doc["caps"], doc["uncore"], doc["in_flight"]), (BOOT, {"3": P_MAX}, {}, False))
         self.assertEqual(oct(self.journal.stat().st_mode & 0o777), "0o600")
         recs = self.runtime_records()
         self.assertEqual([r["event"] for r in recs], ["runtime_attempt", "readback"])
@@ -162,13 +170,41 @@ class Caps(RuntimeCase):
 
     def test_an_e_core_cap_writes_the_four_cpus_of_its_cluster_one_file_each(self) -> None:
         h = self.boot()
-        plan = self.plan(h, caps={"10": 40})
+        plan = self.plan(h, caps={"10": 46})
         self.assertEqual([s["key"] for s in plan["steps"]], ["cpu8", "cpu9", "cpu10", "cpu11"])
         self.assertTrue(any("also set on cpu 8, 9, 11" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertEqual({s["value"] for s in plan["steps"]}, {4_700_000})  # E 46x needs 4.7 GHz (the kernel's perf map), not 4.6 [MEASURED lnx 2026-10-14]
+        self.assertEqual(plan["steps"][0]["expect"], [4_700_000 - cp.E_TOLERANCE_KHZ, 4_700_000 + cp.E_TOLERANCE_KHZ])
         res = self.apply(h, plan)
-        self.assertEqual(res["writes_sent"], 4)
-        self.assertEqual([self.cap(c) for c in (8, 9, 10, 11, 12)], [4_000_000] * 4 + [e_max()])
+        self.assertEqual((res["complete"], res["writes_sent"]), (True, 4), res)
+        quantized = SimCpufreq().model.e_cap_quantized(4_700_000)  # the simulated kernel rounds an E cap to its perf step, like write_cap
+        self.assertNotEqual(quantized, 4_700_000)
+        self.assertEqual([self.cap(c) for c in (8, 9, 10, 11, 12)], [quantized] * 4 + [e_max()])
         self.assertEqual(sorted(self.journal_doc()["caps"]), ["10", "11", "8", "9"])
+        self.refused(h, "runtime.plan", {"caps": {"10": 46}}, "NOTHING_TO_DO")  # a perf step off is the same cap
+        revert = self.apply(h, self.plan(h, revert=True))
+        self.assertTrue(revert["complete"], revert)
+        self.assertEqual([self.cap(c) for c in (8, 9, 10, 11)], [e_max()] * 4)
+
+    def test_e_caps_map_through_the_kernels_perf_map_and_the_fused_top(self) -> None:
+        h = self.boot()
+        for ratio, khz in ((46, 4_700_000), (47, 4_800_000), (40, 4_100_000)):  # 4.1 GHz still lands E 40x (power-profile-capping.md: any kHz inside the bin)
+            self.assertEqual({s["value"] for s in self.plan(h, caps={"8": ratio})["steps"]}, {khz}, ratio)
+        e = self.refused(h, "runtime.plan", {"caps": {"8": 49}}, "CAPS_RANGE")  # cpuinfo_max_freq says 49x; the cluster's fused top is 48x
+        self.assertIn("maximum ratio of its unit (48)", e["message"])
+        self.assertEqual(self.files.writes, [])
+
+    def test_unknown_unit_maxima_is_a_plan_warning_not_a_silent_fallback(self) -> None:
+        h = self.boot()
+
+        def no_msr() -> None:
+            raise OSError("no msr")
+
+        h.helper.measure_wiring.make_run = no_msr  # no turbo tables
+        plan = self.plan(h, caps={"8": 46})
+        self.assertEqual({s["value"] for s in plan["steps"]}, {4_600_000})
+        self.assertTrue(any("maximum ratio of each E unit is not known" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertFalse(any("not known" in w for w in self.plan(h, caps={"3": 45})["warnings"]))  # a P cap needs no table
 
     def test_a_later_apply_keeps_the_first_journaled_value(self) -> None:
         h = self.boot()
@@ -223,45 +259,26 @@ class Caps(RuntimeCase):
 
 
 class Parking(RuntimeCase):
-    def test_park_then_unpark(self) -> None:
+    """Held: nothing here parks a CPU or writes ``online``."""
+
+    def test_parking_in_a_request_is_bad_request(self) -> None:
         h = self.boot()
-        plan = self.plan(h, parking={"12": True})
-        self.assertEqual([(s["key"], s["file"], s["before"], s["value"]) for s in plan["steps"]], [("cpu12", "cpu12/online", 1, 0)])
-        self.assertTrue(any("leaves the live CPU topology" in w for w in plan["warnings"]))
-        res = self.apply(h, plan)
-        self.assertEqual(res["after"]["online"], {"12": False})
-        self.assertEqual(self.files.online[12], 0)
-        self.assertEqual(self.journal_doc()["online"], {"12": 1})
-        self.assertFalse(self.ok(h, "runtime.read")["caps"][12]["online"])
-        self.assertIsNone(self.ok(h, "runtime.read")["caps"][12]["cpufreq"])  # an offline CPU has no cpufreq directory
-        self.go(h, parking={"12": False})
-        self.assertEqual(self.files.online[12], 1)
+        for args in ({"parking": {"12": True}}, {"parking": {"12": False}}, {"caps": {"3": 45}, "parking": {"12": True}}, {"parking": None}):
+            msg = self.call(h, "runtime.plan", args)
+            self.assertEqual((msg["error"]["code"], msg["error"]["message"]), ("BAD_REQUEST", "core parking is not supported (held, D-pending)"), (args, msg))
+        self.assertEqual(self.files.writes, [])
 
-    def test_cpu0_and_the_last_online_cpu_of_a_kind_are_refused(self) -> None:
+    def test_no_online_file_is_ever_written(self) -> None:
         h = self.boot()
-        e = self.refused(h, "runtime.plan", {"parking": {"0": True}}, "PARK_CPU0")
-        self.assertEqual(e["detail"]["key"], "cpu0")
-        self.refused(h, "runtime.plan", {"parking": dict.fromkeys(map(str, range(8, 24)), True)}, "PARK_LAST_OF_KIND")
-        self.go(h, parking=dict.fromkeys(map(str, range(8, 23)), True))
-        self.refused(h, "runtime.plan", {"parking": {"23": True}}, "PARK_LAST_OF_KIND")
-        self.assertEqual([self.files.online[c] for c in (8, 22, 23)], [0, 0, 1])
+        self.go(h, caps={"3": 45, "10": 40}, uncore={"max_ratio": 30})
+        self.apply(h, self.plan(h, revert=True))
+        self.assertFalse([w for w in self.files.writes if w[0].endswith("/online")])
+        self.assertEqual(self.files.online, {c: 1 for c in range(1, 24)})
+        self.assertNotIn("online", self.journal_doc())
+        with self.assertRaises(cp.SysfsError):
+            self.files.write_int("cpu12/online", 0)  # the simulated kernel files are read only for it, too
 
-    def test_parking_needs_the_policy_key_unparking_does_not(self) -> None:
-        h = self.boot(BASE + RUNTIME)
-        self.go(h, parking={"12": True})
-        self.policy.write_text(BASE, encoding="utf-8", newline="\n")  # the operator removed [runtime]
-        e = self.refused(h, "runtime.plan", {"parking": {"13": True}}, "RUNTIME_POLICY_MISSING")
-        self.assertEqual(e["detail"]["key"], "parking")
-        self.go(h, parking={"12": False})
-
-    def test_no_parking_while_a_cap_journal_is_held_but_unparking_is_allowed(self) -> None:
-        h = self.boot()
-        self.go(h, parking={"12": True})
-        self.measure_journal.write_text("{}")
-        self.refused(h, "runtime.plan", {"parking": {"13": True}}, "PARK_CONFLICT")
-        self.go(h, parking={"12": False})
-
-    def test_no_parking_while_stress_runs(self) -> None:
+    def test_stress_holds_the_caps(self) -> None:
         h = self.boot()
         h.helper.machine.begin("s1", "stress.start", State.STRESSING)
         try:
@@ -270,14 +287,47 @@ class Parking(RuntimeCase):
             h.helper.machine.end("s1")
         self.assertIsNone(ops_runtime._held(h.helper))
 
-    def test_a_cap_on_a_cpu_parked_in_the_same_intent_is_refused(self) -> None:
-        h = self.boot()
-        self.refused(h, "runtime.plan", {"parking": {"5": True}, "caps": {"5": 40}}, "CAPS_PARKED")
 
-    def test_a_cpu_the_kernel_will_not_offline_trips(self) -> None:
-        h = self.boot(files=SimRuntimeFiles(SimCpufreq(), range(24), drop_writes=True))
-        res = self.apply(h, self.plan(h, parking={"12": True, "13": True}))
-        self.assertEqual((res["complete"], res["stop"]["kind"], res["writes_sent"]), (False, "unverified", 1))
+class OfflineGuard(RuntimeCase):
+    """A CPU offline outside the app (cpu<N>/online reads 0): everything numbered by the live topology refuses, naming it. A fake sysfs tree with cpu 9 offline."""
+
+    def offline_boot(self) -> Any:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        make_runtime_sysfs(root, offline=[9])
+        return self.boot(files=cp.RuntimeFiles(root))  # type: ignore[arg-type]
+
+    def check(self, msg: dict[str, Any], cpu: int = 9) -> None:
+        self.assertFalse(msg.get("ok"), msg)
+        self.assertEqual((msg["error"]["code"], msg["error"]["detail"]["check"], msg["error"]["detail"]["cpus"]), ("REFUSED", "CPU_OFFLINE", [cpu]), msg)
+        self.assertIn(f"cpu {cpu} is offline", msg["error"]["message"])
+
+    def test_runtime_plan_and_apply_refuse(self) -> None:
+        h = self.offline_boot()
+        self.check(self.call(h, "runtime.plan", {"caps": {"3": 45}}))
+        self.check(self.call(h, "runtime.plan", {"uncore": {"max_ratio": 30}}))
+        self.check(self.call(h, "runtime.apply", {"plan_id": "0" * 64, "typed": "CONFIRM AAAAAA"}))
+        self.assertFalse(self.journal.exists())
+
+    def test_tune_measure_and_stress_refuse_and_read_does_not(self) -> None:
+        h = self.offline_boot()
+        self.check(self.call(h, "tune.apply", {"plan_id": "0" * 64, "typed": "CONFIRM AAAAAA"}))
+        self.check(self.call(h, "vf.measure", {"mode": "quick"}))
+        self.check(self.call(h, "stress.start", {"kind": "cpu", "duration_s": 30}))
+        self.assertEqual(self.ok(h, "runtime.read")["offline"], [9])
+
+    def test_a_simulated_offline_cpu_refuses_and_onlining_it_unblocks(self) -> None:
+        h = self.boot()
+        self.files.online[12] = 0
+        self.check(self.call(h, "runtime.plan", {"caps": {"3": 45}}), 12)
+        self.files.online[12] = 1
+        self.plan(h, caps={"3": 45})
+
+    def test_an_unreadable_runtime_sysfs_is_not_a_refusal(self) -> None:
+        from arltuner.helper.cpu_online import offline_cpus
+
+        h = self.start()  # sim without measure wiring: the runtime files cannot be consulted
+        self.assertEqual(offline_cpus(h.helper), [])
 
 
 class Uncore(RuntimeCase):
@@ -415,18 +465,17 @@ class Safeguards(RuntimeCase):
 
 
 class Revert(RuntimeCase):
-    def test_revert_puts_everything_back_unparks_first_and_keeps_the_journal(self) -> None:
+    def test_revert_puts_everything_back_and_keeps_the_journal(self) -> None:
         h = self.boot()
-        self.go(h, caps={"3": 45, "10": 40}, parking={"12": True}, uncore={"min_ratio": 20, "max_ratio": 30})
-        self.assertEqual((self.cap(3), self.cap(10), self.files.online[12], self.files.uncore["max_freq_khz"]), (4_500_000, 4_000_000, 0, 3_000_000))
+        self.go(h, caps={"3": 45, "10": 40}, uncore={"min_ratio": 20, "max_ratio": 30})
+        self.assertEqual((self.cap(3), self.files.uncore["max_freq_khz"]), (4_500_000, 3_000_000))
         self.files.writes.clear()
         plan = self.plan(h, revert=True)
         keys = [(s["domain"], s["key"]) for s in plan["steps"]]
-        self.assertEqual(keys[0], ("parking", "cpu12"))  # the unpark comes first
-        self.assertEqual({d for d, _ in keys}, {"parking", "caps", "uncore"})
+        self.assertEqual({d for d, _ in keys}, {"caps", "uncore"})
         res = self.apply(h, plan)
         self.assertTrue(res["complete"], res)
-        self.assertEqual((self.cap(3), self.cap(10), self.cap(8), self.files.online[12]), (P_MAX, e_max(), e_max(), 1))
+        self.assertEqual((self.cap(3), self.cap(10), self.cap(8)), (P_MAX, e_max(), e_max()))
         self.assertEqual((self.files.uncore["min_freq_khz"], self.files.uncore["max_freq_khz"]), (800_000, 4_000_000))
         self.assertTrue(self.journal.exists())  # kept: a second revert (nothing to do) and a later apply use the same baseline
         self.refused(h, "runtime.plan", {"revert": True}, "NOTHING_TO_DO")
@@ -438,10 +487,10 @@ class Revert(RuntimeCase):
 
     def test_revert_needs_no_policy_keys(self) -> None:
         h = self.boot()
-        self.go(h, caps={"3": 45}, parking={"12": True})
+        self.go(h, caps={"3": 45})
         self.policy.write_text(BASE, encoding="utf-8", newline="\n")
         self.assertTrue(self.apply(h, self.plan(h, revert=True))["complete"])
-        self.assertEqual((self.cap(3), self.files.online[12]), (P_MAX, 1))
+        self.assertEqual(self.cap(3), P_MAX)
 
     def test_a_revert_warns_when_a_journaled_value_is_outside_the_policy_now(self) -> None:
         h = self.boot()
@@ -451,26 +500,40 @@ class Revert(RuntimeCase):
         self.assertTrue(any("cap_ratio_min" in w for w in warnings), warnings)
         self.assertTrue(any("max_ratio" in w and "uncore_ratio" in w for w in warnings), warnings)
 
-    def test_a_cpu_that_is_offline_at_revert_keeps_its_cap_and_says_so(self) -> None:
+    def test_a_cpu_that_is_offline_at_revert_is_a_named_refusal(self) -> None:
         h = self.boot()
         self.go(h, caps={"3": 45})
-        self.files.online[3] = 0  # parked behind our back
-        e = self.refused(h, "runtime.plan", {"revert": True}, "NOTHING_TO_DO")  # no step is left (the CPU has no cpufreq directory)
-        self.assertIn("cpu 3 has no cpufreq directory (offline): its cap was not restored", e["message"])
+        self.files.online[3] = 0  # taken offline behind our back
+        e = self.refused(h, "runtime.plan", {"revert": True}, "CPU_OFFLINE")
+        self.assertIn("cpu 3 is offline", e["message"])
+        self.assertEqual(self.cap(3), 4_500_000)
 
-    def test_a_revert_waits_for_a_run_that_holds_the_caps_but_unparking_does_not(self) -> None:
+    def test_a_revert_that_skipped_a_cap_keeps_the_in_flight_mark(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        make_runtime_sysfs(root)
+        h = self.boot(files=cp.RuntimeFiles(root))  # type: ignore[arg-type]
+        self.files.write_int("cpu3/cpufreq/scaling_max_freq", 4_500_000)
+        Journal.put(self, {"in_flight": True, "caps": {"3": P_MAX, "9": 4_900_000}})
+        shutil.rmtree(root / "cpu9" / "cpufreq")  # cpu 9 is online but its cpufreq directory is gone: its cap cannot be restored
+        plan = self.plan(h, revert=True)
+        self.assertTrue(any("cpu 9 has no cpufreq directory" in w for w in plan["warnings"]), plan["warnings"])
+        res = self.apply(h, plan)
+        self.assertEqual(self.files.read_int("cpu3/cpufreq/scaling_max_freq"), P_MAX)
+        self.assertTrue(any("cpu 9" in w and "journal is kept" in w for w in res["warnings"]), res["warnings"])
+        self.assertTrue(self.journal_doc()["in_flight"])  # something was skipped: not settled
+        self.refused(h, "runtime.plan", {"caps": {"5": 45}}, "JOURNAL_IN_FLIGHT")
+
+    def test_a_revert_waits_for_a_run_that_holds_the_caps_but_the_uncore_does_not(self) -> None:
         h = self.boot()
-        self.go(h, caps={"3": 45}, parking={"12": True})
+        self.go(h, caps={"3": 45}, uncore={"max_ratio": 30})
         self.measure_journal.write_text("{}")
         e = self.refused(h, "runtime.plan", {"revert": True}, "CAPS_CONFLICT")
         self.assertIn("measure-journal.json", e["message"])
-        self.assertEqual((self.cap(3), self.files.online[12]), (4_500_000, 0))
-        self.measure_journal.unlink()
-        self.go(h, parking={"13": True})
-        self.measure_journal.write_text("{}")
-        self.files.write_int("cpu3/cpufreq/scaling_max_freq", P_MAX)  # nothing left to restore for caps: only unparks remain
+        self.assertEqual((self.cap(3), self.files.uncore["max_freq_khz"]), (4_500_000, 3_000_000))
+        self.files.write_int("cpu3/cpufreq/scaling_max_freq", P_MAX)  # nothing left to restore for caps: only the uncore remains
         self.assertTrue(self.apply(h, self.plan(h, revert=True))["complete"])
-        self.assertEqual((self.files.online[12], self.files.online[13]), (1, 1))
+        self.assertEqual(self.files.uncore["max_freq_khz"], 4_000_000)
 
     def test_the_lock_stops_a_revert_too(self) -> None:
         h = self.boot()
@@ -483,7 +546,7 @@ class Revert(RuntimeCase):
 
 class Journal(RuntimeCase):
     def put(self, doc: dict[str, Any]) -> None:
-        base = {"version": 1, "boot_id": BOOT, "created": 1.0, "pid": 1, "in_flight": False, "caps": {}, "online": {}, "uncore": {}}
+        base = {"version": 1, "boot_id": BOOT, "created": 1.0, "pid": 1, "in_flight": False, "caps": {}, "uncore": {}}
         self.journal.write_text(json.dumps({**base, **doc}))
         self.journal.chmod(0o600)
 
@@ -510,7 +573,7 @@ class Journal(RuntimeCase):
         h = self.boot()
         for doc in (
             {"caps": {"5000": 4_500_000}}, {"caps": {"x": 4_500_000}}, {"caps": {"3": 99_999_999}}, {"caps": {"3": 0}}, {"caps": {"3": -1}}, {"caps": {"3": True}},
-            {"online": {"3": 2}}, {"online": {"3": -1}}, {"uncore": {"mid_ratio": 3_000_000}}, {"uncore": {"max_ratio": 99_999_999}}, {"in_flight": "yes"}, {"version": 2},
+            {"uncore": {"mid_ratio": 3_000_000}}, {"uncore": {"max_ratio": 99_999_999}}, {"in_flight": "yes"}, {"version": 2},
         ):
             self.put(doc)
             self.refused(h, "runtime.plan", {"revert": True}, "JOURNAL_UNUSABLE")
@@ -551,7 +614,7 @@ class Recovery(RuntimeCase):
                 raise RuntimeError("the helper died")
             real(name, value)
 
-        plan = self.plan(h, caps={"3": 45, "4": 44}, parking={"12": True})
+        plan = self.plan(h, caps={"3": 45, "4": 44})
         with mock.patch.object(files, "write_int", side_effect=dying):
             msg = self.call(h, "runtime.apply", {"plan_id": plan["plan_id"], "typed": "CONFIRM " + plan["nonce"]})
         self.assertFalse(msg["ok"], msg)
@@ -568,7 +631,7 @@ class Recovery(RuntimeCase):
         # a new helper starts: it restores the journal
         self.logs.clear()
         self.assertTrue(ops_runtime.recover_journal(h.helper))
-        self.assertEqual((self.cap(3), self.cap(4), self.files.online[12]), (P_MAX, cap4, 1))
+        self.assertEqual((self.cap(3), self.cap(4)), (P_MAX, cap4))
         self.assertFalse(self.journal_doc()["in_flight"])
         self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
         recs = [r for r in self.runtime_records() if r["event"] == "runtime_attempt" and r["revert"]]
@@ -578,15 +641,15 @@ class Recovery(RuntimeCase):
 
     def test_a_settled_journal_is_not_applied_at_start(self) -> None:
         h = self.boot()
-        self.go(h, caps={"3": 45}, parking={"12": True})
+        self.go(h, caps={"3": 45})
         self.files.writes.clear()
         self.assertFalse(ops_runtime.recover_journal(h.helper))  # the helper idles out and restarts: the operator's caps stay
-        self.assertEqual((self.files.writes, self.cap(3), self.files.online[12]), ([], 4_500_000, 0))
+        self.assertEqual((self.files.writes, self.cap(3)), ([], 4_500_000))
 
     def test_no_journal_and_a_journal_of_another_boot_do_nothing(self) -> None:
         h = self.boot()
         self.assertFalse(ops_runtime.recover_journal(h.helper))
-        self.journal.write_text(json.dumps({"version": 1, "boot_id": "another-boot", "created": 1.0, "pid": 1, "in_flight": True, "caps": {"3": P_MAX}, "online": {}, "uncore": {}}))
+        self.journal.write_text(json.dumps({"version": 1, "boot_id": "another-boot", "created": 1.0, "pid": 1, "in_flight": True, "caps": {"3": P_MAX}, "uncore": {}}))
         self.journal.chmod(0o600)
         self.assertFalse(ops_runtime.recover_journal(h.helper))
         self.assertEqual(self.files.writes, [])
@@ -598,7 +661,7 @@ class Recovery(RuntimeCase):
         self.logs.clear()
         self.assertFalse(ops_runtime.recover_journal(h.helper))
         self.assertTrue(any("not applied" in line and "unusable" in line for line in self.logs), self.logs)
-        self.journal.write_text(json.dumps({"version": 1, "boot_id": BOOT, "created": 1.0, "pid": 1, "in_flight": True, "caps": {"3": P_MAX}, "online": {}, "uncore": {}}))
+        self.journal.write_text(json.dumps({"version": 1, "boot_id": BOOT, "created": 1.0, "pid": 1, "in_flight": True, "caps": {"3": P_MAX}, "uncore": {}}))
         self.journal.chmod(0o666)
         self.assertFalse(ops_runtime.recover_journal(h.helper))
         self.assertEqual(self.files.writes, [])
@@ -620,9 +683,60 @@ class Recovery(RuntimeCase):
         self.crash_midway(h)
         res = self.apply(h, self.plan(h, revert=True))
         self.assertTrue(res["complete"], res)
-        self.assertEqual((self.cap(3), self.files.online[12]), (P_MAX, 1))
+        self.assertEqual(self.cap(3), P_MAX)
         self.assertFalse(self.journal_doc()["in_flight"])  # the revert settled it
         self.ok(h, "runtime.plan", {"caps": {"5": 45}})  # and planning works again
+
+
+class StartHook(RuntimeCase):
+    """The accept: the journal restore happens at ``Helper.start`` (not only when the module function is called by hand)."""
+
+    def helper_before_start(self, files: Any, doc: dict[str, Any]) -> Harness:
+        self.policy.write_text(BASE + RUNTIME, encoding="utf-8", newline="\n")
+        self.measure_journal = self.tmp / "measure-journal.json"
+        self.journal = self.tmp / "runtime-journal.json"
+        h = Harness(self.config())
+        self.harnesses.append(h)
+        self.wire(h, files)
+        Journal.put(self, doc)
+        return h
+
+    def tree(self, **kw: Any) -> cp.RuntimeFiles:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        return cp.RuntimeFiles(make_runtime_sysfs(root, **kw))
+
+    def test_helper_start_restores_an_apply_that_died_in_flight(self) -> None:
+        files = self.tree()
+        h = self.helper_before_start(files, {"in_flight": True, "caps": {"3": P_MAX, "8": 4_900_000}})
+        cpus = [3, 4, 8]
+        for cpu in cpus:
+            files.write_int(f"cpu{cpu}/cpufreq/scaling_max_freq", 4_000_000)
+        h.start()  # Helper.run -> Helper.start -> the runtime journal recovery, before the first request
+        self.ok(h, "runtime.read")
+        self.assertEqual([files.read_int(f"cpu{c}/cpufreq/scaling_max_freq") for c in cpus], [P_MAX, 4_000_000, 4_900_000])
+        self.assertFalse(self.journal_doc()["in_flight"])
+        self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
+        self.assertTrue([r for r in self.runtime_records() if r["event"] == "runtime_attempt" and r["revert"]])  # audited
+
+    def test_helper_start_leaves_a_settled_journal_alone(self) -> None:
+        files = self.tree()
+        h = self.helper_before_start(files, {"in_flight": False, "caps": {"3": P_MAX}})
+        files.write_int("cpu3/cpufreq/scaling_max_freq", 4_000_000)
+        h.start()
+        self.ok(h, "runtime.read")
+        self.assertEqual(files.read_int("cpu3/cpufreq/scaling_max_freq"), 4_000_000)
+
+    def test_helper_start_keeps_the_mark_when_a_cap_could_not_be_restored(self) -> None:
+        files = self.tree(offline=[9])  # cpu 9 is offline: no cpufreq directory
+        h = self.helper_before_start(files, {"in_flight": True, "caps": {"3": P_MAX, "9": 4_900_000}})
+        files.write_int("cpu3/cpufreq/scaling_max_freq", 4_000_000)
+        h.start()
+        self.ok(h, "runtime.read")  # the read works with a CPU offline
+        self.assertEqual(files.read_int("cpu3/cpufreq/scaling_max_freq"), P_MAX)  # what could be restored was
+        self.assertTrue(self.journal_doc()["in_flight"])
+        self.assertTrue(any("NOT fully restored" in line and "in-flight mark kept" in line for line in self.logs), self.logs)
+        self.assertTrue(any("cpu 9 has no cpufreq directory" in line for line in self.logs), self.logs)
 
 
 class SimDefaults(RuntimeCase):

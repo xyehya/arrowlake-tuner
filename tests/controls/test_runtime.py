@@ -1,4 +1,4 @@
-"""G-216: the runtime controls (``arltuner.controls.caps`` / ``parking`` / ``uncore``) -- the plan rules, the read-back rule, the files, on a fake sysfs tree. No hardware, no /sys."""
+"""G-216: the runtime controls (``arltuner.controls.caps`` / ``uncore``) -- the plan rules, the read-back rule, the files, on a fake sysfs tree. No hardware, no /sys."""
 from __future__ import annotations
 
 import os
@@ -8,16 +8,15 @@ import unittest
 from pathlib import Path
 
 from arltuner.controls import caps as cp
-from arltuner.controls import parking as pk
 from arltuner.controls import uncore as un
 from arltuner.guard import load_policy
 from arltuner.topology import arl_s_285k, synthetic
-from arltuner.topology.cpumap import Topology
+from arltuner.helper.ops_stress import _cap_khz
 
 from tests.fakesys import make_runtime_sysfs
 
 TOPO = arl_s_285k()  # P = CPU 0-7, E = CPU 8-23 in clusters of four
-FULL = "[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\nparking = true\n"
+FULL = "[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\n"
 UNCORE = "intel_uncore_frequency/package_00_die_00/"
 
 
@@ -40,9 +39,6 @@ class Case(unittest.TestCase):
     def freq(self):
         return cp.read_state(self.files, self.cpus)
 
-    def online(self):
-        return pk.read_state(self.files, self.cpus)
-
     def refusal(self, fn, *args, **kw) -> cp.Refused:
         with self.assertRaises(cp.Refused) as cm:
             fn(*args, **kw)
@@ -54,8 +50,8 @@ class Files(Case):
         f = self.freq()
         self.assertEqual((f[0].max_khz, f[0].cap_khz, f[0].min_khz), (5_700_000, 5_700_000, 800_000))
         self.assertEqual(f[8].max_khz, 4_900_000)
-        self.assertIsNone(self.online()[0])  # cpu0 has no online file
-        self.assertTrue(self.online()[5])
+        self.assertIsNone(self.files.read_int("cpu0/online"))  # cpu0 has no online file
+        self.assertEqual(self.files.read_int("cpu5/online"), 1)
         st = un.read_state(self.files)
         self.assertEqual((st.domain, st.min_khz, st.max_khz, st.initial_min_khz, st.initial_max_khz), ("package_00_die_00", 800_000, 4_000_000, 800_000, 4_000_000))
 
@@ -82,8 +78,6 @@ class Files(Case):
         (self.root / "cpu2" / "online").write_text("maybe\n")
         with self.assertRaises(cp.SysfsError):
             self.files.read_int("cpu2/online")
-        (self.root / "cpu2" / "online").write_text("7\n")
-        self.assertEqual(self.refusal(pk.read_state, self.files, [2]).check, "PARK_STATE")
 
 
 class Caps(Case):
@@ -121,7 +115,7 @@ class Caps(Case):
 
     def test_the_floor_is_the_policy_key_and_an_absent_key_refuses_naming_it(self) -> None:
         self.assertEqual(self.refusal(self.plan, {3: 7}).check, "CAPS_RANGE")
-        for pol in (policy(""), policy("[runtime]\nparking = true\n")):
+        for pol in (policy(""), policy("[runtime]\nuncore_ratio = [10, 38]\n")):
             e = self.refusal(self.plan, {3: 45}, pol)
             self.assertEqual((e.check, e.key), ("RUNTIME_POLICY_MISSING", "cap_ratio_min"))
             self.assertIn("[runtime] cap_ratio_min", str(e))
@@ -154,121 +148,43 @@ class Caps(Case):
         self.assertEqual((e.check, e.key), ("CAPS_CPU_NOT_ALLOWED", "cpu9"))
         self.assertEqual(self.refusal(self.plan, {12: 40}, narrow).check, "CAPS_CPU_NOT_ALLOWED")
 
-    def test_a_cpu_parked_in_the_same_intent_cannot_be_capped(self) -> None:
-        self.assertEqual(self.refusal(self.plan, {5: 40}, parked=frozenset({5})).check, "CAPS_PARKED")
+    def test_an_e_cap_goes_through_the_kernels_perf_map_with_the_units_fused_top(self) -> None:
+        top = {"EC0": 48, "EC1": 48}
+        for ratio, khz in ((46, 4_700_000), (47, 4_800_000), (40, 4_100_000)):  # E 46 needs 4.7 GHz, not 4.6 [MEASURED lnx 2026-10-14]; 4.1 GHz still lands E 40x
+            steps = self.plan({8: ratio}, unit_top=top, khz_of=_cap_khz)
+            self.assertEqual({s.value for s in steps}, {khz}, ratio)
+            self.assertEqual(steps[0].expect, (khz - cp.E_TOLERANCE_KHZ, khz + cp.E_TOLERANCE_KHZ))
+        (p,) = self.plan({3: 46}, unit_top=top, khz_of=_cap_khz)  # a P core: ratio x 100 MHz, exact
+        self.assertEqual((p.value, p.expect), (4_600_000, (4_600_000, 4_600_000)))
+
+    def test_the_e_ceiling_is_the_units_fused_top_ratio(self) -> None:
+        e = self.refusal(self.plan, {8: 49}, unit_top={"EC0": 48}, khz_of=_cap_khz)  # cpuinfo_max_freq says 49x, the cluster only reaches 48x
+        self.assertEqual(e.check, "CAPS_RANGE")
+        self.assertIn("maximum ratio of its unit (48)", str(e))
+        self.assertEqual(self.plan({8: 49}), [])  # without the fused top, 49x is cpuinfo_max_freq itself: already in force
+
+    def test_an_e_cap_within_a_perf_step_of_the_value_in_force_is_already_in_force(self) -> None:
+        top = {"EC0": 48}
+        for cpu in (8, 9, 10, 11):
+            self.files.write_int(f"cpu{cpu}/cpufreq/scaling_max_freq", 4_686_957)  # what the kernel reads back after a 4.7 GHz write
+        self.assertEqual(self.plan({8: 46}, unit_top=top, khz_of=_cap_khz), [])
+        self.assertEqual(len(self.plan({8: 45}, unit_top=top, khz_of=_cap_khz)), 4)
 
     def test_revert_restores_journaled_caps_and_skips_offline_cpus(self) -> None:
         self.files.write_int("cpu3/cpufreq/scaling_max_freq", 4_500_000)
-        steps, notes = cp.plan_revert({3: 5_700_000, 4: 5_700_000}, self.freq())
+        steps, notes = cp.plan_revert({3: 5_700_000, 4: 5_700_000}, self.freq(), TOPO)
         self.assertEqual([(s.key, s.before, s.value) for s in steps], [("cpu3", 4_500_000, 5_700_000)])  # cpu4 is already there
         state = dict(self.freq())
         state[3] = None
-        steps, notes = cp.plan_revert({3: 5_700_000}, state)
+        steps, notes = cp.plan_revert({3: 5_700_000}, state, TOPO)
         self.assertEqual((steps, len(notes)), ([], 1))
-        self.assertEqual(self.refusal(cp.plan_revert, {3: 9_000_000}, self.freq()).check, "CAPS_RANGE")
+        self.assertEqual(self.refusal(cp.plan_revert, {3: 9_000_000}, self.freq(), TOPO).check, "CAPS_RANGE")
 
     def test_the_read_back_is_exact(self) -> None:
         (s,) = self.plan({3: 45})
         self.assertIsNone(cp.readback_problem(s, 4_500_000))
         self.assertIn("reads 4600000", cp.readback_problem(s, 4_600_000))
         self.assertIn("cannot be read back", cp.readback_problem(s, None))
-
-
-class Parking(Case):
-    def plan(self, intent, pol=None, online=None, **kw):
-        return pk.plan(intent, pol or policy(), self.online() if online is None else online, TOPO, **kw)
-
-    def test_park_and_unpark_steps(self) -> None:
-        (s,) = self.plan({12: True})
-        self.assertEqual((s.domain, s.key, s.file, s.before, s.value), ("parking", "cpu12", "cpu12/online", 1, 0))
-        self.files.write_int("cpu12/online", 0)
-        (s,) = self.plan({12: False})
-        self.assertEqual((s.before, s.value), (0, 1))
-
-    def test_cpu0_is_refused_by_name(self) -> None:
-        e = self.refusal(self.plan, {0: True})
-        self.assertEqual((e.check, e.key), ("PARK_CPU0", "cpu0"))
-        self.assertEqual(self.plan({0: False}), [])  # asking the boot CPU online is a no-op
-
-    def test_even_with_an_online_file_cpu0_is_never_parked(self) -> None:
-        online = dict(self.online())
-        online[0] = True
-        self.assertEqual(self.refusal(self.plan, {0: True}, online=online).check, "PARK_CPU0")
-
-    def test_the_last_online_cpu_of_a_kind_is_refused(self) -> None:
-        for cpu in range(8, 23):
-            self.files.write_int(f"cpu{cpu}/online", 0)
-        e = self.refusal(self.plan, {23: True})
-        self.assertEqual(e.check, "PARK_LAST_OF_KIND")
-        self.assertIn("no E CPU online", str(e))
-        self.assertEqual([s.key for s in self.plan({23: True, 22: False})], ["cpu22", "cpu23"])  # unparking one makes room
-
-    def test_the_rule_is_cumulative_within_one_plan(self) -> None:
-        self.assertEqual(self.refusal(self.plan, dict.fromkeys(range(8, 24), True)).check, "PARK_LAST_OF_KIND")
-        self.assertEqual(len(self.plan(dict.fromkeys(range(8, 23), True))), 15)
-
-    def test_the_p_kind_is_protected_in_a_topology_whose_p_cpus_can_all_go(self) -> None:
-        topo = synthetic(2, 4, favored_p=(0,))  # P = CPU 0, 1
-        online = {0: True, 1: True, 2: True, 3: True, 4: True, 5: True}  # (a kernel that does offer cpu0/online)
-        e = self.refusal(pk.plan, {1: True, 0: True}, policy(), online, topo)
-        self.assertEqual(e.check, "PARK_CPU0")  # cpu0 first, by name
-        online[0] = None
-        self.assertEqual(self.refusal(pk.plan, {1: True, 0: True}, policy(), online, topo).check, "PARK_CPU0")
-        self.assertEqual(len(pk.plan({1: True}, policy(), online, topo)), 1)  # cpu0 stays, so a P CPU stays
-
-    def test_parking_needs_the_policy_key_but_unparking_does_not(self) -> None:
-        for pol in (policy(""), policy("[runtime]\ncap_ratio_min = 8\n")):
-            e = self.refusal(self.plan, {12: True}, pol)
-            self.assertEqual((e.check, e.key), ("RUNTIME_POLICY_MISSING", "parking"))
-            self.assertIn("[runtime] parking", str(e))
-        self.assertEqual(self.refusal(self.plan, {12: True}, policy("[runtime]\nparking = false\n")).check, "RUNTIME_POLICY_DENIED")
-        self.files.write_int("cpu12/online", 0)
-        (s,) = self.plan({12: False}, policy(""))
-        self.assertEqual(s.value, 1)
-
-    def test_the_policys_cpu_allowlist_bounds_parking_but_not_unparking(self) -> None:
-        narrow = load_policy('cpus = ["0-8"]\n' + FULL, TOPO)
-        self.assertEqual(self.plan({8: True}, narrow)[0].key, "cpu8")
-        self.assertEqual(self.refusal(self.plan, {12: True}, narrow).check, "PARK_CPU_NOT_ALLOWED")
-        self.files.write_int("cpu12/online", 0)
-        self.assertEqual(self.plan({12: False}, narrow)[0].value, 1)
-
-    def test_nothing_is_parked_while_something_holds_the_caps(self) -> None:
-        e = self.refusal(self.plan, {12: True}, held="the running stress.start (s1)")
-        self.assertEqual(e.check, "PARK_CONFLICT")
-        self.assertIn("stress.start", str(e))
-        self.files.write_int("cpu12/online", 0)
-        self.assertEqual(self.plan({12: False}, held="the running stress.start (s1)")[0].value, 1)  # unparking is always allowed
-
-    def test_unknown_cpu_and_bad_values(self) -> None:
-        self.assertEqual(self.refusal(self.plan, {99: True}).check, "PARK_UNKNOWN_CPU")
-        self.assertEqual(self.refusal(self.plan, {3: 1}).check, "PARK_VALUE")
-        self.assertEqual(self.refusal(self.plan, {}).check, "NOTHING_TO_DO")
-
-    def test_a_parked_cpu_that_left_the_topology_can_still_be_unparked(self) -> None:
-        self.files.write_int("cpu12/online", 0)
-        shrunk = Topology(tuple(c for c in TOPO.cores if c.cpu != 12))
-        (s,) = pk.plan({12: False}, policy(""), self.online(), shrunk)
-        self.assertEqual((s.key, s.value), ("cpu12", 1))
-        self.assertEqual(self.refusal(pk.plan, {12: True}, policy(), self.online(), shrunk).check, "PARK_UNKNOWN_CPU")
-
-    def test_unparks_come_before_parks(self) -> None:
-        self.files.write_int("cpu12/online", 0)
-        self.assertEqual([(s.key, s.value) for s in self.plan({13: True, 12: False})], [("cpu12", 1), ("cpu13", 0)])
-
-    def test_revert_unparks_first_and_needs_no_policy(self) -> None:
-        self.files.write_int("cpu12/online", 0)
-        steps, notes = pk.plan_revert({12: 1, 13: 0, 0: 1}, self.online(), TOPO)
-        self.assertEqual(([(s.key, s.before, s.value) for s in steps], notes), ([("cpu12", 0, 1), ("cpu13", 1, 0)], []))
-
-    def test_revert_never_parks_the_last_online_cpu_of_a_kind(self) -> None:
-        for cpu in range(9, 24):  # something else took all but cpu 8 offline since the journal was written
-            self.files.write_int(f"cpu{cpu}/online", 0)
-        steps, notes = pk.plan_revert({8: 0, 9: 1}, self.online(), TOPO)  # the journal: cpu8 was offline, cpu9 online
-        self.assertEqual([(s.key, s.value) for s in steps], [("cpu9", 1), ("cpu8", 0)])  # the unpark makes room, so the park is fine
-        steps, notes = pk.plan_revert({8: 0}, self.online(), TOPO)
-        self.assertEqual(steps, [])
-        self.assertIn("last online E CPU", notes[0])
 
 
 class Uncore(Case):

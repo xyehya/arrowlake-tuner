@@ -1,19 +1,23 @@
-"""G-216: ``runtime.read``, ``runtime.plan``, ``runtime.apply`` -- the runtime sysfs controls: per-CPU maximum-ratio caps (``scaling_max_freq``), core parking (``online``) and the uncore
-(ring) frequency limits (``intel_uncore_frequency/.../{min,max}_freq_khz``).
+"""G-216: ``runtime.read``, ``runtime.plan``, ``runtime.apply`` -- the runtime sysfs controls: per-CPU maximum-ratio caps (``scaling_max_freq``) and the uncore (ring) frequency limits
+(``intel_uncore_frequency/.../{min,max}_freq_khz``). Core parking is **held** (a parked CPU renumbers the live topology; D-pending): ``parking`` in a plan request is ``BAD_REQUEST`` and no
+``online`` file is ever written -- ``runtime.read`` only reports each CPU's online state, and :func:`~arltuner.helper.cpu_online.refuse_if_cpu_offline` stops plans / applies (here and in
+``tune.apply``, ``vf.measure``, ``stress.start``) while a CPU is offline outside the app.
 
 * ``runtime.read``: caps, online state, uncore limits, the ``[runtime]`` policy keys, what holds the caps (a stress / measure run or its journal) and the journal. No write; allowed in every state.
-* ``runtime.plan``: ``{caps?: {cpu: ratio}, parking?: {cpu: bool}, uncore?: {min_ratio?, max_ratio?}}`` or ``{revert: true}`` (the values of the journal) -> the file writes in a safe order, the
-  nonce, nothing written. Same plan-id / ``CONFIRM <nonce>`` / 600 s / single-use semantics as ``tune.plan`` (:class:`~arltuner.helper.ops_tune.PlanStore`, this module's own store).
-  The rules live in :mod:`arltuner.controls.caps`, ``parking``, ``uncore``; an absent ``[runtime]`` key refuses the control and names itself (a revert needs no key).
+* ``runtime.plan``: ``{caps?: {cpu: ratio}, uncore?: {min_ratio?, max_ratio?}}`` or ``{revert: true}`` (the values of the journal) -> the file writes in a safe order, the nonce, nothing
+  written. Same plan-id / ``CONFIRM <nonce>`` / 600 s / single-use semantics as ``tune.plan`` (:class:`~arltuner.helper.ops_tune.PlanStore`, this module's own store).
+  The rules live in :mod:`arltuner.controls.caps` and ``uncore``; an absent ``[runtime]`` key refuses the control and names itself (a revert needs no key). An E-core cap goes through the
+  kernel's perf map (``ops_stress._cap_khz`` fed with the unit's fused top ratio): E 46 -> 4.7 GHz.
 * ``runtime.apply``: one sysfs file per transaction, planned again from the values now in force (any difference is ``PLAN_STALE``). Before the first write the values being replaced are
   journaled (``runtime-journal.json``, root 0600, boot-id bound, bounded; a key is journaled the first time it is written in a boot and never overwritten) with ``in_flight`` set; each write is audited
   (``runtime_attempt``, fsync'd) before it is sent, under the guard's cross-process lock, read back from the file, and a mismatch stops the apply (no retry, no auto-revert). When the apply ends --
   complete or stopped -- ``in_flight`` is cleared.
 
 **What "restore at helper start" means here.** The journal is kept for ``revert`` (like the power journal) and is **not** applied at every start: the systemd-activated helper idles out after
-600 s and comes back at the next connect, and an unconditional restore would silently undo the operator's caps and parked CPUs each time. Only a journal with ``in_flight`` set -- the helper
+600 s and comes back at the next connect, and an unconditional restore would silently undo the operator's caps each time. Only a journal with ``in_flight`` set -- the helper
 died *during* an apply -- is restored, by :func:`recover_journal` at start (``Helper.start`` calls it next to the measure journal) and, as a net, a plan is refused while one exists
-(``JOURNAL_IN_FLIGHT``: revert first).
+(``JOURNAL_IN_FLIGHT``: revert first). The restore (and a revert) puts back the **whole boot's journal**, including the values of earlier completed applies of this boot -- the safe
+direction (back to the values the boot started with). A restore that had to skip something (a CPU offline: its cap is not restored) keeps the in-flight mark.
 """
 from __future__ import annotations
 
@@ -30,14 +34,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from arltuner.controls import caps as cp
-from arltuner.controls import parking as pk
 from arltuner.controls import uncore as un
 from arltuner.guard import AuditLog, Policy
 from arltuner.helper.config import INSTALLED_LOCK_DIR
 from arltuner.topology import Topology
 
+from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _no_args, _only, _trust, _trust_refusal, helper_topology
 from .ops_power import _boot_id, _NotSent, _open_audit, _release_lock, _take_lock
+from .ops_stress import _cap_khz, _unit_limits
 from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _load_policy, _validate_tune_apply
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, PLAN_STALE, REFUSED, OpError
 from .state import State
@@ -68,8 +73,8 @@ class RuntimeWiring:
 
 class SimRuntimeFiles(cp.RuntimeFiles):
     """The kernel's runtime files in memory (``--sim``, tests): ``cpu<N>/cpufreq/*`` is the simulated cpufreq (the measure / stress model's, so a held cap journal and a cap written here are
-    the same state), ``cpu<N>/online`` (none for cpu0; an offline CPU has no cpufreq directory), the uncore limits (the driver refuses min > max and values outside ``initial_*``, ``EINVAL``).
-    ``writes`` lists ``(file, value)``; ``drop_writes`` makes the kernel accept and ignore them. Defaults: the reference machine's uncore ``[MEASURED lnx 2026-10-18]``."""
+    the same state), ``cpu<N>/online`` (none for cpu0; an offline CPU has no cpufreq directory; read-only here, this app never writes it), the uncore limits (the driver refuses min > max
+    and values outside ``initial_*``, ``EINVAL``). An E-core cap reads back as the kernel's perf step (``SimModel.e_cap_quantized``, like ``SimMeasureIO.write_cap``). ``writes`` lists ``(file, value)``; ``drop_writes`` makes the kernel accept and ignore them. Defaults: the reference machine's uncore ``[MEASURED lnx 2026-10-18]``."""
 
     UNCORE = "intel_uncore_frequency/package_00_die_00"
 
@@ -111,13 +116,13 @@ class SimRuntimeFiles(cp.RuntimeFiles):
     def write_int(self, name: str, value: int) -> None:
         self.writes.append((name, int(value)))
         kind, cpu, attr = self._route(name)
-        if kind == "none" or self.read_text(name) is None:
+        if kind in ("none", "online") or self.read_text(name) is None:
             raise cp.SysfsError(f"cannot write {self.path(name)}: No such file or directory")
         if self.drop_writes:
             return
-        if kind == "online":
-            self.online[cpu] = int(value)  # type: ignore[index]
-        elif kind == "cpufreq":
+        if kind == "cpufreq":
+            if attr == cp.CAP_ATTR and self.cpufreq.model.unit_of(cpu).startswith("E"):
+                value = self.cpufreq.model.e_cap_quantized(int(value))
             self.cpufreq.write(cpu, attr, str(int(value)))
         else:
             new = {**self.uncore, attr: int(value)}
@@ -167,23 +172,22 @@ class StoredRuntimePlan:
 # --------------------------------------------------------------------------------------------------------------
 @dataclass
 class Journal:
-    """The values in force before the first write of each key in this boot: ``caps`` {cpu: kHz}, ``online`` {cpu: 0|1}, ``uncore`` {min_ratio|max_ratio: kHz}. ``in_flight``: an apply was
-    running when it was last written."""
+    """The values in force before the first write of each key in this boot: ``caps`` {cpu: kHz}, ``uncore`` {min_ratio|max_ratio: kHz}. ``in_flight``: an apply was running when it was
+    last written. A revert / recovery restores this whole boot's journal (the safe direction: the values the boot started with)."""
 
     caps: dict[int, int] = field(default_factory=dict)
-    online: dict[int, int] = field(default_factory=dict)
     uncore: dict[str, int] = field(default_factory=dict)
     in_flight: bool = False
 
     def doc(self, boot_id: str, created: float, pid: int | None = None) -> dict[str, Any]:
         return {
             "version": JOURNAL_VERSION, "boot_id": boot_id, "created": created, "pid": os.getpid() if pid is None else pid, "in_flight": self.in_flight,
-            "caps": {str(k): v for k, v in sorted(self.caps.items())}, "online": {str(k): v for k, v in sorted(self.online.items())}, "uncore": dict(sorted(self.uncore.items())),
+            "caps": {str(k): v for k, v in sorted(self.caps.items())}, "uncore": dict(sorted(self.uncore.items())),
             "note": "the values at the first runtime write of this boot, not necessarily the BIOS or kernel defaults",
         }
 
     def empty(self) -> bool:
-        return not (self.caps or self.online or self.uncore)
+        return not (self.caps or self.uncore)
 
     def remember(self, steps: Sequence[cp.RuntimeStep]) -> bool:
         """Journal ``before`` of every step whose key is not journaled yet; ``True`` if anything was added."""
@@ -193,7 +197,7 @@ class Journal:
                 table: dict[Any, int] = self.uncore
                 key: Any = s.key
             else:
-                table = self.caps if s.domain == "caps" else self.online
+                table = self.caps
                 key = int(s.key[3:])
             if key not in table:
                 table[key] = s.before
@@ -214,14 +218,13 @@ def _int_map(raw: Any, what: str, lo: int, hi: int, keys: Callable[[str], bool])
 
 def parse_journal(data: bytes, boot_id: str | None) -> Journal | None:
     """The journal of ``data``, or ``None`` when it is for another boot (a stale file from before a reboot: ignored, replaced by the next write). ``ValueError`` when it is not a runtime
-    journal or a value is outside what the controls can hold (a CPU number >= 1024, a frequency above ratio 255, an online value not 0 / 1)."""
+    journal or a value is outside what the controls can hold (a CPU number >= 1024, a frequency above ratio 255)."""
     doc = json.loads(data.decode("ascii"))
     if not isinstance(doc, dict) or doc.get("version") != JOURNAL_VERSION or not isinstance(doc.get("in_flight"), bool):
         raise ValueError("not a runtime journal")
     is_cpu: Callable[[str], bool] = lambda k: k.isdigit() and len(k) <= 4 and int(k) < _CPU_MAX  # noqa: E731
     journal = Journal(
         caps=_int_map(doc.get("caps"), "caps", 1, cp.JOURNAL_KHZ_MAX, is_cpu),
-        online=_int_map(doc.get("online"), "online", 0, 1, is_cpu),
         uncore=_int_map(doc.get("uncore"), "uncore", 1, cp.JOURNAL_KHZ_MAX, lambda k: k in un.KEYS),
         in_flight=doc["in_flight"],
     )
@@ -250,7 +253,7 @@ def _read_journal(helper: Helper, w: RuntimeWiring) -> Journal | None:
         return parse_journal(data, _boot_id(helper))
     except ValueError as exc:
         raise OpError(
-            REFUSED, f"the runtime journal {w.journal_path} is unusable ({exc}); remove it by hand once the CPU frequency caps, online CPUs and uncore limits are known to be right. Nothing was written.",
+            REFUSED, f"the runtime journal {w.journal_path} is unusable ({exc}); remove it by hand once the CPU frequency caps and uncore limits are known to be right. Nothing was written.",
             {"check": "JOURNAL_UNUSABLE"},
         ) from None
 
@@ -284,9 +287,20 @@ def _write_journal(helper: Helper, w: RuntimeWiring, journal: Journal, boot_id: 
 # reads
 # --------------------------------------------------------------------------------------------------------------
 def _cpus(w: RuntimeWiring, topology: Topology) -> list[int]:
-    """Every CPU the topology has and every ``cpu<N>`` directory sysfs lists (a parked CPU may have left the live topology but still has its ``online`` file)."""
+    """Every CPU the topology has and every ``cpu<N>`` directory sysfs lists (a CPU taken offline outside the app may have left the live topology but still has its ``online`` file)."""
     found = {int(m.group(1)) for n in w.files.listdir("") if (m := _CPU_DIR.fullmatch(n))}
     return sorted(found | {c.cpu for c in topology.cores})
+
+
+def _online_state(files: cp.RuntimeFiles, cpus: Sequence[int]) -> dict[int, bool | None]:
+    """``{cpu: online}``; ``None`` where the CPU has no ``online`` file (cpu0). Read only. ``SysfsError`` when a file holds anything but 0 / 1."""
+    out: dict[int, bool | None] = {}
+    for cpu in cpus:
+        value = files.read_int(f"cpu{cpu}/online")
+        if value not in (None, 0, 1):
+            raise cp.SysfsError(f"{files.path(f'cpu{cpu}/online')} holds {value}, not 0 or 1: nothing is assumed")
+        out[cpu] = None if value is None else bool(value)
+    return out
 
 
 def _held(helper: Helper) -> str | None:
@@ -318,14 +332,13 @@ def _policy_json(policy: Policy) -> dict[str, Any]:
         "source": policy.where,
         "cap_ratio_min": None if r is None else r.cap_ratio_min,
         "uncore_ratio": None if r is None or r.uncore_ratio is None else list(r.uncore_ratio),
-        "parking": None if r is None else r.parking,
     }
 
 
 def _journal_json(j: Journal | None) -> dict[str, Any] | None:
     if j is None:
         return None
-    return {"caps": {str(k): v for k, v in sorted(j.caps.items())}, "online": {str(k): v for k, v in sorted(j.online.items())}, "uncore": dict(sorted(j.uncore.items())), "in_flight": j.in_flight}
+    return {"caps": {str(k): v for k, v in sorted(j.caps.items())}, "uncore": dict(sorted(j.uncore.items())), "in_flight": j.in_flight}
 
 
 def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -334,13 +347,13 @@ def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     topo = helper_topology(helper)
     cpus = _cpus(w, topo)
     result: dict[str, Any] = {
-        "caps": None, "parking": None, "uncore": None, "uncore_note": None, "policy": _policy_json(policy), "held": _held(helper), "journal": None, "journal_path": str(w.journal_path),
+        "caps": None, "offline": None, "uncore": None, "uncore_note": None, "policy": _policy_json(policy), "held": _held(helper), "journal": None, "journal_path": str(w.journal_path),
         "note": None,
     }
     try:
         freq = cp.read_state(w.files, cpus)
-        online = pk.read_state(w.files, cpus)
-    except cp.SysfsError as exc:  # includes Refused (a weird online value)
+        online = _online_state(w.files, cpus)
+    except cp.SysfsError as exc:  # includes a weird online value
         result["note"] = str(exc)
         return result
     rows = []
@@ -348,11 +361,11 @@ def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
         core = next((c for c in topo.cores if c.cpu == cpu), None)
         f = freq[cpu]
         rows.append({
-            "cpu": cpu, "kind": None if core is None else core.kind, "unit": None if core is None else topo.unit_of_cpu(cpu), "online": online[cpu] is not False, "can_park": online[cpu] is not None,
+            "cpu": cpu, "kind": None if core is None else core.kind, "unit": None if core is None else topo.unit_of_cpu(cpu), "online": online[cpu] is not False,
             "cpufreq": None if f is None else f.as_json(),
         })
     result["caps"] = rows
-    result["parking"] = {str(cpu): online[cpu] for cpu in cpus}
+    result["offline"] = [cpu for cpu in cpus if online[cpu] is False]
     try:
         result["uncore"] = un.read_state(w.files).as_json()
     except cp.SysfsError as exc:
@@ -384,7 +397,9 @@ def _whole(what: str, value: object) -> int:
 
 
 def _validate_runtime_plan(args: dict[str, Any]) -> dict[str, Any]:
-    _only(args, {"caps", "parking", "uncore", "revert"})
+    if "parking" in args:
+        raise _bad("core parking is not supported (held, D-pending)")
+    _only(args, {"caps", "uncore", "revert"})
     if "revert" in args:
         if set(args) != {"revert"} or args["revert"] is not True:
             raise _bad("'revert' must be true and the only field")
@@ -394,14 +409,6 @@ def _validate_runtime_plan(args: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(args["caps"], dict) or not args["caps"]:
             raise _bad("'caps' must be a non-empty object {cpu: ratio}")
         out["caps"] = {_cpu_key("caps", k): _whole(f"caps.{k}", v) for k, v in args["caps"].items()}
-    if args.get("parking") is not None:
-        if not isinstance(args["parking"], dict) or not args["parking"]:
-            raise _bad("'parking' must be a non-empty object {cpu: true|false}")
-        out["parking"] = {}
-        for k, v in args["parking"].items():
-            if not isinstance(v, bool):
-                raise _bad(f"parking.{k} must be true (park) or false (unpark)")
-            out["parking"][_cpu_key("parking", k)] = v
     if args.get("uncore") is not None:
         raw = args["uncore"]
         if not isinstance(raw, dict):
@@ -413,24 +420,41 @@ def _validate_runtime_plan(args: dict[str, Any]) -> dict[str, Any]:
         if picked:
             out["uncore"] = picked
     if not out:
-        raise OpError(BAD_REQUEST, "the runtime intent changes nothing (set caps, parking and/or uncore)", {"check": "NOTHING_TO_DO"})
+        raise OpError(BAD_REQUEST, "the runtime intent changes nothing (set caps and/or uncore)", {"check": "NOTHING_TO_DO"})
     return out
 
 
 # --------------------------------------------------------------------------------------------------------------
 # the plan
 # --------------------------------------------------------------------------------------------------------------
-_PHASE = {("parking", 1): 0, ("caps", 0): 1, ("caps", 1): 1, ("uncore", 0): 2, ("uncore", 1): 2, ("parking", 0): 3}
+_PHASE = {"caps": 0, "uncore": 1}
 
 
 def _order(steps: list[cp.RuntimeStep]) -> list[cp.RuntimeStep]:
-    """Unparks, then caps, then uncore, then parks (each domain keeps its own safe order inside); renumbered."""
-    ordered = sorted(steps, key=lambda s: _PHASE[(s.domain, s.value if s.domain == "parking" else 0)])
+    """Caps, then uncore (each domain keeps its own safe order inside); renumbered."""
+    ordered = sorted(steps, key=lambda s: _PHASE[s.domain])
     return [dataclasses.replace(s, number=i) for i, s in enumerate(ordered, 1)]
 
 
+def _cap_limits(helper: Helper, topo: Topology, cpus: Sequence[int]) -> tuple[dict[str, int], Callable[[int, int | None, int | None], int] | None, list[str]]:
+    """``(fused top ratio per E unit, the kHz map, notes)`` for the E units of ``cpus``: the way ``stress.start`` derives them (``ops_stress._unit_limits``: turbo tables, read-only).
+    Without the maxima (no measure wiring / no tables) a cap is ratio x 100 MHz, which may not hold an E-cluster: say so."""
+    units = sorted({topo.unit_of_cpu(c) for c in cpus if topo.by_cpu(c).kind == "E"})
+    if not units:
+        return {}, None, []
+    mw = getattr(helper, "measure_wiring", None)
+    known = False
+    top: dict[str, int] = {}
+    if mw is not None:
+        top, _cpuinfo, known = _unit_limits(helper, mw, topo, units)
+    if known:
+        return top, _cap_khz, []
+    return {}, None, ["the maximum ratio of each E unit is not known (no turbo tables): the E cap is written as ratio x 100 MHz, which may not hold the cluster at that ratio"]
+
+
 def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: dict[str, Any]) -> tuple[list[cp.RuntimeStep], list[str], Journal | None]:
-    """``(steps, notes, journal of this boot or None)`` for a plan-shaped ``args``; raises the refusal. ``policy`` is not needed for a revert."""
+    """``(steps, notes, journal of this boot or None)`` for a plan-shaped ``args``; raises the refusal. ``policy`` is not needed for a revert. For a revert a note means a journaled value was
+    **not** restored (the caller then keeps the in-flight mark)."""
     topo = helper_topology(helper)
     journal = _read_journal(helper, w)
     notes: list[str] = []
@@ -438,16 +462,13 @@ def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: di
         if args.get("revert"):
             if journal is None or journal.empty():
                 raise OpError(REFUSED, "there is nothing to revert to: no runtime value was written in this boot (no journal for this boot). Nothing was written.", {"check": "NO_JOURNAL"})
-            steps, notes = pk.plan_revert(journal.online, pk.read_state(w.files, sorted(journal.online)), topo)
-            caps_steps, cap_notes = cp.plan_revert(journal.caps, cp.read_state(w.files, sorted(journal.caps)))
-            notes += cap_notes
-            steps += caps_steps
+            steps, notes = cp.plan_revert(journal.caps, cp.read_state(w.files, sorted(journal.caps)), topo)
             if journal.uncore:
                 steps += un.plan_revert(journal.uncore, un.read_state(w.files))
             held = _held(helper)
-            if held is not None and any(s.domain == "caps" or (s.domain == "parking" and s.value == 0) for s in steps):
-                # a revert restores a recorded state, but not over a run that owns the caps (its own restore would undo it) or by parking a CPU under it; unparking and the uncore are fine
-                raise cp.Refused("CAPS_CONFLICT" if any(s.domain == "caps" for s in steps) else "PARK_CONFLICT", f"{held} holds the CPU frequency caps: the revert of caps and parking waits until it is finished or restored")
+            if held is not None and any(s.domain == "caps" for s in steps):
+                # a revert restores a recorded state, but not over a run that owns the caps (its own restore would undo it); the uncore is fine
+                raise cp.Refused("CAPS_CONFLICT", f"{held} holds the CPU frequency caps: the revert of caps waits until it is finished or restored")
             return _order(steps), notes, journal
         assert policy is not None
         if journal is not None and journal.in_flight:
@@ -456,19 +477,16 @@ def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: di
             )
         held = _held(helper)
         steps = []
-        cpus = _cpus(w, topo)
-        parked: frozenset[int] = frozenset()
-        if "parking" in args:
-            online = pk.read_state(w.files, cpus)
-            park_steps = pk.plan({int(k): v for k, v in args["parking"].items()}, policy, online, topo, held=held)
-            parked = frozenset(int(s.key[3:]) for s in park_steps if s.value == 0)
-            steps += park_steps
         if "caps" in args:
             intent = {int(k): v for k, v in args["caps"].items()}
-            cap_steps = cp.plan(intent, policy, cp.read_state(w.files, cpus), topo, parked=parked, held=held)
+            known = {c.cpu for c in topo.cores}
+            unit_top, khz_of, limit_notes = _cap_limits(helper, topo, [c for c in intent if c in known])
+            cap_steps = cp.plan(intent, policy, cp.read_state(w.files, _cpus(w, topo)), topo, held=held, unit_top=unit_top, khz_of=khz_of)
             wrote = {int(s.key[3:]) for s in cap_steps}
             if wrote - set(intent):
                 notes.append(f"an E-cluster runs one ratio: the cap was also set on cpu {', '.join(map(str, sorted(wrote - set(intent))))} of the same cluster(s)")
+            if any(topo.by_cpu(c).kind == "E" for c in wrote):
+                notes += limit_notes
             steps += cap_steps
         if "uncore" in args:
             steps += un.plan(args["uncore"], policy, un.read_state(w.files))
@@ -503,6 +521,7 @@ def _journal_policy_warnings(policy: Policy, journal: Journal) -> list[str]:
 
 
 def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    refuse_if_cpu_offline(helper, "runtime.plan")
     w = _wiring(helper)
     steps, notes, journal, policy = _planned(helper, w, args)
     revert = bool(args.get("revert"))
@@ -511,8 +530,6 @@ def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
         warnings.extend(_journal_policy_warnings(policy, journal))
     if not revert:
         warnings.append("the values now in force are journaled before the first write of each key in this boot; \"revert\" puts them back")
-    if any(s.domain == "parking" and s.value == 0 for s in steps):
-        warnings.append("a parked CPU leaves the live CPU topology and has no cpufreq directory; unpark it to use or cap it again")
     warnings.append("these are runtime values: a reboot restores the firmware / kernel defaults")
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))
     canon = json.dumps({"args": args, "steps": [s.as_json() for s in steps], "nonce": nonce}, sort_keys=True)
@@ -525,7 +542,7 @@ def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
 
 
 def _would_add(journal: Journal, steps: Sequence[cp.RuntimeStep]) -> bool:
-    return dataclasses.replace(journal, caps=dict(journal.caps), online=dict(journal.online), uncore=dict(journal.uncore)).remember(steps)
+    return dataclasses.replace(journal, caps=dict(journal.caps), uncore=dict(journal.uncore)).remember(steps)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -630,13 +647,14 @@ def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.R
 # runtime.apply
 # --------------------------------------------------------------------------------------------------------------
 def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    refuse_if_cpu_offline(helper, "runtime.apply")
     plan = _plans(helper).claim(args["plan_id"], args["typed"])
     w = _wiring(helper)
     boot_id = _boot_id(helper)
     if boot_id is None:
         raise OpError(REFUSED, "the boot id is unknown, so the runtime journal cannot be bound to this boot. Nothing was written.", {"check": "BOOT_ID_UNKNOWN"})
     # the plan was made from the values then in force: plan again from the values now; any difference is stale (nothing written)
-    steps, _notes, journal, _policy = _planned(helper, w, plan.intent)
+    steps, notes, journal, _policy = _planned(helper, w, plan.intent)
     if _identity(steps) != _identity(plan.steps):
         raise OpError(PLAN_STALE, "the runtime values changed since the plan was made (or the plan no longer fits the policy); nothing was written. Plan again.")
     try:
@@ -655,7 +673,9 @@ def op_runtime_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         if not plan.revert:
             _end_in_flight(helper, w, journal, boot_id, [])  # nothing was sent: nothing is in flight
         raise
-    if not plan.revert or (run.stop is None and journal.in_flight):  # a complete revert also settles a journal left in flight by a dead helper
+    skipped = plan.revert and bool(notes)  # a revert that left a journaled value unrestored is not complete: the in-flight mark stays
+    run.warnings.extend(f"{n}. The journal is kept." for n in notes if plan.revert)
+    if not plan.revert or (run.stop is None and journal.in_flight and not skipped):  # a complete revert also settles a journal left in flight by a dead helper
         _end_in_flight(helper, w, journal, boot_id, run.warnings)
     complete = run.stop is None
     out: dict[str, Any] = {
@@ -681,9 +701,8 @@ def _after(w: RuntimeWiring, steps: Sequence[cp.RuntimeStep]) -> dict[str, Any] 
     """The values now in force of what the steps touched; ``None`` if they cannot be read."""
     try:
         caps = cp.read_state(w.files, sorted({int(s.key[3:]) for s in steps if s.domain == "caps"}))
-        online = pk.read_state(w.files, sorted({int(s.key[3:]) for s in steps if s.domain == "parking"}))
         return {
-            "caps": {str(c): None if f is None else f.cap_khz for c, f in caps.items()}, "online": {str(c): v for c, v in online.items()},
+            "caps": {str(c): None if f is None else f.cap_khz for c, f in caps.items()},
             "uncore": un.read_state(w.files).as_json() if any(s.domain == "uncore" for s in steps) else None,
         }
     except cp.SysfsError:
@@ -711,7 +730,8 @@ def recover_journal(helper: Helper) -> bool:
         w = _wiring(helper)
         journal = _read_journal(helper, w)
     except OpError as exc:
-        log(f"runtime journal not applied: {exc.message}")
+        if exc.code != INTERNAL:  # INTERNAL = no runtime-control support configured (a simulator without wiring): nothing to recover, nothing to say
+            log(f"runtime journal not applied: {exc.message}")
         return False
     except Exception as exc:
         log(f"runtime journal recovery FAILED: {type(exc).__name__}: {exc}")
@@ -734,6 +754,9 @@ def recover_journal(helper: Helper) -> bool:
             if run.stop is not None:
                 log(f"runtime journal NOT fully restored, in-flight mark kept: {run.stop['reason']}")
                 return True
+        if notes:
+            log(f"runtime journal NOT fully restored, in-flight mark kept: {len(notes)} value(s) skipped")
+            return True
         _end_in_flight(helper, w, journal, boot_id, warnings := [])
         for p in warnings:
             log(f"runtime journal: {p}")

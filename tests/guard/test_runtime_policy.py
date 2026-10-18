@@ -1,4 +1,4 @@
-"""G-216: the ``[runtime]`` table of the policy (caps floor, uncore ratio range, parking) and the ``runtime_attempt`` audit event. Policy parsing only; no hardware."""
+"""G-216: the ``[runtime]`` table of the policy (caps floor, uncore ratio range) and the ``runtime_attempt`` audit event. Policy parsing only; no hardware."""
 from __future__ import annotations
 
 import tempfile
@@ -30,19 +30,18 @@ class RuntimeTable(unittest.TestCase):
         self.assertNotIn("\n[runtime]", text)
 
     def test_a_full_table(self) -> None:
-        r = load("[runtime]\ncap_ratio_min = 8\nuncore_ratio = [8, 40]\nparking = true\n").runtime
-        self.assertEqual((r.cap_ratio_min, r.uncore_ratio, r.parking), (8, (8, 40), True))
+        r = load("[runtime]\ncap_ratio_min = 8\nuncore_ratio = [8, 40]\n").runtime
+        self.assertEqual((r.cap_ratio_min, r.uncore_ratio), (8, (8, 40)))
 
     def test_every_key_is_optional_and_an_empty_table_allows_nothing(self) -> None:
         self.assertEqual(load("[runtime]\n").runtime, RuntimePolicy())
-        r = load("[runtime]\nparking = false\n").runtime
-        self.assertEqual((r.cap_ratio_min, r.uncore_ratio, r.parking), (None, None, False))
+        r = load("[runtime]\nuncore_ratio = [10, 38]\n").runtime
+        self.assertEqual((r.cap_ratio_min, r.uncore_ratio), (None, (10, 38)))
 
     def test_bad_values_are_load_errors(self) -> None:
         for bad in (
             "cap_ratio_min = 0", "cap_ratio_min = 256", "cap_ratio_min = 4.5", 'cap_ratio_min = "8"', "cap_ratio_min = true",
             "uncore_ratio = [8]", "uncore_ratio = [40, 8]", "uncore_ratio = [0, 40]", "uncore_ratio = [8, 300]", "uncore_ratio = [8.5, 40]", 'uncore_ratio = "8-40"',
-            "parking = 1", 'parking = "yes"',
         ):
             with self.assertRaises(PolicyError, msg=bad):
                 load("[runtime]\n" + bad + "\n")
@@ -51,11 +50,13 @@ class RuntimeTable(unittest.TestCase):
         with self.assertRaises(PolicyError):
             load("[runtime]\nuncore_max = 40\n")
         with self.assertRaises(PolicyError):
+            load("[runtime]\nparking = true\n")  # core parking is held: no such key
+        with self.assertRaises(PolicyError):
             load("runtime = 3\n")
 
     def test_the_policy_object_checks_the_type(self) -> None:
         with self.assertRaises(PolicyError):
-            Policy(cpus=frozenset({0}), runtime={"parking": True})  # type: ignore[arg-type]
+            Policy(cpus=frozenset({0}), runtime={"cap_ratio_min": 8})  # type: ignore[arg-type]
 
 
 class AuditEvent(unittest.TestCase):

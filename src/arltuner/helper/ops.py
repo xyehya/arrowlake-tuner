@@ -775,7 +775,7 @@ def builtin_ops() -> dict[str, OpSpec]:
     from .ops_power import power_ops  # G-214: power.read / power.plan / power.apply (powercap PL1 / PL2 / tau); imported here because ops_power imports ops_tune
 
     specs.extend(power_ops())
-    from .ops_runtime import runtime_ops  # G-216: runtime.read / runtime.plan / runtime.apply (per-CPU caps, core parking, uncore limits); imported here because ops_runtime imports ops_tune
+    from .ops_runtime import runtime_ops  # G-216: runtime.read / runtime.plan / runtime.apply (per-CPU caps, uncore limits); imported here because ops_runtime imports ops_tune
 
     specs.extend(runtime_ops())
     return {s.name: s for s in specs}

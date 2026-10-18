@@ -243,8 +243,7 @@ kind = "read"
 
 # --- runtime controls (G-216, D-039): THE KEYS BELOW ARE COMMENTED OUT ON PURPOSE. Until you set them in /etc/arltuner/policy.toml the control they gate refuses and the refusal names the
 # missing key. runtime.read always works. All of it is runtime state: a reboot restores the kernel / firmware values. The numbers are an EXAMPLE of the shape, not a recommendation.
-# A revert to the values this boot started with (runtime.plan {revert: true}) needs none of these keys, and unparking a CPU never does.
+# A revert to the values this boot started with (runtime.plan {revert: true}) needs none of these keys.
 # [runtime]
 # cap_ratio_min = 8        # the lowest per-CPU max-ratio cap that may be written (ratio x 100 MHz); the highest is always the CPU's own cpuinfo_max_freq
 # uncore_ratio = [8, 40]   # [min, max] ratio the uncore (ring) frequency limits may be set to, inside the hardware's own initial_min/max_freq_khz
-# parking = true           # true: a CPU may be taken offline (never cpu0, never the last online CPU of a kind, never while a stress run is active); false/absent: refused
