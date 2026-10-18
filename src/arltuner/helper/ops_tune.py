@@ -1630,14 +1630,14 @@ def _check_ring_range(policy: Policy, topology: Topology, points: Mapping[str, i
         p2 = int(key)
         entry = policy.match(int(Cmd.VOLTAGE_FREQ_WRITE), ringmod.RING_P1, p2)
         if entry is None or entry.kind != "write":
-            raise refuse(f"ring point {p2}: the policy has no write entry for cmd 0x11 P1=2 P2={p2} ({policy.where})")
+            raise refuse(f"ring point {p2}: the helper's mailbox command allowlist has no write entry for cmd 0x11 P1=2 P2={p2} ({policy.where})")
         try:
             raw = VfWord.mv_to_offset_raw(mv)
         except ValueError:
             raise refuse(f"ring point {p2}: offset {mv:+d} mV does not fit the 11-bit offset field ({ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)") from None
         low, high = entry.params.get("offset_raw_min", -1024), entry.params.get("offset_raw_max", 1023)
         if not low <= raw <= high:
-            raise refuse(f"ring point {p2}: offset {mv:+d} mV (raw {raw}) is outside the allow entry {entry.name!r} window {low * 1000 / 1024:+.1f}..{high * 1000 / 1024:+.1f} mV ({policy.where})")
+            raise refuse(f"ring point {p2}: offset {mv:+d} mV (raw {raw}) is outside the mailbox allowlist entry {entry.name!r} window {low * 1000 / 1024:+.1f}..{high * 1000 / 1024:+.1f} mV ({policy.where})")
 
 
 def _ring_setting(helper: Helper, asked: Mapping[str, Any], policy: Policy, topology: Topology) -> RingSetting:
@@ -2328,7 +2328,7 @@ def _turbo_shape_warnings(helper: Helper, profile: Profile, topology: Topology |
 
 # G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
 _RAISE_NOTE = (
-    "this plan RAISES a ratio, V target or offset; the numbers come from the reviewed policy; take a stability check between steps"
+    "this plan RAISES a ratio, V target or offset; the CPU's own limits were checked; run a stability check before relying on it"
 )
 _POINT_NOTE = (
     "per-point offsets change one V/F point (0x11 with P2 = the point); the hardware keeps V(n) >= V(n-1): arltuner models it (CLAMPED warnings) but cannot read the "

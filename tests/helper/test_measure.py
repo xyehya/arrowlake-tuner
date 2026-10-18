@@ -1,6 +1,7 @@
 """``vf.measure`` / ``curves.*`` / ``mem.read`` through a real helper on pipes, over a fake cpufreq sysfs and the SimModel (no hardware, no process, no sleeping)."""
 from __future__ import annotations
 
+import time
 import threading
 import unittest
 
@@ -80,7 +81,12 @@ class QuickRunTests(MeasureCase):
         self.assertEqual(set(prog[-1]), {"event", "op_id", "step", "of", "unit", "ratio", "eta_s"})
         self.assertEqual(prog[-1]["eta_s"], 0)
         self.assertGreaterEqual(prog[0]["eta_s"], 1)
+        # the state events arrive on the connection's reader alongside the answer: wait for the transition back to idle (bounded) instead of racing it under suite load
+        deadline = time.monotonic() + 3.0
         states = [m["state"] for m in h.messages if m.get("event") == "state"]
+        while states[:2] != ["measuring", "idle"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+            states = [m["state"] for m in h.messages if m.get("event") == "state"]
         self.assertEqual(states[:2], ["measuring", "idle"])
 
     def test_dense_covers_every_ratio_up_to_the_unit_maximum(self) -> None:
