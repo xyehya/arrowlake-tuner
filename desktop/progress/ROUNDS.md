@@ -52,3 +52,4 @@
 - G-216 merged (fix round 2 + orchestrator: revert compares exactly, ignores topology). Suite 3273 OK, node 281. Not installed (installs only with operator go-ahead; operator is testing the GUI live now). Next: G-225 Rust allowlist power/runtime, then H5.
 - Operator go-ahead: G-216 INSTALLED (21/21 self-check, MCE 0; runtime.read + power.read verified via socket). AppImage rebuilt from main. G-225 running; G-217 (Power + caps/uncore sub-tabs, parking UI dropped) dispatched.
 - Operator: no policy in the GUI, CPU-enforced limits only (D-049). G-217 stopped (worktree kept; its fixtures reusable). Opus facts audit running (CPU rules evidence + every policy limit to remove + gaps).
+- G-225 merged (Rust allowlist power/runtime; option (a): plans short — verified core.py: a long op answers with a normal response on the request id). Follow-up: web server.py OPS lacks power/runtime (web GUI is legacy; fold into D-049 backend task).
