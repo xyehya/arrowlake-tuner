@@ -147,3 +147,7 @@ install to `~/AppImages/arltuner.AppImage` on operator request.
 Owns `desktop/app/ui/views/dashboard.js`, `components/coremap.js`, new `views/dashboard/{cores,sensors}.js`, `styles/views.css` (+ one `<link>` in index.html).
 Goal: port the web Cores table + Sensors sub-views; mem.read on screen open (read-only MCHBAR); move constructed-stylesheet CSS into `styles/views.css`;
 core map 8 P tiles in one row at 1280 px; calmer tile colours (heat scale on a dark base). Accept: Playwright (mock) + orchestrator screenshot.
+
+**G-225 · Rust allowlist: power.* + runtime.*** · S · R · deps G-214, G-216
+Owns `desktop/app/src-tauri/src/helper/ops.rs` (+ link.rs plan binding), tests. Goal: add `power.read/plan/apply` and `runtime.read/plan/apply` with arg-shape
+checks; bind `power.apply` / `runtime.apply` to plan_ids this connection got from the matching `*.plan` (separate bounded sets). Accept: cargo tests (unknown keys refused, cross-kind plan id refused).

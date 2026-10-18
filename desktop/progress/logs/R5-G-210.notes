@@ -1,0 +1,16 @@
+- G-208 is merged: listen on `store.events` (EventTarget) for `tune:review` ({changes, units}); the draft/model live in the tune controller
+  (views/tune.js: tc.state().draft / .model; lib/intent.js buildIntent(model, draft, features) -> {intent} | {error}).
+- Flow (PLAN §4.3): Review & Apply -> tune.plan {intent} (sync, pure) -> drawer (components/drawer.js from G-205; extend it if needed) with per-unit
+  before/after, the ORDERED write list from plan.steps (G-153 order), ops needed, warnings (plan.warnings), predicted VccIA, "Revert: cold boot";
+  plan errors (REFUSED/BAD_REQUEST with detail) land on the offending field via the draft (show inline in the inspector row, and a summary in the drawer).
+  Apply N writes -> tune.apply {plan_id, typed: "CONFIRM " + nonce} (the Rust link only accepts plan_ids this app created — fine);
+  progress events (helper://progress {op_id, step, of, ops_used}) -> per-unit status rows (queued / writing / read back OK / mismatch), ETA from
+  elapsed/step; Cancel -> `cancel {op_id}` (takes effect between transactions; say so). Result: summary (n/n read back) + expandable read-back table,
+  residual / ring_refused / cpufreq notes; on success clear the draft and trigger a re-read of tune.last (no mailbox) so tiles show the new words;
+  PLAN_STALE -> offer "Re-plan" (calls tune.plan again with the same draft). The window stays usable during apply (drawer is non-modal; Apply disabled
+  while an op runs).
+- Design the drawer to hold MORE THAN ONE plan section (tune now; power.* and runtime.* sections arrive with G-217): a list of {kind, plan, applyFn}
+  applied in sequence, each with its own nonce; stop the sequence on the first failure.
+- Mock: extend fixtures/mock-backend.js for tune.plan errors, PLAN_STALE, progress events and a mismatch result (you own those mock additions).
+- Tests: node (pure helpers: plan -> rows, progress -> unit status, ETA) + Playwright (tests/apply.smoke.py) per TASKS.md acceptance.
+- Node 24 glob; Playwright via /usr/bin/python3 (or python3 if it has playwright).
