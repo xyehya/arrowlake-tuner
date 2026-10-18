@@ -1,0 +1,24 @@
+/* Icons: monochrome SVGs from icons/ used as CSS masks so they take currentColor. Same-origin images; allowed by img-src 'self'. */
+.icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.icon[data-icon="dashboard"] { --icon: url("../icons/dashboard.svg"); }
+.icon[data-icon="tune"] { --icon: url("../icons/tune.svg"); }
+.icon[data-icon="curves"] { --icon: url("../icons/curves.svg"); }
+.icon[data-icon="stress"] { --icon: url("../icons/stress.svg"); }
+.icon[data-icon="profiles"] { --icon: url("../icons/profiles.svg"); }
+.icon[data-icon="system"] { --icon: url("../icons/system.svg"); }
+.icon[data-icon="audit"] { --icon: url("../icons/audit.svg"); }
+.icon[data-icon="chevron-down"] { --icon: url("../icons/chevron-down.svg"); }
+.icon[data-icon="chevron-up"] { --icon: url("../icons/chevron-up.svg"); }
+.icon[data-icon="close"] { --icon: url("../icons/close.svg"); }
+.icon[data-icon="check"] { --icon: url("../icons/check.svg"); }
+.icon[data-icon="alert"] { --icon: url("../icons/alert.svg"); }
+.icon[data-icon="info"] { --icon: url("../icons/info.svg"); }

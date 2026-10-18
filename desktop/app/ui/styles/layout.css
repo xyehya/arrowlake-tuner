@@ -1,0 +1,115 @@
+/* Frame (PLAN §4.1): status bar on top, nav rail left, stage (screen + drawer + toasts), pending-changes bar, monitoring strip at the bottom. */
+.app {
+  display: grid;
+  height: 100vh;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--status-h) minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "status status"
+    "nav stage"
+    "nav pending"
+    "strip strip";
+}
+
+.status-bar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.nav-rail {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.stage {
+  grid-area: stage;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.screen {
+  height: 100%;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+}
+
+.screen:focus {
+  outline: none;
+}
+
+.screen-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.pending-bar {
+  grid-area: pending;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--pending-bg);
+  border-top: 1px solid var(--pending);
+}
+
+.strip {
+  grid-area: strip;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  min-height: var(--strip-collapsed-h);
+}
+
+/* Drawer: slides up over the stage; no scrim, the screen behind stays usable. */
+.drawer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 62%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  transform: translateY(102%);
+  visibility: hidden;
+  transition: transform var(--dur) var(--ease), visibility 0s linear var(--dur);
+}
+
+.drawer.open {
+  transform: translateY(0);
+  visibility: visible;
+  transition: transform var(--dur) var(--ease), visibility 0s;
+}
+
+.toasts {
+  position: absolute;
+  right: var(--space-4);
+  top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(380px, calc(100% - 2 * var(--space-4)));
+  pointer-events: none;
+  z-index: 5;
+}
+
+.toasts > * {
+  pointer-events: auto;
+}

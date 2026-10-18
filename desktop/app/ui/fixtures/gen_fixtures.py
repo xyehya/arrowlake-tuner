@@ -115,9 +115,9 @@ def main() -> int:
         pre["result"]["board"] = "Simulated board"  # the helper reads DMI from the host even in --sim
         dump("preflight.json", pre)
 
-        c.call("telemetry.start", {"interval_s": INTERVAL_S})
+        dump("telemetry-start.json", c.call("telemetry.start", {"interval_s": INTERVAL_S}))
         events = c.collect(TELEMETRY_S)
-        c.call("telemetry.stop", events=events)
+        dump("telemetry-stop.json", c.call("telemetry.stop", events=events))
         dump("telemetry-events.json", {"interval_s": INTERVAL_S, "events": events})
 
         side: list[dict[str, Any]] = []
