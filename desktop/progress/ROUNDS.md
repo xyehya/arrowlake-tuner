@@ -17,3 +17,7 @@
 - G-211 Opus review: APPROVE WITH FIXES (med: same-size mid-log rewrite undetected by a long-running helper; low: anchor bytes source, anchor
   top-up, tests). Fix round dispatched to Sonnet. Session-held lock + pacer change deliberately not done (lock 0.05 ms/op; pacer already 0 at dwell 0).
 - G-212 done (ring intent, intent_features ["ring"], 3031 OK; one unexplained earlier failure) -> Opus review (PLAN_STALE does not cover ring words).
+- G-212 Opus review: APPROVE WITH FIXES — no unsafe write path (P2=0 blocked 3x, P1 always 2, policy + guard re-check); med: ring not PLAN_STALE-checked
+  (end state = confirmed "after" but the shown "before"/diff can be wrong); low: point-key parsing (non-ASCII digits -> INTERNAL, "04"/"4" dup).
+  Two full runs OK (3031); the worker's flaky failure not reproduced (only a logged ConnectionResetError in a web test thread). Fix round dispatched.
+  Note for G-213/G-217: profiles.save refuses ring, so a ring edit can be saved only after it is applied.
