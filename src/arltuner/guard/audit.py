@@ -13,9 +13,10 @@ Record fields (always ``ts`` ISO-8601 UTC, ``seq`` per file, ``event``; the rest
 * ``reason`` / ``detail`` (refusals, errors, trips), ``baseline`` (hex word the predicate compared against);
 * anything else the guard adds (``health_gate``, ``verified``, ``expected``, ``stage``) as plain JSON.
 
-Events: ``refused | attempt | msr_read | result | readback | error | trip``. ``msr_read`` (T-023) is the intent record of a plain ``rdmsr``:
+Events: ``refused | attempt | msr_read | powercap_attempt | result | readback | error | trip``. ``msr_read`` (T-023) is the intent record of a plain ``rdmsr``:
 a plain read is audited but is not an ``attempt`` -- it is not a WRMSR, so it neither counts toward the per-boot cap nor starts a dwell.
-A plain write is an ``attempt`` like a mailbox request.
+A plain write is an ``attempt`` like a mailbox request. ``powercap_attempt`` (G-214) is the intent record of one powercap file write (``kind = "powercap"``): it is not a WRMSR
+and not an ``attempt``, so :func:`read_state` ignores it (no mailbox budget, no dwell).
 
 T-016 (cross-process limits; SAFETY.md "Mailbox-session discipline", D-011): every ``attempt`` record also carries ``boot_id``
 (string or ``null``), and :func:`read_state` summarises the log for the guard -- the latest ``attempt`` time over *all*
@@ -43,7 +44,7 @@ from .policy import MsrRequestLike, RequestLike
 
 __all__ = ["EVENTS", "AuditLog", "AuditState", "AuditUnreadable", "parse_audit_ts", "read_all", "read_state"]
 
-EVENTS = frozenset({"refused", "attempt", "msr_read", "result", "readback", "error", "trip"})
+EVENTS = frozenset({"refused", "attempt", "msr_read", "powercap_attempt", "result", "readback", "error", "trip"})
 
 _RESERVED = frozenset(
     {"ts", "seq", "event", "cpu", "cmd", "p1", "p2", "msr", "msr_kind", "req_data", "purpose", "operator", "rc", "rc_name", "data", "reason", "detail", "baseline", "value"}

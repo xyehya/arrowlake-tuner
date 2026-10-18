@@ -213,3 +213,30 @@ check = "turbo_ratio_bounded"
 name = "msr_0x198_read"   # vf measurement: running ratio + requested VID
 msr = 0x198
 kind = "read"
+
+# --- package power limits (G-214): read-only MSRs. 0x606 units, 0x610 PKG_POWER_LIMIT (lock bit 63: set = the limits cannot be changed), 0x614 PKG_POWER_INFO. Never written (no write entry
+# can exist for them): PL1 / PL2 / tau are written through the powercap files only. ---
+[[msr_allow]]
+name = "msr_0x606_read"
+msr = 0x606
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x610_read"
+msr = 0x610
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x614_read"
+msr = 0x614
+kind = "read"
+
+# --- package power limits (G-214, D-039): THE BOUNDS BELOW ARE COMMENTED OUT ON PURPOSE. Until you set them in /etc/arltuner/policy.toml no PL1 / PL2 / tau write is possible: the helper
+# refuses it and the refusal names the missing key. Reads (power.read) always work. Nothing is derived from the CPU: constraint_0_max_power_uw is NOT a PL1 ceiling. Whole watts for the
+# PLs (the register has 1/8 W steps), seconds for tau (the kernel rounds the window to 2^Y * (1 + Z/4) time units). The numbers below are an EXAMPLE of the shape, not a recommendation.
+# A revert to the values this boot started with (power.plan {revert: true}) needs none of these keys.
+# [power]
+# pl1_w = [125, 253]       # [min, max] W, long-term limit (powercap constraint_0)
+# pl2_w = [125, 295]       # [min, max] W, short-term limit (powercap constraint_1); PL2 >= PL1 is always enforced
+# tau_s = [1, 128]         # [min, max] s, PL1 time window
+# max_step_w = 50          # the largest change of one PL in one apply
