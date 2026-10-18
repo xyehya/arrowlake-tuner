@@ -443,6 +443,10 @@ def _steps_for(helper: Helper, policy: Policy | None, w: RuntimeWiring, args: di
             steps += caps_steps
             if journal.uncore:
                 steps += un.plan_revert(journal.uncore, un.read_state(w.files))
+            held = _held(helper)
+            if held is not None and any(s.domain == "caps" or (s.domain == "parking" and s.value == 0) for s in steps):
+                # a revert restores a recorded state, but not over a run that owns the caps (its own restore would undo it) or by parking a CPU under it; unparking and the uncore are fine
+                raise cp.Refused("CAPS_CONFLICT" if any(s.domain == "caps" for s in steps) else "PARK_CONFLICT", f"{held} holds the CPU frequency caps: the revert of caps and parking waits until it is finished or restored")
             return _order(steps), notes, journal
         assert policy is not None
         if journal is not None and journal.in_flight:

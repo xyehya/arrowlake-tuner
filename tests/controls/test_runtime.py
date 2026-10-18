@@ -147,6 +147,13 @@ class Caps(Case):
         self.assertIsNone(state[5])
         self.assertEqual(self.refusal(cp.plan, {5: 40}, policy(), state, TOPO).check, "CAPS_NO_FILE")
 
+    def test_the_policys_cpu_allowlist_bounds_caps_including_the_cluster_expansion(self) -> None:
+        narrow = load_policy('cpus = ["0-8"]\n' + FULL, TOPO)
+        self.assertEqual(self.plan({3: 45}, narrow)[0].key, "cpu3")
+        e = self.refusal(self.plan, {8: 40}, narrow)  # cpu 8 is allowed, but its cluster (9-11) is not
+        self.assertEqual((e.check, e.key), ("CAPS_CPU_NOT_ALLOWED", "cpu9"))
+        self.assertEqual(self.refusal(self.plan, {12: 40}, narrow).check, "CAPS_CPU_NOT_ALLOWED")
+
     def test_a_cpu_parked_in_the_same_intent_cannot_be_capped(self) -> None:
         self.assertEqual(self.refusal(self.plan, {5: 40}, parked=frozenset({5})).check, "CAPS_PARKED")
 
@@ -218,6 +225,13 @@ class Parking(Case):
         self.files.write_int("cpu12/online", 0)
         (s,) = self.plan({12: False}, policy(""))
         self.assertEqual(s.value, 1)
+
+    def test_the_policys_cpu_allowlist_bounds_parking_but_not_unparking(self) -> None:
+        narrow = load_policy('cpus = ["0-8"]\n' + FULL, TOPO)
+        self.assertEqual(self.plan({8: True}, narrow)[0].key, "cpu8")
+        self.assertEqual(self.refusal(self.plan, {12: True}, narrow).check, "PARK_CPU_NOT_ALLOWED")
+        self.files.write_int("cpu12/online", 0)
+        self.assertEqual(self.plan({12: False}, narrow)[0].value, 1)
 
     def test_nothing_is_parked_while_something_holds_the_caps(self) -> None:
         e = self.refusal(self.plan, {12: True}, held="the running stress.start (s1)")

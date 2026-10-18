@@ -57,6 +57,8 @@ def plan(intent: Mapping[int, bool], policy: Policy, online: Mapping[int, bool |
         if state is None:
             continue  # asked online, has no switch: it is online
         if want_parked and state:
+            if not policy.cpu_allowed(cpu):
+                raise Refused("PARK_CPU_NOT_ALLOWED", f"cpu {cpu} is not in the policy's cpus ({policy.where}): it may not be parked", f"cpu{cpu}")
             parks.append(cpu)
         elif not want_parked and not state:
             unparks.append(cpu)

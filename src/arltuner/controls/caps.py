@@ -216,7 +216,7 @@ def plan(
     """The write steps for ``intent`` (``{cpu: ratio}``) over the caps in force, or :class:`Refused` -- nothing is written by planning.
 
     Checks, in order (each refusal names its check): the policy key ``cap_ratio_min`` (``RUNTIME_POLICY_MISSING``), a measure / stress run or journal that owns the caps (``CAPS_CONFLICT``:
-    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU: being parked in the same intent (``CAPS_PARKED``), no cpufreq
+    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``), being parked in the same intent (``CAPS_PARKED``), no cpufreq
     directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling ``cpuinfo_max_freq`` (``CAPS_RANGE``), the CPU's own ``scaling_min_freq`` (``CAPS_BELOW_MIN``).
     Steps that change nothing are dropped. ``parked``: the CPUs the same intent takes offline.
     """
@@ -230,6 +230,8 @@ def plan(
     for cpu in sorted(targets):
         ratio = targets[cpu]
         key = f"cpu{cpu}"
+        if not policy.cpu_allowed(cpu):  # the policy's CPU allowlist also bounds the CPUs an E-cluster expansion adds
+            raise Refused("CAPS_CPU_NOT_ALLOWED", f"cpu {cpu} is not in the policy's cpus ({policy.where}): its frequency cap may not be changed", key)
         if cpu in parked:
             raise Refused("CAPS_PARKED", f"cpu {cpu} is being parked in the same intent: an offline CPU has no frequency cap to set", key)
         freq = state.get(cpu)

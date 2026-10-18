@@ -457,6 +457,20 @@ class Revert(RuntimeCase):
         self.files.online[3] = 0  # parked behind our back
         self.refused(h, "runtime.plan", {"revert": True}, "NOTHING_TO_DO")  # no step is left (the CPU has no cpufreq directory)
 
+    def test_a_revert_waits_for_a_run_that_holds_the_caps_but_unparking_does_not(self) -> None:
+        h = self.boot()
+        self.go(h, caps={"3": 45}, parking={"12": True})
+        self.measure_journal.write_text("{}")
+        e = self.refused(h, "runtime.plan", {"revert": True}, "CAPS_CONFLICT")
+        self.assertIn("measure-journal.json", e["message"])
+        self.assertEqual((self.cap(3), self.files.online[12]), (4_500_000, 0))
+        self.measure_journal.unlink()
+        self.go(h, parking={"13": True})
+        self.measure_journal.write_text("{}")
+        self.files.write_int("cpu3/cpufreq/scaling_max_freq", P_MAX)  # nothing left to restore for caps: only unparks remain
+        self.assertTrue(self.apply(h, self.plan(h, revert=True))["complete"])
+        self.assertEqual((self.files.online[12], self.files.online[13]), (1, 1))
+
     def test_the_lock_stops_a_revert_too(self) -> None:
         h = self.boot()
         self.go(h, caps={"3": 45})
