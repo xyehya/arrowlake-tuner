@@ -2742,11 +2742,18 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
 # profiles.list / profiles.save
 # --------------------------------------------------------------------------------------------------------------
 def _validate_profiles_save(args: dict[str, Any]) -> dict[str, Any]:
-    """``{name, intent}``; G-148: ``intent`` is the Tune editor's rows laid over this boot's read (rows that change nothing, or none, save the read as it is)."""
-    _only(args, {"name", "intent"})
+    """``{name, intent}`` or (G-228) ``{name, from: "read"}``; G-148: ``intent`` is the Tune editor's rows laid over this boot's read (rows that change nothing, or none,
+    save the read as it is). ``from: "read"`` saves this boot's last read as it is (the state the CPU holds), with no editor rows."""
+    _only(args, {"name", "intent", "from"})
     name = args.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise _bad("'name' must be 1..64 characters of a-z 0-9 . _ -")
+    if "from" in args:
+        if "intent" in args:
+            raise _bad("give 'intent' (the editor's rows) or 'from': 'read' (the state of the last read), not both")
+        if args["from"] != "read":
+            raise _bad("'from' must be 'read'")
+        return {"name": name, "intent": None, "from": "read"}
     try:
         intent: dict[str, Any] | None = canonical_intent(args.get("intent"), rows_only=True)
     except OpError as exc:
@@ -2782,7 +2789,7 @@ def op_profiles_list(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
 
 
 def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
-    """G-148 (D-044): save a **complete** profile: this boot's last read of every unit (OC word fields, every fused point's offset, both turbo tables when read) with the
+    """G-148 (D-044): save a **complete** profile (G-228: ``{name, from: "read"}`` = the read as it is, no rows; never accepts it): this boot's last read of every unit (OC word fields, every fused point's offset, both turbo tables when read) with the
     editor's rows laid over it (``profiles.complete.overlay``). Refused without a read of this boot (``NO_READ``, "read first"), when a write came after it
     (``STALE_READ``), or when a word cannot be recorded exactly (``NOT_REPRESENTABLE``). The rows pass the same policy range checks as a plan. No hardware."""
     name = args["name"]
@@ -2820,8 +2827,11 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         raise OpError(BAD_REQUEST, f"the profile cannot be written: {exc}") from None
     except ProfileStoreError as exc:
         raise OpError(REFUSED if exc.code in ("EXISTS", "UNTRUSTED") else BAD_REQUEST if exc.code in ("BAD_NAME", "TOO_BIG") else INTERNAL, exc.message, {"check": exc.code}) from None
-    return {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
-            "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
+    result = {"name": record["name"], "source": "saved", "created": record["created"], "complete": True, "units": len(profile.entries), "points": len(profile.points),
+              "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
+    if args.get("from") == "read":
+        result["from"] = "read"  # G-228: saved from the state of the last read, not accepted
+    return result
 
 
 def _validate_profiles_get(args: dict[str, Any]) -> dict[str, Any]:

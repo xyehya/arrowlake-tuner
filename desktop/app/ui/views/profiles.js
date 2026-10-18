@@ -2,7 +2,7 @@
 // Ported from web/app.js Profiles (web/app.js:4822-5200): loadProfiles / loadProfileInfo 4830-4858, summaryText 4885, renderAcceptedCard 4897, detailTable 4917, renderProfiles 4949,
 // compareRows 5004, renderProfileDiff 5049, loadIntoTune 5077, updateSaveState 5116, saveProfile 5132, acceptState 5148, recordFingerprint 5168.
 //
-// Ops used (all read-only or bookkeeping, no hardware from here): profiles.list, profiles.get, profiles.save {name, intent}, profiles.accept {name} | {from: "read"}, profiles.fingerprint, tune.last.
+// Ops used (all read-only or bookkeeping, no hardware from here): profiles.list, profiles.get, profiles.save {name, intent} | {name, from: "read"} (G-228), profiles.accept {name} | {from: "read"} (keeps the replaced state: previous_saved_as), profiles.fingerprint, tune.last.
 // "Review and apply" and "Restore accepted" open the apply drawer (views/tune/apply.js) with a whole-state intent ({profile: name} / {restore: "accepted"}) through the "tune:review" event on
 // store.events, `detail.requests` (G-213's one change to apply.js). Nothing is written from this screen: the drawer plans, shows the writes, and applies only on its own Apply.
 //
@@ -26,6 +26,7 @@ export const NO_ACCEPTED_TEXT = "No accepted state yet: save a profile as accept
 export const ACCEPTED_MIGRATE_HINT = "sudo python3 -I tools/arltuner.py accepted-migrate";
 const INFO_BATCH = 6;
 const INFO_MAX = 60;
+const DIFF_MAX = 80;
 
 // ---- pure helpers (node --test) ---------------------------------------------------------------------------------------------------------------------------------------------------
 export const rowsOf = (c) => (isObj(c) && Array.isArray(c.rows) ? c.rows.filter(isObj) : []);
@@ -208,6 +209,92 @@ export const acceptConfirmText = (what, replaced) =>
   (replaced.length ? "It replaces the current accepted state (" + replaced.join(", ") + ")." : "There is no accepted state yet, so nothing is replaced.") +
   " It has to be what the CPU holds now: the complete state of the last read is recorded (every unit and fused point). Nothing is written to the CPU.";
 
+// ---- G-228: save the full state without accepting it; an accept keeps the state it replaces --------------------------------------------------------------------------------------------
+export const PREVIOUS_PREFIX = "accepted-before-";
+export const READ_FIRST_TEXT = "Read CPU state first";
+export const isPreviousAccepted = (name) => typeof name === "string" && name.startsWith(PREVIOUS_PREFIX);
+
+/** ["20261018-120000", n] of "accepted-before-20261018-120000[-n]", else null. */
+function previousKey(name) {
+  const m = /^accepted-before-(\d{8}-\d{6})(?:-(\d+))?$/.exec(String(name));
+  return m ? [m[1], m[2] ? Number(m[2]) : 1] : null;
+}
+
+/** "2026-10-18 12:00:00 UTC" from a previous-accepted name, else "". */
+export function previousStamp(name) {
+  const k = previousKey(name);
+  return k ? k[0].replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/, "$1-$2-$3 $4:$5:$6 UTC") : "";
+}
+
+/** The list order: the accepted state first, the saved profiles as the helper lists them, then the previous accepted states, newest first (stamp, then the -2 / -3 suffix, then created). */
+export function savedOrder(list) {
+  const prev = (p) => p.source !== "accepted" && isPreviousAccepted(p.name);
+  const newest = (a, b) => {
+    const ka = previousKey(a.name);
+    const kb = previousKey(b.name);
+    if (ka && kb) return ka[0] === kb[0] ? kb[1] - ka[1] : ka[0] < kb[0] ? 1 : -1;
+    return String(b.created || b.name) < String(a.created || a.name) ? -1 : 1;
+  };
+  return [...list.filter((p) => p.source === "accepted"), ...list.filter((p) => p.source !== "accepted" && !prev(p)), ...list.filter(prev).sort(newest)];
+}
+
+/** The name gate of "Save current state as…": same rules as the Save card, minus the Tune edits (the helper saves the last read as it is). */
+export function stateNameGate({ name, taken }) {
+  if (!name) return { ok: false, note: "Lowercase letters, digits, dot, underscore, hyphen. Up to 64." };
+  if (!PROFILE_NAME_RE.test(name)) return { ok: false, note: "Not allowed: use a-z, 0-9, dot, underscore, hyphen (1 to 64)." };
+  if (taken.includes(name)) return { ok: false, note: "A profile with this name exists. Names are never reused; pick another." };
+  return { ok: true, note: "Saves every unit as the last read holds it. It is not made the accepted state." };
+}
+
+/** "NO_READ" | "STALE_READ" when the helper refused for want of a current read, else null. */
+export function readRefusal(error) {
+  const c = isObj(error) && isObj(error.detail) ? error.detail.check : null;
+  return c === "NO_READ" || c === "STALE_READ" ? c : null;
+}
+
+/** A profiles.get-shaped `contents` from a Tune model (the last read): per unit its point offsets by ratio, the OC ratio and target voltage, and the turbo tables. The ring is left out like profiles.get leaves it. */
+export function contentsFromModel(model) {
+  if (!isObj(model) || !isObj(model.units)) return null;
+  const rows = [];
+  for (const id of UNIT_ORDER) {
+    const u = model.units[id];
+    if (!u || unitKind(id) === "R") continue;
+    const mv = {};
+    for (const p of u.points) if (isNum(p.ratio) && isNum(p.offset_mv)) mv[String(p.ratio)] = Math.round(p.offset_mv);
+    // the helper records the OC word's ratio + target only for an OC point: a target set and a ratio above the unit's top fused ratio (profiles/complete.py); below it the word is neutral
+    const oc = u.oc || {};
+    const top = u.fused && isNum(u.fused.ratio) ? u.fused.ratio : null;
+    const isOc = isNum(oc.ratio) && isNum(oc.v_target_v) && oc.v_target_v > 0 && top !== null && oc.ratio > top;
+    // profile_contents (contents.py): a complete profile whose points are all 0 reports the unit's whole-curve offset (the OC word's), not the points
+    const flat = Object.values(mv).length > 0 && Object.values(mv).every((x) => x === 0);
+    const offset = flat ? { kind: "curve", mv: isNum(oc.offset_mv) ? Math.round(oc.offset_mv) : 0 } : Object.keys(mv).length ? { kind: "points", mv } : null;
+    rows.push({ target: id, offset, ratio: isOc ? oc.ratio : null, v_target_v: isOc ? Math.round(oc.v_target_v * 1000) / 1000 : null });
+  }
+  const t = model.turbo;
+  return { rows, turbo: isObj(t) && isObj(t.P) && isObj(t.E) ? { P: t.P.ratios.slice(), E: t.E.ratios.slice() } : null, complete: true };
+}
+
+/** [{unit, n}] in row order: how many values differ per unit (the confirm step's per-unit list). */
+export function diffByUnit(rows) {
+  const out = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && last.unit === r.unit) last.n++;
+    else out.push({ unit: r.unit, n: 1 });
+  }
+  return out;
+}
+
+export function diffSummary(rows) {
+  if (!rows.length) return "No differences: the state to accept equals the current accepted state.";
+  return plural(rows.length, "difference") + " in " + plural(diffByUnit(rows).length, "unit") + " from the current accepted state: " + diffByUnit(rows).map((u) => u.unit + " (" + u.n + ")").join(", ") + ".";
+}
+
+export const previousKeptText = (replaced) =>
+  replaced.length
+    ? "The current accepted state (" + replaced.join(", ") + ") is saved first as a profile (accepted-before-<date>), so it can be accepted again."
+    : "There is no accepted state to keep.";
+
 export function fmtCreated(iso) {
   return typeof iso === "string" && iso.length >= 16 ? iso.slice(0, 16).replace("T", " ") + " UTC" : "";
 }
@@ -247,7 +334,7 @@ export function profilesView() {
       const toast = ctx.toast || ((kind, text) => pushToast(store, { kind, text }));
       ensureTune(store);
       const tc = createController({ store, bridge, toast }); // only for loadLast(): adopts this boot's read, so Load into Tune and Save work without visiting Tune first
-      const S = { list: [], loaded: false, note: "", accepted: null, error: "", info: {}, open: new Set(), seq: 0, ask: null, busy: false, status: "", statusKind: "" };
+      const S = { list: [], loaded: false, note: "", accepted: null, error: "", info: {}, open: new Set(), seq: 0, ask: null, busy: false, status: "", statusKind: "", notice: null, saveOpen: false };
       const connected = () => store.get().link.state === "connected";
       const infoOf = (name) => (S.info[name] && !S.info[name].error ? S.info[name] : null);
       const entryOf = (name) => S.list.find((p) => p.name === name) || null;
@@ -260,12 +347,14 @@ export function profilesView() {
       const wrap = h("div", { class: "profiles", hidden: true });
       const refreshBtn = h("button", { type: "button", class: "btn", id: "btn-pr-refresh", text: "Refresh", on: { click: () => reload(true) } });
       const status = h("p", { class: "pr-status", id: "pr-status", role: "status" });
+      const notice = h("div", { class: "card pr-notice", id: "pr-notice", role: "status", hidden: true });
       const ask = h("div", { class: "card pr-ask", id: "pr-ask", role: "alertdialog", "aria-labelledby": "pr-ask-title", hidden: true });
       const acceptedCard = h("section", { class: "card pr-card", id: "pr-accepted-card", "aria-labelledby": "pr-accepted-h", hidden: true });
       const listCard = h("section", { class: "card pr-card", "aria-labelledby": "pr-list-h" });
       const empty = h("p", { class: "muted", id: "pr-empty", role: "status" });
       const listEl = h("ul", { class: "pr-list", id: "pr-list" });
-      listCard.append(h("h2", { id: "pr-list-h", text: "Profiles" }), empty, listEl);
+      const prevNote = h("p", { class: "muted pr-note", id: "pr-prev-note", hidden: true, text: "Previous accepted states are kept as profiles. The app has no delete yet: remove a file from the helper's profiles directory by hand when you no longer need one." });
+      listCard.append(h("h2", { id: "pr-list-h", text: "Profiles" }), empty, listEl, prevNote);
 
       // Save
       const nameInput = h("input", { type: "text", id: "pr-name", class: "pr-name-input", maxlength: "64", autocomplete: "off", spellcheck: "false", "aria-describedby": "pr-name-note", placeholder: "profile-name" });
@@ -291,7 +380,7 @@ export function profilesView() {
         h("div", { class: "pr-row" }, h("label", { for: "pr-a", text: "Profile" }), selA, h("label", { for: "pr-b", text: "against" }), selB),
         diffNote, h("div", { class: "scroll" }, diffTable));
 
-      wrap.append(h("header", { class: "screen-head" }, h("h1", { text: "Profiles" }), h("span", { class: "spacer" }), refreshBtn), status, ask, acceptedCard, listCard, saveCard, compareCard);
+      wrap.append(h("header", { class: "screen-head" }, h("h1", { text: "Profiles" }), h("span", { class: "spacer" }), refreshBtn), status, notice, ask, acceptedCard, listCard, saveCard, compareCard);
       root.append(wrap);
       ensureStyle().then(() => (wrap.hidden = false));
 
@@ -307,10 +396,24 @@ export function profilesView() {
         ask.hidden = !next;
         if (!next) return;
         const yes = h("button", { type: "button", class: "btn primary", id: "pr-ask-yes", text: next.yes, on: { click: () => { const run = next.run; setAsk(null); void run(); } } });
-        ask.append(h("h3", { id: "pr-ask-title", text: next.title }), h("p", { text: next.text }),
+        ask.append(h("h3", { id: "pr-ask-title", text: next.title }), h("p", { text: next.text }), ...(next.detail ? [next.detail] : []),
           h("div", { class: "pr-row" }, yes, h("button", { type: "button", class: "btn", id: "pr-ask-no", text: "Cancel", on: { click: () => setAsk(null) } })));
         (next.focusCancel ? ask.querySelector("#pr-ask-no") : yes).focus();
       }
+
+      /** A line with buttons under the status (G-228: the toast component has no actions, so "Undo" / "Read CPU state first" live here). {kind, text, actions: [{id, label, run}]} or null. */
+      function setNotice(next) {
+        S.notice = next;
+        clear(notice);
+        notice.hidden = !next;
+        if (!next) return;
+        notice.dataset.kind = next.kind || "";
+        notice.append(h("p", { id: "pr-notice-text", text: next.text }), h("div", { class: "pr-row" },
+          ...(next.actions || []).map((a) => h("button", { type: "button", class: "btn", id: a.id, text: a.label, on: { click: () => { void a.run(); } } })),
+          h("button", { type: "button", class: "btn", id: "pr-notice-close", text: "Dismiss", on: { click: () => setNotice(null) } })));
+      }
+
+      const readFirst = (what) => setNotice({ kind: "warn", text: READ_FIRST_TEXT + ": " + what, actions: [{ id: "btn-pr-open-tune", label: "Open Tune", run: () => setScreen(store, "tune") }] });
 
       function acceptedEntries() {
         return S.list.filter((p) => p.source === "accepted");
@@ -342,7 +445,28 @@ export function profilesView() {
             h("span", { class: "muted pr-sum", id: "pr-accepted-sum", text: info ? summaryText(info.summary) : S.info[p.name] ? "contents unavailable" : "reading…" })),
           h("p", { class: "muted", id: "pr-accepted-note", text: "Restore accepted applies this profile in one run, writing only what differs from the CPU." }));
         }
-        acceptedCard.append(head, body, h("div", { class: "pr-row" }, restore, fromRead, finger));
+        const saveState = h("button", { type: "button", class: "btn", id: "btn-pr-save-state", text: "Save current state as…", disabled: !can, "aria-expanded": String(S.saveOpen),
+          title: "profiles.save {from: 'read'}: saves the complete state of this boot's last read as a profile. It is not made the accepted state, and nothing is written to the CPU.",
+          on: { click: () => { S.saveOpen = !S.saveOpen; renderAccepted(); if (S.saveOpen) stateName.focus(); } } });
+        acceptedCard.append(head, body, h("div", { class: "pr-row" }, restore, fromRead, saveState, finger));
+        if (S.saveOpen) acceptedCard.append(statePanel);
+        renderStateGate();
+      }
+
+      // "Save current state as…": the complete profile of the last read, not accepted (G-228)
+      const stateName = h("input", { type: "text", id: "pr-state-name", class: "pr-name-input", maxlength: "64", autocomplete: "off", spellcheck: "false", "aria-describedby": "pr-state-note", placeholder: "profile-name",
+        on: { input: () => renderStateGate(), keydown: (e) => { if (e.key === "Enter") { e.preventDefault(); void saveState(); } } } });
+      const stateNote = h("p", { class: "muted pr-note", id: "pr-state-note" });
+      const stateBtn = h("button", { type: "button", class: "btn primary", id: "btn-pr-state-save", text: "Save", on: { click: () => saveState() } });
+      const statePanel = h("div", { class: "pr-state", id: "pr-state" },
+        h("div", { class: "pr-row" }, h("label", { for: "pr-state-name", text: "Name" }), stateName, stateBtn,
+          h("button", { type: "button", class: "btn", id: "btn-pr-state-cancel", text: "Cancel", on: { click: () => { S.saveOpen = false; renderAccepted(); } } })), stateNote);
+
+      function renderStateGate() {
+        const gate = stateNameGate({ name: stateName.value, taken: S.list.map((p) => p.name) });
+        stateNote.textContent = gate.note;
+        stateBtn.disabled = !gate.ok || !connected() || S.busy;
+        return gate;
       }
 
       function kindPill(k) {
@@ -381,13 +505,14 @@ export function profilesView() {
         if (!S.loaded) empty.textContent = connected() ? "Loading profiles…" : "The helper is not connected.";
         else if (!S.list.length) empty.textContent = S.error ? "Profiles unavailable: " + S.error : "No profiles yet. Change something in Tune and save it here." + (S.note ? " Helper note: " + S.note : "");
         clear(listEl);
+        prevNote.hidden = !S.list.some((p) => p.source !== "accepted" && isPreviousAccepted(p.name));
         const can = connected() && !S.busy;
-        for (const p of S.list) {
+        for (const p of savedOrder(S.list)) {
           const info = infoOf(p.name);
           const k = kindOf(p, info);
           const isAcc = p.source === "accepted";
           const open = S.open.has(p.name);
-          const main = h("div", { class: "pr-main" }, h("span", { class: "pr-name", text: p.name }), pill(isAcc ? "accepted" : "saved", isAcc ? "ok" : "neutral"), k ? kindPill(k) : null,
+          const main = h("div", { class: "pr-main" }, h("span", { class: "pr-name", text: p.name }), pill(isAcc ? "accepted" : "saved", isAcc ? "ok" : "neutral"), !isAcc && isPreviousAccepted(p.name) ? h("span", { class: "pr-sub", title: "The accepted state this replaced, kept by Set as accepted.", text: "previous accepted" + (previousStamp(p.name) ? " · replaced " + previousStamp(p.name) : "") }) : null, k ? kindPill(k) : null,
             isAcc ? null : h("span", { class: "muted", text: fmtCreated(p.created) }),
             h("span", { class: "pr-sum muted", text: info ? summaryText(info.summary) : S.info[p.name] ? "contents unavailable" : "reading…" }));
           const actions = h("div", { class: "pr-actions" },
@@ -519,25 +644,129 @@ export function profilesView() {
         doLoad(name);
       }
 
-      function askAccept(name) {
+      /** profiles.get contents of `name` (cached in S.info), or null with the reason. */
+      async function contentsOf(name) {
+        if (!infoOf(name) && !S.info[name]) {
+          const r = await bridge.call("profiles.get", { name });
+          S.info[name] = r.ok && isObj(r.result) && isObj(r.result.contents) && Array.isArray(r.result.contents.rows) ? r.result : { error: errText(r.error) };
+        }
+        const info = infoOf(name);
+        return info ? { contents: info.contents } : { error: S.info[name].error };
+      }
+
+      /** The confirm step's diff: the accepted state now against the one that would replace it. `name` null = the state of the last read (from the Tune model). {rows} | {error} | {rows: null} (nothing accepted yet). */
+      async function acceptDiff(name) {
+        const acc = acceptedEntries();
+        let next;
+        if (name === null) {
+          if (!store.get().tune.model && connected()) await tc.loadLast();
+          const c = contentsFromModel(store.get().tune.model);
+          if (!c) return { error: READ_FIRST_TEXT };
+          next = { contents: c };
+        } else next = await contentsOf(name);
+        if (next.error) return { error: next.error };
+        if (acc.length !== 1) return { rows: null, chain: acc.length > 1 };
+        const cur = await contentsOf(acc[0].name);
+        if (cur.error) return { error: cur.error };
+        return { rows: compareRows(cur.contents, next.contents) };
+      }
+
+      function diffNode(d) {
+        if (d.error) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: "The comparison is unavailable (" + d.error + "); the helper still keeps the replaced state." });
+        if (d.rows === null) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: d.chain ? "The current accepted state is an older chain; each member is kept as a profile." : "There is no accepted state to compare with." });
+        const box = h("div", { class: "pr-diff-box", id: "pr-ask-diff" }, h("p", { class: "pr-note", id: "pr-ask-diff-note", text: diffSummary(d.rows) }));
+        if (!d.rows.length) return box;
+        const body = h("tbody");
+        for (const r of d.rows.slice(0, DIFF_MAX)) {
+          const cell = (x) => h("td", { class: "n mono", text: x === null ? DASH : r.fmt(x) });
+          body.append(h("tr", {}, h("td", { text: r.unit }), h("td", { text: r.label }), cell(r.a), cell(r.b), h("td", { class: "n mono", text: r.delta(r.a, r.b) })));
+        }
+        box.append(h("div", { class: "scroll" }, h("table", { class: "pr-table pr-diff", id: "pr-ask-diff-table" }, h("caption", { class: "sr", text: "Per-unit differences between the accepted state and the new one" }),
+          h("thead", {}, h("tr", {}, h("th", { scope: "col", text: "Unit" }), h("th", { scope: "col", text: "Setting" }), h("th", { scope: "col", class: "n", text: "Accepted now" }), h("th", { scope: "col", class: "n", text: "New" }), h("th", { scope: "col", class: "n", text: "Change" }))), body)));
+        if (d.rows.length > DIFF_MAX) box.append(h("p", { class: "muted pr-note", text: "…and " + (d.rows.length - DIFF_MAX) + " more." }));
+        return box;
+      }
+
+      async function askAccept(name) {
         const replaced = acceptedEntries().map((p) => p.name);
-        setAsk({ title: "Set as accepted?", text: acceptConfirmText(name === null ? "The state of the last read" : '"' + name + '"', replaced), yes: "Set as accepted", focusCancel: true, run: () => acceptState(name) });
+        say("Comparing with the accepted state…");
+        const d = await acceptDiff(name);
+        say("");
+        if (d.error === READ_FIRST_TEXT) return readFirst("the new accepted state is what the last read holds; there is none to compare with yet.");
+        setAsk({ title: "Set as accepted?", text: acceptConfirmText(name === null ? "The state of the last read" : '"' + name + '"', replaced) + " " + previousKeptText(replaced), detail: diffNode(d), yes: "Accept", focusCancel: true, run: () => acceptState(name) });
       }
 
       async function acceptState(name) {
         if (!connected() || S.busy) return;
         S.busy = true;
         renderList();
+        setNotice(null);
         const r = await bridge.call("profiles.accept", name === null ? { from: "read" } : { name });
         S.busy = false;
         if (r.ok && isObj(r.result)) {
           const replaced = Array.isArray(r.result.replaced) && r.result.replaced.length ? ", replacing " + r.result.replaced.join(", ") : "";
+          const prev = typeof r.result.previous_saved_as === "string" ? r.result.previous_saved_as : null;
           say('Accepted "' + r.result.name + '"' + replaced + ".", "ok");
+          if (prev) {
+            const text = "Previous accepted state saved as " + prev;
+            toast("ok", text);
+            setNotice({ kind: "ok", text: text + ". Undo accepts it again if the CPU still holds it; it applies nothing.", actions: [{ id: "btn-pr-undo", label: "Undo", run: () => undoAccept(prev) }] });
+          }
           await reload(true);
           await refreshAcceptedChip();
         } else {
+          const read = readRefusal(r.error);
+          if (read) readFirst(errText(r.error));
           say("Not accepted: " + errText(r.error), "error");
           renderList();
+        }
+      }
+
+      /** Undo = profiles.accept {name: previous}: it records the previous state only while the CPU holds it, else the helper refuses NOT_APPLIED and we offer Review and apply. */
+      async function undoAccept(prev) {
+        if (!connected() || S.busy) return;
+        S.busy = true;
+        renderList();
+        const r = await bridge.call("profiles.accept", { name: prev });
+        S.busy = false;
+        if (r.ok && isObj(r.result)) {
+          setNotice(null);
+          say('Accepted "' + prev + '" again' + (r.result.previous_saved_as ? "; the state it replaced is saved as " + r.result.previous_saved_as : "") + ".", "ok");
+          await reload(true);
+          await refreshAcceptedChip();
+          return;
+        }
+        const notApplied = isObj(r.error) && isObj(r.error.detail) && r.error.detail.check === "NOT_APPLIED";
+        if (notApplied) {
+          setNotice({ kind: "warn", text: errText(r.error), actions: [{ id: "btn-pr-undo-review", label: "Review and apply", run: () => reviewIntent(store, { profile: prev }, "Apply profile " + prev) }] });
+        } else if (readRefusal(r.error)) readFirst(errText(r.error));
+        else setNotice({ kind: "error", text: "Not accepted: " + errText(r.error), actions: [] });
+        renderList();
+      }
+
+      async function saveState() {
+        const gate = renderStateGate();
+        if (!gate.ok || !connected() || S.busy) return;
+        const name = stateName.value;
+        S.busy = true;
+        renderList();
+        const r = await bridge.call("profiles.save", { name, from: "read" });
+        S.busy = false;
+        if (r.ok) {
+          say('Saved "' + name + '" (the complete state of the last read). It is not the accepted state.', "ok");
+          stateName.value = "";
+          S.saveOpen = false;
+          setNotice(null);
+          await reload();
+        } else if (readRefusal(r.error)) {
+          say("Not saved: " + errText(r.error), "error");
+          readFirst("a saved state is what the CPU holds now, so it needs a current read.");
+          renderList();
+        } else {
+          const exists = isObj(r.error) && isObj(r.error.detail) && r.error.detail.check === "EXISTS";
+          say(exists ? 'A profile named "' + name + '" already exists. Pick another name.' : "Not saved: " + errText(r.error), "error");
+          if (exists) await reload();
+          else renderList();
         }
       }
 

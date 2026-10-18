@@ -190,3 +190,40 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* G-228: the notice with actions (Undo / Read CPU state first), the "Save current state as…" panel, the sub-label of a previous accepted state, the confirm step's diff */
+.pr-notice {
+  border-color: var(--border-strong);
+}
+
+.pr-notice[data-kind="ok"] {
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.pr-notice[data-kind="warn"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.pr-notice[data-kind="error"] {
+  border-color: var(--danger);
+}
+
+.pr-notice p {
+  margin: 0;
+}
+
+.pr-state {
+  margin-top: var(--space-2);
+}
+
+.pr-sub {
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.pr-diff-box {
+  margin: var(--space-2) 0;
+}

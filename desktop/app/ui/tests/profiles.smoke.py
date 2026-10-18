@@ -218,6 +218,7 @@ class TestProfiles(unittest.TestCase):
             self.item(page, "sim-e-light").locator(".pr-load").click()
             page.wait_for_selector("#pr-ask:not([hidden])")
             self.assertEqual(page.inner_text("#pr-ask-title"), "Replace the edits in Tune?")
+            self.assertNotIn("null", page.inner_text("#pr-ask"))
             page.click("#pr-ask-no")
             self.assertTrue(page.locator("#pr-ask").is_hidden())
             self.assertEqual(page.evaluate("Object.keys(window.__arltuner.store.get().tune.draft.units)"), ["P0"])
@@ -365,6 +366,92 @@ class TestProfiles(unittest.TestCase):
             self.assertIn("apply the turbo edit first, then save", page.inner_text("#pr-name-note"))
             self.assertTrue(page.locator("#btn-pr-save").is_disabled())
             self.assertEqual(self.calls(page, "profiles.save"), [])
+            self.assert_clean(page)
+
+    # ---- G-228: save the full state without accepting; an accept keeps history ----
+    @browser
+    def test_save_current_state_as_saves_the_read_without_accepting(self):
+        with self.page() as page:
+            self.wait_list(page)
+            page.click("#btn-pr-save-state")
+            page.wait_for_selector("#pr-state-name", state="visible")
+            self.assertTrue(page.locator("#btn-pr-state-save").is_disabled(), "no name yet")
+            page.fill("#pr-state-name", "Bad Name")
+            self.assertIn("Not allowed", page.inner_text("#pr-state-note"))
+            self.assertTrue(page.locator("#btn-pr-state-save").is_disabled())
+            page.fill("#pr-state-name", "sim-e-light")
+            self.assertIn("exists", page.inner_text("#pr-state-note"))
+            page.fill("#pr-state-name", "known-good")
+            page.click("#btn-pr-state-save")
+            page.wait_for_function("document.querySelector('#pr-status').textContent.startsWith('Saved')")
+            self.assertEqual(self.calls(page, "profiles.save")[0]["args"], {"name": "known-good", "from": "read"})
+            self.assertEqual(self.calls(page, "profiles.accept"), [], "saving is not accepting")
+            self.item(page, "known-good").wait_for()
+            self.assertEqual(self.item(page, "known-good", "accepted").count(), 0)
+            self.assertIn("No accepted state yet", page.inner_text("#pr-accepted-note"))
+            self.assert_clean(page)
+
+    @browser
+    def test_save_current_state_needs_a_fresh_read_and_offers_tune(self):
+        with self.page("?bridge=mock&read=stale") as page:
+            self.wait_list(page)
+            page.click("#btn-pr-save-state")
+            page.fill("#pr-state-name", "known-good")
+            page.click("#btn-pr-state-save")
+            page.wait_for_selector("#pr-notice:not([hidden])")
+            self.assertIn("Read CPU state first", page.inner_text("#pr-notice"))
+            self.assertIn("Not saved", page.inner_text("#pr-status"))
+            page.click("#btn-pr-open-tune")
+            page.wait_for_function("window.__arltuner.store.get().screen === 'tune'")
+            self.assert_clean(page)
+
+    @browser
+    def test_accept_confirm_lists_per_unit_differences_then_keeps_the_previous_state_with_undo(self):
+        with self.page("?bridge=mock&profiles=accepted") as page:
+            self.wait_list(page)
+            # the CPU is changed by applying a saved profile, so the new state differs from the accepted one in P0
+            self.item(page, "sim-p0-undervolt").locator(".pr-review").click()
+            page.wait_for_selector("#apply-go", timeout=5000)
+            page.click("#apply-go")
+            page.wait_for_selector(".apply-headline", timeout=8000)
+            page.click("#drawer-close")
+            page.click("#btn-pr-accept-read")
+            page.wait_for_selector("#pr-ask:not([hidden])")
+            self.assertIn("2 differences in 1 unit", page.inner_text("#pr-ask-diff-note"))
+            self.assertIn("P0 (2)", page.inner_text("#pr-ask-diff-note"))
+            self.assertEqual(page.locator("#pr-ask-diff-table tbody tr").count(), 2)
+            self.assertIn("saved first as a profile", page.inner_text("#pr-ask"))
+            self.assertEqual(page.inner_text("#pr-ask-yes"), "Accept")
+            self.assertEqual(self.calls(page, "profiles.accept"), [])
+            page.click("#pr-ask-yes")
+            page.wait_for_selector("#pr-notice:not([hidden])")
+            result = self.calls(page, "profiles.accept")[0]["res"]["result"]
+            prev = result["previous_saved_as"]
+            self.assertRegex(prev, r"^accepted-before-\d{8}-\d{6}$")
+            self.assertIn("Previous accepted state saved as " + prev, page.inner_text("#pr-notice"))
+            # the saved list marks it and keeps it after the other saved profiles
+            item = self.item(page, prev)
+            item.wait_for()
+            self.assertIn("previous accepted", item.inner_text())
+            self.assertIn("no delete yet", page.inner_text("#pr-prev-note"))
+            names = page.eval_on_selector_all("#pr-list .pr-item", "(els) => els.map((e) => e.dataset.name)")
+            self.assertEqual(names[-1], prev)
+            # Undo = accepting the previous state again (the mock accepts what it holds; the real helper answers NOT_APPLIED, shown with Review and apply)
+            page.click("#btn-pr-undo")
+            page.wait_for_function("document.querySelector('#pr-status').textContent.startsWith('Accepted')")
+            self.assertEqual(self.calls(page, "profiles.accept")[1]["args"], {"name": prev})
+            self.assert_clean(page)
+
+    @browser
+    def test_accept_without_a_fresh_read_says_read_cpu_state_first(self):
+        with self.page("?bridge=mock&read=stale") as page:
+            self.wait_list(page)
+            page.click("#btn-pr-accept-read")
+            self.confirm(page)
+            page.wait_for_selector("#pr-notice:not([hidden])")
+            self.assertIn("Read CPU state first", page.inner_text("#pr-notice"))
+            self.assertIn("Not accepted", page.inner_text("#pr-status"))
+            self.assertEqual(page.locator("#btn-pr-open-tune").count(), 1)
             self.assert_clean(page)
 
 

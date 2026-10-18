@@ -11,6 +11,7 @@ import { MINUS } from "../lib/format.js";
 import { ensureTune } from "../views/tune.js";
 import {
   summaryText, offsetText, offsetShort, kindOf, compareRows, draftFromContents, saveGate, acceptConfirmText, fmtCreated, reviewIntent, rowsOf, profilesView, NO_ACCEPTED_TEXT,
+  isPreviousAccepted, previousStamp, savedOrder, stateNameGate, readRefusal, contentsFromModel, diffByUnit, diffSummary, previousKeptText,
 } from "../views/profiles.js";
 
 const READ = FIX["tune-read"].result;
@@ -269,4 +270,113 @@ test("mock: fingerprint needs an accepted state; knobs make it incomplete or una
   const off = await connected({ accept: "unavailable" });
   assert.equal((await off.call("profiles.accept", { from: "read" })).error.detail.check, "NO_ACCEPTED_DIR");
   assert.equal((await off.call("profiles.fingerprint")).error.detail.check, "NO_ACCEPTED_DIR");
+});
+
+// ---- G-228: save the full state; an accept keeps the state it replaces ----
+test("previous accepted states: recognised, stamped, listed after the saved profiles newest first (same second: -3 before -2)", () => {
+  assert.equal(isPreviousAccepted("accepted-before-20261018-120000"), true);
+  assert.equal(isPreviousAccepted("mine"), false);
+  assert.equal(previousStamp("accepted-before-20261018-120000-2"), "2026-10-18 12:00:00 UTC");
+  assert.equal(previousStamp("mine"), "");
+  const list = [
+    { name: "accepted-before-20261015-090000", source: "saved" },
+    { name: "mine", source: "saved" },
+    { name: "accepted-before-20261018-120000-2", source: "saved" },
+    { name: "accepted-before-20261018-120000", source: "saved" },
+    { name: "now", source: "accepted" },
+    { name: "zeta", source: "saved" },
+  ];
+  assert.deepEqual(savedOrder(list).map((p) => p.name), ["now", "mine", "zeta", "accepted-before-20261018-120000-2", "accepted-before-20261018-120000", "accepted-before-20261015-090000"]);
+});
+
+test("stateNameGate / readRefusal / previousKeptText", () => {
+  assert.equal(stateNameGate({ name: "", taken: [] }).ok, false);
+  assert.equal(stateNameGate({ name: "Bad Name", taken: [] }).ok, false);
+  assert.equal(stateNameGate({ name: "a".repeat(65), taken: [] }).ok, false);
+  assert.match(stateNameGate({ name: "mine", taken: ["mine"] }).note, /exists/);
+  assert.equal(stateNameGate({ name: "known-good.1_x", taken: ["mine"] }).ok, true);
+  assert.equal(readRefusal({ detail: { check: "STALE_READ" } }), "STALE_READ");
+  assert.equal(readRefusal({ detail: { check: "NO_READ" } }), "NO_READ");
+  assert.equal(readRefusal({ detail: { check: "EXISTS" } }), null);
+  assert.equal(readRefusal(null), null);
+  assert.match(previousKeptText(["old"]), /saved first as a profile/);
+  assert.match(previousKeptText([]), /no accepted state/);
+});
+
+test("contentsFromModel: the last read as profiles.get contents; equal to an accepted state made from the same read, so the confirm diff has no false differences", async () => {
+  const c = contentsFromModel(model());
+  assert.equal(c.rows.length, 12);
+  assert.deepEqual(c.rows.map((r) => r.target).slice(0, 2), ["P0", "P1"]);
+  assert.deepEqual(c.turbo.P, READ.tables.p);
+  const b = await connected({ profiles: "accepted" });
+  const acc = await b.call("profiles.get", { name: "read-20261018-120000" });
+  assert.deepEqual(compareRows(acc.result.contents, c), []);
+  assert.equal(contentsFromModel(null), null);
+});
+
+test("diffByUnit / diffSummary: the per-unit list of the confirm step", () => {
+  const a = { rows: [{ target: "P0", offset: { kind: "points", mv: { 48: 0, 53: 0 } }, ratio: null, v_target_v: null }, { target: "EC0", offset: { kind: "curve", mv: -10 }, ratio: null, v_target_v: null }], turbo: null };
+  const bb = { rows: [{ target: "P0", offset: { kind: "points", mv: { 48: -20, 53: -25 } }, ratio: null, v_target_v: null }, { target: "EC0", offset: { kind: "curve", mv: -10 }, ratio: null, v_target_v: null }], turbo: null };
+  const rows = compareRows(a, bb);
+  assert.deepEqual(diffByUnit(rows), [{ unit: "P0", n: 2 }]);
+  assert.match(diffSummary(rows), /2 differences in 1 unit from the current accepted state: P0 \(2\)/);
+  assert.match(diffSummary([]), /^No differences/);
+});
+
+test("mock: profiles.save {name, from: 'read'} saves the complete held state without accepting; never overwrites; refuses a stale read until a read", async () => {
+  const b = await connected();
+  const r = await b.call("profiles.save", { name: "known-good", from: "read" });
+  assert.equal(r.ok, true);
+  assert.equal(r.result.from, "read");
+  assert.equal(r.result.complete, true);
+  const list = await b.call("profiles.list");
+  assert.equal(list.result.accepted, false);
+  assert.ok(list.result.profiles.some((p) => p.name === "known-good" && p.source === "saved"));
+  assert.equal((await b.call("profiles.get", { name: "known-good" })).result.contents.rows.length, 12);
+  assert.equal((await b.call("profiles.save", { name: "known-good", from: "read" })).error.detail.check, "EXISTS");
+  assert.equal((await b.call("profiles.save", { name: "x", from: "read", intent: { scope: "unit", rows: [] } })).error.code, "BAD_REQUEST");
+  assert.equal((await b.call("profiles.save", { name: "x", from: "elsewhere" })).error.code, "BAD_REQUEST");
+  const stale = await connected({ read: "stale" });
+  assert.equal((await stale.call("profiles.save", { name: "x", from: "read" })).error.detail.check, "STALE_READ");
+  assert.equal((await stale.call("profiles.accept", { from: "read" })).error.detail.check, "STALE_READ");
+  const started = await stale.call("tune.read", {});
+  await stale.wait(started.id);
+  assert.equal((await stale.call("profiles.save", { name: "x", from: "read" })).ok, true);
+});
+
+test("mock: accept keeps the replaced state as accepted-before-<stamp> (a saved profile with the same contents); the first accept keeps nothing", async () => {
+  const b = await connected();
+  const first = await b.call("profiles.accept", { from: "read" });
+  assert.equal(first.result.previous_saved_as, null);
+  const before = (await b.call("profiles.get", { name: first.result.name })).result.contents;
+  const second = await b.call("profiles.accept", { from: "read" });
+  assert.match(second.result.previous_saved_as, /^accepted-before-\d{8}-\d{6}$/);
+  assert.deepEqual(second.result.replaced, [first.result.name]);
+  const kept = await b.call("profiles.get", { name: second.result.previous_saved_as });
+  assert.equal(kept.result.source, "saved");
+  assert.deepEqual(kept.result.contents, before);
+  const third = await b.call("profiles.accept", { from: "read" });
+  assert.match(third.result.previous_saved_as, /^accepted-before-\d{8}-\d{6}(-\d+)?$/);
+  assert.notEqual(third.result.previous_saved_as, second.result.previous_saved_as);
+  // undo = accepting the kept profile: the CPU holds that state here, so it works (the real helper refuses NOT_APPLIED when it does not: covered in tests/helper/test_g228.py)
+  assert.equal((await b.call("profiles.accept", { name: second.result.previous_saved_as })).ok, true);
+});
+
+test("contentsFromModel mirrors profile_contents: flat points = the OC word's whole-curve offset, whole millivolts, an OC ratio only above the fused top (checked against the simulator helper's profiles.get)", () => {
+  const pt = (point, ratio, offset_mv) => ({ point, ratio, offset_mv });
+  const unit = (id, points, oc, top) => ({ id, kind: id.startsWith("P") ? "P" : "E", points, oc, fused: { ratio: top }, ocPoint: null });
+  const m = {
+    units: {
+      P4: unit("P4", [pt(1, 48, 0), pt(2, 53, 0)], { ratio: 57, v_target_v: 0, offset_mv: -39.55 }, 57),
+      P3: unit("P3", [pt(1, 48, 0), pt(2, 53, -59.57)], { ratio: 57, v_target_v: 0, offset_mv: 0 }, 57),
+      P5: unit("P5", [pt(1, 48, 0)], { ratio: 59, v_target_v: 1.2001, offset_mv: 0 }, 57),
+    },
+    turbo: null,
+  };
+  const rows = Object.fromEntries(contentsFromModel(m).rows.map((r) => [r.target, r]));
+  assert.deepEqual(rows.P4.offset, { kind: "curve", mv: -40 });
+  assert.deepEqual(rows.P3.offset, { kind: "points", mv: { 48: 0, 53: -60 } });
+  assert.deepEqual([rows.P3.ratio, rows.P3.v_target_v, rows.P4.ratio], [null, null, null]);
+  assert.deepEqual([rows.P5.ratio, rows.P5.v_target_v], [59, 1.2]);
+  assert.equal(contentsFromModel(m).turbo, null);
 });

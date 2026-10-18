@@ -33,6 +33,11 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
   restore, never written; every ring point's offset with ``expect_ratio``). A read without a ring (the policy cannot read it, an older helper) records none, and an accepted state
   without a ring line compares and restores nothing about the ring.
 
+* G-228: an accept never destroys the state it replaces (operator incident 2026-10-18: an accidental "Set as accepted" overwrote a known-good state with no copy). Before the swap
+  the accepted profile being replaced is saved, as it is, into the profile store as ``accepted-before-<UTC yyyymmdd-HHMMSS>`` (``-2``, ``-3`` ... when that name exists); when that
+  save fails the accept is refused (``PREVIOUS_NOT_SAVED``, nothing changed). The reply carries ``previous_saved_as`` (``None`` when there was no accepted state) and the audit
+  record ``previous_saved_as``. An older chain saves each member the same way (``previous_saved_names``).
+
 No mailbox traffic, no MSR. A root file write under the helper's trust rules, like ``profiles.save``.
 """
 from __future__ import annotations
@@ -154,6 +159,33 @@ def _hold_device(helper: Helper, ctx: OpContext, op: str) -> None:
                       {"state": r.state.value, "op_id": r.op_id, "op": r.op}) from None
 
 
+PREVIOUS_PREFIX = "accepted-before-"
+
+
+def _save_replaced(helper: Helper, stamp: str, new_name: str) -> list[str]:
+    """G-228: save the accepted profile(s) about to be replaced into the profile store, text as it is (a comment line first), and return the names. ``[]`` = there is no
+    accepted state. Anything else that stops the copy refuses the accept (``PREVIOUS_NOT_SAVED``): losing the old state is worse than not accepting."""
+    try:
+        rels = T._accepted_paths(helper)
+    except OpError as exc:
+        if exc.message.startswith(T.NO_ACCEPTED_NOTE):
+            return []
+        raise _refused(f"the accepted state that this would replace cannot be read, so it cannot be kept ({exc.message.removesuffix(' Nothing was sent.')}).", "PREVIOUS_NOT_SAVED") from None
+    base = PREVIOUS_PREFIX + time.strftime("%Y%m%d-%H%M%S", time.gmtime(helper.cfg.wall_clock()))
+    store = T._profile_store(helper)
+    saved: list[str] = []
+    for rel in rels:
+        try:
+            text = T._read_accepted_text(helper, rel)
+            note = f"Previous accepted state ({Path(rel).stem}), saved {stamp} because {new_name} replaced it (profiles.accept, G-228). The profile below is the accepted file as it was."
+            saved.append(store.save_unique(base, profile="# " + note + "\n" + text)["name"])
+        except OpError as exc:
+            raise _refused(f"the accepted state that this would replace could not be read, so it cannot be kept ({exc.message.removesuffix(' Nothing was sent.')}).", "PREVIOUS_NOT_SAVED") from None
+        except ProfileStoreError as exc:
+            raise _refused(f"the accepted state that this would replace could not be saved as a profile ({exc.message}); it is kept as it is.", "PREVIOUS_NOT_SAVED") from None
+    return saved
+
+
 def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     _hold_device(helper, ctx, "profiles.accept")
     try:
@@ -227,15 +259,17 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
     except FingerprintError as exc:
         fingerprint_note = f"incomplete: {exc}"
     T._trust(helper, cfg.audit_path, want="file", must_exist=False)
+    previous = _save_replaced(helper, stamp, name)  # G-228: after every refusal that could still come, before the swap; a failure here refuses the accept
     try:
-        AuditLog(cfg.audit_path).append("result", op="profiles.accept", accepted=name, source=source, replaced=replaced, cpus=len(last))
+        AuditLog(cfg.audit_path).append("result", op="profiles.accept", accepted=name, source=source, replaced=replaced, previous_saved_as=previous, cpus=len(last))
     except (OSError, ValueError) as exc:
         raise _refused(f"cannot record this in the audit log: {exc}.", "AUDIT_UNAVAILABLE") from None
     try:
         AcceptedStore(directory, euid=cfg.euid_fn()).replace(name, profile_toml, words_text, header, fingerprint.to_json(stamp))
     except AcceptedError as exc:
         raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code}) from None
-    return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced, "cpus": len(last),
+    return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced,
+            "previous_saved_as": previous[0] if previous else None, "previous_saved_names": previous, "cpus": len(last),
             "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None, "complete": profile.complete,
             "ring_points": 0 if profile.ring is None else len(profile.ring.points), "fingerprint": fingerprint_note}
 

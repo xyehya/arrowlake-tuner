@@ -265,7 +265,7 @@ const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "Z");
 
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
  *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off), applyMode ('mismatch' | 'stale' | null; `?apply=`; see synthPlan above). */
-function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint") } = {}) {
+function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint"), read = searchParam("read") } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -277,6 +277,8 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   // G-213 profiles state (see the block above createMockTransport)
   const profilesMode = profiles;
   const acceptUnavailable = accept === "unavailable";
+  const readStale = read === "stale"; // `?read=stale`: profiles.save {from: "read"} / profiles.accept refuse STALE_READ until a tune.read is answered (G-228)
+  let readFresh = !readStale;
   let held = initialHeld(); // the words the mock CPU holds
   let appliedHere = false; // a tune.apply finished in this mock session: tune.last then answers the held words, as the helper's does after an apply (G-227)
   const saved = new Map(); // name -> {created, contents}
@@ -479,6 +481,16 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
         }
         case "profiles.save": {
           if (typeof args.name !== "string" || !PROFILE_NAME_RE.test(args.name)) return fail(id, "BAD_REQUEST", "'name' must be 1..64 characters of a-z 0-9 . _ -");
+          if (args.from !== undefined) { // G-228: the complete state of the last read, no rows, never accepted
+            if (args.from !== "read" || args.intent !== undefined) return fail(id, "BAD_REQUEST", "give 'intent' (the editor's rows) or 'from': 'read' (the state of the last read), not both");
+            if (saved.has(args.name) || (accepted && accepted.name === args.name)) return fail(id, "REFUSED", `a profile named '${args.name}' already exists (profiles are never overwritten)`, { check: "EXISTS" });
+            if (!readFresh) return fail(id, "REFUSED", "the words of the last read may no longer be what the CPU holds: a write came after it. Read again first (Tune > Read), then save. Nothing was saved.", { check: "STALE_READ" });
+            const contents = contentsOfHeld(held);
+            const created = isoSeconds(now());
+            saved.set(args.name, { created, contents });
+            const sum = summarize(contents);
+            return ok(id, { name: args.name, source: "saved", created, complete: true, units: sum.units, points: sum.points, turbo: true, ring_points: 0, from: "read" });
+          }
           const intent = args.intent;
           if (!intent || typeof intent !== "object" || Array.isArray(intent) || Object.keys(intent).some((k) => k !== "scope" && k !== "rows")) return fail(id, "BAD_REQUEST", "only a {scope, rows} intent can be saved as a profile");
           if (saved.has(args.name) || (accepted && accepted.name === args.name)) return fail(id, "REFUSED", `a profile named '${args.name}' already exists (profiles are never overwritten)`, { check: "EXISTS" });
@@ -492,6 +504,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
         }
         case "profiles.accept": {
           if (acceptUnavailable) return { ...clone(profilesAcceptUnavailable), id };
+          if (!readFresh) return fail(id, "REFUSED", "the words of the last read may no longer be what the CPU holds: a write came after it. Read again first (Tune > Read), then accept. Nothing was changed.", { check: "STALE_READ" });
           let name;
           if (args.from !== undefined) {
             if (args.from !== "read") return fail(id, "BAD_REQUEST", "'from' must be 'read'");
@@ -505,9 +518,16 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
             name = args.name;
           }
           const replaced = accepted ? [accepted.name] : [];
+          let previous = null; // G-228: the replaced state is kept as a saved profile first
+          if (accepted) {
+            const base = "accepted-before-" + isoSeconds(now()).replace(/[-:]/g, "").replace("T", "-").replace("Z", "");
+            previous = base;
+            for (let n = 2; saved.has(previous); n++) previous = `${base}-${n}`;
+            saved.set(previous, { created: isoSeconds(now()), contents: clone(accepted.contents) });
+          }
           accepted = { name, contents: contentsOfHeld(held) };
           const sum = summarize(accepted.contents);
-          return ok(id, { name, source: "accepted", from: args.from !== undefined ? "read" : "saved", accepted_at: isoSeconds(now()), replaced, cpus: 24, core_entries: sum.units, points: sum.points, turbo: true, complete: true, ring_points: 0, fingerprint: "complete" });
+          return ok(id, { name, source: "accepted", from: args.from !== undefined ? "read" : "saved", accepted_at: isoSeconds(now()), replaced, previous_saved_as: previous, previous_saved_names: previous ? [previous] : [], cpus: 24, core_entries: sum.units, points: sum.points, turbo: true, complete: true, ring_points: 0, fingerprint: "complete" });
         }
         case "profiles.fingerprint": {
           if (acceptUnavailable) return { ...clone(profilesFingerprintUnavailable), id };
@@ -537,6 +557,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           if (busyOp) return fail(id, "BUSY", "another long op is running", { state: "applying", op_id: busyOp });
           const result = clone(tuneRead.result);
           result.read_at = new Date(now()).toISOString().replace(/\.\d+Z$/, "Z");
+          readFresh = true;
           replayLong(id, tuneReadEvents, ok(id, result));
           return { id };
         }

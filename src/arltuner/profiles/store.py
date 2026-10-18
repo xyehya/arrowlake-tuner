@@ -116,6 +116,18 @@ class ProfileStore:
             raise ProfileStoreError("IO", f"cannot write {path}: {exc.strerror or exc}") from None
         return record
 
+    def save_unique(self, base: str, *, profile: str) -> dict[str, Any]:
+        """G-228: :meth:`save` under ``base``; when that name exists, under ``base-2``, ``base-3`` ... (the first free one, at most 99). Used for the accepted state an accept
+        replaces (``accepted-before-<UTC stamp>``), which must be kept whatever else is saved. Any other refusal propagates."""
+        for n in range(1, 100):
+            name = base if n == 1 else f"{base}-{n}"
+            try:
+                return self.save(name, profile=profile)
+            except ProfileStoreError as exc:
+                if exc.code != "EXISTS":
+                    raise
+        raise ProfileStoreError("EXISTS", f"{base!r} and its numbered variants -2 .. -99 are all taken")
+
     def load(self, name: str) -> dict[str, Any]:
         """The stored record; ``NOT_FOUND`` / ``UNTRUSTED`` / ``IO``."""
         path = self._path(name)

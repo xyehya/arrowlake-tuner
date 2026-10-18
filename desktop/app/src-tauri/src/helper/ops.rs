@@ -226,7 +226,9 @@ fn tune_plan(a: &Args) -> bool {
 }
 
 fn profiles_save(a: &Args) -> bool {
-    keys_exactly(a, &["name", "intent"]) && str_is(&a["name"], profile_name) && intent_ok(&a["intent"])
+    // G-228: {name, intent} (the editor's rows over the read) or {name, from: "read"} (the state of the last read as it is)
+    let name_ok = a.get("name").is_some_and(|v| str_is(v, profile_name));
+    name_ok && ((keys_exactly(a, &["name", "intent"]) && intent_ok(&a["intent"])) || (keys_exactly(a, &["name", "from"]) && a["from"].as_str() == Some("read")))
 }
 
 fn profiles_accept(a: &Args) -> bool {
@@ -421,6 +423,24 @@ mod tests {
         let idx: Vec<usize> = [PlanKind::Tune, PlanKind::Power, PlanKind::Runtime].iter().map(|k| k.index()).collect();
         assert_eq!(idx, [0, 1, 2]);
         assert_eq!(PlanKind::COUNT, 3);
+    }
+
+    #[test]
+    fn profiles_save_shapes() {
+        assert!(ok("profiles.save", json!({"name": "mine", "intent": {}})));
+        assert!(ok("profiles.save", json!({"name": "mine", "from": "read"})));
+        for bad in [
+            json!({"name": "mine"}),
+            json!({"name": "mine", "from": "elsewhere"}),
+            json!({"name": "mine", "from": 1}),
+            json!({"name": "mine", "from": "read", "intent": {}}),
+            json!({"name": "mine", "from": "read", "extra": 1}),
+            json!({"name": "UPPER", "from": "read"}),
+            json!({"from": "read"}),
+            json!({"name": "mine", "intent": []}),
+        ] {
+            assert!(!ok("profiles.save", bad.clone()), "{bad}");
+        }
     }
 
     #[test]
