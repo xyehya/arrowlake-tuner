@@ -2,7 +2,7 @@
 // Ported from web/app.js Profiles (web/app.js:4822-5200): loadProfiles / loadProfileInfo 4830-4858, summaryText 4885, renderAcceptedCard 4897, detailTable 4917, renderProfiles 4949,
 // compareRows 5004, renderProfileDiff 5049, loadIntoTune 5077, updateSaveState 5116, saveProfile 5132, acceptState 5148, recordFingerprint 5168.
 //
-// Ops used (all read-only or bookkeeping, no hardware from here): profiles.list, profiles.get, profiles.save {name, intent} | {name, from: "read"} (G-228), profiles.accept {name} | {from: "read"} (keeps the replaced state: previous_saved_as), profiles.fingerprint, tune.last.
+// Ops used (all read-only or bookkeeping, no hardware from here): profiles.list, profiles.get, profiles.save {name, intent} | {name, from: "read"} (G-228), profiles.accept {name} | {from: "read"} [+ set_aside_unreadable: true, only from the refusal banner] (keeps the replaced state: previous_saved_as), profiles.diff {a, b} (the confirm step), profiles.fingerprint, tune.last.
 // "Review and apply" and "Restore accepted" open the apply drawer (views/tune/apply.js) with a whole-state intent ({profile: name} / {restore: "accepted"}) through the "tune:review" event on
 // store.events, `detail.requests` (G-213's one change to apply.js). Nothing is written from this screen: the drawer plans, shows the writes, and applies only on its own Apply.
 //
@@ -252,26 +252,25 @@ export function readRefusal(error) {
   return c === "NO_READ" || c === "STALE_READ" ? c : null;
 }
 
-/** A profiles.get-shaped `contents` from a Tune model (the last read): per unit its point offsets by ratio, the OC ratio and target voltage, and the turbo tables. The ring is left out like profiles.get leaves it. */
-export function contentsFromModel(model) {
-  if (!isObj(model) || !isObj(model.units)) return null;
-  const rows = [];
-  for (const id of UNIT_ORDER) {
-    const u = model.units[id];
-    if (!u || unitKind(id) === "R") continue;
-    const mv = {};
-    for (const p of u.points) if (isNum(p.ratio) && isNum(p.offset_mv)) mv[String(p.ratio)] = Math.round(p.offset_mv);
-    // the helper records the OC word's ratio + target only for an OC point: a target set and a ratio above the unit's top fused ratio (profiles/complete.py); below it the word is neutral
-    const oc = u.oc || {};
-    const top = u.fused && isNum(u.fused.ratio) ? u.fused.ratio : null;
-    const isOc = isNum(oc.ratio) && isNum(oc.v_target_v) && oc.v_target_v > 0 && top !== null && oc.ratio > top;
-    // profile_contents (contents.py): a complete profile whose points are all 0 reports the unit's whole-curve offset (the OC word's), not the points
-    const flat = Object.values(mv).length > 0 && Object.values(mv).every((x) => x === 0);
-    const offset = flat ? { kind: "curve", mv: isNum(oc.offset_mv) ? Math.round(oc.offset_mv) : 0 } : Object.keys(mv).length ? { kind: "points", mv } : null;
-    rows.push({ target: id, offset, ratio: isOc ? oc.ratio : null, v_target_v: isOc ? Math.round(oc.v_target_v * 1000) / 1000 : null });
-  }
-  const t = model.turbo;
-  return { rows, turbo: isObj(t) && isObj(t.P) && isObj(t.E) ? { P: t.P.ratios.slice(), E: t.E.ratios.slice() } : null, complete: true };
+/** True when the helper refused because the accepted state cannot be read (it offers to move the whole directory aside). */
+export const unreadableRefusal = (error) => isObj(error) && isObj(error.detail) && error.detail.check === "ACCEPTED_UNREADABLE";
+
+const KIND_FMT = {
+  mv: { fmt: fmtMv, delta: deltaMv },
+  v: { fmt: fmtV, delta: (a, b) => (isNum(a) && isNum(b) ? fmtMv((b - a) * 1000) : DASH) },
+  x: { fmt: (x) => x + TIMES, delta: (a, b) => (isNum(a) && isNum(b) ? stepText(b - a) : DASH) },
+  hex: { fmt: (x) => String(x), delta: () => DASH },
+};
+
+/**
+ * The rows of a profiles.diff answer in the shape renderers use ({unit, label, a, b, fmt, delta}). The helper compares the profiles themselves (every unit's OC word offset / ratio / target voltage,
+ * every fused point, the ring, the turbo tables), so nothing is dropped here. `kind`: mv | v | x | hex (the ring's OC word).
+ */
+export function helperDiffRows(result) {
+  if (!isObj(result) || !Array.isArray(result.rows)) return [];
+  return result.rows.filter(isObj).map((r) => ({
+    unit: String(r.unit), label: String(r.label).replace(/(\d)x$/, "$1" + TIMES), a: r.a === undefined ? null : r.a, b: r.b === undefined ? null : r.b, ...(KIND_FMT[r.kind] || KIND_FMT.hex),
+  }));
 }
 
 /** [{unit, n}] in row order: how many values differ per unit (the confirm step's per-unit list). */
@@ -285,9 +284,14 @@ export function diffByUnit(rows) {
   return out;
 }
 
-export function diffSummary(rows) {
-  if (!rows.length) return "No differences: the state to accept equals the current accepted state.";
-  return plural(rows.length, "difference") + " in " + plural(diffByUnit(rows).length, "unit") + " from the current accepted state: " + diffByUnit(rows).map((u) => u.unit + " (" + u.n + ")").join(", ") + ".";
+export function diffSummary(rows, result = null) {
+  if (!rows.length) {
+    if (!isObj(result) || !Array.isArray(result.compared)) return "No differences were found.";
+    const not = Array.isArray(result.not_compared) && result.not_compared.length ? " Not compared: " + result.not_compared.map((x) => x.what + " (" + x.why + ")").join("; ") + "." : "";
+    return "No differences in what was compared: " + result.compared.join("; ") + "." + not;
+  }
+  const more = isObj(result) && isNum(result.truncated) && result.truncated > 0 ? " (" + result.truncated + " more are not listed)" : "";
+  return plural(rows.length, "difference") + " in " + plural(diffByUnit(rows).length, "unit") + " from the current accepted state: " + diffByUnit(rows).map((u) => u.unit + " (" + u.n + ")").join(", ") + "." + more;
 }
 
 export const previousKeptText = (replaced) =>
@@ -644,37 +648,20 @@ export function profilesView() {
         doLoad(name);
       }
 
-      /** profiles.get contents of `name` (cached in S.info), or null with the reason. */
-      async function contentsOf(name) {
-        if (!infoOf(name) && !S.info[name]) {
-          const r = await bridge.call("profiles.get", { name });
-          S.info[name] = r.ok && isObj(r.result) && isObj(r.result.contents) && Array.isArray(r.result.contents.rows) ? r.result : { error: errText(r.error) };
-        }
-        const info = infoOf(name);
-        return info ? { contents: info.contents } : { error: S.info[name].error };
-      }
-
-      /** The confirm step's diff: the accepted state now against the one that would replace it. `name` null = the state of the last read (from the Tune model). {rows} | {error} | {rows: null} (nothing accepted yet). */
+      /** The confirm step's diff: the accepted state now against the one that would replace it, computed by the helper (profiles.diff) from the profiles themselves. `name` null = the state of
+       *  the last read. {rows, result} | {error, read?} | {rows: null} (no accepted state, or an older chain: nothing to compare). */
       async function acceptDiff(name) {
         const acc = acceptedEntries();
-        let next;
-        if (name === null) {
-          if (!store.get().tune.model && connected()) await tc.loadLast();
-          const c = contentsFromModel(store.get().tune.model);
-          if (!c) return { error: READ_FIRST_TEXT };
-          next = { contents: c };
-        } else next = await contentsOf(name);
-        if (next.error) return { error: next.error };
         if (acc.length !== 1) return { rows: null, chain: acc.length > 1 };
-        const cur = await contentsOf(acc[0].name);
-        if (cur.error) return { error: cur.error };
-        return { rows: compareRows(cur.contents, next.contents) };
+        const r = await bridge.call("profiles.diff", { a: "accepted", b: name === null ? "read" : name });
+        if (r.ok && isObj(r.result) && Array.isArray(r.result.rows)) return { rows: helperDiffRows(r.result), result: r.result };
+        return readRefusal(r.error) ? { error: READ_FIRST_TEXT, read: errText(r.error) } : { error: errText(r.error) };
       }
 
       function diffNode(d) {
         if (d.error) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: "The comparison is unavailable (" + d.error + "); the helper still keeps the replaced state." });
         if (d.rows === null) return h("p", { class: "muted pr-note", id: "pr-ask-diff-note", text: d.chain ? "The current accepted state is an older chain; each member is kept as a profile." : "There is no accepted state to compare with." });
-        const box = h("div", { class: "pr-diff-box", id: "pr-ask-diff" }, h("p", { class: "pr-note", id: "pr-ask-diff-note", text: diffSummary(d.rows) }));
+        const box = h("div", { class: "pr-diff-box", id: "pr-ask-diff" }, h("p", { class: "pr-note", id: "pr-ask-diff-note", text: diffSummary(d.rows, d.result) }));
         if (!d.rows.length) return box;
         const body = h("tbody");
         for (const r of d.rows.slice(0, DIFF_MAX)) {
@@ -692,21 +679,22 @@ export function profilesView() {
         say("Comparing with the accepted state…");
         const d = await acceptDiff(name);
         say("");
-        if (d.error === READ_FIRST_TEXT) return readFirst("the new accepted state is what the last read holds; there is none to compare with yet.");
+        if (d.error === READ_FIRST_TEXT) return readFirst(d.read);
         setAsk({ title: "Set as accepted?", text: acceptConfirmText(name === null ? "The state of the last read" : '"' + name + '"', replaced) + " " + previousKeptText(replaced), detail: diffNode(d), yes: "Accept", focusCancel: true, run: () => acceptState(name) });
       }
 
-      async function acceptState(name) {
+      async function acceptState(name, setAside = false) {
         if (!connected() || S.busy) return;
         S.busy = true;
         renderList();
         setNotice(null);
-        const r = await bridge.call("profiles.accept", name === null ? { from: "read" } : { name });
+        const r = await bridge.call("profiles.accept", { ...(name === null ? { from: "read" } : { name }), ...(setAside ? { set_aside_unreadable: true } : {}) });
         S.busy = false;
         if (r.ok && isObj(r.result)) {
           const replaced = Array.isArray(r.result.replaced) && r.result.replaced.length ? ", replacing " + r.result.replaced.join(", ") : "";
           const prev = typeof r.result.previous_saved_as === "string" ? r.result.previous_saved_as : null;
-          say('Accepted "' + r.result.name + '"' + replaced + ".", "ok");
+          const aside = typeof r.result.set_aside_as === "string" ? " The unreadable accepted state was moved, whole, to " + r.result.set_aside_as + " (nothing was deleted)." : "";
+          say('Accepted "' + r.result.name + '"' + replaced + "." + aside, "ok");
           if (prev) {
             const text = "Previous accepted state saved as " + prev;
             toast("ok", text);
@@ -717,6 +705,9 @@ export function profilesView() {
         } else {
           const read = readRefusal(r.error);
           if (read) readFirst(errText(r.error));
+          else if (unreadableRefusal(r.error)) {
+            setNotice({ kind: "warn", text: errText(r.error), actions: [{ id: "btn-pr-aside", label: "Move it aside and accept", run: () => acceptState(name, true) }] });
+          }
           say("Not accepted: " + errText(r.error), "error");
           renderList();
         }

@@ -2820,7 +2820,10 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         except ProfileError as exc:
             raise OpError(BAD_REQUEST, f"the edits do not fit the read: {exc}. Nothing was saved.") from None
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(helper.cfg.wall_clock()))
-    header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
+    if args.get("from") == "read":
+        header = f"Saved {stamp} by arltuner (profiles.save, G-228): the state of this boot's last read of every unit, as it is (not made the accepted state). A complete profile."
+    else:
+        header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
     try:
         record = _profile_store(helper).save(name, profile=dump_profile(profile, header))
     except ProfileError as exc:
@@ -2885,7 +2888,7 @@ def op_profiles_get(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
 # --------------------------------------------------------------------------------------------------------------
 def tune_ops() -> list[OpSpec]:
     from .ops import _validate_vf_dump
-    from .ops_accept import op_profiles_accept, op_profiles_fingerprint, validate_profiles_accept  # lazy: ops_accept imports this module
+    from .ops_accept import op_profiles_accept, op_profiles_diff, op_profiles_fingerprint, validate_profiles_accept, validate_profiles_diff  # lazy: ops_accept imports this module
 
     return [
         # a mailbox read is a WRMSR (docs/SAFETY.md): write-gated on hardware, long (state machine begin/end), one at a time
@@ -2900,6 +2903,8 @@ def tune_ops() -> list[OpSpec]:
         OpSpec("profiles.get", op_profiles_get, _validate_profiles_get, slow=True),
         # G-129 (D-036): the user's accepted state, written by the root helper (a file write, no mailbox / MSR traffic; a read this boot is required)
         OpSpec("profiles.accept", op_profiles_accept, validate_profiles_accept, slow=True),
+        # G-228: what differs between two states (the accepted one, a saved profile, the last read): the confirm step of "Set as accepted"; a file read, no hardware
+        OpSpec("profiles.diff", op_profiles_diff, validate_profiles_diff, slow=True),
         # G-141: records fingerprint.json for the accepted state that exists (a file write, no mailbox / MSR traffic; needs this boot's read of the fused words)
         OpSpec("profiles.fingerprint", op_profiles_fingerprint, _no_args, slow=True),
         # G-123: the stored last read of this boot (a file read, no hardware); also restores the plan state after a helper restart

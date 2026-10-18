@@ -34,26 +34,32 @@ Contract (what "accepted" means, so the restore and the comparison stay honest):
   without a ring line compares and restores nothing about the ring.
 
 * G-228: an accept never destroys the state it replaces (operator incident 2026-10-18: an accidental "Set as accepted" overwrote a known-good state with no copy). Before the swap
-  the accepted profile being replaced is saved, as it is, into the profile store as ``accepted-before-<UTC yyyymmdd-HHMMSS>`` (``-2``, ``-3`` ... when that name exists); when that
-  save fails the accept is refused (``PREVIOUS_NOT_SAVED``, nothing changed). The reply carries ``previous_saved_as`` (``None`` when there was no accepted state) and the audit
-  record ``previous_saved_as``. An older chain saves each member the same way (``previous_saved_names``).
+  the accepted profile being replaced is saved, as it is, into the profile store as ``accepted-before-<UTC yyyymmdd-HHMMSS>`` (``-2``, ``-3`` ... when that name exists; these do not
+  count toward the store's profile limit); when that save fails the accept is refused (``PREVIOUS_NOT_SAVED``, nothing changed). The reply carries ``previous_saved_as`` (a name, or
+  ``None`` when there was no accepted state) and ``previous_saved_names`` (a list); the audit record ``previous_saved_names`` only. An accepted state that is still an older chain
+  is refused (``ACCEPTED_CHAIN``: run accepted-migrate first). An accepted state that cannot be read (an empty or garbled ``CURRENT``, an untrusted file, a directory without
+  ``CURRENT``) cannot be kept: the accept is refused (``ACCEPTED_UNREADABLE``) unless the request carries ``"set_aside_unreadable": true``, which moves the WHOLE directory to
+  ``<accepted>.unreadable-<UTC stamp>`` (nothing is deleted, nothing is parsed) and then accepts; the reply says where (``set_aside_as``). ``profiles.diff {a, b}`` (read only)
+  lists what differs between two states: the confirm step's per-unit diff.
 
 No mailbox traffic, no MSR. A root file write under the helper's trust rules, like ``profiles.save``.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from arltuner.guard import AuditLog
+from arltuner.curves.record import unit_order
 from arltuner.guard.policy import fused_top_ratio
 from arltuner.profiles import BuildError, Profile, ProfileError, complete_from_words
 from arltuner.profiles.accepted import SAFE_PROFILE_NAME, AcceptedError, AcceptedStore
 from arltuner.profiles.expected import format_ring_line
 from arltuner.profiles.fingerprint import CpuId, FingerprintError, build_fingerprint, cpu_id_from_cpuinfo
 from arltuner.profiles.serialize import dump_profile
-from arltuner.profiles.store import ProfileStoreError
+from arltuner.profiles.store import PREVIOUS_PREFIX, ProfileStoreError
 from arltuner.topology import Topology
 
 from . import ops_tune as T
@@ -65,24 +71,31 @@ from .trust import TrustError, check_trusted_path
 if TYPE_CHECKING:
     from .core import Helper
 
-__all__ = ["op_profiles_accept", "op_profiles_fingerprint", "validate_profiles_accept"]
+__all__ = ["diff_profiles", "op_profiles_accept", "op_profiles_diff", "op_profiles_fingerprint", "validate_profiles_accept", "validate_profiles_diff"]
 
 _VOLT_EPS = 0.002  # V: two decoded targets this close are the same word (the decode is raw / 1024)
 _MV_EPS = 0.6  # mV: one offset raw step is 0.977 mV
 
 
 def validate_profiles_accept(args: dict[str, Any]) -> dict[str, Any]:
-    _only(args, {"name", "from"})
+    _only(args, {"name", "from", "set_aside_unreadable"})
     if ("name" in args) == ("from" in args):
         raise OpError(BAD_REQUEST, "give exactly one of 'name' (a saved profile) or 'from': 'read' (the state of the last read)")
+    out: dict[str, Any]
     if "from" in args:
         if args["from"] != "read":
             raise OpError(BAD_REQUEST, "'from' must be 'read'")
-        return {"from": "read"}
-    name = args["name"]
-    if not isinstance(name, str) or not T.NAME_RE.match(name) or not SAFE_PROFILE_NAME.match(name) or ".." in name:
-        raise OpError(BAD_REQUEST, "'name' must be a saved profile name: 1..64 characters of a-z 0-9 . _ - (no '..', not starting with '.' or '-')")
-    return {"name": name}
+        out = {"from": "read"}
+    else:
+        name = args["name"]
+        if not isinstance(name, str) or not T.NAME_RE.match(name) or not SAFE_PROFILE_NAME.match(name) or ".." in name:
+            raise OpError(BAD_REQUEST, "'name' must be a saved profile name: 1..64 characters of a-z 0-9 . _ - (no '..', not starting with '.' or '-')")
+        out = {"name": name}
+    if "set_aside_unreadable" in args:
+        if args["set_aside_unreadable"] is not True:
+            raise OpError(BAD_REQUEST, "'set_aside_unreadable' must be true when given")
+        out["set_aside_unreadable"] = True
+    return out
 
 
 def _refused(text: str, check: str) -> OpError:
@@ -159,31 +172,64 @@ def _hold_device(helper: Helper, ctx: OpContext, op: str) -> None:
                       {"state": r.state.value, "op_id": r.op_id, "op": r.op}) from None
 
 
-PREVIOUS_PREFIX = "accepted-before-"
+def _reason(exc: OpError) -> str:
+    return exc.message.removesuffix(" Nothing was sent.").rstrip(".")
 
 
-def _save_replaced(helper: Helper, stamp: str, new_name: str) -> list[str]:
-    """G-228: save the accepted profile(s) about to be replaced into the profile store, text as it is (a comment line first), and return the names. ``[]`` = there is no
-    accepted state. Anything else that stops the copy refuses the accept (``PREVIOUS_NOT_SAVED``): losing the old state is worse than not accepting."""
+def _leftovers(directory: Path) -> bool:
+    """True when ``directory`` holds something although it names no accepted state (a real directory with files in it, or a plain file): a swap would delete it."""
+    try:
+        if directory.is_symlink():
+            return False
+        return directory.is_file() or (directory.is_dir() and any(directory.iterdir()))
+    except OSError:
+        return True
+
+
+def _replaced_state(helper: Helper, directory: Path) -> tuple[str, str | None, str]:
+    """G-228: what the accept is about to replace: ``("none", None, "")``, ``("one", "<profiles/x.toml>", "")``, ``("chain", None, "")`` (an older chain of several profiles) or
+    ``("unreadable", None, "<why>")`` (it exists but cannot be read: it cannot be kept as a profile)."""
     try:
         rels = T._accepted_paths(helper)
     except OpError as exc:
-        if exc.message.startswith(T.NO_ACCEPTED_NOTE):
-            return []
-        raise _refused(f"the accepted state that this would replace cannot be read, so it cannot be kept ({exc.message.removesuffix(' Nothing was sent.')}).", "PREVIOUS_NOT_SAVED") from None
+        if not exc.message.startswith(T.NO_ACCEPTED_NOTE):
+            return "unreadable", None, _reason(exc)
+        if _leftovers(directory):
+            return "unreadable", None, f"{directory} has no CURRENT file but is not empty"
+        return "none", None, ""
+    if len(rels) > 1:
+        return "chain", None, ""
+    return "one", rels[0], ""
+
+
+def _save_replaced(helper: Helper, rel: str, stamp: str, new_name: str) -> str:
+    """G-228: save the accepted profile about to be replaced into the profile store, text as it is (a comment line first), and return its name. Anything that stops the copy
+    refuses the accept (``PREVIOUS_NOT_SAVED``): losing the old state is worse than not accepting."""
     base = PREVIOUS_PREFIX + time.strftime("%Y%m%d-%H%M%S", time.gmtime(helper.cfg.wall_clock()))
-    store = T._profile_store(helper)
-    saved: list[str] = []
-    for rel in rels:
-        try:
-            text = T._read_accepted_text(helper, rel)
-            note = f"Previous accepted state ({Path(rel).stem}), saved {stamp} because {new_name} replaced it (profiles.accept, G-228). The profile below is the accepted file as it was."
-            saved.append(store.save_unique(base, profile="# " + note + "\n" + text)["name"])
-        except OpError as exc:
-            raise _refused(f"the accepted state that this would replace could not be read, so it cannot be kept ({exc.message.removesuffix(' Nothing was sent.')}).", "PREVIOUS_NOT_SAVED") from None
-        except ProfileStoreError as exc:
-            raise _refused(f"the accepted state that this would replace could not be saved as a profile ({exc.message}); it is kept as it is.", "PREVIOUS_NOT_SAVED") from None
-    return saved
+    try:
+        text = T._read_accepted_text(helper, rel)
+        note = f"Previous accepted state ({Path(rel).stem}), saved {stamp} because {new_name} replaced it (profiles.accept, G-228). The profile below is the accepted file as it was."
+        return T._profile_store(helper).save_unique(base, profile="# " + note + "\n" + text)["name"]
+    except OpError as exc:
+        raise _refused(f"the accepted state that this would replace could not be read, so it cannot be kept ({_reason(exc)}).", "PREVIOUS_NOT_SAVED") from None
+    except ProfileStoreError as exc:
+        raise _refused(f"the accepted state that this would replace could not be saved as a profile ({exc.message.rstrip('.')}); it is kept as it is.", "PREVIOUS_NOT_SAVED") from None
+
+
+def _aside_target(directory: Path, wall_clock: float) -> Path:
+    """``<accepted>.unreadable-<UTC yyyymmdd-HHMMSS>`` next to the accepted directory (``-2``, ``-3`` ... when taken)."""
+    base = f"{directory.name}.unreadable-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime(wall_clock))
+    for n in range(1, 100):
+        target = directory.parent / (base if n == 1 else f"{base}-{n}")
+        if not os.path.lexists(target):
+            return target
+    raise _refused(f"{directory.parent} already holds {base} and its numbered variants.", "PREVIOUS_NOT_SAVED")
+
+
+def _outcome(text: str, previous: str | None, check: str) -> OpError:
+    """A refusal after the old state was already copied: say so (the copy stays; the accepted state is as it was)."""
+    tail = f" The previous accepted state was saved as {previous}; the accepted state is unchanged." if previous else " Nothing was changed."
+    return OpError(REFUSED, text.rstrip(".") + "." + tail, {"check": check})
 
 
 def op_profiles_accept(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -259,17 +305,41 @@ def _accept(helper: Helper, args: dict[str, Any]) -> dict[str, Any]:
     except FingerprintError as exc:
         fingerprint_note = f"incomplete: {exc}"
     T._trust(helper, cfg.audit_path, want="file", must_exist=False)
-    previous = _save_replaced(helper, stamp, name)  # G-228: after every refusal that could still come, before the swap; a failure here refuses the accept
+    state, rel, why = _replaced_state(helper, directory)
+    aside: Path | None = None
+    if state == "chain":
+        raise _refused(f"the accepted state is an older chain of {len(replaced)} profiles ({', '.join(replaced)}); accepting over it would delete the files that accepted-migrate rebuilds it from. First, {T.CHAIN_HINT}.", "ACCEPTED_CHAIN")
+    if state == "unreadable":
+        aside = _aside_target(directory, cfg.wall_clock())
+        if args.get("set_aside_unreadable") is not True:
+            raise _refused(f"the accepted state that this would replace cannot be read ({why}), so it cannot be kept as a profile. You can have the whole directory {directory} moved aside to {aside} "
+                           "(nothing is deleted) and accept anyway.", "ACCEPTED_UNREADABLE")
+    previous = _save_replaced(helper, rel, stamp, name) if rel is not None else None  # G-228: after every refusal that could still come, before the swap; a failure here refuses the accept
+    names = [previous] if previous else []
     try:
-        AuditLog(cfg.audit_path).append("result", op="profiles.accept", accepted=name, source=source, replaced=replaced, previous_saved_as=previous, cpus=len(last))
+        AuditLog(cfg.audit_path).append("result", op="profiles.accept", accepted=name, source=source, replaced=replaced, previous_saved_names=names,
+                                        **({"set_aside_as": str(aside), "set_aside_reason": why} if aside is not None else {}), cpus=len(last))
     except (OSError, ValueError) as exc:
-        raise _refused(f"cannot record this in the audit log: {exc}.", "AUDIT_UNAVAILABLE") from None
+        raise _outcome(f"cannot record this in the audit log: {exc}", previous, "AUDIT_UNAVAILABLE") from None
+    store = AcceptedStore(directory, euid=cfg.euid_fn())
+    if aside is not None:
+        try:
+            store._check_parent()  # the same trust rule as the swap: never rename inside a directory the helper does not own
+            os.rename(directory, aside)
+        except (AcceptedError, OSError) as exc:
+            raise _refused(f"the unreadable accepted state could not be moved aside ({getattr(exc, 'message', None) or getattr(exc, 'strerror', None) or exc}); it is where it was.", "ACCEPTED_UNREADABLE") from None
     try:
-        AcceptedStore(directory, euid=cfg.euid_fn()).replace(name, profile_toml, words_text, header, fingerprint.to_json(stamp))
+        store.replace(name, profile_toml, words_text, header, fingerprint.to_json(stamp))
     except AcceptedError as exc:
-        raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code}) from None
+        if aside is not None and not os.path.lexists(directory):
+            try:
+                os.rename(aside, directory)  # nothing was accepted: the unreadable state goes back where it was
+                aside = None
+            except OSError:
+                pass
+        raise _outcome(exc.message, previous, "NO_ACCEPTED_STATE" if exc.code == "UNTRUSTED" else exc.code) from None
     return {"name": name, "source": "accepted", "from": "read" if "from" in args else "saved", "accepted_at": stamp, "replaced": replaced,
-            "previous_saved_as": previous[0] if previous else None, "previous_saved_names": previous, "cpus": len(last),
+            "previous_saved_as": previous, "previous_saved_names": names, "set_aside_as": None if aside is None else str(aside), "cpus": len(last),
             "core_entries": len(profile.entries), "points": len(profile.points), "turbo": profile.turbo is not None, "complete": profile.complete,
             "ring_points": 0 if profile.ring is None else len(profile.ring.points), "fingerprint": fingerprint_note}
 
@@ -332,3 +402,137 @@ def _fingerprint(helper: Helper) -> dict[str, Any]:
         check = "NO_ACCEPTED_STATE" if exc.code in ("UNTRUSTED", "MISSING") else exc.code
         raise OpError(REFUSED, f"{exc.message}. Nothing was changed.", {"check": check}) from None
     return {"recorded": stamp, "cpus": len(fingerprint.cpus), "accepted": chain, "fingerprint": note}
+
+
+# --------------------------------------------------------------------------------------------------------------
+# profiles.diff (G-228): what differs between two states. Compares the Profile objects themselves, so nothing the profile holds is dropped on the way (the OC word's whole-curve
+# offset, the ring, the turbo tables), unlike the Profiles list's contents view (profiles/contents.py) which shows a unit's offsets as one row.
+# --------------------------------------------------------------------------------------------------------------
+DIFF_ROWS_MAX = 400
+_RING_UNIT = "ring"
+_OTHER = 3  # unit_order puts P units at 0 and E clusters at 1; the ring and the turbo tables come after
+
+
+def _diff_ref(args: dict[str, Any], key: str) -> str:
+    value = args.get(key)
+    if value in ("accepted", "read"):
+        return value
+    if isinstance(value, str) and T.NAME_RE.match(value):
+        return value
+    raise OpError(BAD_REQUEST, f"'{key}' must be 'accepted', 'read' or a saved profile name (1..64 characters of a-z 0-9 . _ -)")
+
+
+def validate_profiles_diff(args: dict[str, Any]) -> dict[str, Any]:
+    _only(args, {"a", "b"})
+    if "a" not in args or "b" not in args:
+        raise OpError(BAD_REQUEST, "give 'a' and 'b': 'accepted', 'read' or a saved profile name")
+    return {"a": _diff_ref(args, "a"), "b": _diff_ref(args, "b")}
+
+
+def _read_profile(helper: Helper, topology: Topology) -> Profile:
+    """The complete profile of this boot's last read, as ``profiles.save`` / ``profiles.accept`` ``{from: "read"}`` record it (same gates, same builder)."""
+    last = T._last_words(helper)
+    if not last:
+        raise OpError(REFUSED, "no tune.read this boot: the state of the CPU is what the last read found, so read it first (Tune > Read).", {"check": "NO_READ"})
+    why = T.stale_since_read(helper)
+    if why is not None:
+        raise OpError(REFUSED, f"the words of the last read may no longer be what the CPU holds: {why}. Read again first (Tune > Read).", {"check": "STALE_READ"})
+    st = T._state(helper)
+    with st.lock:
+        tables = None if st.tables is None else {k: list(v) for k, v in st.tables.items()}
+    try:
+        return _profile_from_words(topology, "read", last, getattr(helper, "fused_words", None) or {}, tables, T._last_ring(helper))
+    except OpError as exc:
+        raise OpError(REFUSED, exc.message.removesuffix(" Nothing was changed."), exc.detail) from None
+
+
+def _diff_side(helper: Helper, topology: Topology, ref: str) -> tuple[Profile, dict[str, Any]]:
+    if ref == "read":
+        return _read_profile(helper, topology), {"ref": ref, "name": None, "source": "read", "partial": False}
+    try:
+        acc_name, acc = T._accepted_profile(helper)
+    except OpError:
+        if ref == "accepted":
+            raise
+        acc_name, acc = None, None
+    if acc is not None and ref in ("accepted", acc_name):
+        return acc, {"ref": ref, "name": acc_name, "source": "accepted", "partial": not acc.complete}
+    if ref == "accepted":
+        raise OpError(REFUSED, T.NO_ACCEPTED_NOTE + ".", {"check": "NO_ACCEPTED_STATE"})
+    try:
+        record = T._profile_store(helper).load(ref)
+    except ProfileStoreError as exc:
+        raise OpError(BAD_REQUEST if exc.code == "NOT_FOUND" else REFUSED, exc.message, {"check": "PROFILE_" + exc.code}) from None
+    saved = T._saved_profile(record)
+    if saved is not None:
+        return saved, {"ref": ref, "name": ref, "source": "saved", "partial": False}
+    policy = T._load_policy(helper)  # a partial (legacy) profile: its rows resolved against the read; only what it sets is compared
+    resolved = T._rows_to_profile(helper, T.canonical_intent(record["intent"], rows_only=True), policy, topology, ref).profile
+    return resolved, {"ref": ref, "name": ref, "source": "saved", "partial": True}
+
+
+def _rank(unit: str) -> tuple[int, int]:
+    if unit == _RING_UNIT:
+        return (_OTHER, 0)
+    if unit.endswith(" turbo"):
+        return (_OTHER + 1, 0 if unit[0] == "P" else 1)
+    return unit_order(unit)
+
+
+def _facts(profile: Profile, topology: Topology) -> dict[tuple[str, int], tuple[str, str, Any]]:
+    """``{(unit, order): (label, kind, value)}`` for everything the profile holds. ``kind``: ``mv`` (offset), ``v`` (volts), ``x`` (a ratio), ``hex`` (a word). ``None`` = not set."""
+    out: dict[tuple[str, int], tuple[str, str, Any]] = {}
+    for s in profile.expand(topology):
+        unit = topology.unit_of_cpu(s.cpu)
+        out[(unit, 0)] = ("OC word: whole-curve offset", "mv", s.offset_mv)
+        out[(unit, 1)] = ("OC ratio", "x", s.ratio)
+        out[(unit, 2)] = ("OC target voltage", "v", None if s.oc_voltage_mv is None else round(s.oc_voltage_mv / 1000, 4))
+    for p in profile.expand_points(topology):
+        out[(topology.unit_of_cpu(p.cpu), 10 + p.point)] = (f"Offset at {p.expect_ratio}x" if p.expect_ratio else f"Offset, point {p.point}", "mv", p.offset_mv)
+    if profile.ring is not None:
+        out[(_RING_UNIT, 0)] = ("OC word (BIOS-owned)", "hex", f"0x{profile.ring.oc_word:08X}")
+        for rp in profile.ring.points:
+            out[(_RING_UNIT, 10 + rp.point)] = (f"Offset at {rp.expect_ratio}x", "mv", rp.offset_mv)
+    if profile.turbo is not None:
+        for key in ("p", "e"):
+            for i, ratio in enumerate(getattr(profile.turbo, key) or ()):
+                out[(f"{key.upper()} turbo", i)] = (f"Bucket {i}", "x", ratio)
+    return out
+
+
+def diff_profiles(pa: Profile, pb: Profile, topology: Topology) -> list[dict[str, Any]]:
+    """The settings that differ between two profiles, in display order: ``{unit, label, kind, a, b}`` (``None`` = that profile does not hold it)."""
+    fa, fb = _facts(pa, topology), _facts(pb, topology)
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(fa) | set(fb), key=lambda k: (_rank(k[0]), k[0], k[1])):
+        ta, tb = fa.get(key), fb.get(key)
+        va = None if ta is None else ta[2]
+        vb = None if tb is None else tb[2]
+        if va != vb:
+            label, kind, _ = ta or tb  # type: ignore[misc]
+            rows.append({"unit": key[0], "label": label, "kind": kind, "a": va, "b": vb})
+    return rows
+
+
+def op_profiles_diff(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """``{a, b}`` -> ``{a: side, b: side, rows: [{unit, label, kind, a, b}], units: [{unit, n}], compared: [...], not_compared: [{what, why}], truncated}``. Each side is ``"accepted"``
+    (the accepted profile), ``"read"`` (this boot's last read as ``profiles.save`` / ``profiles.accept`` ``{from: "read"}`` record it; ``NO_READ`` / ``STALE_READ`` as there) or a saved
+    profile's name. A row is one setting that differs; ``a`` / ``b`` ``None`` = that state does not hold it. Read only: files and the stored read, no hardware."""
+    topology = T._topology(helper)
+    pa, side_a = _diff_side(helper, topology, args["a"])
+    pb, side_b = _diff_side(helper, topology, args["b"])
+    rows = diff_profiles(pa, pb, topology)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["unit"]] = counts.get(r["unit"], 0) + 1
+    compared = ["each unit's OC word (whole-curve offset, OC ratio, OC target voltage)", "every fused point's offset"]
+    not_compared: list[dict[str, str]] = []
+    for what, held in (("the ring", pa.ring is not None or pb.ring is not None), ("the turbo tables", pa.turbo is not None or pb.turbo is not None)):
+        if held:
+            compared.append(what)
+        else:
+            not_compared.append({"what": what, "why": "neither state records it"})
+    if side_a["partial"] or side_b["partial"]:
+        not_compared.append({"what": "settings a partial (legacy) profile does not set", "why": "only what it sets is compared"})
+    return {"a": side_a, "b": side_b, "rows": rows[:DIFF_ROWS_MAX], "units": [{"unit": u, "n": n} for u, n in counts.items()], "compared": compared, "not_compared": not_compared,
+            "truncated": max(0, len(rows) - DIFF_ROWS_MAX)}

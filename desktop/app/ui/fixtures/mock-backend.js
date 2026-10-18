@@ -175,6 +175,24 @@ function contentsOfHeld(held) {
   return { rows, turbo: { E: held.turbo.E.slice(), P: held.turbo.P.slice() }, complete: true };
 }
 
+const DIFF_UNITS = ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "EC0", "EC1", "EC2", "EC3", "ring", "P turbo", "E turbo"];
+
+/** G-228: the settings a profile's contents hold, as profiles.diff counts them: [{unit, order, label, kind, value}] (a whole-curve row stands for every point of its unit). */
+function diffFacts(contents) {
+  const out = [];
+  for (const row of contents.rows) {
+    const o = row.offset;
+    for (const p of pointsOfUnit(row.target)) {
+      const value = !o ? null : o.kind === "curve" ? o.mv : String(p.ratio) in o.mv ? o.mv[String(p.ratio)] : null;
+      if (value !== null) out.push({ unit: row.target, order: 10 + p.point, label: `Offset at ${p.ratio}x`, kind: "mv", value });
+    }
+    out.push({ unit: row.target, order: 1, label: "OC ratio", kind: "x", value: row.ratio });
+    out.push({ unit: row.target, order: 2, label: "OC target voltage", kind: "v", value: row.v_target_v });
+  }
+  for (const k of ["P", "E"]) if (contents.turbo && Array.isArray(contents.turbo[k])) contents.turbo[k].forEach((value, i) => out.push({ unit: k + " turbo", order: i, label: "Bucket " + i, kind: "x", value }));
+  return out;
+}
+
 function summarize(contents) {
   let deepest = null;
   let points = 0;
@@ -265,7 +283,7 @@ const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "Z");
 
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
  *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off), applyMode ('mismatch' | 'stale' | null; `?apply=`; see synthPlan above). */
-function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint"), read = searchParam("read") } = {}) {
+function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint"), read = searchParam("read"), diff = searchParam("diff") } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -279,11 +297,13 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   const acceptUnavailable = accept === "unavailable";
   const readStale = read === "stale"; // `?read=stale`: profiles.save {from: "read"} / profiles.accept refuse STALE_READ until a tune.read is answered (G-228)
   let readFresh = !readStale;
+  let unreadable = accept === "unreadable"; // `?accept=unreadable`: the accepted state cannot be read: profiles.accept refuses ACCEPTED_UNREADABLE until set_aside_unreadable is given (G-228)
+  const diffExtras = diff === "extras"; // `?diff=extras`: the state of the last read differs from the accepted one ONLY in a unit's OC-word offset and a ring point (profiles.diff rows, no point change)
   let held = initialHeld(); // the words the mock CPU holds
   let appliedHere = false; // a tune.apply finished in this mock session: tune.last then answers the held words, as the helper's does after an apply (G-227)
   const saved = new Map(); // name -> {created, contents}
   if (profilesMode !== "none") for (const g of profilesGet) saved.set(g.result.name, { created: g.result.created, contents: clone(g.result.contents) });
-  let accepted = profilesMode === "accepted" ? { name: "read-20261018-120000", contents: contentsOfHeld(held) } : null;
+  let accepted = profilesMode === "accepted" && !unreadable ? { name: "read-20261018-120000", contents: contentsOfHeld(held) } : null;
   const planIntents = new Map(); // plan_id -> the intent it was made from (what an apply puts into `held`)
 
   const emit = (event, payload) => {
@@ -502,8 +522,61 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           const sum = summarize(contents);
           return ok(id, { name: args.name, source: "saved", created, complete: true, units: sum.units, points: sum.points, turbo: true, ring_points: 0 });
         }
+        case "profiles.diff": {
+          const refOk = (v) => typeof v === "string" && PROFILE_NAME_RE.test(v);
+          if (!refOk(args.a) || !refOk(args.b) || Object.keys(args).some((k) => k !== "a" && k !== "b")) return fail(id, "BAD_REQUEST", "give 'a' and 'b': 'accepted', 'read' or a saved profile name");
+          const side = (ref) => {
+            if (ref === "read") {
+              return readFresh
+                ? { source: "read", name: null, facts: diffFacts(contentsOfHeld(held)) }
+                : { error: ["STALE_READ", "the words of the last read may no longer be what the CPU holds: a write came after it. Read again first (Tune > Read)."] };
+            }
+            if (ref === "accepted" || (accepted && accepted.name === ref)) {
+              return accepted ? { source: "accepted", name: accepted.name, facts: diffFacts(accepted.contents) } : { error: ["NO_ACCEPTED_STATE", "No accepted state yet: save a profile as accepted (Profiles)."] };
+            }
+            const rec = saved.get(ref);
+            return rec ? { source: "saved", name: ref, facts: diffFacts(rec.contents) } : { error: ["PROFILE_NOT_FOUND", `no saved profile named '${ref}'`] };
+          };
+          const sa = side(args.a);
+          const sb = side(args.b);
+          const bad = sa.error || sb.error;
+          if (bad) return fail(id, bad[0].startsWith("PROFILE_") ? "BAD_REQUEST" : "REFUSED", bad[1], { check: bad[0] });
+          if (diffExtras) {
+            if (args.a === "accepted") sa.facts.push({ unit: "P1", order: 0, label: "OC word: whole-curve offset", kind: "mv", value: 0 });
+            if (args.b === "read") sb.facts.push({ unit: "P1", order: 0, label: "OC word: whole-curve offset", kind: "mv", value: -5 }, { unit: "ring", order: 24, label: "Offset at 14x", kind: "mv", value: -25 });
+          }
+          const key = (f) => `${f.unit}|${f.order}`;
+          const fa = new Map(sa.facts.map((f) => [key(f), f]));
+          const fb = new Map(sb.facts.map((f) => [key(f), f]));
+          const rows = [...new Set([...fa.keys(), ...fb.keys()])]
+            .map((k) => {
+              const x = fa.get(k);
+              const y = fb.get(k);
+              const f = x || y;
+              return { unit: f.unit, order: f.order, label: f.label, kind: f.kind, a: x ? x.value : null, b: y ? y.value : null };
+            })
+            .filter((r) => r.a !== r.b)
+            .sort((p, q) => DIFF_UNITS.indexOf(p.unit) - DIFF_UNITS.indexOf(q.unit) || p.order - q.order)
+            .map(({ order, ...r }) => r);
+          const units = [];
+          for (const r of rows) {
+            const last = units[units.length - 1];
+            if (last && last.unit === r.unit) last.n++;
+            else units.push({ unit: r.unit, n: 1 });
+          }
+          const info = (x, ref) => ({ ref, name: x.name, source: x.source, partial: false });
+          return ok(id, {
+            a: info(sa, args.a), b: info(sb, args.b), rows, units, truncated: 0,
+            compared: ["each unit's OC word (whole-curve offset, OC ratio, OC target voltage)", "every fused point's offset", "the turbo tables"],
+            not_compared: [{ what: "the ring", why: "neither state records it" }],
+          });
+        }
         case "profiles.accept": {
           if (acceptUnavailable) return { ...clone(profilesAcceptUnavailable), id };
+          if (args.set_aside_unreadable !== undefined && args.set_aside_unreadable !== true) return fail(id, "BAD_REQUEST", "'set_aside_unreadable' must be true when given");
+          if (unreadable && args.set_aside_unreadable !== true) {
+            return fail(id, "REFUSED", "the accepted state that this would replace cannot be read (accepted CURRENT lists no profile), so it cannot be kept as a profile. You can have the whole directory /etc/arltuner/accepted moved aside to /etc/arltuner/accepted.unreadable-20261018-120000 (nothing is deleted) and accept anyway. Nothing was changed.", { check: "ACCEPTED_UNREADABLE" });
+          }
           if (!readFresh) return fail(id, "REFUSED", "the words of the last read may no longer be what the CPU holds: a write came after it. Read again first (Tune > Read), then accept. Nothing was changed.", { check: "STALE_READ" });
           let name;
           if (args.from !== undefined) {
@@ -519,6 +592,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           }
           const replaced = accepted ? [accepted.name] : [];
           let previous = null; // G-228: the replaced state is kept as a saved profile first
+          const setAside = unreadable ? "/etc/arltuner/accepted.unreadable-20261018-120000" : null;
           if (accepted) {
             const base = "accepted-before-" + isoSeconds(now()).replace(/[-:]/g, "").replace("T", "-").replace("Z", "");
             previous = base;
@@ -526,8 +600,9 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
             saved.set(previous, { created: isoSeconds(now()), contents: clone(accepted.contents) });
           }
           accepted = { name, contents: contentsOfHeld(held) };
+          unreadable = false;
           const sum = summarize(accepted.contents);
-          return ok(id, { name, source: "accepted", from: args.from !== undefined ? "read" : "saved", accepted_at: isoSeconds(now()), replaced, previous_saved_as: previous, previous_saved_names: previous ? [previous] : [], cpus: 24, core_entries: sum.units, points: sum.points, turbo: true, complete: true, ring_points: 0, fingerprint: "complete" });
+          return ok(id, { name, source: "accepted", from: args.from !== undefined ? "read" : "saved", accepted_at: isoSeconds(now()), replaced, previous_saved_as: previous, previous_saved_names: previous ? [previous] : [], set_aside_as: setAside, cpus: 24, core_entries: sum.units, points: sum.points, turbo: true, complete: true, ring_points: 0, fingerprint: "complete" });
         }
         case "profiles.fingerprint": {
           if (acceptUnavailable) return { ...clone(profilesFingerprintUnavailable), id };

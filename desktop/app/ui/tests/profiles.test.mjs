@@ -7,11 +7,11 @@ import { createMockTransport } from "../fixtures/mock-backend.js";
 import { createAppStore } from "../store.js";
 import { modelFromRead } from "../lib/units.js";
 import { emptyDraft, setPoint, setRingPoint, setBucket, isEmpty, diff } from "../lib/draft.js";
-import { MINUS } from "../lib/format.js";
+import { MINUS, TIMES, DASH } from "../lib/format.js";
 import { ensureTune } from "../views/tune.js";
 import {
   summaryText, offsetText, offsetShort, kindOf, compareRows, draftFromContents, saveGate, acceptConfirmText, fmtCreated, reviewIntent, rowsOf, profilesView, NO_ACCEPTED_TEXT,
-  isPreviousAccepted, previousStamp, savedOrder, stateNameGate, readRefusal, contentsFromModel, diffByUnit, diffSummary, previousKeptText,
+  isPreviousAccepted, previousStamp, savedOrder, stateNameGate, readRefusal, helperDiffRows, unreadableRefusal, diffByUnit, diffSummary, previousKeptText,
 } from "../views/profiles.js";
 
 const READ = FIX["tune-read"].result;
@@ -303,15 +303,13 @@ test("stateNameGate / readRefusal / previousKeptText", () => {
   assert.match(previousKeptText([]), /no accepted state/);
 });
 
-test("contentsFromModel: the last read as profiles.get contents; equal to an accepted state made from the same read, so the confirm diff has no false differences", async () => {
-  const c = contentsFromModel(model());
-  assert.equal(c.rows.length, 12);
-  assert.deepEqual(c.rows.map((r) => r.target).slice(0, 2), ["P0", "P1"]);
-  assert.deepEqual(c.turbo.P, READ.tables.p);
+test("profiles.diff (mock): the accepted state equals the read it was made from, so the confirm diff has no false differences and names what it compared", async () => {
   const b = await connected({ profiles: "accepted" });
-  const acc = await b.call("profiles.get", { name: "read-20261018-120000" });
-  assert.deepEqual(compareRows(acc.result.contents, c), []);
-  assert.equal(contentsFromModel(null), null);
+  const r = await b.call("profiles.diff", { a: "accepted", b: "read" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.result.rows, []);
+  assert.deepEqual([r.result.a.source, r.result.b.source], ["accepted", "read"]);
+  assert.match(diffSummary(helperDiffRows(r.result), r.result), /^No differences in what was compared: each unit's OC word .*every fused point's offset.*the turbo tables\. Not compared: the ring \(neither state records it\)\./);
 });
 
 test("diffByUnit / diffSummary: the per-unit list of the confirm step", () => {
@@ -362,21 +360,62 @@ test("mock: accept keeps the replaced state as accepted-before-<stamp> (a saved 
   assert.equal((await b.call("profiles.accept", { name: second.result.previous_saved_as })).ok, true);
 });
 
-test("contentsFromModel mirrors profile_contents: flat points = the OC word's whole-curve offset, whole millivolts, an OC ratio only above the fused top (checked against the simulator helper's profiles.get)", () => {
-  const pt = (point, ratio, offset_mv) => ({ point, ratio, offset_mv });
-  const unit = (id, points, oc, top) => ({ id, kind: id.startsWith("P") ? "P" : "E", points, oc, fused: { ratio: top }, ocPoint: null });
-  const m = {
-    units: {
-      P4: unit("P4", [pt(1, 48, 0), pt(2, 53, 0)], { ratio: 57, v_target_v: 0, offset_mv: -39.55 }, 57),
-      P3: unit("P3", [pt(1, 48, 0), pt(2, 53, -59.57)], { ratio: 57, v_target_v: 0, offset_mv: 0 }, 57),
-      P5: unit("P5", [pt(1, 48, 0)], { ratio: 59, v_target_v: 1.2001, offset_mv: 0 }, 57),
-    },
-    turbo: null,
-  };
-  const rows = Object.fromEntries(contentsFromModel(m).rows.map((r) => [r.target, r]));
-  assert.deepEqual(rows.P4.offset, { kind: "curve", mv: -40 });
-  assert.deepEqual(rows.P3.offset, { kind: "points", mv: { 48: 0, 53: -60 } });
-  assert.deepEqual([rows.P3.ratio, rows.P3.v_target_v, rows.P4.ratio], [null, null, null]);
-  assert.deepEqual([rows.P5.ratio, rows.P5.v_target_v], [59, 1.2]);
-  assert.equal(contentsFromModel(m).turbo, null);
+test("profiles.diff rows: a ring-only and an OC-word-offset-only change are listed, with the unit counts and the readable cells", async () => {
+  const b = await connected({ profiles: "accepted", diff: "extras" });
+  const r = await b.call("profiles.diff", { a: "accepted", b: "read" });
+  const rows = helperDiffRows(r.result);
+  assert.deepEqual(rows.map((x) => [x.unit, x.label]), [["P1", "OC word: whole-curve offset"], ["ring", "Offset at 14" + TIMES]]);
+  assert.deepEqual(rows.map((x) => [x.a, x.b]), [[0, -5], [null, -25]]);
+  assert.deepEqual(rows.map((x) => x.fmt(x.b)), [MINUS + "5 mV", MINUS + "25 mV"]);
+  assert.equal(rows[0].delta(rows[0].a, rows[0].b), MINUS + "5 mV");
+  assert.equal(rows[1].delta(rows[1].a, rows[1].b), DASH);
+  assert.deepEqual(diffByUnit(rows), [{ unit: "P1", n: 1 }, { unit: "ring", n: 1 }]);
+  assert.match(diffSummary(rows, r.result), /^2 differences in 2 units from the current accepted state: P1 \(1\), ring \(1\)\./);
+});
+
+test("helperDiffRows: every kind has a formatter (mv, v, x, hex); unknown shapes give no rows", () => {
+  const rows = helperDiffRows({ rows: [
+    { unit: "EC0", label: "OC target voltage", kind: "v", a: null, b: 1.1 },
+    { unit: "EC0", label: "OC ratio", kind: "x", a: 48, b: 49 },
+    { unit: "ring", label: "OC word (BIOS-owned)", kind: "hex", a: "0x00000028", b: "0x00000027" },
+    { unit: "P3", label: "Offset at 53x", kind: "mv", a: -60, b: -50 },
+  ] });
+  assert.equal(rows[0].fmt(1.1), "1.100 V");
+  assert.equal(rows[1].fmt(49), "49" + TIMES);
+  assert.equal(rows[1].delta(48, 49), "+1" + TIMES);
+  assert.equal(rows[2].fmt("0x00000027"), "0x00000027");
+  assert.equal(rows[2].delta("0x00000028", "0x00000027"), DASH);
+  assert.equal(rows[3].label, "Offset at 53" + TIMES);
+  assert.equal(rows[3].delta(-60, -50), "+10 mV");
+  assert.deepEqual(helperDiffRows(null), []);
+  assert.deepEqual(helperDiffRows({ rows: "x" }), []);
+});
+
+test("diffSummary: an empty diff without an answer from the helper does not claim anything was compared", () => {
+  assert.equal(diffSummary([]), "No differences were found.");
+  assert.match(diffSummary([{ unit: "P0", label: "x", a: 1, b: 2 }], { truncated: 3 }), /\(3 more are not listed\)/);
+});
+
+test("unreadableRefusal keys on the check code, never on the message", () => {
+  assert.equal(unreadableRefusal({ detail: { check: "ACCEPTED_UNREADABLE" }, message: "x" }), true);
+  assert.equal(unreadableRefusal({ detail: { check: "ACCEPTED_CHAIN" }, message: "cannot be read" }), false);
+  assert.equal(unreadableRefusal(null), false);
+});
+
+test("mock: profiles.diff refuses a stale read, an unknown profile and bad shapes; profiles.accept offers set_aside_unreadable only for an unreadable accepted state", async () => {
+  const stale = await connected({ profiles: "accepted", read: "stale" });
+  assert.equal((await stale.call("profiles.diff", { a: "accepted", b: "read" })).error.detail.check, "STALE_READ");
+  const b = await connected({ profiles: "accepted" });
+  assert.equal((await b.call("profiles.diff", { a: "accepted", b: "nope" })).error.code, "BAD_REQUEST");
+  assert.equal((await b.call("profiles.diff", { a: "accepted" })).error.code, "BAD_REQUEST");
+  assert.equal((await b.call("profiles.diff", { a: "Bad", b: "read" })).error.code, "BAD_REQUEST");
+  const u = await connected({ accept: "unreadable" });
+  const refused = await u.call("profiles.accept", { from: "read" });
+  assert.equal(refused.error.detail.check, "ACCEPTED_UNREADABLE");
+  assert.doesNotMatch(refused.error.message, /\.\)/);
+  assert.equal((await u.call("profiles.accept", { from: "read", set_aside_unreadable: false })).error.code, "BAD_REQUEST");
+  const ok = await u.call("profiles.accept", { from: "read", set_aside_unreadable: true });
+  assert.equal(ok.ok, true);
+  assert.match(ok.result.set_aside_as, /accepted\.unreadable-/);
+  assert.equal(ok.result.previous_saved_as, null);
 });

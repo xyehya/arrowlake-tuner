@@ -92,7 +92,7 @@ class TestStatic(unittest.TestCase):
     def test_the_view_only_calls_ops_that_write_no_hardware(self):
         text = (UI / "views/profiles.js").read_text(encoding="utf-8")
         ops = set(re.findall(r'bridge\.call\(\s*"([a-z.]+)"', text))
-        self.assertEqual(ops, {"profiles.list", "profiles.get", "profiles.accept", "profiles.fingerprint", "profiles.save", "tune.last"})
+        self.assertEqual(ops, {"profiles.list", "profiles.get", "profiles.accept", "profiles.diff", "profiles.fingerprint", "profiles.save", "tune.last"})
 
 
 class TestProfiles(unittest.TestCase):
@@ -452,6 +452,49 @@ class TestProfiles(unittest.TestCase):
             self.assertIn("Read CPU state first", page.inner_text("#pr-notice"))
             self.assertIn("Not accepted", page.inner_text("#pr-status"))
             self.assertEqual(page.locator("#btn-pr-open-tune").count(), 1)
+            self.assert_clean(page)
+
+    @browser
+    def test_accept_confirm_shows_a_ring_only_and_an_oc_offset_only_change(self):
+        with self.page("?bridge=mock&profiles=accepted&diff=extras") as page:
+            self.wait_list(page)
+            page.click("#btn-pr-accept-read")
+            page.wait_for_selector("#pr-ask:not([hidden])")
+            self.assertIn("2 differences in 2 units", page.inner_text("#pr-ask-diff-note"))
+            self.assertNotIn("No differences", page.inner_text("#pr-ask"))
+            self.assertEqual(page.locator("#pr-ask-diff-table tbody tr").count(), 2)
+            table = page.inner_text("#pr-ask-diff-table")
+            self.assertIn("OC word: whole-curve offset", table)
+            self.assertIn("ring", table)
+            self.assertEqual(self.calls(page, "profiles.diff")[0]["args"], {"a": "accepted", "b": "read"})
+            self.assert_clean(page)
+
+    @browser
+    def test_accept_confirm_with_no_differences_names_what_was_compared(self):
+        with self.page("?bridge=mock&profiles=accepted") as page:
+            self.wait_list(page)
+            page.click("#btn-pr-accept-read")
+            page.wait_for_selector("#pr-ask:not([hidden])")
+            note = page.inner_text("#pr-ask-diff-note")
+            self.assertIn("No differences in what was compared", note)
+            self.assertIn("whole-curve offset", note)
+            self.assertIn("Not compared: the ring", note)
+            self.assert_clean(page)
+
+    @browser
+    def test_an_unreadable_accepted_state_offers_to_move_it_aside(self):
+        with self.page("?bridge=mock&accept=unreadable") as page:
+            self.wait_list(page)
+            page.click("#btn-pr-accept-read")
+            self.confirm(page)
+            page.wait_for_selector("#btn-pr-aside")
+            self.assertIn("cannot be read", page.inner_text("#pr-notice"))
+            self.assertNotIn(".)", page.inner_text("#pr-notice"))
+            self.assertEqual(self.calls(page, "profiles.accept")[0]["args"], {"from": "read"})
+            page.click("#btn-pr-aside")
+            page.wait_for_function("document.querySelector('#pr-status').textContent.startsWith('Accepted')")
+            self.assertEqual(self.calls(page, "profiles.accept")[1]["args"], {"from": "read", "set_aside_unreadable": True})
+            self.assertIn("moved, whole,", page.inner_text("#pr-status"))
             self.assert_clean(page)
 
 

@@ -33,7 +33,7 @@ const CPU_MAX: usize = 1024;
 /// Every allowed op name, in the order of `server.py` `OPS`.
 pub const ALLOWED_OPS: &[&str] = &[
     "preflight", "audit.tail", "telemetry.start", "telemetry.stop", "cancel", "vf.dump", "tune.read", "tune.plan", "tune.apply",
-    "profiles.list", "profiles.save", "profiles.accept", "profiles.fingerprint", "profiles.get", "tune.last", "vf.measure", "curves.list",
+    "profiles.list", "profiles.save", "profiles.accept", "profiles.diff", "profiles.fingerprint", "profiles.get", "tune.last", "vf.measure", "curves.list",
     "curves.get", "curves.update", "curves.delete", "mem.read", "stress.start", "stress.stop", "stress.list", "power.read", "power.plan",
     "power.apply", "runtime.read", "runtime.plan", "runtime.apply",
 ];
@@ -87,6 +87,7 @@ pub fn check(op: &str, args: &Value) -> Result<OpInfo, Refusal> {
         "runtime.plan" => (runtime_plan(a), false),
         "profiles.save" => (profiles_save(a), false),
         "profiles.accept" => (profiles_accept(a), false),
+        "profiles.diff" => (profiles_diff(a), false),
         "profiles.get" => (profiles_get(a), false),
         "vf.measure" => (vf_measure(a), true),
         "curves.get" => (curves_get(a), false),
@@ -232,7 +233,16 @@ fn profiles_save(a: &Args) -> bool {
 }
 
 fn profiles_accept(a: &Args) -> bool {
-    (keys_exactly(a, &["name"]) && str_is(&a["name"], profile_name)) || (keys_exactly(a, &["from"]) && a["from"].as_str() == Some("read"))
+    // G-228: the optional `set_aside_unreadable: true` moves an unreadable accepted directory aside (the helper keeps it whole), only when the operator chose that
+    let aside_ok = a.get("set_aside_unreadable").map_or(true, |v| v.as_bool() == Some(true));
+    let mut rest = a.clone();
+    rest.remove("set_aside_unreadable");
+    aside_ok && ((keys_exactly(&rest, &["name"]) && str_is(&rest["name"], profile_name)) || (keys_exactly(&rest, &["from"]) && rest["from"].as_str() == Some("read")))
+}
+
+fn profiles_diff(a: &Args) -> bool {
+    // G-228: {a, b}, each "accepted", "read" or a saved profile name (the last two are also valid names)
+    keys_exactly(a, &["a", "b"]) && str_is(&a["a"], profile_name) && str_is(&a["b"], profile_name)
 }
 
 fn profiles_get(a: &Args) -> bool {
@@ -333,7 +343,7 @@ mod tests {
             assert!(e.as_ref().err().map_or(true, |r| r.code == "BAD_REQUEST"), "{op}: {e:?}");
         }
         assert_eq!(check("rm -rf", &json!({})).unwrap_err().code, "UNKNOWN_OP");
-        assert_eq!(ALLOWED_OPS.len(), 30);
+        assert_eq!(ALLOWED_OPS.len(), 31);
     }
 
     fn ok(op: &str, args: Value) -> bool {
@@ -440,6 +450,49 @@ mod tests {
             json!({"name": "mine", "intent": []}),
         ] {
             assert!(!ok("profiles.save", bad.clone()), "{bad}");
+        }
+    }
+
+    #[test]
+    fn profiles_accept_shapes() {
+        assert!(ok("profiles.accept", json!({"name": "mine"})));
+        assert!(ok("profiles.accept", json!({"from": "read"})));
+        assert!(ok("profiles.accept", json!({"from": "read", "set_aside_unreadable": true})));
+        assert!(ok("profiles.accept", json!({"name": "mine", "set_aside_unreadable": true})));
+        for bad in [
+            json!({}),
+            json!({"set_aside_unreadable": true}),
+            json!({"from": "read", "set_aside_unreadable": false}),
+            json!({"from": "read", "set_aside_unreadable": "yes"}),
+            json!({"from": "read", "set_aside_unreadable": 1}),
+            json!({"from": "read", "set_aside_unreadable": null}),
+            json!({"from": "elsewhere"}),
+            json!({"name": "mine", "from": "read"}),
+            json!({"from": "read", "extra": true}),
+            json!({"name": "UPPER"}),
+        ] {
+            assert!(!ok("profiles.accept", bad.clone()), "{bad}");
+        }
+    }
+
+    #[test]
+    fn profiles_diff_shapes() {
+        assert!(ok("profiles.diff", json!({"a": "accepted", "b": "read"})));
+        assert!(ok("profiles.diff", json!({"a": "mine", "b": "read"})));
+        assert!(ok("profiles.diff", json!({"a": "accepted", "b": "mine"})));
+        assert!(!check("profiles.diff", &json!({"a": "accepted", "b": "read"})).unwrap().long);
+        for bad in [
+            json!({}),
+            json!({"a": "accepted"}),
+            json!({"b": "read"}),
+            json!({"a": "accepted", "b": "read", "c": "x"}),
+            json!({"a": "UPPER", "b": "read"}),
+            json!({"a": "accepted", "b": 1}),
+            json!({"a": null, "b": "read"}),
+            json!({"a": "accepted", "b": ""}),
+            json!({"a": "../x", "b": "read"}),
+        ] {
+            assert!(!ok("profiles.diff", bad.clone()), "{bad}");
         }
     }
 
