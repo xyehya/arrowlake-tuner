@@ -1,0 +1,23 @@
+You are a READ-ONLY adversarial security reviewer (Opus) for the arltuner project, host lnx. Do not edit any file. No hardware, no sudo.
+Read AGENTS.md and docs/SAFETY.md first.
+
+Review branch task/G-211-guard-speed against main: `git diff main...task/G-211-guard-speed` (you are in its worktree).
+Context: desktop/TASKS.md section G-211, desktop/PLAN.md §5, docs/knowledge/apply-latency.md. The guard is the only path to mailbox writes; its
+audit-derived state (per-boot op budget, cross-process dwell, refusal/trip state, BASELINE_MISSING/session facts) gates hardware writes.
+
+Questions to answer with evidence (file:line):
+1. Is the incremental read_state semantically identical to a full rescan for every decision the guard takes from it (budget, dwell, trips,
+   baselines, anything else read from the audit state)? Find any state that the cached summary could get wrong (e.g. records whose meaning
+   depends on later records, boot_id changes, seq gaps, clock changes, multiple guards/processes appending concurrently, CLI + helper both writing).
+2. Cache invalidation: inode + size + first/last 256 bytes. Construct concrete sequences (truncate+regrow to same size, rotate/replace file,
+   append by another process between our append and our read, partial line at EOF, fsync ordering, crash mid-write) and say whether each is
+   handled fail-closed. Is the stated gap (same-size in-place edit) acceptable given the trust model (root-owned 0600, root-owned parents,
+   SPEC §4.4) and the dev path (user-owned audit under ~/.local/state)? Recommend a cheap hardening if any.
+3. Does anything now fail open that previously failed closed (exceptions swallowed, malformed lines, unreadable file, permission errors)?
+4. Health snapshot change: same files, same parse, same failure behaviour (fail closed on unreadable)? Any lost check?
+5. Process-global cache: thread safety inside the helper (ThreadingHTTPServer is not involved, but the helper has op threads and a sampler).
+6. Tests: do they prove the claims? Missing cases?
+Run `python3 tools/run_tests.py` (read-only) and `python3 tools/bench_guard.py` if quick.
+
+Verdict format (≤ 400 words): APPROVE / APPROVE WITH FIXES / REJECT, then numbered findings with severity (high/med/low), each with file:line and
+the concrete fix. Be honest; do not inflate.

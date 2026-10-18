@@ -1,0 +1,24 @@
+You are an implementer worker on the arltuner project (host lnx), task G-212, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-212 (branch task/G-212-ring-intent).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-212: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-212 · Helper: ring rows in the intent** · S · R · deps none
+Owns `src/arltuner/helper/ops_tune.py` (intent parse/resolve for ring only), `tests/` for it, `docs/ARCHITECTURE.md` (Contract 9 intent line).
+Accept: intent `{ring:{points:{"4":-25}}}` plans ring P2 writes within policy; ring OC word never written; changed ring OC word refuses ring alone; tests.
+
+Round notes from the orchestrator:
+- Read docs/DECISIONS.md D-045 and the ring parts of src/arltuner/helper/ops_tune.py and src/arltuner/profiles/ first. The ring is already a unit in profiles/restore; you only add an intent form for the editor. Ring writes stay offset-only on P1=2, P2 within the policy ring entry; ring OC word never written.
+- Add a capability flag in the tune.read or preflight result (e.g. "intent_features": ["ring"]) so the desktop UI can detect support. Update docs/ARCHITECTURE.md Contract 9 intent line accordingly.
+- Security-relevant (helper op): Opus review before merge.

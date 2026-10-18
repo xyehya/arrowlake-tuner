@@ -1,0 +1,3 @@
+- Read docs/DECISIONS.md D-045 and the ring parts of src/arltuner/helper/ops_tune.py and src/arltuner/profiles/ first. The ring is already a unit in profiles/restore; you only add an intent form for the editor. Ring writes stay offset-only on P1=2, P2 within the policy ring entry; ring OC word never written.
+- Add a capability flag in the tune.read or preflight result (e.g. "intent_features": ["ring"]) so the desktop UI can detect support. Update docs/ARCHITECTURE.md Contract 9 intent line accordingly.
+- Security-relevant (helper op): Opus review before merge.

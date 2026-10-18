@@ -1,0 +1,34 @@
+You are an implementer worker on the arltuner project (host lnx), task G-202, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-202 (branch task/G-202-tauri-scaffold).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-202: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-202 · Tauri 2 scaffold + AppImage pipeline** · S · deps G-201
+Owns `desktop/app/src-tauri/**` (Cargo.toml, build.rs, tauri.conf.json, capabilities/, icons/, src/main.rs, src/lib.rs), `desktop/app/ui/index.html`
+(placeholder), `desktop/tools/build-appimage.sh`, `desktop/app/.gitignore`.
+Goal: Tauri 2 stable app `arltuner-desktop` (identifier `io.github.xyehya.arltuner`), `frontendDist: ../ui`, `withGlobalTauri: true`, no npm
+(`beforeDevCommand`/`beforeBuildCommand` empty), CSP `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost`,
+capabilities = core window/event defaults + app commands only (no shell/fs/http plugins). Plugins: single-instance, window-state, notification;
+tray icon with Show/Quit. `--version` prints the version. Cargo feature `dev-socket` declared (empty for now); build script refuses it.
+Accept: `cargo test` passes in `src-tauri`; `desktop/tools/build-appimage.sh` produces `desktop/dist/*.AppImage`; running it with `--version`
+prints the version; `cargo tree -e normal --depth 1` lists only tauri + the three plugins + serde/serde_json/libc.
+
+Round notes from the orchestrator:
+- tauri-cli 2.12.3 is installed (~/.cargo/bin/cargo-tauri); use Tauri 2 stable crates (tauri 2.x, tauri-build 2.x, tauri-plugin-single-instance 2, tauri-plugin-window-state 2, tauri-plugin-notification 2), serde, serde_json, libc. Do NOT use tauri 3 alphas.
+- The operator approved the linuxdeploy downloads that `cargo tauri build --bundles appimage` performs itself into ~/.cache/tauri (linuxdeploy-x86_64.AppImage, linuxdeploy-plugin-gtk.sh, linuxdeploy-plugin-appimage). Nothing else may be downloaded.
+- Reference stack on this machine: /home/yk/AppImages/unsloth.appimage is Tauri 2.12 + WebKitGTK 4.1 (do not run it; it is just the reference).
+- System libs present: webkit2gtk4.1-devel 2.54.1, gtk3-devel, libappindicator-gtk3-devel, librsvg2-devel, openssl-devel.
+- Icons: generate simple placeholder PNG icons in-repo with Python stdlib (zlib + struct PNG writer); no image tools downloads. 32x32, 128x128, 128x128@2x, icon.png 512.
+- desktop/tools/build-appimage.sh: runs `cargo tauri build --bundles appimage` from desktop/app/src-tauri, then copies the bundle to desktop/dist/arltuner-desktop-<version>-x86_64.AppImage and prints sha256; refuses if the build enables feature dev-socket. If the AppImage build fails on this host because of an environment issue (e.g. FUSE, strip, NO_STRIP needed), report the exact error; do not hack around it silently (NO_STRIP=true is an acceptable documented setting).
+- You may run the built AppImage only with --version (headless; there is no display in your session).

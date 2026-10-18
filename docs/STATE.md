@@ -12,9 +12,9 @@ _Updated: 2026-10-15 · lnx · G-154 merged + installed (ring in the accepted st
   README has a Screenshots section (`docs/img/`, captured read-only with `tools/screenshots.py`).
 - **Remote:** `github.com/xyehya/arrowlake-tuner` (`origin`, only `main` pushed).
 
-## 2026-10-12 (merged + installed + checked live)
-G-133/G-139 Tune model · G-134/G-137 live limits (D-038/D-039) · G-136 screenshots · G-138 Windows fingerprint · G-140 public scrub (D-041) ·
-G-141 review fixes · G-142 security (D-042) · polish.
+## Desktop track (D-046, 2026-10-18) — `desktop/` (PLAN, TASKS static; live board `desktop/progress/STATUS.md`)
+Tauri 2 AppImage replaces the browser GUI (Rust speaks the helper socket; vanilla JS, no npm). New controls: power limits, ring row + uncore,
+per-core caps + parking. Apply latency measured 194 ms/op overhead = audit-log reparse (`docs/knowledge/apply-latency.md`); G-211 fix in review.
 
 ## Machine state (reference 285K)
 - Policy `/etc/arltuner/policy.toml`: ratio_max **P 60 / E 50** (D-038; backup `policy.toml.bak-2026-10-12`), offsets ±200 mV; ring writes P2 1..9

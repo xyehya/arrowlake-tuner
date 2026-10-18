@@ -1,0 +1,7 @@
+- tauri-cli 2.12.3 is installed (~/.cargo/bin/cargo-tauri); use Tauri 2 stable crates (tauri 2.x, tauri-build 2.x, tauri-plugin-single-instance 2, tauri-plugin-window-state 2, tauri-plugin-notification 2), serde, serde_json, libc. Do NOT use tauri 3 alphas.
+- The operator approved the linuxdeploy downloads that `cargo tauri build --bundles appimage` performs itself into ~/.cache/tauri (linuxdeploy-x86_64.AppImage, linuxdeploy-plugin-gtk.sh, linuxdeploy-plugin-appimage). Nothing else may be downloaded.
+- Reference stack on this machine: /home/yk/AppImages/unsloth.appimage is Tauri 2.12 + WebKitGTK 4.1 (do not run it; it is just the reference).
+- System libs present: webkit2gtk4.1-devel 2.54.1, gtk3-devel, libappindicator-gtk3-devel, librsvg2-devel, openssl-devel.
+- Icons: generate simple placeholder PNG icons in-repo with Python stdlib (zlib + struct PNG writer); no image tools downloads. 32x32, 128x128, 128x128@2x, icon.png 512.
+- desktop/tools/build-appimage.sh: runs `cargo tauri build --bundles appimage` from desktop/app/src-tauri, then copies the bundle to desktop/dist/arltuner-desktop-<version>-x86_64.AppImage and prints sha256; refuses if the build enables feature dev-socket. If the AppImage build fails on this host because of an environment issue (e.g. FUSE, strip, NO_STRIP needed), report the exact error; do not hack around it silently (NO_STRIP=true is an acceptable documented setting).
+- You may run the built AppImage only with --version (headless; there is no display in your session).

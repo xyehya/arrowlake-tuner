@@ -1,0 +1,29 @@
+You are an implementer worker on the arltuner project (host lnx), task G-211, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-211 (branch task/G-211-guard-speed).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-211: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-211 · Helper bookkeeping speed-up** · S · R · deps none (parallel with D1/D2)
+Owns `src/arltuner/guard/{guard.py,audit.py}`, `src/arltuner/health/{snapshot.py,gate.py}`, `src/arltuner/controls/executor.py`, `tests/guard/`, `tests/health/`,
+`tools/bench_guard.py` (new).
+Read: PLAN §5; `docs/knowledge/apply-latency.md`; `docs/SAFETY.md`; the owned files.
+Goal: first `tools/bench_guard.py` (simulator transport, 16 MB synthetic audit log, 300 ops) prints per-part timings; then incremental audit state,
+session-held lock, cheaper snapshot implementation, no pacer slack at `min_dwell_s = 0`; semantics unchanged.
+Accept: bench before/after in the report; ≤ 20 ms median overhead per op on the 16 MB log; full suite green; new tests prove: appended-only parse,
+rescan on inode/size mismatch or truncation, lock still excludes a second process, health gate still trips on each injected fault, dwell still honoured when > 0.
+
+Round notes from the orchestrator:
+- Measured live (docs/knowledge/apply-latency.md): mailbox transaction 1 ms median; 194 ms median between transactions; real audit log 15.9 MB. Your bench must reproduce the overhead shape on a synthetic 16 MB log first (report per-part timing: read_state parse, lock, audit fsync, health snapshots, pacer), THEN optimize the biggest parts.
+- This is security-relevant code (guard). Semantics must be identical; an Opus reviewer will read your diff adversarially. Prefer small, obviously-correct changes with tests over cleverness. Document each change's invariant in the code comment and in your report.
+- Keep: one transaction at a time, health snapshot before and after every transaction, fsync of the attempt record before the write, read-back, budget/dwell checks semantics, fail-closed on any unreadable state.

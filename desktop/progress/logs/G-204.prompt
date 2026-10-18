@@ -1,0 +1,33 @@
+You are an implementer worker on the arltuner project (host lnx), task G-204, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-204 (branch task/G-204-helper-link).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-204: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-204 · Rust helper link** · S · R · deps G-202
+Owns `desktop/app/src-tauri/src/helper/**`, `desktop/app/src-tauri/tests/helper_*.rs`, `desktop/app/src-tauri/tests/fixtures/`.
+Read: PLAN §3.1; `src/arltuner/web/helperlink.py`; `src/arltuner/helper/protocol.py`; `src/arltuner/web/server.py:40-200` (OPS, validators); `docs/ARCHITECTURE.md` Contract 8/9.
+Goal: connect + root checks (lstat uid 0 socket; SO_PEERCRED listener uid 0 via libc getsockopt), preflight handshake, refusal mapping with the same fix
+texts, line framing ≤ 64 KiB, id allocation, request/response matching, event emission `helper://<event>`, op allowlist with arg-shape checks,
+reconnect-on-demand, commands `helper_status/helper_connect/helper_call`. Feature `dev-socket`: accept a socket owned by the current uid at
+`ARLTUNER_DESKTOP_SOCKET`.
+Accept: `cargo test` covers: non-socket / non-root node refused (via injectable lstat/peercred), oversize line refused, `CLIENT_BUSY` and
+`ACCESS_DENIED` framed refusals mapped, unknown op refused locally, a long op's result delivered as event; integration test with feature
+`dev-socket` against the Python simulator helper (`tools/arltuner-helper.py` sim on a temp socket) runs `preflight`, `telemetry.start`, receives ≥ 2 telemetry events.
+
+Round notes from the orchestrator:
+- G-202 is merged: the Tauri scaffold exists in desktop/app/src-tauri. Add a `helper` module; register the commands in lib.rs (you may edit lib.rs only to add `mod helper;` and the command registration lines — say so in the report).
+- libc is the only new crate allowed for SO_PEERCRED/lstat (std::os::unix::net::UnixStream::peer_cred is unstable). Keep unsafe blocks minimal, each with a SAFETY comment.
+- Mirror refusal texts from src/arltuner/web/helperlink.py:305-362 exactly (the user should see the same fix commands as in the web GUI).
+- Integration test: spawn the simulator with temp paths (see the hard rules); write a helper.toml in a temp dir admitting your own user for --helper-toml; build tests with --features dev-socket.
+- An Opus reviewer will check: no path to bypass the root checks in a release build (cfg/feature gating), no unbounded reads, no panics on malformed input, no op outside the allowlist reaches the socket.

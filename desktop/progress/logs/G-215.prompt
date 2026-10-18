@@ -1,0 +1,25 @@
+You are an implementer worker on the arltuner project (host lnx), task G-215, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-215 (branch task/G-215-limit-reasons).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-215: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-215 · Limit-reason decode** · S · deps none
+Owns `docs/knowledge/registers.md` (limit-reasons section), `src/arltuner/telemetry/limits.py` (new), tests.
+Goal: document `0x64F`/`0x6B0` bit meanings with evidence tags (DOC/COMMUNITY sources; mark UNVERIFIED bits), decode only DOC/MEASURED bits.
+Accept: decoder tests; registers.md entry cites sources.
+
+Round notes from the orchestrator:
+- You have WebFetch/WebSearch for this task only: find primary sources (Intel SDM Vol 4 MSR tables, Linux kernel sources e.g. arch/x86 or tools/power/x86/turbostat which decodes core/package/graphics/ring perf limit reasons, Intel datasheets) for MSR 0x64F (CORE_PERF_LIMIT_REASONS) and 0x6B0/0x6B1 (GRAPHICS/RING_PERF_LIMIT_REASONS) on recent client CPUs. Note: in this repo 0x6B0 is labelled PKG_PERF_LIMIT_REASONS in telemetry-sources.md — verify which name is right and say so.
+- Tag every bit with its evidence ([DOC url] / [COMMUNITY url] / [UNVERIFIED]); only DOC (or turbostat source = DOC-equivalent, cite file+line) bits may be decoded in code. Arrow Lake specifics may differ: say so.
+- Only telemetry reading code: no new MSR reads beyond the ones already allowed in TELEMETRY_MSRS.

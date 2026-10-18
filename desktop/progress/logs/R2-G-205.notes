@@ -1,0 +1,4 @@
+- G-202 is merged; replace the placeholder desktop/app/ui/index.html. Read desktop/discovery/xtu-reference.md and look at the layout description; dark theme, dense but calm, tabular numerals.
+- Fixtures: generate them by running the simulator helper with temp paths and recording real responses (preflight, telemetry events for ~10 s, tune.read, a tune.plan for a one-point offset, a tune.apply result, profiles.list, audit.tail). Save as JSON under desktop/app/ui/fixtures/ with a README naming how they were made. No reference-machine numbers beyond what the simulator itself produces (D-036).
+- bridge.js interface: connect(), status(), call(op,args) -> Promise, on(event, cb), off(); the mock replays fixtures (telemetry on a timer).
+- CSP: no inline scripts/styles, no style attributes set via HTML strings; use classList and CSS custom properties via element.style.setProperty only if needed.

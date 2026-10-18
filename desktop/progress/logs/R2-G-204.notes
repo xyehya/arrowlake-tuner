@@ -1,0 +1,5 @@
+- G-202 is merged: the Tauri scaffold exists in desktop/app/src-tauri. Add a `helper` module; register the commands in lib.rs (you may edit lib.rs only to add `mod helper;` and the command registration lines — say so in the report).
+- libc is the only new crate allowed for SO_PEERCRED/lstat (std::os::unix::net::UnixStream::peer_cred is unstable). Keep unsafe blocks minimal, each with a SAFETY comment.
+- Mirror refusal texts from src/arltuner/web/helperlink.py:305-362 exactly (the user should see the same fix commands as in the web GUI).
+- Integration test: spawn the simulator with temp paths (see the hard rules); write a helper.toml in a temp dir admitting your own user for --helper-toml; build tests with --features dev-socket.
+- An Opus reviewer will check: no path to bypass the root checks in a release build (cfg/feature gating), no unbounded reads, no panics on malformed input, no op outside the allowlist reaches the socket.

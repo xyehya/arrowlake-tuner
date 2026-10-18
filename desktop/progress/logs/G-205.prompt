@@ -1,0 +1,30 @@
+You are an implementer worker on the arltuner project (host lnx), task G-205, working ONLY in this git worktree: /home/yk/AI/arrowlake-tuner/.claude/worktrees/G-205 (branch task/G-205-ui-shell).
+Read AGENTS.md first, then desktop/PLAN.md (the sections your task names), then only the files your task lists.
+
+Hard rules (violating any = task failed):
+- NO hardware: never sudo, never touch /dev/cpu, /sys write paths, wrmsr, modprobe, systemctl, the installed helper or /run/arltuner. Simulator, fake sysfs and fixtures only.
+- If you run the simulator helper, always give it temp paths: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock $TMP/lock --state-dir $TMP/state (plus --helper-toml with your own user if needed). Never use the default audit/lock paths.
+- Edit only the files your task lists under Owns. Need another file changed? Stop and say so in the report.
+- Python stdlib only for Python code (D-012). UI: plain HTML/CSS/JS ES modules, no npm, no CDN, no bundler. Rust: only the crates the task names.
+- No downloads besides crates.io fetches done by cargo for the crates named. No new third-party dependencies.
+- Tests: python3 tools/run_tests.py must be green before you finish (plus cargo test / node --test where your task uses them).
+- Commit on your branch with messages "G-205: <summary>". Do not merge, push or touch main.
+- Shared cargo target dir is already exported (CARGO_TARGET_DIR); do not change it.
+
+Finish with a report of at most 300 words: changed files, tests run with counts, acceptance items met/not met, open questions.
+
+Your task (from desktop/TASKS.md):
+**G-205 · UI shell, design system, bridge** · S · deps G-202
+Owns `desktop/app/ui/{index.html,app.js,bridge.js,store.js,styles/**,components/**,icons/**}`, `desktop/app/ui/fixtures/**`, `desktop/app/ui/tests/shell.*`.
+Read: PLAN §3.2, §4.1, §4.5; `discovery/xtu-reference.md` (UI structure).
+Goal: frame of §4.1 (nav rail, status bar, monitoring strip, pending-changes bar, toasts, drawer component), `bridge.js` with real (Tauri) and
+`mock` (fixtures, `?bridge=mock`) backends sharing one interface, `store.js`. Fixtures generated from the simulator (preflight, telemetry stream,
+tune.read result, plan, apply result) checked in as JSON.
+Accept: `node --test` (store, bridge mock); Playwright smoke (`ARLTUNER_BROWSER_TESTS=1`) loads `index.html?bridge=mock`, navigates all 7 screens,
+no console errors, CSP violations = 0.
+
+Round notes from the orchestrator:
+- G-202 is merged; replace the placeholder desktop/app/ui/index.html. Read desktop/discovery/xtu-reference.md and look at the layout description; dark theme, dense but calm, tabular numerals.
+- Fixtures: generate them by running the simulator helper with temp paths and recording real responses (preflight, telemetry events for ~10 s, tune.read, a tune.plan for a one-point offset, a tune.apply result, profiles.list, audit.tail). Save as JSON under desktop/app/ui/fixtures/ with a README naming how they were made. No reference-machine numbers beyond what the simulator itself produces (D-036).
+- bridge.js interface: connect(), status(), call(op,args) -> Promise, on(event, cb), off(); the mock replays fixtures (telemetry on a timer).
+- CSP: no inline scripts/styles, no style attributes set via HTML strings; use classList and CSS custom properties via element.style.setProperty only if needed.
