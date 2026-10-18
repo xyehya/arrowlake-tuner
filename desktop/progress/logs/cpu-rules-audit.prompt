@@ -1,0 +1,20 @@
+You are a READ-ONLY facts auditor for arltuner (host lnx). Do not edit files except writing your report to the path below. No hardware, no sudo, no network.
+Operator decision (2026-10-18): the helper must enforce ONLY what the Core Ultra 9 285K itself enforces/reports (like Intel XTU) — no operator policy
+value limits. Large single changes are allowed (Review shows a warning). The voltage ceiling is the CPU-reported max voltage limit (OC mailbox cmd 0x28).
+Read AGENTS.md, docs/knowledge/ (registers.md is canonical), docs/DECISIONS.md (D-038, D-039), and the guard code: src/arltuner/guard/policy.py and
+every caller of the policy limits (grep: offset_ceiling_mv, effective_offset_floor_mv, max_ratio_step, max_v_step_mv, max_offset_step_mv, ratio_max,
+v_target_max_mv, max_operations, min_dwell, [power], [runtime], cap_ratio_min, uncore_ratio).
+Produce a report with two tables:
+A. CPU RULES — for each, the evidence in the repo (file:line + its tag MEASURED/DECOMPILED/DOC/COMMUNITY/UNVERIFIED), the exact value on this machine if
+   known, how the helper can READ it at runtime (mailbox cmd / MSR / sysfs), and whether the code already enforces it (file:line):
+   1 max VID / max voltage limit (cmd 0x28) — encoding, value; 2 voltage floor (cmd 0x09); 3 max OC ratio per P / E (cmd 0x01 capability; is "x120" or
+   any fused max ratio documented? what is this chip's value?); 4 per-point VID monotonicity — and specifically: is there evidence that the CPU itself
+   CLAMPS an over-deep offset at a point to the previous point's VID (operator claim: "-500 mV at x57 is clamped to the x56 point VID")? quote it or
+   say UNVERIFIED; 5 offset field encoding range (bits, mV resolution); 6 target-voltage field encoding; 7 turbo ratio table rules (non-increasing with
+   active cores? bucket bounds; OC ratio vs P0); 8 ring P1/P2 bounds; 9 PL1/PL2/tau MSR 0x610 field widths, lock bit, PL1<=PL2, MSR 0x614 package info;
+   10 cpufreq cap bounds (cpuinfo_min/max); 11 uncore initial_min/max; 12 anything else the CPU rejects (mailbox error codes that mean "out of range").
+B. POLICY LIMITS TO REMOVE — every operator-policy value limit the code enforces today (file:line), what it guards, and which CPU rule (from A) replaces
+   it, or "none — just remove" / "keep as warning". Flag anything that is a PROCESS invariant (one mailbox transaction at a time, mailbox [[allow]] list,
+   access list, read-back, write order, op counters) and must stay.
+C. GAPS — facts the decision needs that the repo does NOT have, phrased as concrete research questions (what to measure or look up), most important first.
+Write the report (≤ 1500 words, tables) to desktop/progress/logs/cpu-rules-audit.md and print a 10-line summary.
