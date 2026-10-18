@@ -1,5 +1,5 @@
 // components/drawer.js: the bottom drawer of PLAN §4.3 (review & apply, results). Slides up over the stage, never modal: the window behind it stays
-// usable, there is no scrim, no focus trap, Escape closes it. Content is whatever DOM the caller hands to setContent().
+// usable, there is no scrim, no focus trap, Escape closes it. Content is whatever DOM the caller hands to setContent(); G-210 (views/tune/apply.js) fills it with the apply flow.
 import { h, icon, clear } from "./dom.js";
 import { closeDrawer } from "../store.js";
 
@@ -33,6 +33,13 @@ export function createDrawer(root, store) {
     setContent(bodyNode, footerNodes = []) {
       clear(body).append(...[].concat(bodyNode || []));
       clear(footer).append(...footerNodes);
+    },
+    /** Focus the first element matching `selector` in the drawer (G-210: the safe button, never the one that writes). Returns whether something took focus. */
+    focus(selector) {
+      const el = root.querySelector(selector);
+      if (!el || el.disabled) return false;
+      el.focus();
+      return true;
     },
     body,
     footer,
