@@ -2,7 +2,9 @@
 //   const transport = wrapMockTransport(createMockTransport({...}), {seed: "recorded"});   // same interface: connect, status, call, listen, close
 // Everything it answers is a recording of the SIMULATOR helper (g218/gen_fixtures_g218.py, see fixtures/README.md): the measurement and the screens are replayed,
 // not performed. What is NOT recorded is the user's choice: a measurement always yields the recorded points whatever `units` were asked (the fresh curve gets
-// the asked name, a new id and the time of the call), a stress run is the recorded 30 s run. The curve store and the stress history are in memory and
+// the asked name, a new id and the time of the call), and a stress run replays the recorded 30 s run. INVENTED (not simulator output): the replayed
+// stress clock is stretched to the length that was asked for (`elapsed_s` / `of_s` x duration/30), `duration_s` of the result is the asked length, and
+// a Stop answers with the recorded cancelled result carrying the elapsed time of the replay so far. The curve store and the stress history are in memory and
 // change like the helper's (list / get / update / delete, new entries newest first). Wiring at merge: in mock-backend.js `createMockTransport` return
 // `wrapMockTransport(<its object>, options)`; until then the Curves / Stress tests build the wrapper themselves.
 // options: stepMs (gap between replayed events, default 12), seed ("none" (empty library, default) | "recorded" (the stock + second curves)), now.

@@ -228,8 +228,10 @@ class TestStress(Base):
             expect(page.locator("#t-st-temp")).to_have_text("n/a")
             self.assertRegex(page.inner_text("#t-st-temp-why"), r".{4,}")  # the helper's own reason, not an empty cell
             self.assertEqual(page.locator("#t-st-pkgw").inner_text(), "n/a")
-            expect(page.locator("#st-hist-body tr")).to_have_count(3, timeout=3000)  # the recorded history
-            self.assertIn("health", page.inner_text("#st-hist-body tr").lower() + "health")
+            expect(page.locator("#st-hist-body tr")).to_have_count(3, timeout=3000)  # the recorded history: two full runs and one Stop
+            ended = [t.strip() for t in page.locator("#st-hist-body tr td:nth-child(5)").all_inner_texts()]
+            self.assertEqual(sorted(ended), ["full length", "full length", "stopped"])
+            self.assertEqual(page.locator("#st-hist-body tr td:nth-child(7)").first.inner_text().strip(), "clean")
             self.assert_clean(page, logs)
 
 
