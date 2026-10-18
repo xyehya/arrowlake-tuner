@@ -151,3 +151,27 @@ core map 8 P tiles in one row at 1280 px; calmer tile colours (heat scale on a d
 **G-225 · Rust allowlist: power.* + runtime.*** · S · R · deps G-214, G-216
 Owns `desktop/app/src-tauri/src/helper/ops.rs` (+ link.rs plan binding), tests. Goal: add `power.read/plan/apply` and `runtime.read/plan/apply` with arg-shape
 checks; bind `power.apply` / `runtime.apply` to plan_ids this connection got from the matching `*.plan` (separate bounded sets). Accept: cargo tests (unknown keys refused, cross-kind plan id refused).
+
+**G-226 · Helper: CPU-enforced limits only (D-049)** · M · R · deps G-216, G-225
+Owns `src/arltuner/guard/{policy,guard,planner,encoding}.py`, `src/arltuner/controls/{power,caps,uncore}.py`, `src/arltuner/helper/ops_tune.py` (limit paths
+only), `policies/default.toml`, their tests. Goal: remove every operator-policy VALUE limit listed in desktop/progress/logs/cpu-rules-audit.md §B; enforce
+only CPU/kernel rules (§A rows 1, 3, 5, 6, 9 lock/fields, 10, 11) read at runtime, fail closed when a CPU limit is unread; demote non-CPU rules to warnings;
+keep every PROCESS invariant. Expose the limits as `cpu_limits` (contract in notes). Accept: tests per removed limit (now allowed + warned) and per CPU rule
+(refused at the CPU value, source cited); Opus review.
+
+**G-227 · Bug: tiles/inspector don't show applied offsets until a re-read** · S · deps G-210
+Owns `desktop/app/ui/views/tune/apply.js` (afterApply), `views/tune.js` / inspector render paths as needed, `src/arltuner/helper/ops_tune.py`
+(`_record_apply`/`op_tune_last` only), tests. Reported live by the operator 2026-10-18. Accept: a test that fails before the fix and passes after, at the layer
+where the bug is; Playwright smoke shows the applied value in tile + inspector right after Apply with no Read.
+
+**G-229 · Throttling indicators + event log (XTU-style)** · M · deps G-206, G-223
+Owns `src/arltuner/telemetry/{sampler,cpu,msrio,limits}.py` (+ new `throttle.py`), `desktop/app/ui/{store.js,views/dashboard.js,components/monitor-strip.js}` + a new
+`components/throttle.js` / styles, `docs/knowledge/telemetry-sources.md`, tests. Spec: docs/knowledge/throttling.md (§B mapping, §C read strategy, §D read path, §E log).
+Accept: Power · Current/EDP · Thermal chips (+ VR thermal, grey Max-turbo) from 0x64F status, 10 Hz duty fractions, popover with every active bit + source word,
+no MSR write anywhere, throttle.jsonl event log + GUI list; node + Playwright + Python tests.
+
+**G-228 · Save full state as a profile; accept keeps history** · M · R · deps G-213, G-226
+Owns `src/arltuner/helper/ops_accept.py`, `src/arltuner/profiles/store.py`, the profiles.save path in `ops_tune.py`, `desktop/app/ui/views/profiles.js` (+css),
+`desktop/app/src-tauri/src/helper/ops.rs` (profiles.save arg shape only), tests. Operator 2026-10-18 (an accidental "Set as accepted" overwrote a known-good
+accepted state with no backup). Accept: save-from-read creates a complete profile without accepting; accept moves the replaced state into saved profiles;
+confirm step shows the per-unit diff; tests at helper + UI; Opus review.

@@ -115,6 +115,20 @@ class RestartTests(LastReadCase):
         plan = self.plan(h2, rows(row("P4", curve=0)))
         self.assertAlmostEqual(plan["before"]["P4"]["0"]["offset_mv"], -40, delta=0.5)
 
+    def test_point_offsets_at_x55_x57_follow_an_apply_without_a_restart(self) -> None:
+        """G-227: tune.last right after an apply (same helper process) holds the applied per-point offsets, decoded copy and raw units alike (what the page's model is built from)."""
+        h = self.boot(ALL_P_53)
+        self.read(h)
+        self.apply_ok(h, self.plan(h, rows(row("P0", points={"57": -20}), row("P1", points={"55": -15}))))
+        got = self.last(h)
+        self.assertIsNotNone(got["applied_at"])
+        for unit, ratio, mv in (("P0", 57, -20), ("P1", 55, -15)):
+            decoded = [p for p in got["result"]["tune"][unit]["cpus"][0]["points"] if p["ratio"] == ratio and p["point"] > 0]
+            raw = [p for u in got["result"]["units"] if u["id"] == unit for p in u["cpus"][0]["points"] if p["ratio"] == ratio]
+            self.assertEqual((len(decoded), len(raw)), (1, 1), unit)
+            self.assertAlmostEqual(decoded[0]["offset_mv"], mv, delta=0.5, msg=unit)
+            self.assertAlmostEqual(raw[0]["offset_mv"], mv, delta=0.5, msg=unit)
+
     def test_a_second_read_replaces_the_record(self) -> None:
         h = self.boot(ALL_P_53)
         self.read(h)

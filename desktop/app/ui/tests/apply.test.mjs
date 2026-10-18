@@ -7,6 +7,8 @@ import { createMockTransport } from "../fixtures/mock-backend.js";
 import { createAppStore } from "../store.js";
 import { modelFromRead } from "../lib/units.js";
 import { emptyDraft, setPoint } from "../lib/draft.js";
+import * as draftLib from "../lib/draft.js";
+import { tileFace } from "../views/tune/grid.js";
 import { buildIntent } from "../lib/intent.js";
 import { ensureTune, patchTune } from "../views/tune.js";
 import {
@@ -167,6 +169,70 @@ test("controller: review plans the draft, Apply sends CONFIRM <nonce>, progress 
   assert.equal(store.get().tune.read.fromLast, true);
 });
 
+// G-227: the operator's report: after Apply the tiles/inspector kept the OLD offsets until "Read CPU state". The mock's tune.last now follows the applied words (as the helper's does).
+const offAt = (model, id, ratio) => model.units[id].points.find((p) => p.ratio === ratio).offset_mv;
+test("controller: after Apply the model, tile faces and pending count hold the applied offsets (x57 on P0, x55 on P1), no re-read", async () => {
+  const { store, ctl, model } = await rig({}, (m, d) => setPoint(m, setPoint(m, d, ["P0"], 57, -20), ["P1"], 55, -15));
+  assert.equal(offAt(model, "P0", 57), 0);
+  assert.equal(await ctl.review(["tune"]), "review");
+  assert.equal(await ctl.apply(), true);
+  const t = store.get().tune;
+  assert.ok(Math.abs(offAt(t.model, "P0", 57) + 20) < 0.5, "P0 x57 reads back -20 mV: " + offAt(t.model, "P0", 57));
+  assert.ok(Math.abs(offAt(t.model, "P1", 55) + 15) < 0.5, "P1 x55 reads back -15 mV: " + offAt(t.model, "P1", 55));
+  assert.equal(offAt(t.model, "P2", 55), 0, "an untouched unit is unchanged");
+  assert.equal(store.get().pending.changes, 0);
+  assert.ok(Math.abs(tileFace(t.model, t.draft, "P0", []).deepest + 20) < 0.5, "the tile's deepest offset follows the model");
+});
+
+test("controller: a CPU read-back that differs from the plan (clamped) shows the CPU's value and drops the applied draft entries", async () => {
+  const { store, ctl } = await rig({ applyMode: "mismatch" }, (m, d) => setPoint(m, setPoint(m, d, ["P0"], 57, -20), ["P1"], 55, -15));
+  assert.equal(await ctl.review(["tune"]), "review");
+  await ctl.apply();
+  const a = store.get().apply;
+  assert.equal(a.sections[0].summary.allMatch, false);
+  const t = store.get().tune;
+  assert.ok(Math.abs(offAt(t.model, "P0", 57) + 20) < 0.5 && Math.abs(offAt(t.model, "P1", 55) + 15) < 0.5, "the model holds what the helper read back");
+  assert.equal(draftLib.isEmpty(t.draft), true, "applied entries are not kept as pending edits over the CPU's value");
+});
+
+// the live bug: the helper had no usable tune.last (nothing stored for this boot, an error, or a record that predates the apply): the draft was cleared, the old model stayed
+const NO_LAST = {
+  unavailable: () => ({ id: "x", ok: true, result: { available: false } }),
+  error: () => ({ id: "x", ok: false, error: { code: "BUSY", message: "the helper is busy" } }),
+  "predates the apply": (r) => ({ ...r, result: { ...r.result, applied_at: null } }),
+};
+for (const [name, answer] of Object.entries(NO_LAST)) {
+  test(`controller: tune.last ${name} -> the model follows the plan and the matched read-back, the draft clears, the user is told`, async () => {
+    const { store, ctl, bridge, toasts } = await rig({}, (m, d) => setPoint(m, setPoint(m, d, ["P0"], 57, -20), ["P1"], 55, -15));
+    const call = bridge.call.bind(bridge);
+    bridge.call = async (op, args) => (op === "tune.last" ? answer(await call(op, args)) : call(op, args));
+    assert.equal(await ctl.review(["tune"]), "review");
+    assert.equal(await ctl.apply(), true);
+    const t = store.get().tune;
+    assert.ok(Math.abs(offAt(t.model, "P0", 57) + 20) < 0.5, "P0 x57: " + offAt(t.model, "P0", 57));
+    assert.ok(Math.abs(offAt(t.model, "P1", 55) + 15) < 0.5, "P1 x55: " + offAt(t.model, "P1", 55));
+    assert.equal(offAt(t.model, "P2", 55), 0);
+    assert.equal(draftLib.isEmpty(t.draft), true);
+    assert.equal(store.get().pending.changes, 0);
+    assert.ok(toasts.some(([k, text]) => k === "warn" && /no stored read/.test(text)), "the user is told the tiles follow the plan: " + JSON.stringify(toasts));
+  });
+}
+
+test("controller: tune.last unavailable + a turbo-table apply -> the model's turbo ratios follow the intent", async () => {
+  const { store, ctl, bridge, model } = await rig({}, (m, d) => d);
+  const bucket = (model.turbo.P.ratios.length - 1);
+  const want = model.turbo.P.ratios.slice();
+  want[bucket] -= 1;
+  const call = bridge.call.bind(bridge);
+  bridge.call = async (op, args) => (op === "tune.last" ? NO_LAST.unavailable() : call(op, args));
+  const { setBucket } = draftLib;
+  patchTune(store, { draft: setBucket(model, emptyDraft(), "P", bucket, want[bucket]) });
+  assert.equal(await ctl.review(["tune"]), "review");
+  assert.equal(await ctl.apply(), true);
+  assert.deepEqual(store.get().tune.model.turbo.P.ratios, want);
+  assert.equal(store.get().pending.changes, 0);
+});
+
 test("controller: a plan refusal fails the review, names the unit/ratio, and nothing is applied", async () => {
   const { store, ctl, bridge } = await rig({}, (m, d) => setPoint(m, d, ["P0"], 48, -180));
   assert.equal(await ctl.review(["tune"]), "failed");
@@ -188,7 +254,7 @@ test("controller: nothing pending and no read are request-level errors", async (
   assert.match(s2.get().apply.error.message, /Read the CPU state first/);
 });
 
-test("controller: mismatch result is shown, keeps the draft and stops the sequence", async () => {
+test("controller: mismatch result is shown, the written unit's draft entries give way to the CPU's words (G-227) and the sequence stops", async () => {
   const { store, ctl } = await rig({ applyMode: "mismatch" });
   await ctl.review(["tune"]);
   assert.equal(await ctl.apply(), false);
@@ -196,7 +262,7 @@ test("controller: mismatch result is shown, keeps the draft and stops the sequen
   assert.equal(s.status, "done");
   assert.equal(s.summary.mismatches.length, 1);
   assert.equal(store.get().apply.state, "failed");
-  assert.equal(store.get().tune.draft.units.P0 !== undefined, true, "the draft is kept when the read-back differs");
+  assert.equal(store.get().tune.draft.units.P0, undefined, "the draft would otherwise show the wanted value over the CPU's read-back");
 });
 
 test("controller: PLAN_STALE marks the section stale; replan issues a fresh plan that applies", async () => {

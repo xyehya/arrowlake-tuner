@@ -1,0 +1,19 @@
+- Spec = docs/knowledge/throttling.md (read it fully; cite its tags). Operator: "a hex that doesn't mean anything to me"; wants XTU-style point-in-time
+  Power / Current / Thermal indicators that flip as conditions change, plus logging.
+- Orchestrator decision (record as one line in telemetry-sources.md): ADD 0x6B1 (ring perf limit reasons, package, read-only) to TELEMETRY_MSRS — plain rdmsr,
+  telemetry set only; NOT PLAIN_MSR_READABLE. Fix the msrio.py:8-10 docstring conflict (sets are separate).
+- NO MSR WRITES anywhere: never clear log bits (0x64F/0x6B0/0x6B1/0x19C/0x1B1). "Reset" = app counters only.
+- Sampler: 0x64F on CPU 0 at ~10 Hz inside the existing sampler thread (cheap: CPU 0 only); publish per tick per group: active (status OR over the window),
+  duty (fraction of samples), bits list. 0x1B1 once per tick. 0x19C per CPU only on demand (a `detail` flag on telemetry.start args if trivial; else skip, say so).
+  Kernel thermal_throttle/*_count diff per tick as `kernel_thermal` (sysfs, root-free).
+- Groups (labels exactly): "Power limit" (bits 10 PL1 / 11 PL2), "Current / EDP" (8 electrical/other, 7 VR TDC), "Thermal" (1 thermal, 0 PROCHOT, 5 RATL),
+  "VR thermal" (6), "Max turbo cap" (12, grey/info, never amber), attenuation/residency (13/4) popover only; unknown bits shown by number only.
+- UI: the Dashboard tile and the monitor strip drop the hex: chips Power · Current/EDP · Thermal · VR thermal (green "No" / amber-red "Yes" with duty %),
+  grey Max-turbo chip, click -> popover (every active status bit, SDM name, source word, "log since boot" bits flagged "may have been cleared by XTU on Windows").
+  Keep the raw words only in the popover. Retire limit_reasons_raw from the UI.
+- Event log: throttle.jsonl beside the audit log (dev $XDG_STATE_HOME/arltuner/, installed /var/lib/arltuner/, D-030/D-041), written by the helper sampler,
+  0600, size-capped rotation, debounce per §E (open on first window, close after 2 clean windows; max-turbo not logged). Fields per §E incl. tuning_id (accepted
+  name / last apply id). Read op `throttle.tail {n}` (bounded) — add it to the Rust allowlist (desktop/app/src-tauri/src/helper/ops.rs; you may edit it ONLY for
+  that) and a "Throttle events" list (Dashboard card or Audit sub-section; your choice, say which).
+- Other workers are editing src/arltuner/guard/*, controls/*, helper/ops_tune.py (G-226) and desktop/app/ui/views/tune/* (G-227): do not touch those.
+- Simulator/fake sysfs only; the simulator should be able to produce throttle bits (add a knob) for tests and the mock. Do NOT run build-appimage.sh.

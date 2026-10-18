@@ -755,12 +755,29 @@ def op_cancel(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str,
     return helper.cancel_running(args["op_id"])
 
 
+
+def op_throttle_tail(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    """G-229: the last ``n`` throttle events (``throttle.jsonl`` beside the audit log, written by the sampler). Read-only, bounded."""
+    from arltuner.telemetry.throttle import tail, throttle_log_path
+    path = throttle_log_path(Path(helper.cfg.audit_path))
+    _trust(helper, path, want="file", must_exist=False)
+    return tail(path, args["n"])
+
+
+def _validate_throttle_tail(args: dict[str, Any]) -> dict[str, Any]:
+    from arltuner.telemetry.throttle import validate_tail_n
+    try:
+        return {"n": validate_tail_n(args)}
+    except ValueError as exc:
+        raise OpError(BAD_REQUEST, str(exc)) from None
+
 def builtin_ops() -> dict[str, OpSpec]:
     from .ops_measure import measure_ops  # lazy: ops_measure imports this module (G-111: vf.measure, curves.*, mem.read)
 
     specs = [
         OpSpec("preflight", op_preflight, _no_args, slow=True),
         OpSpec("audit.tail", op_audit_tail, _validate_audit_tail, slow=True),
+        OpSpec("throttle.tail", op_throttle_tail, _validate_throttle_tail, slow=True),
         OpSpec("telemetry.start", op_telemetry_start, _validate_telemetry_start),
         OpSpec("telemetry.stop", op_telemetry_stop, _no_args),
         OpSpec("cancel", op_cancel, _validate_cancel),

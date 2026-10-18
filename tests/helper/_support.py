@@ -25,9 +25,6 @@ cpus = ["0-23"]
 max_operations_per_session = 300
 max_operations_per_boot = 400
 min_dwell_s = 60.0
-max_ratio_step = 8
-max_v_step_mv = 200
-max_offset_step_mv = 200
 
 [[allow]]
 name = "vf_read"

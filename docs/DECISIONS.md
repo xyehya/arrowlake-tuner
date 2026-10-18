@@ -245,3 +245,12 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
 G-216 Opus review: an offline CPU renumbers P-core indices (profile offsets would land on the wrong physical core) and unequal E clusters push the helper
 READ_ONLY so the unpark itself is refused. Parking is not an XTU control. Held out of G-216; the helper instead refuses tune/measure/stress/runtime writes
 while any CPU is offline. Revisit only with live evidence of how this kernel reports a parked CPU.
+
+## D-049 · CPU-enforced limits only, no operator value policy (2026-10-18, operator)
+The operator wants XTU-like behaviour: anything the Core Ultra 9 285K accepts may be set. The helper enforces only what the CPU itself fuses/reports
+(max VID / voltage limit via OC mailbox 0x28 = the voltage ceiling, fused/OC ratio limits, voltage floor, field encodings, V/F monotonicity, turbo table
+ordering, PL1 <= PL2 and the 0x610 lock, cpufreq/uncore bounds). Large single changes are allowed; the Review drawer warns. The GUI shows no policy.
+Operator-policy VALUE limits (offset ceiling/floor, step limits, ratio_max, v_target_max, [power]/[runtime] ranges) are removed; PROCESS invariants stay
+hidden in code/config: one mailbox transaction at a time, the mailbox command allowlist, the helper access list, read-back, write order, audit.
+Supersedes the operator-policy parts of D-038/D-039. Rationale: over-voltage is the only damage path and the CPU's own limit caps it; too deep an
+undervolt costs stability (a crash/reboot also clears runtime V/F). Facts audit: desktop/progress/logs/cpu-rules-audit.md.

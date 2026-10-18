@@ -44,12 +44,6 @@ class CompleteCase(TuneCase):
         shutil.copy(EXAMPLE / "accepted-2026-10-04.toml", acc / "profiles" / "accepted-2026-10-04.toml")
         return acc
 
-    def policy_steps(self, **values: int) -> None:
-        text = self.policy.read_text()
-        for key, value in values.items():
-            text = text.replace(next(line for line in text.splitlines() if line.startswith(f"{key} =")), f"{key} = {value}")
-        self.policy.write_text(text)
-
     def restore(self, h: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         plan = self.plan(h, {"restore": "accepted"})
         return plan, self.apply_ok(h, plan)
@@ -91,36 +85,24 @@ class ColdBoot(CompleteCase):
         self.assertEqual(result["writes_sent"], 0)
         self.assertFalse([r for r in self.sim.requests[before:] if r.cmd in (0x11, 0x15, 0x1D, 0x27)])
 
-    def test_a_small_step_limit_is_split_into_rounds_in_the_one_apply(self) -> None:
-        self.policy_steps(max_offset_step_mv=25)  # -91 mV from the cold 0 is four 25 mV steps
+    def test_a_restore_is_one_round_whatever_the_distance(self) -> None:
+        """D-049: no step limit -- the deepest point (55x -91 mV from the cold 0) is written once, directly, in the one round; no 'guarded rounds' warning."""
         h = self.boot(COLD, accepted_dir=self.accepted())
         self.read(h)
         plan, result = self.restore(h)
-        self.assertGreater(plan["rounds"], 1)
-        self.assertTrue(any("guarded rounds" in w for w in texts(plan)), texts(plan))
+        self.assertEqual(plan["rounds"], 1)
+        self.assertFalse(any("guarded rounds" in w for w in texts(plan)), texts(plan))
         self.assertTrue(result["complete"])
         self.assert_expected_words()
-        p7 = TOPO.resolve("P", 7).cpu  # 55x -91 mV: the deepest point, reached in steps the guard allows (each judged from the word read in its round)
-        self.assertGreaterEqual(len([r for r in self.sim.requests if r.cmd == 0x11 and (r.cpu, r.p2) == (p7, 6)]), 4)
+        p7 = TOPO.resolve("P", 7).cpu
+        self.assertEqual(len([r for r in self.sim.requests if r.cmd == 0x11 and (r.cpu, r.p2) == (p7, 6)]), 1)
 
-    def test_rounds_that_do_not_fit_the_session_are_refused_before_anything_is_sent(self) -> None:
-        self.policy_steps(max_offset_step_mv=25, max_operations_per_session=900)
+    def test_without_a_read_the_apply_is_one_round_too(self) -> None:
         h = self.boot(COLD, accepted_dir=self.accepted())
-        self.read(h)
-        sent = len(self.sim.requests)
-        r = h.call("p", "tune.plan", {"intent": {"restore": "accepted"}})
-        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "STEP_LIMIT"))
-        self.assertIn("rounds", r["error"]["message"])
-        self.assertIn("P-Core", r["error"]["message"])  # names the unit and the field that needs the most rounds
-        self.assertEqual(len(self.sim.requests), sent)
-
-    def test_without_a_read_the_apply_judges_the_rounds_from_its_own_reads(self) -> None:
-        self.policy_steps(max_offset_step_mv=25, max_operations_per_session=900)
-        h = self.boot(COLD, accepted_dir=self.accepted())
-        plan = self.plan(h, {"restore": "accepted"})  # no read: one round reserved
-        r = self.apply(h, plan)
-        self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "STEP_LIMIT"))
-        self.assertFalse([q for q in self.sim.requests if q.cmd in (0x11, 0x15)], "nothing written: the rounds were judged before the first write")
+        plan = self.plan(h, {"restore": "accepted"})  # no read: one round
+        self.assertEqual(plan["rounds"], 1)
+        self.apply_ok(h, plan)
+        self.assert_expected_words()
 
 
 class WarmBoot(CompleteCase):
@@ -139,14 +121,13 @@ class WarmBoot(CompleteCase):
         self.assertTrue(ec1["match"] and ec1["equivalent"], ec1)
         self.assertTrue(all(c["match"] for c in after["accepted_match"]), after["accepted_match"])
 
-    def test_a_residual_oc_point_and_a_small_step_limit_in_one_apply(self) -> None:
-        self.policy_steps(max_offset_step_mv=25)
+    def test_a_residual_oc_point_and_a_far_restore_in_one_apply(self) -> None:
         initial = dict(COLD.initial_vf)
         initial.update({c: VfWord.from_u32(EC1_WORD) for c in EC1})
         h = self.boot(dataclasses.replace(COLD, initial_vf=initial), accepted_dir=self.accepted())
         self.read(h)
         plan, result = self.restore(h)
-        self.assertGreater(plan["rounds"], 1)
+        self.assertEqual(plan["rounds"], 1)
         self.assertTrue(result["residual"], result)
         after = self.read(h)
         self.assertTrue(all(c["match"] for c in after["accepted_match"]), after["accepted_match"])

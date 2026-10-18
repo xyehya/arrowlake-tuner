@@ -39,6 +39,22 @@ GFX_6B0: dict[int, tuple[str, str]] = {
     12: ("inefficient_operation", "Inefficient operation"),
 }
 
+# 0x6B1 ring limit reasons: the 0x64F layout without bits 4 / 12 / 13 [DOC edk2 SkylakeMsr.h MSR_RING_PERF_LIMIT_REASONS; throttling.md section A].
+RING_6B1: dict[int, tuple[str, str]] = {b: CORE_64F[b] for b in (0, 1, 5, 6, 7, 8, 10, 11)}
+
+# 0x1B1 IA32_PACKAGE_THERM_STATUS, the throttle-related bits: a status bit and its sticky log bit one above it [DOC edk2 ArchitecturalMsr.h].
+# Bit 13 is the "PMAX log" of the IPF primitives (non-architectural; its meaning on Arrow Lake is [UNVERIFIED]), so it is named but flagged in the UI.
+PKG_THERM_1B1: dict[int, tuple[str, str]] = {
+    0: ("thermal", "Package thermal status"),
+    2: ("prochot", "PROCHOT# / FORCEPR event"),
+    4: ("critical_temp", "Critical temperature"),
+    6: ("threshold1", "Thermal threshold 1"),
+    8: ("threshold2", "Thermal threshold 2"),
+    10: ("power_limit", "Package power limit notification"),
+}
+PKG_THERM_PMAX_LOG_BIT = 13
+_PKG_THERM_IGNORED = frozenset(range(16, 23)) | {26, 31}  # readout 22:16, HFI update 26 (kernel-handled), reading-valid 31 -- not throttle state
+
 
 @dataclass(frozen=True)
 class LimitReasons:
@@ -72,3 +88,22 @@ def decode_graphics_6b0(word: int) -> LimitReasons:
     """MSR 0x6B0 (SDM MSR_GRAPHICS_PERF_LIMIT_REASONS): limits on the integrated graphics frequency, not the cores."""
     return _decode(word, GFX_6B0)
 
+
+
+def decode_ring_6b1(word: int) -> LimitReasons:
+    """MSR 0x6B1 (SDM MSR_RING_PERF_LIMIT_REASONS): limits on the ring (uncore) frequency. Package scope, read-only here."""
+    return _decode(word, RING_6B1)
+
+
+def decode_pkg_therm_1b1(word: int) -> LimitReasons:
+    """MSR 0x1B1 throttle-related bits: ``status`` bit n, ``log`` bit n+1 (not +16), ``pmax_log`` for bit 13; readout / valid / HFI bits are not throttle state and
+    are never reported as unknown. This module never writes the log bits (the kernel owns them, throttling.md section A)."""
+    if not isinstance(word, int) or isinstance(word, bool) or not 0 <= word < 1 << 64:
+        raise ValueError("limit-reason word must be an unsigned 64-bit integer")
+    status = tuple(k for b, (k, _) in sorted(PKG_THERM_1B1.items()) if word >> b & 1)
+    log = tuple(k for b, (k, _) in sorted(PKG_THERM_1B1.items()) if word >> (b + 1) & 1)
+    if word >> PKG_THERM_PMAX_LOG_BIT & 1:
+        log += ("pmax_log",)
+    named = set(PKG_THERM_1B1) | {b + 1 for b in PKG_THERM_1B1} | {PKG_THERM_PMAX_LOG_BIT} | _PKG_THERM_IGNORED
+    unknown = tuple(b for b in range(64) if word >> b & 1 and b not in named)
+    return LimitReasons(word, status, log, unknown)

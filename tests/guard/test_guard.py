@@ -60,15 +60,12 @@ class GuardCase(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.wall = FakeClock(1_700_000_000.0)
         self.env: dict[str, str] = {ENV_FLAG: "1"}
-        # the step limits are relaxed to their sanity maxima: only the step tests (test_bounds.py) use the shipped one-step defaults
+        # D-049: no operator value limits; the CPU's own ratio limit (cmd 0x01) is bound as 120x, the voltage limit (cmd 0x28) stays unread
         self.policy = dataclasses.replace(
             default_m1_policy(),
             max_operations_per_session=10,
             min_dwell_s=0.0,
-            max_ratio_step=8,
-            max_v_step_mv=200,
-            max_offset_step_mv=200,
-            assumed_bios_offset_mv={"P": -50, "E": 0},  # these tests exercise the D-015 mechanism with a stated BIOS offset (the shipped default is 0 for both)
+            hw_ratio_max={"P": 120, "E": 120},
         )
         self.confirm = Confirmation(self.TOKEN, self.OPERATOR)
         self.gate_calls: list[str] = []
@@ -433,27 +430,33 @@ class Checks(GuardCase):
     def test_overvolt_refused(self) -> None:
         self.refused_vf(STOCK.with_(v_target_raw=STOCK.v_target_raw + 1, offset_raw=-10))
 
-    def test_ratio_above_baseline_refused(self) -> None:
-        self.refused_vf(STOCK.with_(ratio=STOCK.ratio + 1, offset_raw=-10))
+    def test_ratio_raise_follows_the_cpu_limit_only(self) -> None:
+        # D-049: no policy ceiling. A raise is judged by the CPU's own ratio limit (cmd 0x01 [7:0], bound as 120x here)
+        self.assertIs(self.accepted_vf(STOCK.with_(ratio=STOCK.ratio + 1, offset_raw=-10)).verified, True)
+        exc = self.refused_vf(STOCK.with_(ratio=121, offset_raw=-10))
+        self.assertIn("cmd 0x01", exc.detail)
+        self.assertIn("120x", exc.detail)
+        self.policy = dataclasses.replace(self.policy, hw_ratio_max={"P": None, "E": None})  # the limit was not read: a raise is refused naming the read
+        exc = self.refused_vf(STOCK.with_(ratio=STOCK.ratio + 1, offset_raw=-10))
+        self.assertIn("CPU_LIMIT_UNREAD", exc.detail)
+        self.assertIs(self.accepted_vf(STOCK.with_(ratio=STOCK.ratio - 1, offset_raw=-10)).verified, True)  # a lowering never needs the limit
 
     def test_static_mode_refused(self) -> None:
         self.refused_vf(STOCK.with_(static=True, offset_raw=-10))
         self.refused_vf(STOCK.with_(offset_raw=-10), baseline=STOCK.with_(static=True))  # cannot bound a static baseline
 
     def test_offset_bounds_on_an_e_core(self) -> None:
-        # E core (cpu 8): assumed BIOS offset 0 -> runtime floor -100 mV = raw -102 (== the policy minimum -102)
-        self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=-102), cpu=8).verified, True)
-        self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=0), cpu=8).verified, True)
-        self.refused_vf(STOCK.with_(offset_raw=-103), cpu=8)
-        self.refused_vf(STOCK.with_(offset_raw=1), cpu=8)
-        self.refused_vf(STOCK.with_(offset_raw=-1024), cpu=8)
+        # D-049: no floor / ceiling. Any undervolt of the 11-bit field is accepted; a positive offset raises the predicted voltage and needs the CPU's cmd 0x28 limit (unread here)
+        for raw in (-102, 0, -103, -300, -1024):
+            self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=raw), cpu=8).verified, True, raw)
+        exc = self.refused_vf(STOCK.with_(offset_raw=1), cpu=8)
+        self.assertIn("CPU_LIMIT_UNREAD", exc.detail)
+        self.assertIn("cmd 0x28", exc.detail)
 
-    def test_offset_bounds_on_a_p_core_follow_the_assumed_bios_offset(self) -> None:
-        # P core (cpu 0): assumed BIOS offset -50 mV (D-015) -> runtime floor -50 mV = raw -51
-        self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=-51)).verified, True)
-        self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=0)).verified, True)
-        self.refused_vf(STOCK.with_(offset_raw=-52))
-        self.refused_vf(STOCK.with_(offset_raw=-102))  # the policy minimum alone would have allowed it
+    def test_offset_bounds_on_a_p_core(self) -> None:
+        # the same for a P core: no assumed BIOS offset, no floor (D-015 is gone)
+        for raw in (-51, 0, -52, -102, -1024):
+            self.assertEqual(self.accepted_vf(STOCK.with_(offset_raw=raw)).verified, True, raw)
         self.refused_vf(STOCK.with_(offset_raw=1))
 
     def test_lower_ratio_and_voltage_are_accepted_each_in_its_own_word(self) -> None:
@@ -921,7 +924,7 @@ class AuditTrail(GuardCase):
         new = STOCK.with_(offset_raw=-40).to_u32()
         guard.execute(self.write_req(new), self.confirm)
         self.wall.advance(2.5)
-        self.assert_refused(guard, self.write_req(STOCK.with_(offset_raw=-300).to_u32()), Refusal.CHECK_FAILED)
+        self.assert_refused(guard, self.write_req(STOCK.with_(offset_raw=200).to_u32()), Refusal.CHECK_FAILED)  # a positive offset with cmd 0x28 unread
         records = self.records()
         self.assertEqual(
             [(r["event"], r["seq"]) for r in records],
@@ -941,7 +944,7 @@ class AuditTrail(GuardCase):
         self.assertEqual(records[8]["data"], f"0x{new:08X}")
         self.assertEqual(records[9]["ts"], "2023-11-14T22:13:22.500+00:00")
         self.assertEqual(records[9]["reason"], "CHECK_FAILED")
-        self.assertIn("offset_raw -300", records[9]["detail"])
+        self.assertIn("CPU_LIMIT_UNREAD", records[9]["detail"])
 
     def test_every_refusal_is_audited_with_its_request(self) -> None:
         guard = self.make_guard()

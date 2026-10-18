@@ -26,15 +26,27 @@ fn done(r: Result<Reply, CallError>) -> Value {
 
 /// Plan on `link` the way the app does: a successful `tune.plan` answer carrying `plan_id`.
 fn make_plan(link: &Link, helper: &mut FakeHelper, plan_id: &str) {
+    make_plan_of(link, helper, "tune.plan", json!({"intent": {"cores": []}}), plan_id);
+}
+
+fn make_plan_of(link: &Link, helper: &mut FakeHelper, op: &str, args: Value, plan_id: &str) {
     std::thread::scope(|s| {
         let t = s.spawn(|| {
             let req = helper.request();
-            assert_eq!(req["op"], "tune.plan");
+            assert_eq!(req["op"], op);
             helper.send(&json!({"id": req["id"], "ok": true, "result": {"plan_id": plan_id}}));
         });
-        assert_eq!(done(link.call("tune.plan", &json!({"intent": {"cores": []}}), T))["ok"], true);
+        assert_eq!(done(link.call(op, &args, T))["ok"], true);
         t.join().unwrap();
     });
+}
+
+fn power_plan(link: &Link, helper: &mut FakeHelper, plan_id: &str) {
+    make_plan_of(link, helper, "power.plan", json!({"power": {"pl1_w": 200}}), plan_id);
+}
+
+fn runtime_plan(link: &Link, helper: &mut FakeHelper, plan_id: &str) {
+    make_plan_of(link, helper, "runtime.plan", json!({"caps": {"1": 30}}), plan_id);
 }
 
 #[test]
@@ -355,6 +367,95 @@ fn tune_apply_needs_a_plan_made_on_this_connection_and_spends_it() {
     assert_eq!(req["op"], "tune.apply", "the refused applies wrote nothing");
     // ... and is spent
     assert!(matches!(link.call("tune.apply", &apply(&known), T), Err(CallError::Refused(_))));
+}
+
+#[test]
+fn power_and_runtime_apply_need_a_plan_of_their_own_kind_and_spend_it() {
+    let (link, mut helper, _rx) = start();
+    let apply = |plan: &str| json!({"plan_id": plan, "typed": "CONFIRM ABCDEF"});
+    let (t, p, r) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+    for op in ["power.apply", "runtime.apply"] {
+        assert!(matches!(link.call(op, &apply(&t), T), Err(CallError::Refused(_))), "{op}: nothing planned");
+    }
+    make_plan(&link, &mut helper, &t);
+    power_plan(&link, &mut helper, &p);
+    runtime_plan(&link, &mut helper, &r);
+
+    // cross-kind: every kind's id is refused by the other two applies
+    for (op, bad) in [
+        ("tune.apply", [&p, &r]),
+        ("power.apply", [&t, &r]),
+        ("runtime.apply", [&t, &p]),
+    ] {
+        for id in bad {
+            match link.call(op, &apply(id), T) {
+                Err(CallError::Refused(x)) => assert_eq!(x.message, "refused locally: plan not made by this app", "{op}"),
+                other => panic!("{op}: {other:?}"),
+            }
+        }
+    }
+    // the matching kind goes out, once
+    assert!(matches!(link.call("power.apply", &apply(&p), T), Ok(Reply::Started(_))));
+    let req = helper.request();
+    assert_eq!((req["op"].as_str(), req["args"]["plan_id"].as_str()), (Some("power.apply"), Some(p.as_str())), "refused applies wrote nothing");
+    assert!(matches!(link.call("power.apply", &apply(&p), T), Err(CallError::Refused(_))), "spent");
+    // spending a power plan leaves the other kinds' plans alone
+    assert!(matches!(link.call("runtime.apply", &apply(&r), T), Ok(Reply::Started(_))));
+    assert_eq!(helper.request()["op"], "runtime.apply");
+    assert!(matches!(link.call("tune.apply", &apply(&t), T), Ok(Reply::Started(_))));
+    assert_eq!(helper.request()["op"], "tune.apply");
+}
+
+#[test]
+fn power_and_runtime_plan_sets_are_bounded_separately() {
+    let (link, mut helper, _rx) = start();
+    let apply = |plan: &str| json!({"plan_id": plan, "typed": "CONFIRM ABCDEF"});
+    let ids: Vec<String> = (0..9).map(|i| format!("{i:x}").repeat(64)).collect();
+    let first_tune = "f".repeat(64);
+    make_plan(&link, &mut helper, &first_tune);
+    for i in &ids {
+        power_plan(&link, &mut helper, i);
+    }
+    // nine power plans push the oldest power plan out, but not the tune plan
+    assert!(matches!(link.call("power.apply", &apply(&ids[0]), T), Err(CallError::Refused(_))));
+    assert!(matches!(link.call("power.apply", &apply(&ids[8]), T), Ok(Reply::Started(_))));
+    helper.request();
+    for i in &ids {
+        runtime_plan(&link, &mut helper, i);
+    }
+    assert!(matches!(link.call("runtime.apply", &apply(&ids[0]), T), Err(CallError::Refused(_))));
+    assert!(matches!(link.call("runtime.apply", &apply(&ids[8]), T), Ok(Reply::Started(_))));
+    helper.request();
+    assert!(matches!(link.call("tune.apply", &apply(&first_tune), T), Ok(Reply::Started(_))));
+}
+
+#[test]
+fn a_refused_power_or_runtime_plan_and_the_read_ops_go_through_the_allowlist() {
+    let (link, mut helper, _rx) = start();
+    for (op, args) in [
+        ("power.plan", json!({"power": {"pl1_w": 200}, "revert": true})),
+        ("runtime.plan", json!({"parking": {"3": false}})),
+        ("runtime.plan", json!({"caps": {"1": 30}, "parking": {"3": false}})),
+        ("runtime.read", json!({"x": 1})),
+        ("power.read", json!({"x": 1})),
+    ] {
+        match link.call(op, &args, T) {
+            Err(CallError::Refused(r)) => assert_eq!(r.code, "BAD_REQUEST", "{op}"),
+            other => panic!("{op}: {other:?}"),
+        }
+    }
+    // power.read is long (the id comes back at once), runtime.read is answered in line
+    assert!(matches!(link.call("power.read", &json!({}), T), Ok(Reply::Started(_))));
+    assert_eq!(helper.request()["op"], "power.read");
+    std::thread::scope(|s| {
+        let t = s.spawn(|| {
+            let req = helper.request();
+            assert_eq!(req["op"], "runtime.read");
+            helper.send(&json!({"id": req["id"], "ok": true, "result": {}}));
+        });
+        assert_eq!(done(link.call("runtime.read", &json!({}), T))["ok"], true);
+        t.join().unwrap();
+    });
 }
 
 #[test]

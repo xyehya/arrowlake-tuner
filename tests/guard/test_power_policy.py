@@ -1,4 +1,5 @@
-"""G-214: the ``[power]`` table of the policy and the plain-MSR read allowlist for ``0x606`` / ``0x610`` / ``0x614``. Policy parsing only; no hardware."""
+"""G-214 / D-049: the ``[power]`` table is gone from the policy (an old file still loads, the table is ignored), and the plain-MSR read allowlist for ``0x606`` / ``0x610`` / ``0x614``
+stays. Policy parsing only; no hardware."""
 from __future__ import annotations
 
 import tempfile
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from arltuner.guard import AuditLog, MsrAllowEntry, PolicyError, default_m1_policy, load_policy, read_state
 from arltuner.guard.audit import EVENTS
-from arltuner.guard.policy import PLAIN_MSR_READABLE, PLAIN_MSR_WRITABLE, PowerPolicy
+from arltuner.guard.policy import PLAIN_MSR_READABLE, PLAIN_MSR_WRITABLE
 from arltuner.topology import arl_s_285k
 
 SHIPPED = Path(__file__).resolve().parents[2] / "policies/default.toml"
@@ -18,49 +19,36 @@ def load(extra: str):
     return load_policy(BASE + extra, arl_s_285k())
 
 
-class PowerTable(unittest.TestCase):
+class PowerTableIsIgnored(unittest.TestCase):
     def test_absent_means_none(self) -> None:
         self.assertIsNone(load("").power)
 
-    def test_the_shipped_policy_has_no_power_table(self) -> None:
-        """D-039: the bounds are the operator's; the shipped file keeps them commented out."""
+    def test_the_shipped_policy_has_no_power_table_and_no_commented_example(self) -> None:
         policy = load_policy(SHIPPED, arl_s_285k())
         self.assertIsNone(policy.power)
+        self.assertEqual(policy.ignored_keys, ())
         text = SHIPPED.read_text(encoding="utf-8")
-        self.assertIn("# [power]", text)
         self.assertNotIn("\n[power]", text)
+        self.assertNotIn("# [power]", text)
 
-    def test_a_full_table(self) -> None:
-        p = load("[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 128.5]\nmax_step_w = 50\n").power
-        self.assertEqual((p.pl1_w, p.pl2_w, p.tau_s, p.max_step_w), ((100, 253), (100, 295), (1.0, 128.5), 50))
+    def test_an_old_table_loads_is_ignored_and_named(self) -> None:
+        with self.assertLogs("arltuner.policy", level="WARNING") as logs:
+            p = load("[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 128.5]\nmax_step_w = 50\n")
+        self.assertIsNone(p.power)  # the neutral stand-in: PL writes need no policy
+        self.assertEqual(p.ignored_keys, ("power.max_step_w", "power.pl1_w", "power.pl2_w", "power.tau_s"))
+        self.assertEqual(len(logs.records), 1)
+        for key in p.ignored_keys:
+            self.assertIn(key, logs.records[0].getMessage())
 
-    def test_every_key_is_optional(self) -> None:
-        p = load("[power]\npl1_w = [100, 200]\n").power
-        self.assertEqual(p.pl1_w, (100, 200))
-        self.assertIsNone(p.pl2_w)
-        self.assertIsNone(p.tau_s)
-        self.assertIsNone(p.max_step_w)
+    def test_the_old_values_are_not_validated_but_an_unknown_key_still_fails_closed(self) -> None:
+        p = load("[power]\npl1_w = 200\ntau_s = [9, 1]\nmax_step_w = -3\n")
+        self.assertEqual(p.ignored_keys, ("power.max_step_w", "power.pl1_w", "power.tau_s"))
+        with self.assertRaises(PolicyError):
+            load("[power]\npl1_w = 200\nnonsense = true\n")
 
-    def test_an_empty_table_is_a_table_with_nothing_allowed(self) -> None:
-        self.assertEqual(load("[power]\n").power, PowerPolicy())
-
-    def test_bad_tables_are_load_errors(self) -> None:
-        for text, needle in (
-            ("[power]\npl3_w = [1, 2]\n", "pl3_w"),  # unknown key
-            ("[power]\npl1_w = 200\n", "[min, max]"),
-            ("[power]\npl1_w = [200, 100]\n", "pl1_w"),  # min > max
-            ("[power]\npl1_w = [0, 100]\n", "pl1_w"),  # below the field
-            ("[power]\npl1_w = [100, 5000]\n", "pl1_w"),  # above the 15-bit field
-            ("[power]\npl1_w = [100.5, 200]\n", "whole watts"),
-            ("[power]\ntau_s = [0, 10]\n", "tau_s"),
-            ("[power]\ntau_s = [1, 1e12]\n", "tau_s"),
-            ("[power]\nmax_step_w = 0\n", "max_step_w"),
-            ("[power]\nmax_step_w = true\n", "max_step_w"),
-            ('power = "yes"\n', "power"),
-        ):
-            with self.subTest(text=text), self.assertRaises(PolicyError) as ctx:
-                load(text)
-            self.assertIn(needle, str(ctx.exception))
+    def test_an_empty_table_and_a_non_table_are_ignored_too(self) -> None:
+        self.assertEqual(load("[power]\n").ignored_keys, ("power",))
+        self.assertEqual(load('power = "yes"\n').ignored_keys, ("power",))
 
 
 class PowerMsrAllowlist(unittest.TestCase):

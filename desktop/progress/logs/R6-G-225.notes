@@ -1,0 +1,4 @@
+- G-214 (power.*) and G-216 (runtime.*) are merged: read src/arltuner/helper/ops_power.py and ops_runtime.py for the exact request shapes
+  (runtime.plan: {caps?, uncore?} or {revert: true}; parking is refused by the helper (D-048) — do not allow a `parking` key in the Rust check either).
+- Mirror the existing tune.plan/tune.apply plan-id binding in link.rs: separate bounded sets per kind so a power plan_id cannot be used with runtime.apply.
+- Do NOT run desktop/tools/build-appimage.sh and do not write to desktop/dist (the operator is running the AppImage). cargo test only (CARGO_TARGET_DIR is set by dispatch or use the worktree default).

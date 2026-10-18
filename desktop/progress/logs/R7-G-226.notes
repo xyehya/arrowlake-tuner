@@ -1,0 +1,21 @@
+- Decision D-049 (docs/DECISIONS.md) + the facts audit desktop/progress/logs/cpu-rules-audit.md (read it fully; §B is your removal list with file:line).
+- Remove: offset_ceiling_mv, effective_offset_floor_mv / assumed_bios_offset_mv, max_ratio_step, max_v_step_mv, max_offset_step_mv, ratio_max (+"auto"),
+  v_target_max_mv, [power] ranges (power is always available when 0x610 is unlocked), [runtime] cap_ratio_min / uncore_ratio. Old policy files that still
+  contain these keys must still LOAD (ignore them with one warning line naming the ignored keys) — the installed /etc/arltuner/policy.toml has them.
+- Structural side effects (audit §B): the offset floor was also the "no context" gate (offset_floor_raw is None) — replace with an explicit context flag;
+  without step limits the planner's multi-round plans collapse to one round — keep the transition-safe write ORDER (raising first) intact.
+- Enforce (fail closed when unread, cite registers.md entry): voltage target / predicted V <= 0x28 limit per domain (P/E/ring) using XTU's raw-1 rule;
+  FIX the field-0 bug (policy.py:497 vs :285): pick the registers.md meaning and make both agree, test it. Ratios (OC ratio, turbo buckets, ring OC slot)
+  <= 0x01 [7:0] for that domain. Offsets within the 11-bit field (-1024..+1023 raw). PL fields within 0x610 widths, refuse if locked. Caps within
+  [cpuinfo_min, cpuinfo_max], uncore within initial bounds, min<=max (kernel).
+- Warnings (Review shows them, never refusals): LARGE_CHANGE (> 50 mV offset delta, > 4 ratio delta, > 50 W per apply — constants, not policy),
+  TURBO_NOT_MONOTONIC, PL2_BELOW_PL1, TURBO_RAISE, POSITIVE_OFFSET, DEEP_WHOLE_CURVE (whole-curve offset deeper than -100 mV: "the CPU's V/F clamp does not
+  protect a whole-curve offset"), plus the existing E40_OFFSET / E_TARGET_WHEA / CLAMPED.
+- Contract `cpu_limits` (add to tune.read/tune.last results AND power.read/runtime.read):
+  {"P": {"max_mv": 1625|null, "max_ratio": 120|null, "source": "0x28/0x01 read <iso>"}, "E": {...}, "ring": {...},
+   "offset_mv": [-1000, 999], "power": {"locked": bool, "pl_max_w": <field max>}, "caps_khz": {"<cpu>": [min,max]}, "uncore_khz": [min,max]}
+  null = not read yet (the write that needs it is refused with code CPU_LIMIT_UNREAD naming the read).
+- Process invariants STAY: one mailbox transaction at a time, [[allow]] + PLAIN_MSR lists, cpus/access list, baseline-first + read-back, write order,
+  0x1D/0x27/0x15 rules, op counters, audit, health gate, adaptive-only (operator scope, keep).
+- The legacy web server (src/arltuner/web/server.py OPS) gets power.*/runtime.* passthroughs only if trivial; otherwise leave it and say so.
+- Simulator/fake sysfs only. `python3 tools/run_tests.py` green. Commits `G-226: ...`.

@@ -211,8 +211,8 @@ class Plan(CliCase):
     def test_allowed_plan_exits_0_and_sends_nothing(self) -> None:
         code, out, err = self.run_cli("plan", self.profile_file, "--sim", "--policy", self.policy_file)
         self.assertEqual((code, err), (0, ""), out)
-        for needle in ("0x14", "0x10", "0x1C", "0x09", "0x26", "0x15", "0x11", "0x1D", "0x27", "Operations required: 13 mailbox WRMSRs = 9 guard operations", "4 read-backs", "policy allows 60", "ALLOWED",
-                       "offset +0.00 -> -30.27 mV", "runtime offset -30.27 mV, effective -80.27 mV (assumed BIOS offset -50 mV)", "nothing was sent",
+        for needle in ("0x14", "0x10", "0x1C", "0x09", "0x26", "0x01", "0x15", "0x11", "0x1D", "0x27", "Operations required: 14 mailbox WRMSRs = 10 guard operations", "4 read-backs", "policy allows 60",
+                       "ALLOWED", "offset +0.00 -> -30.27 mV", "read the CPU's own ratio limit (0x01) of P CPUs", "nothing was sent",  # D-049: the plan always reads the CPU's own ratio limit for a ratio target
                        "WARNING: " + XTU_SHAPE_CAVEAT):
             self.assertIn(needle, out)
         self.nothing_sent()  # not even a mailbox read: the baseline comes from the simulator's own state
@@ -221,25 +221,40 @@ class Plan(CliCase):
     def test_default_policy_needs_a_higher_limit_exit_2(self) -> None:
         code, out, _ = self.run_cli("plan", self.profile_file, "--sim")
         self.assertEqual(code, 2)
-        self.assertIn("Operations required: 13 mailbox WRMSRs = 9 guard operations", out)
+        self.assertIn("Operations required: 14 mailbox WRMSRs = 10 guard operations", out)
         self.assertIn("policy allows 1", out)
         self.assertIn("NEEDS A HIGHER LIMIT", out)
         self.assertIn("NOT ALLOWED", out)
         self.nothing_sent()
 
     def test_predicted_refusal_exits_2(self) -> None:
+        """D-049: only the CPU's own limits refuse -- the voltage above the 0x28 limit (the simulator's is 2.0 V) and a ratio above the 0x01 limit (120x)."""
         for name, entry in {
-            "overvolt": e_core(0, oc_voltage_mv=1500),  # G-124: a V target only exists on an OC point (E ratio 48 > 46); P4 at 55x has none
-            "ratio up": p4(ratio=57),
-            "offset -150": p4(offset_mv=-150),
-            "offset -51 (P-core runtime floor, D-015)": p4(offset_mv=-51),
+            "overvolt above the CPU limit": e_core(0, oc_voltage_mv=2100),  # G-124: a V target only exists on an OC point (E ratio 48 > 46); P4 at 55x has none
+            "ratio above the CPU limit": p4(ratio=121),
         }.items():
             with self.subTest(name):
                 path = self.write("bad.toml", profile_text(entry))
                 code, out, _ = self.run_cli("plan", path, "--sim", "--policy", self.policy_file)
                 self.assertEqual(code, 2)
                 self.assertIn("CHECK_FAILED", out)
+                self.assertIn("CPU limit", out)
                 self.assertIn("NOT ALLOWED", out)
+                self.nothing_sent()
+
+    def test_the_removed_policy_limits_now_allow(self) -> None:
+        """D-049: a ratio raise, offsets of -150 / -51 mV and a lower voltage are no longer refused by the policy (they were ratio_max / the D-015 runtime floor / the offset ceilings)."""
+        for name, entry in {
+            "ratio up": p4(ratio=57),
+            "offset -150": p4(offset_mv=-150),
+            "offset -51 (the old P-core runtime floor, D-015)": p4(offset_mv=-51),
+        }.items():
+            with self.subTest(name):
+                path = self.write("ok.toml", profile_text(entry))
+                code, out, _ = self.run_cli("plan", path, "--sim", "--policy", self.policy_file)
+                self.assertEqual(code, 0, out)
+                self.assertIn("ALLOWED", out)
+                self.assertNotIn("NOT ALLOWED", out)
                 self.nothing_sent()
 
     def test_the_baseline_comes_from_the_simulator_state(self) -> None:
@@ -252,7 +267,7 @@ class Plan(CliCase):
         sim = SimMsrPort(sim_config(misc_global_config=0x8))
         code, out, _ = self.run_cli("plan", self.profile_file, "--sim", "--policy", self.policy_file, sim=sim)
         self.assertEqual(code, 0)
-        self.assertIn("Operations required: 11 mailbox WRMSRs = 8 guard operations", out)
+        self.assertIn("Operations required: 12 mailbox WRMSRs = 9 guard operations", out)
         self.assertNotIn("cmd 0x15", out)
 
     def test_usage_errors_exit_1(self) -> None:
@@ -282,7 +297,7 @@ class Apply(CliCase):
         self.assertEqual(self.sim.vf(4), P4_BASELINE.with_(offset_raw=-31, v_target_raw=0))  # G-120: no OC point at ratio 55
         self.assertTrue(self.sim.per_core_enabled)
         events = [r["event"] for r in read_all(self.audit)]
-        self.assertEqual((events.count("attempt"), events.count("readback")), (9, 4))
+        self.assertEqual((events.count("attempt"), events.count("readback")), (10, 4))  # 9 + the plan's 0x01 read of the CPU's own ratio limit
         self.assertEqual({r["operator"] for r in read_all(self.audit)}, {"tester"})
         self.assertFalse(self.lock.exists())
         self.assertIn("dwell: waiting", out)  # the virtual clock honoured the 60 s dwell without really waiting
@@ -298,7 +313,7 @@ class Apply(CliCase):
         def sleep(seconds: float) -> None:
             if seconds >= 30:  # a dwell wait, not a transport busy-poll
                 waits.append(seconds)
-                if len(waits) == 6:  # the wait before the 0x11 write (the 7th operation), after the 0x15 write was executed
+                if len(waits) == 7:  # the wait before the 0x11 write (the 8th operation), after the 0x15 write was executed (the 0x01 limit read is the 6th)
                     raise KeyboardInterrupt
             now[0] += seconds
 
@@ -374,13 +389,13 @@ class Apply(CliCase):
         args = [a for a in self.apply_args() if a not in ("--policy", self.policy_file)]
         code, out, err = self.run_cli(*args, stdin=self.confirmed())
         self.assertEqual(code, 2)
-        self.assertIn("needs 13 mailbox WRMSRs", err)
+        self.assertIn("needs 14 mailbox WRMSRs", err)
         self.assertIn("allows 1", err)
         self.assertNotIn("CONFIRM", out)
         self.nothing_sent()
 
     def test_predicted_refusal_is_reported_before_the_prompt(self) -> None:
-        path = self.write("bad.toml", profile_text(e_core(0, oc_voltage_mv=1500)))  # G-124: an OC point carries the V target
+        path = self.write("bad.toml", profile_text(e_core(0, oc_voltage_mv=2100)))  # G-124: an OC point carries the V target; 2100 mV is above the CPU's 0x28 limit (the simulator's is 2.0 V)
         args = self.apply_args()
         args[1] = path
         code, out, err = self.run_cli(*args, stdin=self.confirmed())
@@ -426,8 +441,8 @@ class Apply(CliCase):
 
         code, _, _ = self.run_cli(*self.apply_args(), stdin=self.confirmed(), health_gate=gate)
         self.assertEqual(code, 0)
-        self.assertEqual(phases, ["before", "after"] * 9)
-        self.assertEqual([r.get("health_gate") for r in read_all(self.audit) if r["event"] == "attempt"], [{"before": "clean"}] * 9)
+        self.assertEqual(phases, ["before", "after"] * 10)
+        self.assertEqual([r.get("health_gate") for r in read_all(self.audit) if r["event"] == "attempt"], [{"before": "clean"}] * 10)
 
     def test_allow_taint_bit_is_parsed_and_passed_to_the_health_gate_factory(self) -> None:
         seen: list[frozenset[int]] = []
@@ -489,13 +504,13 @@ class Measured(CliCase):
         path = self.write("p1.toml", profile_text('kind = "P"\nindex = 1\noffset_mv = -5\nratio = 55'))
         code, out, err = self.run_default_sim("plan", path, "--sim", "--policy", self.policy_file)
         self.assertEqual((code, err), (0, ""), out)
-        self.assertIn("Operations required: 11 mailbox WRMSRs = 8 guard operations", out)  # 0x14 reads 0x8 on the measured machine: no 0x15
+        self.assertIn("Operations required: 12 mailbox WRMSRs = 9 guard operations", out)  # 0x14 reads 0x8 on the measured machine: no 0x15; + the 0x01 limit read
         self.assertNotIn("cmd 0x15", out)
         self.assertIn("data 0xff600037", out)  # CPU 1 at -5 mV: ratio 55 (0x1C) | offset, no OC point -> V target 0 (G-120)
         self.assertIn("favored-core word of P-Core 1: data 0x37", out)
         self.assertIn("granular-ratio word of P-Core 1: data 0x3", out)
         self.assertIn("ratio 0 -> 55", out)  # the measured baseline word is 0x0
-        self.assertIn("effective -54.88 mV", out)
+        self.assertIn("runtime offset -4.88 mV", out)  # D-049: there is no assumed BIOS offset to add any more (the line still names +0 mV: report.py is not part of this task)
 
     def test_apply_cpu_0_and_revert_note_on_the_measured_machine(self) -> None:
         path = self.write("p0.toml", profile_text('kind = "P"\nindex = 0\noffset_mv = -5\nratio = 57'))
@@ -535,12 +550,14 @@ class RaiseThroughTheCli(CliCase):
     E_UP = profile_text('kind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1176')  # 48 -> 49 and +20 mV on cluster 0
     E_FAR = profile_text('kind = "E"\nindex = 0\nratio = 49\noc_voltage_mv = 1200')  # more than one step (the V target: +44 mV)
 
-    def test_the_default_policy_refuses_a_raise_with_the_reason(self) -> None:
+    def test_the_default_policy_allows_a_raise_within_the_cpu_limits(self) -> None:
+        """D-049: the built-in policy has no no-raise value any more -- a raise is judged against the CPU's own limits (read: 0x01 ratio, 0x28 voltage)."""
         path = self.write("e_up.toml", self.E_UP)
         code, out, err = self.run_default_sim("plan", path, "--sim")  # no --policy: the built-in policy
-        self.assertEqual(code, 2, out + err)
-        self.assertIn("no-raise value", out)
-        self.assertIn("NOT ALLOWED", out)
+        self.assertEqual(code, 2, out + err)  # the built-in session limit is 1 operation: the plan itself is fine, the budget is not
+        self.assertNotIn("no-raise value", out)
+        self.assertIn("cmd 0x01 read the CPU's own ratio limit", out)
+        self.assertNotIn("CHECK_FAILED", out)
 
     def test_the_example_policy_allows_a_small_raise_voltage_first(self) -> None:
         path = self.write("e_up.toml", self.E_UP)
@@ -553,14 +570,15 @@ class RaiseThroughTheCli(CliCase):
         self.assertIn("this plan RAISES", out)  # the [UNVERIFIED] caveat
         self.assertNotIn("NEXT ALLOWED STEP", out)
 
-    def test_a_request_beyond_the_step_limits_prints_the_next_step_and_exits_2(self) -> None:
+    def test_a_request_beyond_the_old_step_limits_is_one_allowed_plan(self) -> None:
+        """D-049: no step limits -- +44 mV on the V target in one plan is ALLOWED (voltage first), with no 'next step' to print."""
         path = self.write("e_far.toml", self.E_FAR)
         code, out, err = self.run_default_sim("plan", path, "--sim", "--policy", self.EXAMPLE)
-        self.assertEqual(code, 2, out + err)
-        self.assertIn("NEXT ALLOWED STEP", out)
-        self.assertIn("ratio = 49", out)
-        self.assertIn("oc_voltage_mv = 1176", out)
-        self.assertIn("needs a smaller step", out)
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("ALLOWED", out)
+        self.assertNotIn("NEXT ALLOWED STEP", out)
+        self.assertNotIn("needs a smaller step", out)
+        self.assertIn("[1/2 voltage first]", out)
         self.nothing_sent_by_plan(out)
 
     def nothing_sent_by_plan(self, out: str) -> None:
@@ -607,20 +625,24 @@ class RaiseThroughTheCli(CliCase):
         self.assertEqual(code, 2, out + err)
         self.assertIn("CPU limit 48x (cmd 0x01", out)
 
-    def test_apply_refuses_a_big_step_and_prints_the_next_one(self) -> None:
+    def test_apply_runs_a_big_step_in_one_go(self) -> None:
+        """D-049: the old step limits (1 bin / 20 mV V / 25 mV offset) are gone -- the +44 mV target is applied, not refused with a 'next step'."""
         path = self.write("e_far.toml", self.E_FAR)
         args = ["apply", path, "--sim", "--policy", self.EXAMPLE, "--audit", self.audit, "--lock", self.lock]
         code, out, err = self.run_default_sim(*args, stdin=self.confirmed())
-        self.assertEqual(code, 2, out + err)
-        self.assertIn("NEXT ALLOWED STEP", out)
-        self.assertNotIn("CONFIRM", out)  # refused before the prompt
-        self.assertFalse(self.audit.exists())
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("Result: OK", out)
+        self.assertNotIn("NEXT ALLOWED STEP", out)
 
-    def test_a_value_above_the_policy_ceiling_is_refused_before_anything_else(self) -> None:
-        path = self.write("e_high.toml", profile_text('kind = "E"\nindex = 0\nratio = 50'))  # the example's E ceiling is 49 (D-017)
+    def test_a_ratio_the_old_ceiling_refused_is_now_allowed_and_one_above_the_cpu_limit_is_refused_before_anything_else(self) -> None:
+        path = self.write("e_50.toml", profile_text('kind = "E"\nindex = 0\nratio = 50'))  # the example's old E ceiling was 49 (D-017)
+        code, out, err = self.run_default_sim("plan", path, "--sim", "--policy", self.EXAMPLE)
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("ALLOWED", out)
+        path = self.write("e_121.toml", profile_text('kind = "E"\nindex = 0\nratio = 121'))  # above the CPU's own 0x01 limit (120x on the simulator)
         code, out, err = self.run_default_sim("apply", path, "--sim", "--policy", self.EXAMPLE, "--audit", self.audit, "--lock", self.lock, stdin=self.confirmed())
         self.assertEqual(code, 2, out + err)
-        self.assertIn("ratio_max", err)
+        self.assertIn("CPU limit 120x (cmd 0x01", out + err)
         self.assertNotIn("CONFIRM", out)
         self.assertFalse(self.audit.exists())
 
@@ -629,11 +651,10 @@ class RaiseThroughTheCli(CliCase):
 
         example = load_policy(self.EXAMPLE)
         shipped = default_m1_policy()
-        self.assertEqual(example.allow, shipped.allow)  # the same allowlist: the file only adds numbers
-        self.assertEqual(dict(example.ratio_max), {"P": 58, "E": 49})
-        self.assertEqual(dict(example.v_target_max_mv), {"P": None, "E": 1250})  # P blank = the fused voltage
-        self.assertEqual((example.max_ratio_step, example.max_v_step_mv, example.max_offset_step_mv, example.offset_ceiling_mv), (1, 20, 25, 0))
-        self.assertEqual((dict(shipped.ratio_max), dict(shipped.v_target_max_mv)), ({"P": None, "E": None}, {"P": None, "E": None}))
+        self.assertEqual(example.allow, shipped.allow)  # the same allowlist: the file only carried numbers
+        self.assertIn("ratio_max", example.ignored_keys)  # D-049: its operator value limits load, are named and change nothing
+        self.assertIn("v_target_max_mv", example.ignored_keys)
+        self.assertEqual(shipped.ignored_keys, ())
         src = Path(cli.__file__).resolve().parents[1]
         for path in src.rglob("*.py"):
             self.assertNotIn("example-oc-ramp", path.read_text(encoding="utf-8"), path)  # no source file loads it by name
@@ -931,7 +952,7 @@ class DeviceRefusals(CliCase):
     def test_apply_needs_a_higher_limit_with_the_default_policy(self) -> None:
         args = [a for a in self.device_apply() if a not in ("--policy", self.policy_file)]
         _, err = self.refused(*args, stdin=self.confirmed())
-        self.assertIn("needs 13 mailbox WRMSRs", err)
+        self.assertIn("needs 14 mailbox WRMSRs", err)
 
     def test_apply_policy_refusal(self) -> None:
         low = self.write("low.toml", POLICY_TOML.replace('cpus = ["0-23"]', "cpus = [0, 1]"))
@@ -1187,11 +1208,11 @@ class PointOffset(CliCase):
         self.assertEqual(code, 1)
         self.nothing_sent()
 
-    def test_step_limit_refuses_the_write_and_exits_2(self) -> None:
+    def test_an_old_step_limit_in_the_policy_is_ignored_and_the_write_goes_through(self) -> None:
+        """D-049: ``max_offset_step_mv`` is a removed operator limit -- the file still loads and -90 mV from -75 is one allowed write."""
         code, out, err = self.po("--offset-mv", -90, policy=self.step_policy)
-        self.assertEqual(code, 2, out)
-        self.assertIn("step", err)
-        self.assertEqual(self.sim.vf(0, 2, 8).offset_raw, -77)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.sim.vf(0, 2, 8).offset_raw, round(-90 * 1024 / 1000))
 
     def test_env_flag_is_required(self) -> None:
         code, out, err = self.po("--offset-mv", -80, env={"USER": "tester"})

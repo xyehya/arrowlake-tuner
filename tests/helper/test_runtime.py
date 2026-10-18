@@ -24,7 +24,8 @@ from ._support import Harness, HelperCase
 
 BOOT = "11111111-2222-3333-4444-555555555555"
 BASE = 'cpus = ["0-23"]\nmax_operations_per_session = 300\nmax_operations_per_boot = 400\nmin_dwell_s = 0.0\n'
-RUNTIME = "\n[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\n"
+RUNTIME = ""  # D-049: no [runtime] table -- the kernel / driver bounds (cpuinfo, scaling_min, uncore initial_min/max) are all that apply
+LEGACY_RUNTIME = "\n[runtime]\ncap_ratio_min = 8\nuncore_ratio = [10, 38]\n"  # an old operator policy: loads, ignored
 P_MAX = 5_700_000  # SimModel.max_khz(cpu 0)
 
 
@@ -108,13 +109,19 @@ class Read(RuntimeCase):
         self.assertEqual(r["offline"], [])
         self.assertNotIn("parking", r)
         self.assertEqual((r["uncore"]["min_khz"], r["uncore"]["max_khz"], r["uncore"]["initial_max_khz"]), (800_000, 4_000_000, 4_000_000))
-        self.assertEqual(r["policy"], {"source": str(self.policy), "cap_ratio_min": 8, "uncore_ratio": [10, 38]})
+        self.assertEqual(r["policy"], {"source": str(self.policy)})  # D-049: no operator range, only where the policy came from
+        lim = r["cpu_limits"]  # the kernel's / driver's own bounds, read now
+        self.assertEqual(lim["uncore_khz"], [800_000, 4_000_000])
+        self.assertEqual(lim["caps_khz"]["0"][1], P_MAX)
+        self.assertEqual(lim["caps_khz"]["8"][1], 4_900_000)
         self.assertEqual((r["held"], r["journal"]), (None, None))
 
-    def test_an_absent_runtime_table_is_all_null(self) -> None:
-        h = self.boot(BASE)
-        p = self.ok(h, "runtime.read")["policy"]
-        self.assertEqual((p["cap_ratio_min"], p["uncore_ratio"]), (None, None))
+    def test_an_old_runtime_table_is_ignored(self) -> None:
+        h = self.boot(BASE + LEGACY_RUNTIME)
+        r = self.ok(h, "runtime.read")
+        self.assertEqual(r["policy"], {"source": str(self.policy)})
+        plan = self.plan(h, caps={"3": 45}, uncore={"max_ratio": 39})  # 39 is above the old [10, 38]
+        self.assertTrue(plan["steps"])
 
     def test_the_read_names_what_holds_the_caps(self) -> None:
         h = self.boot()
@@ -221,17 +228,17 @@ class Caps(RuntimeCase):
         self.apply(h, plan)
         self.assertEqual(self.journal_doc()["caps"], {"3": P_MAX, "4": cap4})
 
-    def test_no_policy_key_no_write_and_the_refusal_names_the_key(self) -> None:
+    def test_no_policy_key_is_needed_and_a_large_cap_change_only_warns(self) -> None:
         h = self.boot(BASE)
-        e = self.refused(h, "runtime.plan", {"caps": {"3": 45}}, "RUNTIME_POLICY_MISSING")
-        self.assertEqual(e["detail"]["key"], "cap_ratio_min")
-        self.assertIn("[runtime] cap_ratio_min", e["message"])
+        plan = self.plan(h, caps={"3": 45})  # D-049: no [runtime] cap_ratio_min to miss; 57 -> 45 is a large single change
+        self.assertTrue(plan["steps"])
+        self.assertTrue(any(w.startswith("LARGE_CHANGE") for w in plan["warnings"]), plan["warnings"])
         self.assertEqual(self.files.writes, [])
         self.assertFalse(self.journal.exists())
 
     def test_range_and_cluster_rules(self) -> None:
         h = self.boot()
-        self.refused(h, "runtime.plan", {"caps": {"3": 7}}, "CAPS_RANGE")
+        self.refused(h, "runtime.plan", {"caps": {"3": 7}}, "CAPS_BELOW_MIN")  # 700 MHz is below scaling_min_freq 800 MHz: the kernel would refuse
         self.refused(h, "runtime.plan", {"caps": {"3": 99}}, "CAPS_RANGE")
         self.refused(h, "runtime.plan", {"caps": {"8": 40, "9": 41}}, "CAPS_CLUSTER_CONFLICT")
         self.refused(h, "runtime.plan", {"caps": {"99": 40}}, "CAPS_UNKNOWN_CPU")
@@ -366,14 +373,13 @@ class Uncore(RuntimeCase):
         self.assertEqual([w[0].rsplit("/", 1)[1] for w in self.files.writes], ["max_freq_khz", "min_freq_khz"])
         self.assertEqual((self.files.uncore["min_freq_khz"], self.files.uncore["max_freq_khz"]), (3_600_000, 3_800_000))
 
-    def test_bounds_policy_and_order_refusals(self) -> None:
+    def test_bounds_are_the_hardwares_and_the_order_is_the_drivers(self) -> None:
         h = self.boot()
-        self.refused(h, "runtime.plan", {"uncore": {"max_ratio": 39}}, "UNCORE_RANGE")
-        self.refused(h, "runtime.plan", {"uncore": {"min_ratio": 9}}, "UNCORE_RANGE")
+        self.refused(h, "runtime.plan", {"uncore": {"max_ratio": 41}}, "UNCORE_RANGE")  # initial_max_freq_khz says 40
+        self.refused(h, "runtime.plan", {"uncore": {"min_ratio": 7}}, "UNCORE_RANGE")  # initial_min_freq_khz says 8
         self.refused(h, "runtime.plan", {"uncore": {"min_ratio": 30, "max_ratio": 20}}, "UNCORE_ORDER")
-        self.policy.write_text(BASE, encoding="utf-8", newline="\n")  # the operator removed [runtime]
-        e = self.refused(h, "runtime.plan", {"uncore": {"max_ratio": 35}}, "RUNTIME_POLICY_MISSING")
-        self.assertEqual(e["detail"]["key"], "uncore_ratio")
+        plan = self.plan(h, uncore={"max_ratio": 39, "min_ratio": 9})  # inside the hardware range: the old [10, 38] policy range is gone
+        self.assertEqual(len(plan["steps"]), 2)
         self.assertEqual(self.files.writes, [])
 
     def test_a_driver_that_refuses_is_a_transport_stop(self) -> None:
@@ -511,13 +517,13 @@ class Revert(RuntimeCase):
         self.assertTrue(self.apply(h, self.plan(h, revert=True))["complete"])
         self.assertEqual(self.cap(3), P_MAX)
 
-    def test_a_revert_warns_when_a_journaled_value_is_outside_the_policy_now(self) -> None:
+    def test_a_revert_ignores_an_old_policy_range(self) -> None:
         h = self.boot()
         self.go(h, caps={"3": 45}, uncore={"max_ratio": 30})
-        self.policy.write_text(BASE + "\n[runtime]\ncap_ratio_min = 58\nuncore_ratio = [10, 20]\n", encoding="utf-8", newline="\n")
+        self.policy.write_text(BASE + "\n[runtime]\ncap_ratio_min = 58\nuncore_ratio = [10, 20]\n", encoding="utf-8", newline="\n")  # D-049: ignored
         warnings = self.plan(h, revert=True)["warnings"]
-        self.assertTrue(any("cap_ratio_min" in w for w in warnings), warnings)
-        self.assertTrue(any("max_ratio" in w and "uncore_ratio" in w for w in warnings), warnings)
+        self.assertFalse(any("cap_ratio_min" in w or "uncore_ratio" in w for w in warnings), warnings)
+        self.assertTrue(self.apply(h, self.plan(h, revert=True))["complete"])
 
     def test_a_cpu_that_is_offline_at_revert_is_skipped_and_the_revert_is_not_complete(self) -> None:
         root = Path(tempfile.mkdtemp())

@@ -112,17 +112,29 @@ class Caps(Case):
     def test_a_cap_at_the_maximum_changes_nothing(self) -> None:
         self.assertEqual(self.plan({3: 57}), [])
 
-    def test_the_floor_is_the_policy_key_and_an_absent_key_refuses_naming_it(self) -> None:
-        self.assertEqual(self.refusal(self.plan, {3: 7}).check, "CAPS_RANGE")
-        for pol in (policy(""), policy("[runtime]\nuncore_ratio = [10, 38]\n")):
-            e = self.refusal(self.plan, {3: 45}, pol)
-            self.assertEqual((e.check, e.key), ("RUNTIME_POLICY_MISSING", "cap_ratio_min"))
-            self.assertIn("[runtime] cap_ratio_min", str(e))
+    def test_no_policy_floor_applies_and_no_runtime_key_is_missing(self) -> None:
+        """D-049: ``cap_ratio_min`` is gone -- a policy with no [runtime] table plans a cap, and a legacy [runtime] table is ignored."""
+        for pol in (policy(""), policy("[runtime]\nuncore_ratio = [10, 38]\n"), policy()):
+            self.assertEqual(len(self.plan({3: 45}, pol)), 1)
+        self.assertIn("runtime.cap_ratio_min", policy().ignored_keys)
 
     def test_a_ratio_below_the_cpus_scaling_min_is_refused(self) -> None:
-        low = policy("[runtime]\ncap_ratio_min = 1\n")
-        self.assertEqual(self.refusal(self.plan, {3: 5}, low).check, "CAPS_BELOW_MIN")  # 500 MHz < scaling_min_freq 800 MHz: the kernel would refuse
-        self.assertEqual(self.plan({3: 8}, low)[0].value, 800_000)
+        self.assertEqual(self.refusal(self.plan, {3: 7}).check, "CAPS_BELOW_MIN")  # 700 MHz < scaling_min_freq 800 MHz: the kernel would refuse
+        e = self.refusal(self.plan, {3: 5})
+        self.assertEqual(e.check, "CAPS_BELOW_MIN")
+        self.assertIn("scaling_min_freq", str(e))  # the source is cited
+        self.assertEqual(self.plan({3: 8})[0].value, 800_000)
+
+    def test_a_large_cap_change_is_allowed_and_warned(self) -> None:
+        self.assertEqual(len(self.plan({3: 45})), 1)
+        self.assertEqual([c for c, _ in cp.warnings({3: 45}, self.freq(), TOPO)], ["LARGE_CHANGE"])  # 57 -> 45
+        self.assertEqual(cp.warnings({3: 55}, self.freq(), TOPO), [])
+        self.assertEqual(cp.warnings({99: 10}, self.freq(), TOPO), [])  # an intent the plan refuses has no warnings to add
+
+    def test_the_limits_are_the_cpus_own_files(self) -> None:
+        doc = cp.limits_json(self.freq())
+        self.assertEqual(doc["3"][1], 5_700_000)
+        self.assertEqual(doc["8"][1], 4_900_000)
 
     def test_a_held_cap_journal_is_a_named_conflict(self) -> None:
         e = self.refusal(self.plan, {3: 45}, held="the cpufreq journal /run/arltuner/measure-journal.json")
@@ -223,17 +235,24 @@ class Uncore(Case):
         (s,) = self.plan({"max_ratio": 35})
         self.assertEqual((s.domain, s.key, s.file, s.before, s.value), ("uncore", "max_ratio", UNCORE + "max_freq_khz", 4_000_000, 3_500_000))
 
-    def test_bounds_are_the_hardwares_and_the_policys(self) -> None:
-        wide = policy("[runtime]\nuncore_ratio = [1, 60]\n")
-        self.assertIn("hardware's own", str(self.refusal(self.plan, {"max_ratio": 41}, wide)))  # above initial_max 40
-        self.assertEqual(self.refusal(self.plan, {"min_ratio": 7}, wide).check, "UNCORE_RANGE")  # below initial_min 8
-        self.assertIn("[runtime] uncore_ratio = [10, 38]", str(self.refusal(self.plan, {"max_ratio": 39})))
-        self.assertEqual(self.refusal(self.plan, {"min_ratio": 9}).check, "UNCORE_RANGE")
+    def test_bounds_are_the_hardwares_own(self) -> None:
+        e = self.refusal(self.plan, {"max_ratio": 41})  # above initial_max 40
+        self.assertEqual(e.check, "UNCORE_RANGE")
+        self.assertIn("initial_min/max_freq_khz", str(e))  # the source is cited
+        self.assertEqual(self.refusal(self.plan, {"min_ratio": 7}).check, "UNCORE_RANGE")  # below initial_min 8
 
-    def test_an_absent_key_refuses_naming_it(self) -> None:
-        e = self.refusal(self.plan, {"max_ratio": 35}, policy(""))
-        self.assertEqual((e.check, e.key), ("RUNTIME_POLICY_MISSING", "uncore_ratio"))
-        self.assertIn("[runtime] uncore_ratio", str(e))
+    def test_the_removed_policy_range_is_now_allowed(self) -> None:
+        """The old [runtime] uncore_ratio = [10, 38] refused 39 and 9: both are inside the hardware's 8..40 and are planned; an absent key is not an error."""
+        for pol in (policy(), policy("")):
+            self.assertEqual(len(self.plan({"max_ratio": 39}, pol)), 1)
+            self.assertEqual(len(self.plan({"min_ratio": 9}, pol)), 1)
+        self.assertEqual(len(self.plan({"max_ratio": 35}, policy(""))), 1)
+        self.assertIn("runtime.uncore_ratio", policy().ignored_keys)
+
+    def test_a_large_change_is_warned_and_the_limits_are_published(self) -> None:
+        self.assertEqual([c for c, _ in un.warnings({"max_ratio": 20}, un.read_state(self.files))], ["LARGE_CHANGE"])  # 40 -> 20
+        self.assertEqual(un.warnings({"max_ratio": 38}, un.read_state(self.files)), [])
+        self.assertEqual(un.limits_json(un.read_state(self.files)), [800_000, 4_000_000])
 
     def test_min_never_exceeds_max(self) -> None:
         self.assertEqual(self.refusal(self.plan, {"min_ratio": 30, "max_ratio": 20}).check, "UNCORE_ORDER")

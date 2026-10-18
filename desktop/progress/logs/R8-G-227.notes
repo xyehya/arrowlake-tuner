@@ -1,0 +1,17 @@
+- Operator report (live, installed helper + AppImage built from main a22c3a7+): applied negative offsets on P cores at x55 and on the favored cores at x56/x57
+  (Review & Apply, then Apply N writes). Apply succeeds, but the tiles/inspector keep showing the OLD offsets until "Read CPU state" is clicked; after the
+  re-read the applied values show correctly. So the writes landed; the display path after apply is wrong.
+- Known path: apply.js afterApply (~:257) calls tune.last and patches tune.model when last.result.available; it clears the draft only when summary.allMatch
+  and the draft is unchanged. Helper: ops_tune.py _record_apply sets applied_at (~:1155) and op_tune_last overlays the stored read-back words (~:1171).
+- Reproduce BOTH layers before fixing:
+  (a) helper, with the simulator (temp paths only: python3 tools/arltuner-helper.py --sim --socket --socket-path $TMP/h.sock --audit $TMP/audit.jsonl --lock
+      $TMP/lock --state-dir $TMP/state): tune.read -> tune.plan {P0 point at x57 -20 mV, P1 at x55 -15 mV} -> tune.apply -> tune.last. Do the decoded offsets
+      in tune.last equal the applied ones (the fields the UI's modelFromRead uses — check lib/ for modelFromRead)? Points with ratio x55/56/57, favored cores.
+  (b) UI with the mock: is afterApply reached on the real success path (not only in the smoke's seam), does modelFromRead produce the new offsets, do the tiles,
+      the inspector rows and the pending bar re-render from the new model (watchers on tune.model? memoised per-unit views? the inspector holding its own copy?).
+      Note the mock's tune.last fixture is static (recorded before) — the mock may hide the bug; make the mock's tune.last reflect the last apply.
+  Also check: when summary.allMatch is false (e.g. a CLAMPED/word mismatch warning — the operator's deep offsets at x57 may be clamped by the CPU's V/F rule),
+  the draft is kept, so the inspector may show the draft instead of the model: if so, the correct behaviour is to show the CPU's read-back value with a
+  "clamped by the CPU" note and drop the draft entries that were applied.
+- G-226 (running) also edits ops_tune.py (limit paths): touch ONLY _record_apply / op_tune_last there; keep your diff small.
+- Do NOT run build-appimage.sh / write desktop/dist. Node 24 glob; Playwright via python3 that has playwright.

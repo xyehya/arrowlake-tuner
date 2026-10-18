@@ -1,0 +1,8 @@
+host lnx · 2026-10-18 · hard crash at 18:00:05 EEST, reboot 18:01:09. Journal of boot -1 ends without a shutdown; no MCE/BERT/pstore record.
+Load at the time: three agent processes (two Python test suites + a cargo build) on all cores, plus Chrome.
+Last V/F writes (audit, local time): 15:41-15:45 CPU0 and CPU3 points; profiles.accept at 15:58 (accepted = the state below).
+State after reboot (tune.read 18:1x, read-only): every P/E/ring offset 0, E OC words absent = stock. Accepted state (diffs vs stock) decoded:
+  all P point 5 (53x) -50 mV; point 6 (55x): P1 -50, P2 -110, P4 -60, P5 -100, P6 -90, P7 -120 mV; P0 56x -60 57x -90 (55x -40); P3 56x -30 57x -60 (55x -40);
+  E 46x -40/-50 mV + OC words; ring points 8/9 -25 mV.
+Inference [UNVERIFIED]: undervolt instability under all-core load (classic signature); not proven — no error record.
+Side effect: git loose objects written in the last seconds were empty (repaired: main intact = origin; G-227 branch dropped; G-226 WIP saved).

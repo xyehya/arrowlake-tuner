@@ -127,7 +127,8 @@ Raw tables: baseline words `src/arltuner/msr/measured_baseline.py`, write sequen
 0xE7 MPERF, 0xE8 APERF `[DOC SDM]` · 0xCE PLATFORM_INFO [15:8] `measured` · 0x198 PERF_STATUS [47:32] V, [15:8] ratio `measured` ·
 0x19C / 0x1B1 THERM_STATUS [31] valid, [22:16] readout `[DOC SDM]`, ARL `[UNVERIFIED]` · 0x1A2 [23:16] Tjmax `measured` · 0x606 [12:8] energy unit
 `measured` · 0x611 PKG_ENERGY [31:0] `[DOC SDM]` · 0x64F core / 0x6B0 **graphics** limit reasons: bit tables in "Limit reasons" below (decoder
-`telemetry/limits.py`). Separate from the guard's `PLAIN_MSR_READABLE` (unchanged). 0x150 (mailbox) refused by `TelemetryMsr`.
+`telemetry/limits.py`) · 0x6B1 **ring** limit reasons (G-229, orchestrator decision 2026-10-18: added to the telemetry set, read-only; XTU allowlists it RO
+`[DECOMPILED win-xtu-native-provider.md:101]`; bit table `[DOC edk2 SkylakeMsr.h]`, live on ARL `[UNVERIFIED]`; see `throttling.md`). Separate from the guard's `PLAIN_MSR_READABLE` (unchanged). 0x150 (mailbox) refused by `TelemetryMsr`.
 
 ### Limit reasons — 0x64F (core) and 0x6B0 (graphics) (G-215) `host lnx`, decoder `src/arltuner/telemetry/limits.py`
 **Names (resolves a repo mislabel).** Linux `arch/x86/include/asm/msr-index.h`: `MSR_PERF_LIMIT_REASONS = 0x64F` (under "Hardware P state interface"),

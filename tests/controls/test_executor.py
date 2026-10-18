@@ -257,8 +257,9 @@ class HappyPaths(Case):
     def test_the_report_shows_runtime_and_effective_offsets(self) -> None:
         s = self.session()
         text = s.apply(profile(p4(offset_mv=-30, ratio=55), e_core(0, offset_mv=-20, ratio=48))).format_report()
-        self.assertIn("runtime offset -30.27 mV, effective -80.27 mV (assumed BIOS offset -50 mV)", text)  # P core: BIOS -50
-        self.assertIn("runtime offset -19.53 mV, effective -19.53 mV (assumed BIOS offset +0 mV)", text)  # E core: BIOS 0
+        # D-049: no BIOS offset is assumed for either kind (the D-015 policy value is gone; the report's wording is another task's)
+        self.assertIn("runtime offset -30.27 mV, effective -30.27 mV (assumed BIOS offset +0 mV)", text)  # P core
+        self.assertIn("runtime offset -19.53 mV, effective -19.53 mV (assumed BIOS offset +0 mV)", text)  # E core
 
     def test_per_core_enable_already_set_skips_0x15(self) -> None:
         s = self.session(config=sim_config(misc_global_config=0x8))
@@ -283,7 +284,7 @@ class PreflightBeforeAnything(Case):
         s = self.session(policy=default_m1_policy())
         with self.assertRaises(NeedsHigherLimit) as ctx:
             s.apply(profile(p4(offset_mv=-30, ratio=55)))
-        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (13, 1))  # 9 operations + 4 read-backs
+        self.assertEqual((ctx.exception.required, ctx.exception.allowed), (14, 1))  # 9 operations + 4 read-backs + the 0x01 read of the CPU's ratio limit (D-049: not bound by this policy)
         self.assertEqual(s.sim.writes, [])  # no mailbox request - not even a read - was sent
         self.assertEqual(s.sim.reads, [])
         self.assertEqual(s.audit(), [])
@@ -307,8 +308,8 @@ class PreflightBeforeAnything(Case):
     def test_predicted_refusals_abort_after_the_reads_and_before_every_write(self) -> None:
         # the refusals that depend on the words read: the planner's prediction and the real guard agree on the very same write
         cases = {
-            "overvolt": (profile(p4(oc_voltage_mv=1400)), sim_config(initial_vf={4: P4_BASELINE.with_(ratio=58)}), [0x14, 0x10, 0x1C, 0x09, 0x26, 0x28]),  # an OC-point voltage also reads 0x28; G-124: only an OC point (58 > 57) carries a V target
-            "ratio above baseline": (profile(p4(ratio=57)), None, [0x14, 0x10, 0x1C, 0x09, 0x26]),
+            "overvolt": (profile(p4(oc_voltage_mv=2100)), sim_config(initial_vf={4: P4_BASELINE.with_(ratio=58)}), [0x14, 0x10, 0x1C, 0x09, 0x26, 0x28]),  # above the simulator's 0x28 limit (0x800 = 2.0 V, minus one LSB); an OC-point voltage also reads 0x28; G-124: only an OC point (58 > 57) carries a V target
+            "ratio above the CPU limit": (profile(p4(ratio=125)), None, [0x14, 0x10, 0x1C, 0x09, 0x26]),  # cmd 0x01 is bound as 120x by policy_with
             "static-mode baseline": (profile(p4(offset_mv=-30, ratio=55)), sim_config(initial_vf={4: P4_BASELINE.with_(static=True)}), [0x14, 0x10, 0x1C, 0x09, 0x26]),
         }
         for name, (prof, config, reads) in cases.items():
@@ -334,31 +335,27 @@ class PreflightBeforeAnything(Case):
                     s.guard.execute(bad, s.confirm)
                 self.assertEqual(g.exception.reason, Refusal.CHECK_FAILED)
 
-    def test_values_outside_the_policy_window_are_refused_before_the_first_read(self) -> None:
-        # D-016: the explicit bounds (offset window, policy ceilings) are judged on the profile alone, so nothing is sent at all
+    def test_offsets_past_the_old_policy_window_are_no_longer_refused(self) -> None:
+        # D-049: the D-015 window (P -50 mV, E -100 mV, ceiling 0) is gone: the field is the only offset bound, the CPU's voltage limit bounds a positive one
         cases = {
-            "offset -150 mV": profile(p4(offset_mv=-150)),
-            "offset -101 mV": profile(p4(offset_mv=-101)),
-            "offset -51 mV (P-core runtime floor, D-015)": profile(p4(offset_mv=-51)),
-            "positive offset (the default ceiling is 0)": profile(p4(offset_mv=1)),
+            "offset -150 mV": (profile(p4(offset_mv=-150)), -154),
+            "offset -101 mV": (profile(p4(offset_mv=-101)), -103),
+            "offset -51 mV": (profile(p4(offset_mv=-51)), -52),
+            "offset -1000 mV (the field)": (profile(p4(offset_mv=-1000)), -1024),
+            "positive offset": (profile(p4(offset_mv=20)), 20),
         }
-        for name, prof in cases.items():
+        for name, (prof, raw) in cases.items():
             with self.subTest(name):
                 tmp = self.tmp / "".join(c if c.isalnum() else "_" for c in name)
                 tmp.mkdir()
                 s = make_session(tmp)
-                with self.assertRaises(PlanRefused) as ctx:
-                    s.apply(prof)
-                refusal = ctx.exception.refusals[0]
-                self.assertEqual((refusal.reason, refusal.cmd), ("CHECK_FAILED", 0x11))
-                self.assertIn("vf_bounded", refusal.detail)
-                self.assertEqual(s.sim.requests, [])  # not even a read
-                self.assertEqual(s.audit(), [])
-                self.assertIsNone(ctx.exception.report)
+                report = s.apply(prof)
+                self.assertTrue(report.ok, report.format_report())
+                self.assertEqual(s.sim.vf(4).offset_raw, raw)
 
-    def test_the_p_core_floor_boundary_runs_end_to_end(self) -> None:
+    def test_the_old_p_core_floor_boundary_runs_end_to_end(self) -> None:
         s = self.session()
-        report = s.apply(profile(p4(offset_mv=-50)))  # raw -51: exactly the runtime floor of a P core
+        report = s.apply(profile(p4(offset_mv=-50)))  # raw -51: was exactly the runtime floor of a P core
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual(s.sim.vf(4).offset_raw, -51)
 

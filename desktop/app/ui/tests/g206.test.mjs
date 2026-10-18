@@ -12,7 +12,8 @@ import { niceNum, niceTicks, padSpan, dataRange, chartPaths, fmtSpan, nearestInd
 import {
   LEVELS, METRICS, levelOf, autoRange, rampAt, rampCss, tempsByCpu, coreReading, readingValue, clockCeiling, buildCoreMap, clamp,
 } from "../components/coremap.js";
-import { tileModel, limitTileModel, appendChartSample, chartReasons, opsModel, memModel, ageText, HISTORY_S } from "../views/dashboard.js";
+import { deriveThrottle } from "../store.js";
+import { tileModel, throttleTileModel, appendChartSample, chartReasons, opsModel, memModel, ageText, HISTORY_S } from "../views/dashboard.js";
 import {
   sortChecks, checkState, normLimits, normHw, limitRows, limitsNote, preflightSummary, countStatuses, topologyRows, fmtSigned, POLICY_FILE, MINUS,
 } from "../views/system.js";
@@ -256,18 +257,21 @@ test("dashboard: every tile of the raw fixture frame is n/a with its reason (thr
     assert.equal(m.na, true, def.key);
     assert.ok(m.reason.length > 3, def.key);
   }
-  assert.equal(limitTileModel(t.limits).na, true);
-  assert.match(limitTileModel(t.limits).sub, /no MSR access/);
+  assert.equal(throttleTileModel(t.throttle).na, true);
+  assert.match(throttleTileModel(t.throttle).sub, /no MSR access/);
 });
 
-test("dashboard: limit tile for n/a, none and a raw word", () => {
-  assert.equal(limitTileModel({ state: "na", reason: "r", source: "msr 0x6B0" }).text, "n/a");
-  assert.equal(limitTileModel(null).sub, "no telemetry yet");
-  const none = limitTileModel({ state: "none", raw: 0, source: "s" });
-  assert.deepEqual([none.text, none.tone, none.na], ["none", "ok", false]);
-  const raw = limitTileModel({ state: "raw", raw: 0x10, source: "s" });
-  assert.deepEqual([raw.text, raw.tone], ["0x10", "warn"]);
-  assert.match(raw.sub, /named reasons/);
+test("dashboard: throttling tile for n/a, none and an active group (no hex anywhere)", () => {
+  assert.equal(throttleTileModel(null).sub, "n/a · no telemetry yet");
+  const mk = (word) => deriveThrottle({ limit_reasons: { status: "ok", value: word } });
+  const none = throttleTileModel(mk({ raw: 0, status: [], log: [], unknown_bits: [] }));
+  assert.deepEqual([none.tone, none.na, none.sub], ["ok", false, "no limit active"]);
+  const turbo = throttleTileModel(mk({ raw: 0x1000, status: ["max_turbo_limit"], log: [], unknown_bits: [] }));
+  assert.deepEqual([turbo.tone, turbo.sub], ["ok", "no limit active (all-core turbo cap only)"]); // grey info, never amber
+  const hot = throttleTileModel(mk({ raw: 0x402, status: ["thermal", "pl1"], log: [], unknown_bits: [] }));
+  assert.equal(hot.tone, "warn");
+  assert.match(hot.sub, /Power limit, Thermal/);
+  assert.doesNotMatch(JSON.stringify([none.sub, turbo.sub, hot.sub]), /0x[0-9A-F]+/);
 });
 
 test("dashboard: the chart buffer takes one entry per sample time and keeps HISTORY_S seconds", () => {

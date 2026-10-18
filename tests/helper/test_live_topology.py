@@ -113,14 +113,14 @@ class SixPlusEight(LiveCase):
         p = self.plan(h, {"scope": "simple", "rows": [row("E", curve=-10)]})
         self.assertEqual(p["units"], ["EC0", "EC1"])
 
-    def test_the_policy_auto_entries_follow_the_part(self) -> None:
+    def test_the_cpu_limits_follow_the_part(self) -> None:
         h = self.boot_topology(SIX_EIGHT)
         self.read(h)
-        p = self.plan(h, rows(row("EC1", ratio=49)))  # the E ratio ceiling is this part's live E maximum (49)
+        p = self.plan(h, rows(row("EC1", ratio=50)))  # D-049: no policy cap (the old "auto" E maximum, 49) -- only the CPU's own limit counts
         self.assertTrue(p["ops_needed"] > 0)
-        r = h.call("hi", "tune.plan", {"intent": rows(row("EC1", ratio=50))})
+        r = h.call("hi", "tune.plan", {"intent": rows(row("EC1", ratio=121))})
         self.assertEqual(error_code(r), "REFUSED")
-        self.assertIn("ratio_max", r["error"]["message"])
+        self.assertIn("CPU limit", r["error"]["message"])
 
     def test_measure_covers_exactly_the_units_of_the_part_and_says_which_plan_it_used(self) -> None:
         h = self.boot_topology(SIX_EIGHT)

@@ -66,3 +66,20 @@ class Graphics6B0(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RingAndPackageTherm(unittest.TestCase):
+    def test_ring_6b1_has_the_core_bits_minus_4_12_13(self):
+        self.assertEqual(sorted(limits.RING_6B1), [0, 1, 5, 6, 7, 8, 10, 11])
+        self.assertEqual(limits.decode_ring_6b1(1 << 10).status, ("pl1",))
+        self.assertEqual(limits.decode_ring_6b1((1 << 12) | (1 << 4)).unknown_bits, (4, 12))  # not ring bits: by number only
+
+    def test_pkg_therm_1b1_status_log_and_ignored_bits(self):
+        w = (1 << 31) | (30 << 16) | (1 << 10) | (1 << 11) | (1 << 0) | (1 << 1) | (1 << 13) | (1 << 26)  # valid, readout, PL status+log, thermal status+log, pmax log, HFI
+        r = limits.decode_pkg_therm_1b1(w)
+        self.assertEqual(r.status, ("thermal", "power_limit"))
+        self.assertEqual(r.log, ("thermal", "power_limit", "pmax_log"))
+        self.assertEqual(r.unknown_bits, ())
+        self.assertEqual(limits.decode_pkg_therm_1b1(1 << 14).unknown_bits, (14,))
+        with self.assertRaises(ValueError):
+            limits.decode_pkg_therm_1b1(-1)

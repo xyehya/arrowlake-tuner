@@ -7,8 +7,9 @@ model of ``docs/knowledge/power-profile-capping.md`` section 6 (``[MEASURED lnx 
 The kernel rounds an E cap to a perf step, so an E read-back is judged within ``E_TOLERANCE_KHZ`` of the value written.
 
 The four E-cores of a cluster run one ratio, so a cap on one of them does not hold: a cap on an E CPU is written to all CPUs of its cluster (topology from the live read,
-never hard-coded; the G-152 rule). Nothing here has a default floor: ``policy.runtime.cap_ratio_min`` says how low a cap may go and an absent key refuses naming itself; the
-ceiling is always the CPU's own ``cpuinfo_max_freq``.
+never hard-coded; the G-152 rule). D-049: no policy floor. A cap is refused only when the kernel / CPU would: above the CPU's own ``cpuinfo_max_freq`` (``CAPS_RANGE``), below its
+``scaling_min_freq`` (``CAPS_BELOW_MIN``: the cpufreq driver refuses a maximum under the minimum) or below ``cpuinfo_min_freq`` when the CPU reports one (``CAPS_RANGE``). A big change is a
+*warning* (:func:`warnings`), never a refusal.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arltuner.guard.policy import Policy
+from arltuner.guard.policy import LARGE_RATIO_CHANGE, Policy
 from arltuner.topology import Topology, UnknownCore
 
 __all__ = [
@@ -37,16 +38,18 @@ __all__ = [
     "SysfsError",
     "cap_choice",
     "plan",
+    "limits_json",
     "plan_revert",
     "read_state",
     "readback_problem",
-    "require_runtime_key",
+    "warnings",
 ]
 
 CPU_ROOT = Path("/sys/devices/system/cpu")
 CAP_ATTR = "scaling_max_freq"
 MIN_ATTR = "scaling_min_freq"
 MAX_ATTR = "cpuinfo_max_freq"
+CPUINFO_MIN_ATTR = "cpuinfo_min_freq"
 KHZ_PER_RATIO = 100_000
 #: the largest frequency a journal may hold (kHz): 25.5 GHz = ratio 255, the byte the policy's ratio fields are bounded by
 JOURNAL_KHZ_MAX = 255 * KHZ_PER_RATIO
@@ -59,7 +62,7 @@ class SysfsError(Exception):
 
 
 class Refused(SysfsError):
-    """The plan or the write is refused. ``check`` names the reason (``RUNTIME_POLICY_MISSING`` ...), ``key`` the ``[runtime]`` key / intent item it is about."""
+    """The plan or the write is refused. ``check`` names the reason (``CAPS_RANGE`` ...), ``key`` the intent item it is about."""
 
     def __init__(self, check: str, text: str, key: str | None = None) -> None:
         super().__init__(text)
@@ -141,17 +144,6 @@ class RuntimeStep:
         return out
 
 
-def require_runtime_key(policy: Policy, key: str) -> Any:
-    """The value of ``[runtime] key``, or :class:`Refused` naming the key (the operator's next step is the policy file)."""
-    where = policy.where
-    if policy.runtime is None:
-        raise Refused("RUNTIME_POLICY_MISSING", f"the policy has no [runtime] table ({where}): this control may not be used. Add [runtime] {key} to the policy to allow it", key)
-    value = getattr(policy.runtime, key)
-    if value is None:
-        raise Refused("RUNTIME_POLICY_MISSING", f"the policy has no [runtime] {key} ({where}): this control may not be used. Add [runtime] {key} to the policy to allow it", key)
-    return value
-
-
 def readback_problem(step: RuntimeStep, file_value: int | None) -> str | None:
     """``None`` when the write took (the file reads back what ``step.expect`` allows -- exactly ``step.value``), else the reason (a mismatch trips the apply)."""
     if file_value is None:
@@ -167,14 +159,15 @@ def readback_problem(step: RuntimeStep, file_value: int | None) -> str | None:
 # --------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class CpuFreq:
-    """What the CPU's cpufreq directory shows (kHz): its own maximum, the user cap, the user floor (``None`` = file absent)."""
+    """What the CPU's cpufreq directory shows (kHz): its own maximum, the user cap, the user floor (``None`` = file absent) and (D-049) the CPU's own minimum ``cpuinfo_min_freq``."""
 
     max_khz: int
     cap_khz: int
     min_khz: int | None = None
+    cpuinfo_min_khz: int | None = None
 
     def as_json(self) -> dict[str, Any]:
-        return {"cpuinfo_max_khz": self.max_khz, "cap_khz": self.cap_khz, "min_khz": self.min_khz, "cap_ratio": self.cap_khz / KHZ_PER_RATIO}
+        return {"cpuinfo_max_khz": self.max_khz, "cap_khz": self.cap_khz, "min_khz": self.min_khz, "cap_ratio": self.cap_khz / KHZ_PER_RATIO, "cpuinfo_min_khz": self.cpuinfo_min_khz}
 
 
 def cap_file(cpu: int) -> str:
@@ -186,7 +179,7 @@ def read_state(files: RuntimeFiles, cpus: Sequence[int]) -> dict[int, CpuFreq | 
     out: dict[int, CpuFreq | None] = {}
     for cpu in cpus:
         top, cap = files.read_int(f"cpu{cpu}/cpufreq/{MAX_ATTR}"), files.read_int(cap_file(cpu))
-        out[cpu] = None if top is None or cap is None else CpuFreq(top, cap, files.read_int(f"cpu{cpu}/cpufreq/{MIN_ATTR}"))
+        out[cpu] = None if top is None or cap is None else CpuFreq(top, cap, files.read_int(f"cpu{cpu}/cpufreq/{MIN_ATTR}"), files.read_int(f"cpu{cpu}/cpufreq/{CPUINFO_MIN_ATTR}"))
     return out
 
 
@@ -289,14 +282,14 @@ def _step(number: int, cpu: int, before: int, value: int, tolerance: int, ratio:
 def plan(intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, held: str | None = None) -> list[RuntimeStep]:
     """The write steps for ``intent`` (``{cpu: ratio}``) over the caps in force, or :class:`Refused` -- nothing is written by planning.
 
-    Checks, in order (each refusal names its check): the policy key ``cap_ratio_min`` (``RUNTIME_POLICY_MISSING``), a measure / stress run or journal that owns the caps (``CAPS_CONFLICT``:
-    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``), no cpufreq
-    directory (``CAPS_NO_FILE``: an offline CPU), the floor ``cap_ratio_min`` and the ceiling, the CPU's own ``cpuinfo_max_freq`` (``CAPS_RANGE``), the CPU's own ``scaling_min_freq``
-    (``CAPS_BELOW_MIN``). The kHz is :func:`cap_choice`'s; a step carries the ratio the cap will give and, when that is not the ratio asked, a note. Steps that change nothing are dropped.
+    D-049, checks in order (each refusal names its check and the file it comes from): a measure / stress run or journal that owns the caps (``CAPS_CONFLICT``:
+    ``held`` is its name), unknown CPUs and the E-cluster expansion (``CAPS_UNKNOWN_CPU`` / ``CAPS_CLUSTER_CONFLICT``), then per CPU (the expansion's too): not in the policy's ``cpus`` (``CAPS_CPU_NOT_ALLOWED``, an
+    access list), no cpufreq directory (``CAPS_NO_FILE``: an offline CPU), the CPU's own range ``cpuinfo_min_freq`` .. ``cpuinfo_max_freq`` (``CAPS_RANGE``), the CPU's own ``scaling_min_freq``
+    (``CAPS_BELOW_MIN``: the driver refuses a maximum below the minimum). The kHz is :func:`cap_choice`'s; a step carries the ratio the cap will give and, when that is not the ratio asked, a note.
+    Steps that change nothing are dropped. There is no policy floor.
     """
     if not intent:
         raise Refused("NOTHING_TO_DO", "the caps intent changes nothing (set caps {cpu: ratio})")
-    floor = require_runtime_key(policy, "cap_ratio_min")
     if held is not None:
         raise Refused("CAPS_CONFLICT", f"{held} holds the CPU frequency caps: caps may not be changed until it is finished or restored")
     targets = expand(intent, topology)
@@ -309,10 +302,10 @@ def plan(intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq 
         freq = state.get(cpu)
         if freq is None:
             raise Refused("CAPS_NO_FILE", f"cpu {cpu} has no cpufreq directory (is it offline?)", key)
-        if ratio < floor:
-            raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is below [runtime] cap_ratio_min = {floor} ({policy.where})", key)
         if ratio * KHZ_PER_RATIO > freq.max_khz:
             raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is above the CPU's own maximum (cpuinfo_max_freq {freq.max_khz} kHz = ratio {freq.max_khz / KHZ_PER_RATIO:g})", key)
+        if freq.cpuinfo_min_khz is not None and ratio * KHZ_PER_RATIO < freq.cpuinfo_min_khz:
+            raise Refused("CAPS_RANGE", f"cpu {cpu}: ratio {ratio} is below the CPU's own minimum (cpuinfo_min_freq {freq.cpuinfo_min_khz} kHz = ratio {freq.cpuinfo_min_khz / KHZ_PER_RATIO:g})", key)
         tol = _tolerance(topology, cpu)
         choice = cap_choice("E" if tol else "P", ratio, freq.max_khz)
         note = None
@@ -343,3 +336,23 @@ def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], 
         if values[cpu] != freq.cap_khz:
             steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], 0))
     return steps, notes
+
+
+def warnings(intent: Mapping[int, int], state: Mapping[int, CpuFreq | None], topology: Topology) -> list[tuple[str, str]]:
+    """D-049 ``[(code, text)]`` warnings of a caps intent: ``LARGE_CHANGE`` when a CPU's cap moves by more than ``LARGE_RATIO_CHANGE`` bins from the one in force. The Review shows them;
+    nothing refuses (a cap only ever lowers the maximum, and the kernel bounds it)."""
+    out: list[tuple[str, str]] = []
+    try:
+        targets = expand(intent, topology)
+    except Refused:
+        return out
+    for cpu in sorted(targets):
+        freq = state.get(cpu)
+        if freq is not None and abs(targets[cpu] - freq.cap_khz / KHZ_PER_RATIO) > LARGE_RATIO_CHANGE:
+            out.append(("LARGE_CHANGE", f"cpu {cpu}: cap {freq.cap_khz / KHZ_PER_RATIO:g} -> {targets[cpu]} is a large single change (more than {LARGE_RATIO_CHANGE} bins); the kernel accepts it"))
+    return out
+
+
+def limits_json(state: Mapping[int, CpuFreq | None]) -> dict[str, list[int | None]]:
+    """D-049 ``cpu_limits.caps_khz``: ``{"<cpu>": [cpuinfo_min_freq (else scaling_min_freq, else null), cpuinfo_max_freq]}`` of every CPU that has a cpufreq directory (the kernel's own bounds of a cap)."""
+    return {str(cpu): [f.cpuinfo_min_khz if f.cpuinfo_min_khz is not None else f.min_khz, f.max_khz] for cpu, f in sorted(state.items()) if f is not None}

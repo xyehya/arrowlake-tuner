@@ -241,6 +241,26 @@ function heldDifference(contents, held) {
   return intent.turbo ? "the " + Object.keys(intent.turbo)[0] + " turbo table differs" : "";
 }
 
+/** G-227: a tune.last result (cloned) with the held words laid over its V/F points (raw and decoded copy) and its turbo tables, like the helper's op_tune_last after an apply. */
+function overlayHeld(result, held) {
+  const put = (p, mv) => Object.assign(p, { offset_mv: mv, ...(typeof p.offset_raw === "number" ? { offset_raw: rawOf(mv) } : {}), ...(typeof p.word === "string" && typeof p.ratio === "number" ? { word: wordOf(mv, p.ratio) } : {}) });
+  for (const u of result.units || []) {
+    const mvs = held.units[u.id];
+    if (!mvs) continue;
+    for (const cpu of u.cpus) for (const p of cpu.points) if (p.point in mvs) put(p, mvs[p.point]);
+  }
+  for (const [id, t] of Object.entries(result.tune || {})) {
+    const mvs = held.units[id];
+    if (!mvs) continue;
+    for (const cpu of t.cpus) for (const p of cpu.points) if (p.point > 0 && p.point in mvs) p.offset_mv = mvs[p.point];
+  }
+  if (result.tables) Object.assign(result.tables, { p: held.turbo.P.slice(), e: held.turbo.E.slice() });
+  if (result.turbo && result.turbo.P && result.turbo.E) {
+    result.turbo.P.ratios = held.turbo.P.slice();
+    result.turbo.E.ratios = held.turbo.E.slice();
+  }
+}
+
 const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "Z");
 
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
@@ -258,6 +278,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   const profilesMode = profiles;
   const acceptUnavailable = accept === "unavailable";
   let held = initialHeld(); // the words the mock CPU holds
+  let appliedHere = false; // a tune.apply finished in this mock session: tune.last then answers the held words, as the helper's does after an apply (G-227)
   const saved = new Map(); // name -> {created, contents}
   if (profilesMode !== "none") for (const g of profilesGet) saved.set(g.result.name, { created: g.result.created, contents: clone(g.result.contents) });
   let accepted = profilesMode === "accepted" ? { name: "read-20261018-120000", contents: contentsOfHeld(held) } : null;
@@ -435,6 +456,8 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
         case "tune.last": {
           const r = clone(tuneLast.result);
           if (r.available) r.at = now() / 1000 - 60; // pretend the recorded read happened a minute ago
+          if (r.available && appliedHere && searchParam("last") === "gone") return ok(id, { available: false }); // `?last=gone`: the helper kept no record of the apply (the page must still show the applied words)
+          if (r.available && appliedHere) overlayHeld(r.result, held);
           if (r.available && accepted) Object.assign(r.result, { accepted_match: acceptedMatch(), accepted_note: null }); // G-213: redone against the (invented) accepted state
           return ok(id, r);
         }
@@ -530,6 +553,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           if (args.typed !== `CONFIRM ${plan.nonce}`) return fail(id, "CONFIRM_MISMATCH", "the typed confirmation does not match the plan's nonce");
           plans.delete(plan.plan_id); // single use
           held = heldAfter(held, planIntents.get(plan.plan_id)); // G-213: what the mock CPU holds now (profiles.accept compares with it)
+          appliedHere = true;
           if (plan.plan_id === tunePlan.response.result.plan_id) recordedGone = true;
           const outcome = applyOutcome(id, plan);
           replayLong(id, outcome.events, outcome.response);

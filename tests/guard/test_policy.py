@@ -1,5 +1,5 @@
 """T-013 policy tests: default M1 policy, strict TOML loading, and the write predicates (the T-021 additions -- session facts,
-D-015 floor, 0x1D / 0x27 checks -- are in test_measured_checks.py).
+0x1D / 0x27 checks -- are in test_measured_checks.py; D-049, the CPU-only limits, in test_d049.py).
 
 Facts: docs/knowledge/registers.md ("V/F data word", "Mailbox commands"); bounds: docs/tasks/T-013-guard.md "Policy".
 """
@@ -15,15 +15,14 @@ from arltuner.guard.policy import CheckContext
 from arltuner.mailbox import Cmd, VfWord
 
 STOCK = VfWord(ratio=55, v_target_raw=0x4A0, static=False, offset_raw=0)
-#: session facts of the checks below (T-021): 0x1C word and fused 0x09 point equal to STOCK's ratio / V target; E-core floor -102; the step
-#: limits are relaxed (these tests are about the offset window and static mode; the steps are tested in test_bounds.py)
+#: session facts of the checks below (T-021): 0x1C word and fused 0x09 point equal to STOCK's ratio / V target; the CPU's own limits are bound
+#: (cmd 0x01: 120x, cmd 0x28: 0x680) so that nothing but the rule under test refuses (D-049)
 CTX = CheckContext(
-    offset_floor_raw=-102,
+    bound=True,
     favored_word=55 | 55 << 8,
     fused_word=55 | 0x4A0 << 8,
-    max_ratio_step=8,
-    max_v_step_raw=200,
-    max_offset_step_raw=200,
+    hw_ratio_max=120,
+    hw_v_max_raw=0x680,
 )
 
 
@@ -74,7 +73,7 @@ class DefaultPolicy(unittest.TestCase):
         self.assertEqual((by_cmd[0x11].p1, by_cmd[0x11].p2), (frozenset({0}), frozenset({0})))
         self.assertEqual((by_cmd[0x15].p1, by_cmd[0x15].p2), (frozenset({0}), frozenset({0})))
         self.assertEqual(by_cmd[0x11].check, "vf_bounded")
-        self.assertEqual(dict(by_cmd[0x11].params), {})  # D-016: the bounds are Policy fields, not entry params
+        self.assertEqual(dict(by_cmd[0x11].params), {})  # D-016: the bounds are the CPU's, not entry params
         self.assertEqual(by_cmd[0x15].check, "percore_enable_only")
         for cmd in (0x1D, 0x26, 0x27):  # T-021: the XTU follow-ups of a per-core Apply and the read that feeds 0x27
             self.assertEqual((by_cmd[cmd].p1, by_cmd[cmd].p2), (frozenset({0}), frozenset({0})))
@@ -104,6 +103,11 @@ class DefaultPolicy(unittest.TestCase):
         self.assertEqual(set(CHECKS), {"vf_bounded", "vf_point_offset_bounded", "percore_enable_only", "favored_ratio_follows_vf", "granular_equals_read"})
         with self.assertRaises(TypeError):
             CHECKS["evil"] = lambda *a: (True, "")  # type: ignore[index]
+
+    def test_the_cpu_limits_start_unread(self) -> None:
+        self.assertEqual(dict(self.policy.hw_ratio_max), {"P": None, "E": None})
+        self.assertEqual(dict(self.policy.hw_v_target_max_mv), {"P": None, "E": None})
+        self.assertEqual(self.policy.ignored_keys, ())
 
 
 class Loading(unittest.TestCase):
@@ -181,7 +185,7 @@ class Loading(unittest.TestCase):
                 self.assert_rejected(text, fragment)
 
     def test_offset_raw_bounds_accept_the_whole_field(self) -> None:
-        # D-016: the offset window is a pair of bounds; neither side is restricted to the undervolt half any more
+        # D-016: the offset window of an allow entry is a pair of bounds; neither side is restricted to the undervolt half
         base = 'cpus=[0]\n[[allow]]\nname="w"\ncmd=0x11\np1=[0]\np2=[0]\nkind="write"\ncheck="vf_bounded"\n'
         for key in ("offset_raw_min", "offset_raw_max"):
             for bad in ("1024", "-1025", "'x'", "true", "-50.5"):
@@ -205,7 +209,7 @@ class Loading(unittest.TestCase):
 
 
 class VfBoundedCheck(unittest.TestCase):
-    """The offset window and static mode of ``vf_bounded`` (the ceilings, steps and ordering are in test_bounds.py)."""
+    """The entry params and static mode of ``vf_bounded`` (the CPU limits are in test_d049.py, the ordering in test_bounds.py)."""
 
     check = staticmethod(CHECKS["vf_bounded"])
     base = STOCK.to_u32()
@@ -214,36 +218,30 @@ class VfBoundedCheck(unittest.TestCase):
     def run_check(self, new: VfWord, *, baseline: VfWord = STOCK, params=None, ctx: CheckContext | None = CTX) -> tuple[bool, str]:
         return self.check(req(new.to_u32()), baseline.to_u32(), self.params if params is None else params, ctx)
 
-    def test_offset_bounds(self) -> None:
-        # window [floor -102 (E core), ceiling 0]: positive offsets are refused until a policy raises offset_ceiling_mv
-        for raw, ok in ((-102, True), (0, True), (-50, True), (-103, False), (1, False), (-1024, False), (1023, False)):
+    def test_every_offset_of_the_field_is_allowed_below_the_cpu_voltage_limit(self) -> None:
+        # D-049: no window, no ceiling, no floor: the 11-bit field is the only bound. A positive offset adds to the predicted voltage (0x4A0 + raw <= 0x680).
+        for raw, ok in ((-1024, True), (-103, True), (-102, True), (0, True), (1, True), (480, True), (0x680 - 0x4A0, True), (0x680 - 0x4A0 + 1, False), (1023, False)):
             with self.subTest(raw=raw):
                 self.assertIs(self.run_check(STOCK.with_(offset_raw=raw))[0], ok)
 
-    def test_the_offset_ceiling_comes_from_the_context(self) -> None:
-        raised = CheckContext(**{**CTX.__dict__, "offset_ceiling_raw": 26})
-        for raw, ok in ((26, True), (27, False), (1, True)):
-            with self.subTest(raw=raw):
-                self.assertIs(self.run_check(STOCK.with_(offset_raw=raw), ctx=raised)[0], ok)
-
-    def test_entry_params_only_tighten_the_window(self) -> None:
+    def test_entry_params_tighten_the_field(self) -> None:
         self.assertTrue(self.run_check(STOCK.with_(offset_raw=-50), params={"offset_raw_min": -50})[0])
         self.assertFalse(self.run_check(STOCK.with_(offset_raw=-51), params={"offset_raw_min": -50})[0])
-        raised = CheckContext(**{**CTX.__dict__, "offset_ceiling_raw": 40})
-        self.assertTrue(self.run_check(STOCK.with_(offset_raw=20), params={"offset_raw_max": 20}, ctx=raised)[0])
-        self.assertFalse(self.run_check(STOCK.with_(offset_raw=21), params={"offset_raw_max": 20}, ctx=raised)[0])
-        # a looser entry param never widens the policy window: min -1024 / max 1023 do not beat the floor / ceiling
-        self.assertFalse(self.run_check(STOCK.with_(offset_raw=-103), params={"offset_raw_min": -1024})[0])
-        self.assertFalse(self.run_check(STOCK.with_(offset_raw=1), params={"offset_raw_max": 1023})[0])
+        self.assertTrue(self.run_check(STOCK.with_(offset_raw=20), params={"offset_raw_max": 20})[0])
+        self.assertFalse(self.run_check(STOCK.with_(offset_raw=21), params={"offset_raw_max": 20})[0])
+        # a looser entry param never widens the field
+        self.assertTrue(self.run_check(STOCK.with_(offset_raw=-1024), params={"offset_raw_min": -1024})[0])
 
-    def test_default_ceilings_are_the_no_raise_values(self) -> None:
+    def test_ratio_and_v_target_are_bounded_by_the_cpu_limits_only(self) -> None:
         ok, detail = self.run_check(STOCK.with_(v_target_raw=STOCK.v_target_raw - 1, ratio=STOCK.ratio - 1))
-        self.assertFalse(ok)  # ratio and V target both down in ONE word: the ordering rule (frequency first), not a ceiling
+        self.assertFalse(ok)  # ratio and V target both down in ONE word: the ordering rule (frequency first)
         self.assertIn("lower the ratio first", detail)
         self.assertTrue(self.run_check(STOCK.with_(v_target_raw=STOCK.v_target_raw - 1))[0])
         self.assertTrue(self.run_check(STOCK.with_(ratio=STOCK.ratio - 1))[0])
-        self.assertFalse(self.run_check(STOCK.with_(v_target_raw=STOCK.v_target_raw + 1))[0])
-        self.assertFalse(self.run_check(STOCK.with_(ratio=STOCK.ratio + 1))[0])
+        self.assertTrue(self.run_check(STOCK.with_(v_target_raw=STOCK.v_target_raw + 1))[0])  # D-049: a raise within the CPU's limits is allowed
+        self.assertTrue(self.run_check(STOCK.with_(ratio=STOCK.ratio + 1))[0])
+        self.assertFalse(self.run_check(STOCK.with_(ratio=121))[0])  # above cmd 0x01
+        self.assertFalse(self.run_check(STOCK.with_(v_target_raw=0x681))[0])  # above cmd 0x28 - 1 LSB
 
     def test_static_mode_refused_either_side(self) -> None:
         self.assertFalse(self.run_check(STOCK.with_(static=True))[0])
@@ -253,6 +251,12 @@ class VfBoundedCheck(unittest.TestCase):
 
     def test_identical_word_is_fine(self) -> None:
         self.assertTrue(self.run_check(STOCK)[0])
+
+    def test_no_bound_context_is_refused(self) -> None:
+        for ctx in (None, CheckContext()):
+            ok, detail = self.run_check(STOCK, ctx=ctx)
+            self.assertFalse(ok)
+            self.assertIn("no check context", detail)
 
 
 class PerCoreEnableCheck(unittest.TestCase):
@@ -268,152 +272,36 @@ class PerCoreEnableCheck(unittest.TestCase):
         self.assertFalse(self.check(req(0xFFFFFFFF), 0x0, {})[0])
 
 
-class AutoLimitsTests(unittest.TestCase):
-    """D-036 / G-128: ``"auto"`` ceilings and CPU sets are derived live; numeric values keep working."""
+class TopologyBindingTests(unittest.TestCase):
+    """D-036 / G-128: CPU sets are derived live; D-049: the only "auto" left is cpus / e_cpus (the ratio / V "auto" ceilings are gone)."""
 
-    TOML = 'cpus = "auto"\ne_cpus = "auto"\n[ratio_max]\nP = "auto"\nE = "auto"\n[v_target_max_mv]\nP = "auto"\nE = "auto"\n'
-
-    OC = 0x778  # cmd 0x01 P1=0 as the reference machine answers it: 120x, bits [10:8] set
-
-    def ctx(self, policy, cpu, vmax=None, favored=None, kind_words=None, oc=(OC,)):
-        from arltuner.guard.policy import build_context
-
-        return build_context(
-            policy, cpu, favored_word=favored, fused_word=None, vf_word_sent=None, max_voltage_word=vmax, favored_words_of_kind=kind_words,
-            oc_cap_words_of_kind=oc,
-        )
+    TOML = 'cpus = "auto"\ne_cpus = "auto"\n'
 
     def test_auto_needs_the_live_topology_never_a_default(self) -> None:
         for text in ('cpus = "auto"\n', 'cpus = [0]\ne_cpus = "auto"\n'):
             with self.subTest(text=text), self.assertRaisesRegex(PolicyError, "live topology"):
                 load_policy(text)
 
-    def test_cpus_come_from_the_topology_and_auto_ratios_are_not_numbers_at_load(self) -> None:
+    def test_cpus_come_from_the_topology(self) -> None:
         from arltuner.topology import arl_s_285k, synthetic
 
         p = load_policy(self.TOML, arl_s_285k())
         self.assertEqual((p.cpus, p.e_cpus), (frozenset(range(24)), frozenset(range(8, 24))))
-        self.assertEqual((p.ratio_max["P"], p.ratio_max["E"], p.ratio_auto), (None, None, frozenset({"P", "E"})))  # CPU data of the session, not sysfs
         six = load_policy(self.TOML, synthetic(6, 8))
         self.assertEqual((six.cpus, six.e_cpus), (frozenset(range(14)), frozenset(range(6, 14))))
         self.assertEqual((six.core_kind(5), six.core_kind(6)), ("P", "E"))
-        load_policy('cpus = [0]\n[ratio_max]\nP = "auto"\n')  # needs no topology
 
-    def test_auto_ratio_is_the_fused_value_the_cpu_reported_in_0x1c(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, None, 0x3939).ratio_max, 60)  # P: 0x1C[15:8] = [7:0] = 57, + 3 (D-038)
-        self.assertEqual(self.ctx(p, 8, None, 0x2E30).ratio_max, 49)  # E: fused byte [15:8] 46 + 3; [7:0] 48 follows the BIOS turbo setting and is not used
-        self.assertEqual(self.ctx(p, 1, None, 0x3737).ratio_max, 58)
-        self.assertEqual(self.ctx(p, 0, None, 0x3739).ratio_max, 58)  # the fused byte [15:8] (55), not the larger [7:0]
-        self.assertEqual(self.ctx(p, 0, None, 0x3739, kind_words=[0x3737, 0x3939]).ratio_max, 60)  # per kind: the highest word read
-
-    def test_fused_ratio_cap_adds_the_oc_headroom_and_clamps_to_the_cpu_limit(self) -> None:
-        """D-038: fused max of the kind + AUTO_OC_HEADROOM (3); D-039: clamped by the CPU's own 0x01 limit when given, by no constant; None when no 0x1C of the kind was read."""
-        from arltuner.guard.policy import AUTO_OC_HEADROOM, fused_ratio_cap
-
-        self.assertEqual(AUTO_OC_HEADROOM, 3)
-        self.assertEqual(fused_ratio_cap("P", [0x3939]), 60)  # P fused 57 -> 60
-        self.assertEqual(fused_ratio_cap("E", [0x2E2E]), 49)  # E fused 46 -> 49
-        self.assertEqual(fused_ratio_cap("E", [0x2E30, 0x2E2E]), 49)  # [7:0] 48 is the turbo setting, only the fused [15:8] 46 counts
-        self.assertEqual(fused_ratio_cap("E", [0x3030]), 51)  # a higher turbo byte alone changes nothing; a higher fused byte does
-        self.assertEqual(fused_ratio_cap("P", [0x3D3D]), 64)  # 61 + 3: no code constant clamps it any more
-        self.assertEqual(fused_ratio_cap("P", [0x3D3D], hw_max=62), 62)  # the CPU's own limit does
-        self.assertEqual(fused_ratio_cap("P", [0x3939], hw_max=120), 60)
-        for words in ([], [None], [0], [None, 0]):
-            self.assertIsNone(fused_ratio_cap("P", words))  # nothing read: no raise
-
-    def test_auto_ratio_unread_or_zero_allows_no_raise(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertIsNone(self.ctx(p, 0, None, None).ratio_max)
-        self.assertIsNone(self.ctx(p, 0, None, 0).ratio_max)
-
-    def test_auto_ratio_is_clamped_by_the_cpu_limit_not_by_a_constant(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, None, 0xFFFF, oc=[0x13E]).ratio_max, 62)  # 0x01 says 62x: 255 + 3 clamps to it
-        self.assertEqual(self.ctx(p, 8, None, 0xFFFF, oc=[0x134]).ratio_max, 52)
-        self.assertEqual(self.ctx(p, 0, None, 0x3939, oc=[0x13E]).ratio_max, 60)  # below the CPU limit: fused 57 + 3
-        self.assertIn("CPU limit 62x (cmd 0x01", self.ctx(p, 0, None, 0xFFFF, oc=[0x13E]).ratio_text)
-
-    def test_auto_ratio_without_the_cpu_limit_allows_no_raise(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        c = self.ctx(p, 0, None, 0x3939, oc=())
-        self.assertIsNone(c.ratio_max)
-        self.assertIn("no-raise value", c.ratio_text)
-        self.assertIn("cmd 0x01", c.ratio_text)
-
-    def test_a_cpuinfo_max_freq_change_does_not_move_the_cap(self) -> None:
+    def test_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
         from arltuner.topology import synthetic
 
-        before = load_policy(self.TOML, synthetic(8, 16, favored_p=(0,), e_ratio=49))
-        after = load_policy(self.TOML, synthetic(8, 16, favored_p=(0,), e_ratio=50))  # an OC write raised cpuinfo_max_freq by one bin
-        self.assertEqual(before.ratio_max, after.ratio_max)
-        self.assertEqual(self.ctx(before, 8, None, 0x2E30).ratio_max, self.ctx(after, 8, None, 0x2E30).ratio_max)  # the cap follows the fused word only
-
-    def test_numeric_ratio_values_are_unchanged(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy('cpus = ["0-23"]\n[ratio_max]\nP = 57\nE = 49\n', arl_s_285k())
-        self.assertEqual((self.ctx(p, 0, None, 0x3737).ratio_max, self.ctx(p, 8, None, 0x2E30).ratio_max), (57, 49))  # the CPU allows 120x
-        self.assertEqual((self.ctx(p, 0, None, 0x3737, oc=()).ratio_max, self.ctx(p, 8, None, 0x2E30, oc=()).ratio_max), (None, None))  # 0x01 unread: no raise (D-039)
-
-    def test_auto_ratio_applies_to_the_plain_turbo_write_context(self) -> None:
-        from arltuner.guard.policy import build_msr_context
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        oc = {0: self.OC, 8: self.OC}
-        e = build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30, 9: 0x2E30, 0: 0x3939}, oc_cap_words=oc)
-        self.assertEqual(e.ratio_max, 49)  # only the E CPUs' words count for the E table (fused 46 + 3)
-        self.assertEqual(build_msr_context(p, 0x1AD, platform_info=None, favored_words={0: 0x3939, 8: 0x2E30}, oc_cap_words=oc).ratio_max, 60)
-        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={0: 0x3939}, oc_cap_words=oc).ratio_max)
-        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, oc_cap_words=oc).ratio_max)
-        self.assertIsNone(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={0: self.OC}).ratio_max)  # the E limit was not read: no raise
-        self.assertEqual(build_msr_context(p, 0x650, platform_info=None, favored_words={8: 0x2E30}, oc_cap_words={9: 0x134}).ratio_max, 49)  # any CPU of the kind answers for it
-
-    def test_numeric_values_keep_working_and_a_policy_without_e_cpus_takes_the_live_ones(self) -> None:
-        from arltuner.topology import synthetic
-
-        p = load_policy('cpus = ["0-13"]\n[ratio_max]\nP = 57\nE = 49\n[v_target_max_mv]\nP = 1625\nE = 1355\n', synthetic(6, 8))
-        self.assertEqual((p.ratio_max["P"], p.v_target_max_mv["E"], p.v_target_auto), (57, 1355, frozenset()))
+        p = load_policy('cpus = ["0-13"]\n', synthetic(6, 8))
         self.assertEqual(p.e_cpus, frozenset(range(6, 14)))
 
-    def test_v_target_auto_is_the_0x28_maximum_minus_one_lsb(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(p.v_target_auto, frozenset({"P", "E"}))
-        self.assertEqual(self.ctx(p, 0, 0x681).v_target_max_raw, 0x680)  # P: 1.625 V
-        self.assertAlmostEqual(0x680 / 1024, 1.625)
-        self.assertEqual(self.ctx(p, 8, 0x56D).v_target_max_raw, 0x56C)  # E: 1.3555 V
-
-    def test_v_target_auto_follows_the_cpu_whatever_its_value(self) -> None:
-        """D-039: the code keeps no V target ceiling of its own; the CPU's 0x28 maximum minus one LSB is the whole limit."""
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertEqual(self.ctx(p, 0, 0x7FF).v_target_max_raw, 0x7FE)  # 1.998 V: above the old P bound of 1.625 V
-        self.assertEqual(self.ctx(p, 8, 0xFFF).v_target_max_raw, 0xFFE)
-
-    def test_v_target_auto_with_a_zero_or_unread_0x28_allows_no_raise(self) -> None:
-        from arltuner.topology import arl_s_285k
-
-        p = load_policy(self.TOML, arl_s_285k())
-        self.assertIsNone(self.ctx(p, 0, 0x0).v_target_max_raw)  # a field of 0 means 2.0 V to hw_v_max_raw: auto must not inherit that
-        self.assertIsNone(self.ctx(p, 0, 0x1000).v_target_max_raw)  # only [11:0] counts
-        self.assertIsNone(self.ctx(p, 0, None).v_target_max_raw)
-
-    def test_the_default_m1_policy_assumes_no_bios_offset(self) -> None:
+    def test_the_cpu_limits_bind_per_kind_and_the_original_is_unchanged(self) -> None:
         p = default_m1_policy()
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})
-        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-102, -102))  # G-141: -100 mV for both kinds (the P default used to assume a -50 mV BIOS offset)
+        bound = p.with_hw_limits({"P": 120, "E": 100, "ring": 90}, {"P": 1625, "E": 1355})  # the ring is not a core kind: dropped
+        self.assertEqual((dict(bound.hw_ratio_max), dict(bound.hw_v_target_max_mv)), ({"P": 120, "E": 100}, {"P": 1625, "E": 1355}))
+        self.assertEqual(dict(p.hw_ratio_max), {"P": None, "E": None})
 
     def test_a_policy_built_without_a_topology_does_not_guess_the_285k_layout(self) -> None:
         """G-141 (D-036): a bare ``Policy`` is unbound (``e_cpus`` unset) and refuses to say which CPU is an E-core; the loaders bind a topology (or, on purpose, the reference)."""

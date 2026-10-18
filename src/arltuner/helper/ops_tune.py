@@ -86,8 +86,8 @@ from arltuner.guard import (
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
 from arltuner.controls import ring as ringmod
-from arltuner.controls.planner import POINT_CAVEAT, build_plan, _same_state, _goal_word, current_word, kept_word, oc_cap_reads_of
-from arltuner.guard.policy import ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit, v_target_limit_mv
+from arltuner.controls.planner import POINT_CAVEAT, POSITIVE_OFFSET, Warn, build_plan, _same_state, _goal_word, change_notes, current_word, kept_word, needs_vmax, oc_cap_reads_of, turbo_change_notes
+from arltuner.guard.policy import CPU_LIMIT_UNREAD, ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, hw_v_max_raw, ratio_limit, turbo_bytes, v_target_limit
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.msr import MailboxTransport
@@ -100,7 +100,7 @@ from arltuner.profiles.serialize import dump_profile
 from arltuner.profiles.lastread import LastReadError, LastReadStore
 from arltuner.profiles.store import NAME_RE, ProfileStore, ProfileStoreError
 from arltuner.topology import Topology, TopologyError, UnknownCore
-from arltuner.vfmodel import CurvePoint, check_turbo_order, complete_baseline, effective_curve, predict_vccia, voltage_at
+from arltuner.vfmodel import CurvePoint, complete_baseline, effective_curve, predict_vccia, voltage_at
 
 from .cpu_online import refuse_if_cpu_offline
 from .ops import (
@@ -151,17 +151,6 @@ _MAX_STEPS_LISTED = 300
 # --------------------------------------------------------------------------------------------------------------
 # Units (contract 9): P<n> = the n-th P CPU, EC<n> = the CPUs of the n-th E-cluster (live topology)
 # --------------------------------------------------------------------------------------------------------------
-class Warn(str):
-    """A plan warning with a machine-readable ``code`` (contract 9 addendum: the result carries ``{code, text}``). Everything untagged is ``NOTE``."""
-
-    code: str
-
-    def __new__(cls, code: str, text: str) -> "Warn":
-        obj = super().__new__(cls, text)
-        obj.code = code
-        return obj
-
-
 def warning_objects(items: Sequence[str]) -> list[dict[str, str]]:
     return [{"code": getattr(w, "code", "NOTE"), "text": str(w)} for w in items]
 
@@ -343,8 +332,8 @@ def _load_policy(helper: Helper) -> Policy:
 
 
 def _bind_hw_limits(helper: Helper, policy: Policy) -> Policy:
-    """G-137 (D-039): the policy bound to the CPU's own limits of this boot's ``tune.read`` (ratio ``0x01``, V target ``0x28``). Every ratio / V target ceiling is
-    then the policy value clamped by them (planner, guard and plan-time checks alike); none read = no raise."""
+    """G-137 (D-039, D-049): the policy bound to the CPU's own limits of this boot's ``tune.read`` (ratio ``0x01``, V target ``0x28``; P and E -- the ring's are for ``cpu_limits`` only).
+    They are the only value limits (planner, guard and plan-time checks alike); none read = a raise is refused (``CPU_LIMIT_UNREAD``)."""
     _last_words(helper)  # the lazy restore of this boot's stored read brings the limits back after a helper restart
     st = _state(helper)
     with st.lock:
@@ -352,6 +341,7 @@ def _bind_hw_limits(helper: Helper, policy: Policy) -> Policy:
     return policy.with_hw_limits(
         {kind: v.get("ratio_max_oc") for kind, v in limits.items()},
         {kind: v.get("v_target_max_mv") for kind, v in limits.items()},
+        {kind: v.get("v_target_max_raw") for kind, v in limits.items()},
     )
 
 
@@ -359,40 +349,68 @@ def _topology(helper: Helper) -> Topology:
     return helper_topology(helper)
 
 
-def _ratio_limit(policy: Policy, kind: str, favored_words: Mapping[int, int] | None) -> int | None:
-    """The effective ratio ceiling of a kind (G-137, D-039): the policy's number, or for ``"auto"`` the fused ``0x1C`` values of that kind in ``favored_words`` plus 3,
-    clamped by the CPU's own ``0x01`` limit that ``policy`` is bound to (``None`` = none / not read: no raise)."""
-    return ratio_limit(policy, kind, [w for cpu, w in (favored_words or {}).items() if policy.core_kind(cpu) == kind])[0]
-
-
 def _limits(policy: Policy, topology: Topology, favored_words: Mapping[int, int] | None) -> dict[str, Any]:
-    """G-133 / D-036: the limits of the bound policy, ``"auto"`` resolved, so the page offers exactly what the guard would accept and no literal. Per kind ``P`` / ``E``:
-
-    * ``offset_mv`` ``{min, max}``: the runtime floor of the kind (the lowest ``offset_floor_raw`` over its CPUs, in mV) and ``offset_ceiling_mv``,
-    * ``v_target_max_v``: ``v_target_max_mv`` / 1000 clamped by the CPU's own ``0x28`` maximum read by ``tune.read`` (G-137); for ``"auto"`` that live value (``None`` when it was
-      not read: no raise); ``None`` = the policy sets no ceiling (no raise),
-    * ``ratio_max``: the policy number, or the ``"auto"`` ceiling from the ``0x1C`` words read this boot; ``None`` = none (no raise / not read),
-    * ``source``: ``{ratio_max, v_target_max}`` -> ``"policy"`` | ``"auto"`` | ``"none"`` (what the number comes from), for the page's one-line reasons."""
+    """The ``limits`` of ``tune.read`` / ``tune.last`` (G-133, kept for the page): D-049 removed every operator value limit, so the *policy* part is empty -- ``ratio_max`` and
+    ``v_target_max_v`` are ``null`` with source ``"none"`` (the CPU's own limits are in ``hw_limits`` / ``cpu_limits``) and ``offset_mv`` is the 11-bit field's window (the only offset bound)."""
     out: dict[str, Any] = {"offset_mv": {}, "v_target_max_v": {}, "ratio_max": {}, "source": {"ratio_max": {}, "v_target_max": {}}}
     for kind in ("P", "E"):
-        cpus = [c.cpu for c in topology.cores if (c.kind == "E") == (kind == "E")]
-        floor_raw = min((policy.offset_floor_raw(c) for c in cpus), default=0)
-        out["offset_mv"][kind] = {"min": min(0, round(floor_raw * 1000 / 1024)), "max": policy.offset_ceiling_mv}
-        vmax = v_target_limit_mv(policy, kind, None)[0]
-        out["v_target_max_v"][kind] = None if vmax is None else round(vmax / 1000, 4)
-        out["source"]["v_target_max"][kind] = "auto" if kind in policy.v_target_auto else "none" if policy.v_target_max_mv[kind] is None else "policy"
-        out["ratio_max"][kind] = _ratio_limit(policy, kind, favored_words)
-        out["source"]["ratio_max"][kind] = "auto" if kind in policy.ratio_auto else "none" if policy.ratio_max[kind] is None else "policy"
+        out["offset_mv"][kind] = {"min": ENCODING_OFFSET_FLOOR_MV, "max": ENCODING_OFFSET_CEILING_MV}
+        out["v_target_max_v"][kind] = None
+        out["ratio_max"][kind] = None
+        out["source"]["ratio_max"][kind] = "none"
+        out["source"]["v_target_max"][kind] = "none"
     return out
 
 
 def _add_limits(helper: Helper, result: dict[str, Any], topology: Topology, favored_words: Mapping[int, int] | None) -> None:
-    """``result["limits"]`` from the policy as it is now; ``None`` plus ``limits_note`` when the policy cannot be loaded (never an error of a read)."""
+    """``result["limits"]`` (see :func:`_limits`); ``None`` plus ``limits_note`` when the policy cannot be loaded (never an error of a read)."""
     try:
         result["limits"] = _limits(_load_policy(helper), topology, favored_words)
         result.pop("limits_note", None)
     except OpError as exc:
         result["limits"], result["limits_note"] = None, f"policy limits not available: {exc.message}"
+
+
+def _cpu_limit_entry(entry: Mapping[str, Any] | None, read_at: str | None) -> dict[str, Any]:
+    """One domain of ``cpu_limits``: ``{max_mv, max_ratio, source}``; a limit that was not read is ``null``."""
+    entry = entry or {}
+    max_mv, max_ratio = entry.get("v_target_max_mv"), entry.get("ratio_max_oc")
+    known = max_mv is not None or max_ratio is not None
+    source = ("0x28/0x01 read" + (f" {read_at}" if read_at else "")) if known else "not read yet (0x28 / 0x01)"
+    return {"max_mv": max_mv, "max_ratio": max_ratio, "source": source}
+
+
+def cpu_limits_doc(
+    helper: Helper,
+    result: Mapping[str, Any] | None = None,
+    *,
+    power: Mapping[str, Any] | None = None,
+    caps: Mapping[str, Any] | None = None,
+    uncore: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """D-049 ``cpu_limits`` (tune.read / tune.last; ``power.read`` / ``runtime.read`` pass ``power`` = ``power.limits_json(...)``, ``caps`` = ``caps.limits_json(...)``, ``uncore`` =
+    ``uncore.limits_json(...)``): everything the helper enforces, read at runtime::
+
+        {"P": {"max_mv": 1625|null, "max_ratio": 120|null, "source": "0x28/0x01 read <iso>"}, "E": {...}, "ring": {...},
+         "offset_mv": [-1000, 999], "power": {"locked": bool|null, "pl_max_w": number|null, "source": text}, "caps_khz": {"<cpu>": [min, max]}|null, "uncore_khz": [min, max]|null}
+
+    ``null`` = not read yet: the write that needs it is refused with ``CPU_LIMIT_UNREAD`` naming the read. ``max_mv`` is ``0x28 [11:0] - 1 LSB`` in whole mV (XTU's rule; field 0 = 2.0 V),
+    ``max_ratio`` ``0x01 [7:0]`` (``registers.md``); the P / E / ring values are the ones of this boot's ``tune.read`` (kept across a helper restart with the stored read; the timestamp of
+    ``source`` is that read's), ``offset_mv`` is the 11-bit offset field (``-1024..1023`` raw = XTU's ``-1000..+999`` mV)."""
+    st = _state(helper)
+    with st.lock:
+        limits = {kind: dict(v) for kind, v in (st.hw_limits or {}).items()}
+    read_at = (result or {}).get("read_at") if isinstance((result or {}).get("read_at"), str) else None
+    out: dict[str, Any] = {kind: _cpu_limit_entry(limits.get(kind), read_at) for kind in ("P", "E", "ring")}
+    out["offset_mv"] = [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]
+    out["power"] = dict(power) if power is not None else {"locked": None, "pl_max_w": None, "source": "not read here (power.read reads MSR 0x610 / 0x606)"}
+    out["caps_khz"] = None if caps is None else dict(caps)
+    out["uncore_khz"] = None if uncore is None else list(uncore)
+    return out
+
+
+def _add_cpu_limits(helper: Helper, result: dict[str, Any]) -> None:
+    result["cpu_limits"] = cpu_limits_doc(helper, result)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -695,12 +713,13 @@ def _fused_entry(word: int) -> dict[str, Any]:
 
 
 def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topology) -> dict[str, Any]:
-    """G-114: the guarded reads that make ``tune.read`` respect SPEC-v3 section 9, in ONE session of exactly ``units + P-cores + E-clusters + 4 + 4`` guard-counted requests (four
+    """G-114: the guarded reads that make ``tune.read`` respect SPEC-v3 section 9, in ONE session of exactly ``units + P-cores + E-clusters + 4 + 6`` guard-counted requests (four
     are plain rdmsr, the rest mailbox reads = WRMSR to 0x150), one at a time:
 
     * ``fused`` (F7): cmd ``0x09 P1=0x11 P2=0`` on every P-core and on the first CPU of every E-cluster (one per unit),
     * ``favored`` (F5): cmd ``0x1C`` on every P-core (low byte = the favored ratio; E clusters follow ``0x650``) and (G-137) on the first CPU of every E-cluster (word kept for an "auto" ceiling only),
-    * ``limits`` (G-137, D-039): cmd ``0x01 P1=0`` (fused max OC ratio) and ``0x28 P1=0`` (max voltage) on the first P CPU and the first CPU of the first E cluster (4),
+    * ``limits`` (G-137, D-039, D-049): cmd ``0x01 P1=0`` (fused max OC ratio) and ``0x28 P1=0`` (max voltage) on the first P CPU and the first CPU of the first E cluster (4), and the same two
+      with ``P1=2`` (the ring, addressed through the first P CPU) for ``cpu_limits.ring`` (2): 6,
     * ``turbo`` (F5): plain ``rdmsr`` ``0x1AD`` / ``0x1AE`` / ``0x650`` / ``0x651`` on the first P CPU (4).
 
     Each group degrades alone (a refusal leaves that group ``None`` with a note); a guard trip or a cancel ends the session. The mailbox requests are paced like
@@ -711,7 +730,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
     e_cpus = [topology.cluster_cpus(k)[0] for k in sorted({c.cluster for c in topology.cores if c.cluster is not None})]
     out: dict[str, Any] = {"fused": None, "turbo": None, "tables": None, "hw_limits": None, "notes": {}, "ops": 0}
     notes: dict[str, str] = out["notes"]
-    limit_cpus = {kind: cpus[0] for kind, cpus in (("P", p_cpus), ("E", e_cpus)) if cpus}  # one CPU per kind answers for its kind
+    limit_cpus = {kind: cpus[0] for kind, cpus in (("P", p_cpus), ("E", e_cpus), ("ring", p_cpus)) if cpus}  # one CPU per kind answers for its kind; the ring (P1=2) is package-level, any CPU answers
     guards: list[WriteGuard] = []
     try:
         with _guarded_session(helper, ctx, policy, len(p_cpus) * 2 + len(e_cpus) * 2 + 4 + 2 * len(limit_cpus), "the fused-point / CPU-limit / turbo-table read") as session:
@@ -759,14 +778,14 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 limits: dict[str, dict[str, Any]] = {}
                 out["hw_limits"] = limits  # filled kind by kind: a read that fails later leaves the earlier ones
                 for kind, cpu in limit_cpus.items():
-                    entry: dict[str, Any] = {"ratio_max_oc": None, "v_target_max_mv": None, "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
+                    entry: dict[str, Any] = {"ratio_max_oc": None, "v_target_max_mv": None, "v_target_max_raw": None, "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
                     limits[kind] = entry
                     for what, cmd, fill in (
                         ("the CPU's ratio limit (0x01)", int(Cmd.OC_CAPABILITY_READ), _fill_oc_cap),
                         ("the CPU's maximum voltage (0x28)", int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), _fill_v_max),
                     ):
                         try:
-                            fill(entry, mailbox(cpu, cmd, 0, f"read {what}"))
+                            fill(entry, mailbox(cpu, cmd, 2 if kind == "ring" else 0, f"read {what}" + (" of the ring (P1=2)" if kind == "ring" else "")))
                         except (OpError, GuardRefused) as exc:  # each read degrades alone: a refused 0x01 leaves the 0x28 limit readable
                             if isinstance(exc, OpError) and exc.code == CANCELLED or isinstance(exc, GuardRefused) and exc.reason is Refusal.TRIPPED:
                                 raise
@@ -872,7 +891,8 @@ def _fill_oc_cap(entry: dict[str, Any], word: int) -> None:
 
 
 def _fill_v_max(entry: dict[str, Any], word: int) -> None:
-    """``0x28 P1=0`` word -> ``v_target_max_mv`` (``[11:0] - 1 LSB`` in whole mV, XTU's rule)."""
+    """``0x28`` word -> ``v_target_max_raw`` (``[11:0] - 1 LSB``, raw S2.10, XTU's rule: the exact limit the checks use) and ``v_target_max_mv`` (the same in whole mV, for display)."""
+    entry["v_target_max_raw"] = hw_v_max_raw(word)
     entry["v_target_max_mv"] = hw_v_max_mv(word)
 
 
@@ -962,7 +982,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         st.fused, st.turbo = extras["fused"], extras["turbo"]
         st.favored_words = extras.get("favored_words") or None
         st.hw_limits = _merge_hw_limits(st.hw_limits, extras.get("hw_limits"))
-        hw_limits = None if st.hw_limits is None else {k: dict(v) for k, v in st.hw_limits.items()}
+        hw_limits = None if st.hw_limits is None else {k: dict(v) for k, v in st.hw_limits.items() if k != "ring"}  # P and E; the ring's limits are in cpu_limits
     fused_words = _fused_map(topology, extras["fused"])
     if fused_words:
         helper.fused_words = fused_words
@@ -986,6 +1006,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         result["problems"] = [*result.get("problems", []), cross]
     result["read_at"] = _read_at(helper.cfg.wall_clock())
     _add_limits(helper, result, topology, extras.get("favored_words"))
+    _add_cpu_limits(helper, result)  # D-049
     result = _fit(result)
     _save_last_read(helper, result, topology)
     return result
@@ -1107,6 +1128,9 @@ def _restore_last_locked(helper: Helper) -> None:
             limits = result.get("hw_limits")
             if st.hw_limits is None and isinstance(limits, dict):
                 st.hw_limits = {str(k): dict(v) for k, v in limits.items() if isinstance(v, dict)}
+                ring = (result.get("cpu_limits") or {}).get("ring")  # D-049: the ring's limits are kept in cpu_limits only
+                if "ring" not in st.hw_limits and isinstance(ring, dict) and (ring.get("max_mv") is not None or ring.get("max_ratio") is not None):
+                    st.hw_limits["ring"] = {"ratio_max_oc": ring.get("max_ratio"), "v_target_max_mv": ring.get("max_mv"), "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
             turbo = result.get("turbo")
             if st.turbo is None and isinstance(turbo, dict):
                 st.turbo = {**turbo, "favored": {int(c): int(r) for c, r in (turbo.get("favored") or {}).items()}}
@@ -1204,6 +1228,7 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     _add_limits(helper, result, topology, favored)  # G-133: the policy as it is now, not as it was at the read
     if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
         result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored
+    _add_cpu_limits(helper, result)  # D-049: from this boot's kept limits (they survive a helper restart with the stored read)
     return {"available": True, "boot_id": record["boot_id"], "at": record.get("at"), "applied_at": applied_at, "result": _fit(result)}
 
 
@@ -1482,16 +1507,15 @@ def _no_read(unit: str, why: str) -> OpError:
 
 
 def _ratio_cap(helper: Helper, policy: Policy, kind: str) -> tuple[int | None, str]:
-    """The ratio ceiling of a kind at plan time and where it comes from (G-137, D-039): the policy value (for ``"auto"`` the fused ``0x1C`` values of that kind read by
-    this boot's ``tune.read`` plus 3) clamped by the CPU's own ``0x01`` limit that ``policy`` is bound to. ``None`` = not known: the guard judges it when the plan is applied."""
-    st = _state(helper)
-    with st.lock:
-        words = dict(st.favored_words or {})
-    return ratio_limit(policy, kind, [w for cpu, w in words.items() if policy.core_kind(cpu) == kind])
+    """The CPU's own ratio limit of a kind at plan time and where it comes from (G-137, D-039, D-049): ``0x01 [7:0]`` of the ``tune.read`` of this boot that ``policy`` is bound to.
+    ``None`` = not known (the text names the read): the apply reads it itself and its guard judges the word."""
+    return ratio_limit(policy, kind)
 
 
 def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[str, Any], ratio_cap: tuple[int | None, str] | None = None) -> None:
-    """``REFUSED POLICY_RANGE`` naming the field, the limit and where the limit comes from (policy file / CPU / field encoding), before anything else is computed."""
+    """``REFUSED POLICY_RANGE`` naming the field, the limit and where the limit comes from (the CPU's own register, or the field encoding), before anything else is computed. D-049: the
+    only bounds are the 11-bit offset field, the CPU's voltage limit (``0x28``) and ratio limit (``0x01``) when this boot's ``tune.read`` got them; an unread limit is the apply's to
+    read (and its guard refuses a raise without it: ``CPU_LIMIT_UNREAD``)."""
     kind = _kind_of(unit)
 
     def refuse(text: str) -> OpError:
@@ -1500,16 +1524,13 @@ def _check_range(policy: Policy, unit: str, cpus: Sequence[int], row: Mapping[st
     offset = row["offset"]
     if offset is not None:
         values = [offset["mv"]] if offset["kind"] == "curve" else list(offset["mv"].values())
-        floor_raw = min(policy.offset_floor_raw(c) for c in cpus)
-        ceil_raw = VfWord.mv_to_offset_raw(policy.offset_ceiling_mv)
         for mv in values:
-            raw = VfWord.mv_to_offset_raw(mv)
-            if not floor_raw <= raw <= ceil_raw:
+            try:
+                VfWord.mv_to_offset_raw(mv)
+            except ValueError:
                 raise refuse(
-                    f"{unit}: offset {mv:+d} mV (raw {raw}) is outside the policy window {floor_raw * 1000 / 1024:+.1f}..{ceil_raw * 1000 / 1024:+.1f} mV "
-                    f"(policy effective_offset_floor_mv = {policy.effective_offset_floor_mv}, offset_ceiling_mv = {policy.offset_ceiling_mv}; {policy.where}; "
-                    f"the field encoding allows {ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)"
-                )
+                    f"{unit}: offset {mv:+d} mV does not fit the 11-bit offset field (registers.md V/F data word: {ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)"
+                ) from None
     v = row["v_target_v"]
     if v is not None:
         mv = round(v * 1000)
@@ -1599,11 +1620,8 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
 
 
 def _check_ring_range(policy: Policy, topology: Topology, points: Mapping[str, int]) -> None:
-    """``REFUSED POLICY_RANGE`` before anything else is computed (G-212): every ring point must have a policy ``0x11 P1=2`` write entry, and its offset must sit in the window the
-    guard evaluates for a point offset write (``_check_vf_point_offset_bounded``: the runtime floor / ceiling of the policy, tightened by the entry's ``offset_raw_min`` / ``_max``)."""
-    cpu = ringmod.ring_cpu(topology)
-    floor_raw = policy.offset_floor_raw(cpu)
-    ceil_raw = VfWord.mv_to_offset_raw(policy.offset_ceiling_mv)
+    """``REFUSED POLICY_RANGE`` before anything else is computed (G-212): every ring point must have a policy ``0x11 P1=2`` write entry (an access list), and its offset must fit the
+    11-bit field and the entry's optional ``offset_raw_min`` / ``_max`` (what the guard evaluates in ``_check_vf_point_offset_bounded``; D-049: no policy window on top)."""
 
     def refuse(text: str) -> OpError:
         return OpError(REFUSED, f"{text}. Nothing was sent.", {"check": "POLICY_RANGE"})
@@ -1613,15 +1631,13 @@ def _check_ring_range(policy: Policy, topology: Topology, points: Mapping[str, i
         entry = policy.match(int(Cmd.VOLTAGE_FREQ_WRITE), ringmod.RING_P1, p2)
         if entry is None or entry.kind != "write":
             raise refuse(f"ring point {p2}: the policy has no write entry for cmd 0x11 P1=2 P2={p2} ({policy.where})")
-        low = max(floor_raw, entry.params.get("offset_raw_min", -1024))
-        high = min(ceil_raw, entry.params.get("offset_raw_max", 1023))
-        raw = VfWord.mv_to_offset_raw(mv)
+        try:
+            raw = VfWord.mv_to_offset_raw(mv)
+        except ValueError:
+            raise refuse(f"ring point {p2}: offset {mv:+d} mV does not fit the 11-bit offset field ({ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)") from None
+        low, high = entry.params.get("offset_raw_min", -1024), entry.params.get("offset_raw_max", 1023)
         if not low <= raw <= high:
-            raise refuse(
-                f"ring point {p2}: offset {mv:+d} mV (raw {raw}) is outside the policy window {low * 1000 / 1024:+.1f}..{high * 1000 / 1024:+.1f} mV "
-                f"(policy effective_offset_floor_mv = {policy.effective_offset_floor_mv}, offset_ceiling_mv = {policy.offset_ceiling_mv}, entry {entry.name!r}; {policy.where}; "
-                f"the field encoding allows {ENCODING_OFFSET_FLOOR_MV}..{ENCODING_OFFSET_CEILING_MV} mV)"
-            )
+            raise refuse(f"ring point {p2}: offset {mv:+d} mV (raw {raw}) is outside the allow entry {entry.name!r} window {low * 1000 / 1024:+.1f}..{high * 1000 / 1024:+.1f} mV ({policy.where})")
 
 
 def _ring_setting(helper: Helper, asked: Mapping[str, Any], policy: Policy, topology: Topology) -> RingSetting:
@@ -1665,7 +1681,7 @@ def _turbo_tables(helper: Helper, asked: Mapping[str, int], warnings: list[str])
 
 def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], derived: TurboTables | None, policy: Policy, warnings: list[str]) -> TurboTables:
     """The tables the intent names (``turbo: {P, E}``), replacing what a row's OC ratio would have derived for that kind. Range-checked against the policy
-    (``REFUSED POLICY_RANGE``); the order rule F5 is checked by :func:`_check_turbo_order` on the finished profile."""
+    (``REFUSED POLICY_RANGE``); the order rule F5 is a plan warning (:func:`_turbo_shape_warnings`) on the finished profile, no longer a refusal (D-049)."""
     st = _state(helper)
     with st.lock:
         tables = st.tables
@@ -2195,7 +2211,7 @@ def _predicted_steps(
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
     rings = resolve_ring_targets(profile, topology)
-    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if t.oc_voltage_mv is not None) + len(pts) + (len(rings) + 1 if rings else 0)  # every word is read, also the unchanged ones
+    reads = (1 if (targets or pts) else 0) + 4 * len(targets) + sum(1 for t in targets if needs_vmax(t)) + len(pts) + (len(rings) + 1 if rings else 0)  # every word is read, also the unchanged ones
     if profile.complete and known is not None:
         baseline, words, ring_known = known
 
@@ -2270,27 +2286,44 @@ def _preflight_error(exc: PreflightError) -> OpError:
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "STEP_LIMIT"})
     if isinstance(exc, PlanRefused):
         first = exc.refusals[0]
+        if CPU_LIMIT_UNREAD in first.detail:  # D-049: the CPU's own limit was not read; the detail names the read (cmd 0x01 / cmd 0x28)
+            return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": CPU_LIMIT_UNREAD})
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": _REFUSAL_CHECK.get(first.reason, first.reason)})
     return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PREFLIGHT"})
 
 
-def _check_turbo_order(profile: Profile) -> None:
-    """F5: bucket ratios must not RISE with the active-core count. ``REFUSED TURBO_ORDER`` before the planner (which would refuse the same table later as a
-    generic policy failure). Only a profile can carry a table (the contract 9 row intent has no table field): accepted / saved profiles and ``restore``."""
+def _base_ratio(helper: Helper, topology: Topology, kind: str) -> int | None:
+    """The base ratio of a core kind from the cpufreq ``base_frequency`` of its first CPU (kHz / 100000), for the ``TURBO_BELOW_BASE`` warning of ``tune.plan``; ``None`` without the
+    measurement wiring or when the file is unreadable (no warning then -- it is a warning, never a limit)."""
+    w = getattr(helper, "measure_wiring", None)
+    cpu = next((c.cpu for c in topology.cores if c.kind == kind), None)
+    if w is None or cpu is None:
+        return None
+    try:
+        khz = int(str(w.cpufreq.read(cpu, "base_frequency")).strip())
+    except (OSError, ValueError, TypeError):
+        return None
+    return khz // 100_000 or None
+
+
+def _turbo_shape_warnings(helper: Helper, profile: Profile, topology: Topology | None = None) -> list[str]:
+    """D-049: F5 (bucket ratios should not RISE with the active-core count), a bucket below the base ratio and a bucket moved by more than ``LARGE_RATIO_CHANGE`` are *warnings*
+    (``TURBO_NOT_MONOTONIC`` / ``TURBO_BELOW_BASE`` / ``LARGE_CHANGE``), no longer the ``TURBO_ORDER`` refusal: the CPU accepts such a table. Only a profile can carry a table (the contract
+    9 row intent has no table field): accepted / saved profiles and ``restore``."""
     if profile.turbo is None:
-        return
-    for key, label in (("p", "P (MSR 0x1AD)"), ("e", "E (MSR 0x650)")):
+        return []
+    st = _state(helper)
+    with st.lock:
+        tables = st.tables
+    out: list[str] = []
+    for key, label in (("p", "P turbo table (MSR 0x1AD)"), ("e", "E turbo table (MSR 0x650)")):
         table = getattr(profile.turbo, key)
         if table is None:
             continue
-        bad = check_turbo_order(table)
-        if bad is not None:
-            raise OpError(
-                REFUSED,
-                f"the {label} turbo table is not non-increasing: bucket {bad + 1} ({table[bad]}x) is above bucket {bad} ({table[bad - 1]}x); more active cores must never raise the ratio. "
-                f"Nothing was sent.",
-                {"check": "TURBO_ORDER", "table": key.upper(), "bucket": bad, "ratios": list(table)},
-            )
+        old = None if tables is None else tables.get(key)
+        base = None if topology is None else _base_ratio(helper, topology, key.upper())
+        out.extend(Warn(code, text) for code, text in turbo_change_notes(label, table, old, base))
+    return out
 
 
 # G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
@@ -2344,7 +2377,6 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     policy = _load_policy(helper)
     resolved = resolve_intent(helper, intent, policy, topology)
     profile = resolved.profile
-    _check_turbo_order(profile)
     used, budget = helper.budget.snapshot()
     if used is None:  # G-141: an unreadable audit log is not "0 operations used": the apply could not count them either, so the plan is refused here like the apply would be
         raise OpError(REFUSED, "the audit log cannot be read, so the per-boot operation count is unknown and no plan can be checked against it. Nothing was sent.", {"check": "AUDIT_UNAVAILABLE"})
@@ -2379,8 +2411,6 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         warnings.append(_ORDER_NOTE)
     if restore:
         warnings.extend(_residual_preview(found_residual))
-    if rounds > 1:
-        warnings.append(f"the change is larger than the policy's per-operation step limits ({worst}): the apply splits it into up to {rounds} guarded rounds in this one run (G-148)")
     if any(t.ratio is not None or t.oc_voltage_mv is not None for t in targets):
         warnings.append(_RAISE_NOTE)
     for unit, items in after.items():
@@ -2388,6 +2418,13 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
             was = (before.get(unit) or {}).get(point)
             if now["offset_mv"] is not None and now["offset_mv"] > 0 and (was is None or was["offset_mv"] <= 0):
                 warnings.append(Warn("POSITIVE_OFFSET", f"positive offset {now['offset_mv']:+.1f} mV on {unit} {'OC word' if point == '0' else 'point ' + point}"))
+            # D-049: a large single change / a deep whole-curve offset are warnings of the Review, never refusals; a unit with no earlier read is judged from the requested offset alone
+            where = f"{unit} {'OC word' if point == '0' else 'point ' + point}"
+            was = was or {}
+            for code, text in change_notes(where, ratio=(was.get("ratio"), now.get("ratio")), offset_mv=(was.get("offset_mv"), now.get("offset_mv")), whole_curve=point == "0"):
+                if code != POSITIVE_OFFSET:
+                    warnings.append(Warn(code, text))
+    warnings.extend(_turbo_shape_warnings(helper, profile, topology))
     prediction = _predict(helper, profile, topology, last, before, after, warnings)
     warnings.append(REVERT_NOTE)
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))
