@@ -638,7 +638,7 @@
   cursor: grabbing;
 }
 
-.hidden {
+.chart-hidden {
   display: none;
 }
 

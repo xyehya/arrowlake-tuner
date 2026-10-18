@@ -227,7 +227,7 @@ export function createCurveEditor(tc, section) {
     lnRead.setAttribute("points", pts("read"));
     lnDraft.setAttribute("points", pts("draft"));
     const anyPending = rows.some((r) => r.pending);
-    lnRead.classList.toggle("hidden", !anyPending);
+    lnRead.classList.toggle("chart-hidden", !anyPending);
     lnDraft.classList.toggle("pending", anyPending);
     rows.forEach((r, i) => {
       const x = xOf(i, n);

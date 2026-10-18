@@ -129,8 +129,10 @@ export function createController({ store, bridge, toast }) {
   function adopt(result, extra) {
     const model = unitsLib.modelFromRead(result);
     if (!model) return null;
+    const kept = state().selection.filter((id) => model.units[id]); // a re-read keeps the selection (the inspector does not jump)
     const first = model.order.find((id) => model.units[id].kind === "P") || model.order[0];
-    patchTune(store, { model, draft: draftLib.emptyDraft(), selection: first ? [first] : [], anchor: first || null, ...extra });
+    const selection = kept.length ? kept : first ? [first] : [];
+    patchTune(store, { model, draft: draftLib.emptyDraft(), selection, anchor: selection.includes(state().anchor) ? state().anchor : selection[0] || null, ...extra });
     void tc.loadBaseline();
     return model;
   }
