@@ -1,0 +1,1 @@
+{"id":null,"ok":false,"error":{"code":"REFUSED","message":"uid 1000 is not allowed to use the helper (not in [access] of /etc/arltuner/helper.toml)","detail":{"check":"ACCESS_DENIED"}}}

@@ -1,0 +1,1 @@
+{"id":"REPLACE","ok":false,"error":{"code":"REFUSED","message":"policy window exceeded","detail":{"check":"POLICY_RANGE","state":"idle","curve_id":"20261018T101500Z-a1b2","secret_path":"/etc/arltuner/policy.toml","partial":{"rows":[1,2,3]},"list":[1]}}}

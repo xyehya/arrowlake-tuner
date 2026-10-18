@@ -1,0 +1,1 @@
+{"id":null,"ok":false,"error":{"code":"REFUSED","message":"another client is already connected to the helper","detail":{"check":"CLIENT_BUSY"}}}
