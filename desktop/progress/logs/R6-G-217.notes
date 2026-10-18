@@ -1,0 +1,15 @@
+- Helper side is merged AND installed: read src/arltuner/helper/ops_power.py (power.read/plan/apply, {revert:true}) and ops_runtime.py (runtime.read/plan/apply;
+  plan {caps?, uncore?} or {revert:true}; parking is REFUSED by the helper (D-048): build NO parking UI — drop "parking" from this task; show per-CPU online
+  state read-only). Real responses: record fixtures from the simulator (temp paths) for power.read/plan/apply and runtime.read/plan/apply into
+  desktop/app/ui/fixtures/ (new files only; extend the mock; regenerate fixtures.js via gen_fixtures.py, which bundles every *.json).
+- G-225 (Rust allowlist for power.*/runtime.*) is running in parallel; the UI only uses bridge.call, so build against the mock.
+- Sub-tabs inside Tune (views/tune.js has the sub-tab registry; add yours the way turbo.js is registered — you may edit tune.js ONLY to register them):
+  Power: PL1 / PL2 / tau with current (file and MSR), boot value, policy range, step limit; XTU-style labels ("Processor Core Power Limit (PL1)",
+  "Processor Core Turbo Power Limit (PL2)", "Turbo Boost Power Time Window"); Revert to boot values.
+  Ring & caps: per-core max-ratio caps (P per core, E per cluster — say "applies to all 4 cores of the cluster"), the plan note when a ratio is
+  unreachable by a cpufreq cap ("capped at Nx"), uncore min/max ratio within initial bounds; Revert.
+  These are RUNTIME settings: say "lost on reboot" next to each section.
+- Review & Apply: register kinds "power" and "runtime" with the apply drawer (views/tune/apply.js registerKind) so one Review shows V/F + power + runtime
+  sections applied in sequence (stop on first failure). The typed confirm for power/runtime apply is "CONFIRM " + nonce like tune.
+- Policy refusals (missing [runtime] keys -> the helper names the key) are shown inline with the key name, not as a generic error.
+- Do NOT run build-appimage.sh / write desktop/dist. Node 24 glob; Playwright via /usr/bin/python3; tests/power-runtime.smoke.py.
