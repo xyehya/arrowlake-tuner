@@ -5,6 +5,9 @@ Decodes (registers.md / telemetry-sources.md):
     tsc_mhz = 100 MHz * PLATFORM_INFO[15:8].
   * 0x198 PERF_STATUS: ratio [15:8], requested VID [47:32] / 8192 V (a request, not delivered voltage) [MEASURED lnx 2026-09-29]
   * 0x19C / 0x1B1: valid [31], digital readout [22:16] (degrees below Tjmax), Tjmax = 0x1A2[23:16] [DOC SDM; 0x1A2 MEASURED]
+  * 0x64F core / 0x6B0 graphics limit words: decoded by telemetry/limits.py into {raw,status,log,unknown_bits}; 0x6B0's raw word
+    is also still published as ``limit_reasons_raw`` for one release (the key previously carried the graphics word under a wrong
+    "package" label). Bit tables and evidence: registers.md "Limit reasons".
 """
 from __future__ import annotations
 
@@ -13,8 +16,10 @@ from collections.abc import Callable, Iterable
 
 from arltuner.msr.port import MsrError
 
-from .msrio import (MSR_APERF, MSR_MPERF, MSR_PACKAGE_THERM_STATUS, MSR_PERF_STATUS, MSR_PLATFORM_INFO,
-                    MSR_TEMPERATURE_TARGET, MSR_THERM_STATUS, TelemetryMsr, bits)
+from .msrio import (MSR_APERF, MSR_CORE_PERF_LIMIT_REASONS, MSR_GFX_PERF_LIMIT_REASONS, MSR_MPERF,
+                    MSR_PACKAGE_THERM_STATUS, MSR_PERF_STATUS, MSR_PLATFORM_INFO, MSR_TEMPERATURE_TARGET,
+                    MSR_THERM_STATUS, TelemetryMsr, bits)
+from .limits import decode_core_64f, decode_graphics_6b0
 from .readings import Reading, unavailable
 
 BUS_MHZ = 100  # [DOC] ARL BCLK 100 MHz; tsc ratio from PLATFORM_INFO
@@ -110,11 +115,33 @@ def read_package_temp_msr(msr: TelemetryMsr, cpu: int, tjmax: Reading) -> Readin
     return _therm(msr, cpu, MSR_PACKAGE_THERM_STATUS, tjmax)
 
 
+def read_limit_reasons(msr: TelemetryMsr, cpu: int = 0) -> Reading:
+    """0x64F (core limit word, package scope) decoded. The Reading value is the decoder's ``{raw,status,log,unknown_bits}`` dict;
+    an unreadable MSR is unavailable with the reason -- never a guessed word."""
+    src = "msr 0x64F (decoded)"
+    try:
+        word = msr.rdmsr(cpu, MSR_CORE_PERF_LIMIT_REASONS)
+        decoded = decode_core_64f(word).to_json()
+    except (MsrError, ValueError) as e:
+        return unavailable(src, str(e))
+    return Reading(decoded, "", src)
+
+
+def read_limit_reasons_gfx(msr: TelemetryMsr, cpu: int = 0) -> Reading:
+    """0x6B0 (GRAPHICS limit word -- the integrated GPU, not the package) decoded the same way as :func:`read_limit_reasons`."""
+    src = "msr 0x6B0 (decoded)"
+    try:
+        word = msr.rdmsr(cpu, MSR_GFX_PERF_LIMIT_REASONS)
+        decoded = decode_graphics_6b0(word).to_json()
+    except (MsrError, ValueError) as e:
+        return unavailable(src, str(e))
+    return Reading(decoded, "", src)
+
+
 def read_limit_reasons_raw(msr: TelemetryMsr, cpu: int = 0) -> Reading:
-    """Raw 0x6B0 word, NOT decoded (decode open in registers.md)."""
-    from .msrio import MSR_PKG_PERF_LIMIT_REASONS
+    """Raw 0x6B0 (graphics) word, undecoded -- kept unchanged for consumers of ``limit_reasons_raw`` for one release."""
     src = "msr 0x6B0 (raw)"
     try:
-        return Reading(msr.rdmsr(cpu, MSR_PKG_PERF_LIMIT_REASONS), "raw", src)
+        return Reading(msr.rdmsr(cpu, MSR_GFX_PERF_LIMIT_REASONS), "raw", src)
     except (MsrError, ValueError) as e:
         return unavailable(src, str(e), "raw")

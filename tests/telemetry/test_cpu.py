@@ -2,7 +2,7 @@ import errno
 import unittest
 
 from arltuner.msr.port import MsrError
-from arltuner.telemetry import cpu, msrio
+from arltuner.telemetry import cpu, limits, msrio
 from arltuner.telemetry.msrio import TelemetryMsr
 from arltuner.telemetry.rapl import MsrPackagePower
 
@@ -92,6 +92,30 @@ class Temps(unittest.TestCase):
     def test_limit_reasons_raw(self):
         self.assertEqual(cpu.read_limit_reasons_raw(TelemetryMsr(FakeMsrPort({(0, 0x6B0): 0x1234}))).value, 0x1234)
         self.assertFalse(cpu.read_limit_reasons_raw(TelemetryMsr(FakeMsrPort())).available)
+
+    def test_limit_reasons_decoded(self):
+        # [MEASURED lnx 2026-10-13] 0x64F = 0x1DC21000 on this CPU; decode comes from limits.py, not from here
+        port = FakeMsrPort({(0, 0x64F): 0x1DC21000, (0, 0x6B0): 0x10001000})
+        r = cpu.read_limit_reasons(TelemetryMsr(port))
+        self.assertTrue(r.available)
+        self.assertEqual(r.value, limits.decode_core_64f(0x1DC21000).to_json())
+        self.assertEqual(r.value["raw"], 0x1DC21000)
+        self.assertEqual(r.value["status"], ["max_turbo_limit"])
+        self.assertEqual(r.value["unknown_bits"], [])
+        self.assertEqual(port.reads, [(0, 0x64F)])  # CPU 0 only, allowlisted MSR only
+        g = cpu.read_limit_reasons_gfx(TelemetryMsr(port))
+        self.assertEqual(port.reads, [(0, 0x64F), (0, 0x6B0)])
+        self.assertEqual(g.value, limits.decode_graphics_6b0(0x10001000).to_json())
+        self.assertEqual(g.value["log"], ["inefficient_operation"])
+
+    def test_limit_reasons_unavailable_never_guessed(self):
+        m = TelemetryMsr(FakeMsrPort())
+        for r in (cpu.read_limit_reasons(m), cpu.read_limit_reasons_gfx(m), cpu.read_limit_reasons_raw(m)):
+            self.assertFalse(r.available)
+            self.assertIsNone(r.value)
+            self.assertIn("unimplemented", r.reason)
+        self.assertEqual(cpu.read_limit_reasons(m).to_json()["status"], "unavailable")
+        self.assertIn("reason", cpu.read_limit_reasons_gfx(m).to_json())
 
 
 class MsrRapl(unittest.TestCase):
