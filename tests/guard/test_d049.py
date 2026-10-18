@@ -266,6 +266,122 @@ class CpuVoltageLimit(unittest.TestCase):
         self.assertEqual(ctx(cpu=E_CPU, vmax=None, p=p).hw_v_max_raw, 1355 * 1024 // 1000)
 
 
+class TargetClampedUpToTheFusedPoint(unittest.TestCase):
+    """cpu-rules-audit A:38: the CPU clamps a V target below the top fused point UP to it, so the predicted voltage is max(target, fused) + a positive offset."""
+
+    FUSED_1300 = 0x53800 | 57 | ((1331 - 0x538) << 8)  # fused V 1331 raw ~ 1.3 V
+
+    def test_a_low_target_with_a_big_positive_offset_is_judged_from_the_fused_voltage(self) -> None:
+        low = round(1.0 * 1024)  # target 1.0 V
+        plus_600 = VfWord.mv_to_offset_raw(600)  # 614 raw: 1.0 V + 600 mV = 1.6 V < 1.625 V, but the CPU clamps the target up to 1.3 V -> ~1.9 V
+        c = ctx(fused=0x39 | (1331 << 8))
+        ok, detail = vf(word(57, low, plus_600), word(57, low), c)
+        self.assertFalse(ok)
+        self.assertIn("predicted voltage", detail)
+        self.assertIn("cmd 0x28", detail)
+        ok, detail = vf(word(57, low, 0), word(57, low), c)  # no offset: the fused voltage 1331 < 0x680
+        self.assertTrue(ok, detail)
+
+    def test_a_target_below_the_fused_voltage_alone_predicts_the_fused_voltage(self) -> None:
+        p = policy().with_hw_limits(None, None, {"P": 1300})  # a limit BELOW the fused voltage
+        c = ctx(vmax=None, p=p, fused=0x39 | (1331 << 8))
+        ok, detail = vf(word(57, 1024), word(57, 1331), c)
+        self.assertFalse(ok)
+        self.assertIn("fused 0x533", detail)
+
+    def test_a_positive_offset_with_the_fused_voltage_unread_is_cpu_limit_unread(self) -> None:
+        c = build_context(policy(), P_CPU, favored_word=FAVORED_P, fused_word=None, vf_word_sent=None, max_voltage_word=VMAX_P, oc_cap_words_of_kind=(OC_120,))
+        ok, detail = vf(word(57, P_V, 10), word(57, P_V), c)
+        self.assertFalse(ok)
+        self.assertIn(CPU_LIMIT_UNREAD, detail)
+        self.assertIn("0x09", detail)
+
+
+class PositivePointOffsetsAgainstTheDomainLimit(unittest.TestCase):
+    """Per-point (core P2 1..15, ring P1=2) positive offsets: base + offset <= the 0x28 limit of the domain; unread base or limit = CPU_LIMIT_UNREAD; negative offsets need no ceiling."""
+
+    LIMIT = hw_v_max_raw(VMAX_P)  # 0x680
+
+    def point(self, offset_raw: int, *, base_v: int = 0, c=None, p1: int = 0, p2: int = 5, base_offset: int = 0):
+        base = VfWord(54, base_v, False, base_offset).to_u32()
+        new = VfWord(54, base_v, False, offset_raw).to_u32()
+        return _check_vf_point_offset_bounded(Request(P_CPU, 0x11, p1, p2, new, "d049"), base, {}, c if c is not None else ctx())
+
+    def test_core_point_at_the_limit_and_one_over(self) -> None:
+        at = self.LIMIT - P_V  # fused top voltage + at == the limit
+        ok, detail = self.point(at)
+        self.assertTrue(ok, detail)
+        ok, detail = self.point(at + 1)
+        self.assertFalse(ok)
+        self.assertIn("predicted voltage", detail)
+        self.assertIn("cmd 0x28", detail)
+
+    def test_the_points_own_v_target_is_the_base_when_it_has_one(self) -> None:
+        ok, detail = self.point(10, base_v=self.LIMIT - 10)
+        self.assertTrue(ok, detail)
+        ok, detail = self.point(11, base_v=self.LIMIT - 10)
+        self.assertFalse(ok)
+
+    def test_limit_unread_refuses_a_positive_offset_and_names_the_read(self) -> None:
+        ok, detail = self.point(10, c=ctx(vmax=None))
+        self.assertFalse(ok)
+        self.assertIn(CPU_LIMIT_UNREAD, detail)
+        self.assertIn("cmd 0x28", detail)
+
+    def test_base_unread_refuses_a_positive_offset(self) -> None:
+        c = build_context(policy(), P_CPU, favored_word=FAVORED_P, fused_word=None, vf_word_sent=None, max_voltage_word=VMAX_P, oc_cap_words_of_kind=(OC_120,))
+        ok, detail = self.point(10, c=c)
+        self.assertFalse(ok)
+        self.assertIn(CPU_LIMIT_UNREAD, detail)
+
+    def test_negative_offsets_and_lowerings_need_no_ceiling(self) -> None:
+        bare = build_context(policy(), P_CPU, favored_word=None, fused_word=None, vf_word_sent=None)
+        for raw in (-1024, -1, 0):
+            ok, detail = self.point(raw, c=bare)
+            self.assertTrue(ok, (raw, detail))
+        ok, detail = self.point(5, c=bare, base_offset=20)  # lowers a positive offset
+        self.assertTrue(ok, detail)
+
+    def test_ring_uses_the_ring_limit_of_p1_2(self) -> None:
+        ring_vmax = 0x600  # 1536 mV - 1 LSB = 0x5FF
+        c = build_context(policy(), P_CPU, favored_word=FAVORED_P, fused_word=FUSED_P, vf_word_sent=None, max_voltage_word=VMAX_P, ring_max_voltage_word=ring_vmax)
+        self.assertEqual(c.hw_ring_v_max_raw, 0x5FF)
+        base_v = 0x5F0
+        ok, detail = self.point(0xF, base_v=base_v, c=c, p1=2, p2=3)  # 0x5F0 + 0xF = 0x5FF: at the ring limit (the core limit 0x680 would allow more)
+        self.assertTrue(ok, detail)
+        ok, detail = self.point(0x10, base_v=base_v, c=c, p1=2, p2=3)
+        self.assertFalse(ok)
+        self.assertIn("ring", detail)
+
+    def test_ring_unread_limit_or_base_is_cpu_limit_unread(self) -> None:
+        ring_vmax = 0x600
+        with_limit = build_context(policy(), P_CPU, favored_word=FAVORED_P, fused_word=FUSED_P, vf_word_sent=None, max_voltage_word=VMAX_P, ring_max_voltage_word=ring_vmax)
+        ok, detail = self.point(5, c=with_limit, p1=2, p2=3)  # the point word has no V target and a ring has no readable fused voltage
+        self.assertFalse(ok)
+        self.assertIn(CPU_LIMIT_UNREAD, detail)
+        ok, detail = self.point(5, base_v=0x500, c=ctx(), p1=2, p2=3)  # ring limit unread (the core's 0x28 is not the ring's)
+        self.assertFalse(ok)
+        self.assertIn(CPU_LIMIT_UNREAD, detail)
+        self.assertIn("ring", detail)
+
+    def test_the_bound_ring_limit_stands_in_for_the_session_word(self) -> None:
+        p = policy().with_hw_limits(None, None, {"ring": 0x5FF})
+        c = ctx(p=p)
+        self.assertEqual(c.hw_ring_v_max_raw, 0x5FF)
+        ok, detail = self.point(0xF, base_v=0x5F0, c=c, p1=2, p2=3)
+        self.assertTrue(ok, detail)
+
+
+class TheLimitIsStoredRaw(unittest.TestCase):
+    def test_e_0x56c_stays_exact(self) -> None:
+        raw = hw_v_max_raw(0x56D)  # 0x56C = 1388 raw = 1355.47 mV; whole mV (1355) rounded back to raw is 1387
+        self.assertEqual(raw, 1388)
+        p = policy().with_hw_limits(None, {"E": hw_v_max_mv(0x56D)}, {"E": raw})
+        self.assertEqual(v_target_limit(p, "E", None)[0], 1388)
+        p_mv_only = policy().with_hw_limits(None, {"E": 1355})
+        self.assertEqual(v_target_limit(p_mv_only, "E", None)[0], 1387)  # the old whole-mV binding: one LSB on the safe side
+
+
 class OffsetField(unittest.TestCase):
     def test_the_field_extremes_are_accepted_by_the_check(self) -> None:
         for raw in (-1024, 1023):

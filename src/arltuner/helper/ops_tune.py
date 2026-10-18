@@ -86,8 +86,8 @@ from arltuner.guard import (
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
 from arltuner.controls import ring as ringmod
-from arltuner.controls.planner import POINT_CAVEAT, POSITIVE_OFFSET, build_plan, _same_state, _goal_word, change_notes, current_word, kept_word, needs_vmax, oc_cap_reads_of, turbo_change_notes
-from arltuner.guard.policy import CPU_LIMIT_UNREAD, ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, ratio_limit, turbo_bytes, v_target_limit
+from arltuner.controls.planner import POINT_CAVEAT, POSITIVE_OFFSET, Warn, build_plan, _same_state, _goal_word, change_notes, current_word, kept_word, needs_vmax, oc_cap_reads_of, turbo_change_notes
+from arltuner.guard.policy import CPU_LIMIT_UNREAD, ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, hw_v_max_raw, ratio_limit, turbo_bytes, v_target_limit
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
 from arltuner.msr import MailboxTransport
@@ -151,17 +151,6 @@ _MAX_STEPS_LISTED = 300
 # --------------------------------------------------------------------------------------------------------------
 # Units (contract 9): P<n> = the n-th P CPU, EC<n> = the CPUs of the n-th E-cluster (live topology)
 # --------------------------------------------------------------------------------------------------------------
-class Warn(str):
-    """A plan warning with a machine-readable ``code`` (contract 9 addendum: the result carries ``{code, text}``). Everything untagged is ``NOTE``."""
-
-    code: str
-
-    def __new__(cls, code: str, text: str) -> "Warn":
-        obj = super().__new__(cls, text)
-        obj.code = code
-        return obj
-
-
 def warning_objects(items: Sequence[str]) -> list[dict[str, str]]:
     return [{"code": getattr(w, "code", "NOTE"), "text": str(w)} for w in items]
 
@@ -352,6 +341,7 @@ def _bind_hw_limits(helper: Helper, policy: Policy) -> Policy:
     return policy.with_hw_limits(
         {kind: v.get("ratio_max_oc") for kind, v in limits.items()},
         {kind: v.get("v_target_max_mv") for kind, v in limits.items()},
+        {kind: v.get("v_target_max_raw") for kind, v in limits.items()},
     )
 
 
@@ -788,7 +778,7 @@ def _read_extras(helper: Helper, ctx: OpContext, policy: Policy, topology: Topol
                 limits: dict[str, dict[str, Any]] = {}
                 out["hw_limits"] = limits  # filled kind by kind: a read that fails later leaves the earlier ones
                 for kind, cpu in limit_cpus.items():
-                    entry: dict[str, Any] = {"ratio_max_oc": None, "v_target_max_mv": None, "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
+                    entry: dict[str, Any] = {"ratio_max_oc": None, "v_target_max_mv": None, "v_target_max_raw": None, "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
                     limits[kind] = entry
                     for what, cmd, fill in (
                         ("the CPU's ratio limit (0x01)", int(Cmd.OC_CAPABILITY_READ), _fill_oc_cap),
@@ -901,7 +891,8 @@ def _fill_oc_cap(entry: dict[str, Any], word: int) -> None:
 
 
 def _fill_v_max(entry: dict[str, Any], word: int) -> None:
-    """``0x28 P1=0`` word -> ``v_target_max_mv`` (``[11:0] - 1 LSB`` in whole mV, XTU's rule)."""
+    """``0x28`` word -> ``v_target_max_raw`` (``[11:0] - 1 LSB``, raw S2.10, XTU's rule: the exact limit the checks use) and ``v_target_max_mv`` (the same in whole mV, for display)."""
+    entry["v_target_max_raw"] = hw_v_max_raw(word)
     entry["v_target_max_mv"] = hw_v_max_mv(word)
 
 
@@ -1138,7 +1129,7 @@ def _restore_last_locked(helper: Helper) -> None:
             if st.hw_limits is None and isinstance(limits, dict):
                 st.hw_limits = {str(k): dict(v) for k, v in limits.items() if isinstance(v, dict)}
                 ring = (result.get("cpu_limits") or {}).get("ring")  # D-049: the ring's limits are kept in cpu_limits only
-                if isinstance(ring, dict) and (ring.get("max_mv") is not None or ring.get("max_ratio") is not None):
+                if "ring" not in st.hw_limits and isinstance(ring, dict) and (ring.get("max_mv") is not None or ring.get("max_ratio") is not None):
                     st.hw_limits["ring"] = {"ratio_max_oc": ring.get("max_ratio"), "v_target_max_mv": ring.get("max_mv"), "offset_mv": [ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV]}
             turbo = result.get("turbo")
             if st.turbo is None and isinstance(turbo, dict):
@@ -2301,7 +2292,21 @@ def _preflight_error(exc: PreflightError) -> OpError:
     return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PREFLIGHT"})
 
 
-def _turbo_shape_warnings(helper: Helper, profile: Profile) -> list[str]:
+def _base_ratio(helper: Helper, topology: Topology, kind: str) -> int | None:
+    """The base ratio of a core kind from the cpufreq ``base_frequency`` of its first CPU (kHz / 100000), for the ``TURBO_BELOW_BASE`` warning of ``tune.plan``; ``None`` without the
+    measurement wiring or when the file is unreadable (no warning then -- it is a warning, never a limit)."""
+    w = getattr(helper, "measure_wiring", None)
+    cpu = next((c.cpu for c in topology.cores if c.kind == kind), None)
+    if w is None or cpu is None:
+        return None
+    try:
+        khz = int(str(w.cpufreq.read(cpu, "base_frequency")).strip())
+    except (OSError, ValueError, TypeError):
+        return None
+    return khz // 100_000 or None
+
+
+def _turbo_shape_warnings(helper: Helper, profile: Profile, topology: Topology | None = None) -> list[str]:
     """D-049: F5 (bucket ratios should not RISE with the active-core count), a bucket below the base ratio and a bucket moved by more than ``LARGE_RATIO_CHANGE`` are *warnings*
     (``TURBO_NOT_MONOTONIC`` / ``TURBO_BELOW_BASE`` / ``LARGE_CHANGE``), no longer the ``TURBO_ORDER`` refusal: the CPU accepts such a table. Only a profile can carry a table (the contract
     9 row intent has no table field): accepted / saved profiles and ``restore``."""
@@ -2316,7 +2321,8 @@ def _turbo_shape_warnings(helper: Helper, profile: Profile) -> list[str]:
         if table is None:
             continue
         old = None if tables is None else tables.get(key)
-        out.extend(Warn(code, text) for code, text in turbo_change_notes(label, table, old))
+        base = None if topology is None else _base_ratio(helper, topology, key.upper())
+        out.extend(Warn(code, text) for code, text in turbo_change_notes(label, table, old, base))
     return out
 
 
@@ -2412,12 +2418,13 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
             was = (before.get(unit) or {}).get(point)
             if now["offset_mv"] is not None and now["offset_mv"] > 0 and (was is None or was["offset_mv"] <= 0):
                 warnings.append(Warn("POSITIVE_OFFSET", f"positive offset {now['offset_mv']:+.1f} mV on {unit} {'OC word' if point == '0' else 'point ' + point}"))
-            if was is not None:  # D-049: a large single change / a deep whole-curve offset are warnings of the Review, never refusals
-                where = f"{unit} {'OC word' if point == '0' else 'point ' + point}"
-                for code, text in change_notes(where, ratio=(was.get("ratio"), now.get("ratio")), offset_mv=(was.get("offset_mv"), now.get("offset_mv")), whole_curve=point == "0"):
-                    if code != POSITIVE_OFFSET:
-                        warnings.append(Warn(code, text))
-    warnings.extend(_turbo_shape_warnings(helper, profile))
+            # D-049: a large single change / a deep whole-curve offset are warnings of the Review, never refusals; a unit with no earlier read is judged from the requested offset alone
+            where = f"{unit} {'OC word' if point == '0' else 'point ' + point}"
+            was = was or {}
+            for code, text in change_notes(where, ratio=(was.get("ratio"), now.get("ratio")), offset_mv=(was.get("offset_mv"), now.get("offset_mv")), whole_curve=point == "0"):
+                if code != POSITIVE_OFFSET:
+                    warnings.append(Warn(code, text))
+    warnings.extend(_turbo_shape_warnings(helper, profile, topology))
     prediction = _predict(helper, profile, topology, last, before, after, warnings)
     warnings.append(REVERT_NOTE)
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))

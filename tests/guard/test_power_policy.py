@@ -40,9 +40,11 @@ class PowerTableIsIgnored(unittest.TestCase):
         for key in p.ignored_keys:
             self.assertIn(key, logs.records[0].getMessage())
 
-    def test_the_old_table_is_not_validated(self) -> None:
-        p = load("[power]\npl1_w = 200\nnonsense = true\n")
-        self.assertEqual(p.ignored_keys, ("power.nonsense", "power.pl1_w"))
+    def test_the_old_values_are_not_validated_but_an_unknown_key_still_fails_closed(self) -> None:
+        p = load("[power]\npl1_w = 200\ntau_s = [9, 1]\nmax_step_w = -3\n")
+        self.assertEqual(p.ignored_keys, ("power.max_step_w", "power.pl1_w", "power.tau_s"))
+        with self.assertRaises(PolicyError):
+            load("[power]\npl1_w = 200\nnonsense = true\n")
 
     def test_an_empty_table_and_a_non_table_are_ignored_too(self) -> None:
         self.assertEqual(load("[power]\n").ignored_keys, ("power",))

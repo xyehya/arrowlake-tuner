@@ -85,6 +85,7 @@ from .policy import (
     MsrAllowEntry,
     Policy,
     build_context,
+    hw_v_max_raw,
     build_msr_context,
     fused_top_ratio,
     turbo_bytes,
@@ -807,8 +808,14 @@ class WriteGuard:
             fused_word=self._baselines.get((int(Cmd.VOLTAGE_FLOOR_READ), cpu, 0x11, 0)),
             vf_word_sent=self._last_vf_word_sent(cpu),
             max_voltage_word=self._baselines.get((int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), cpu, 0, 0)),
+            ring_max_voltage_word=self._ring_max_voltage_word(),
             oc_cap_words_of_kind=self.oc_cap_words(self._policy.core_kind(cpu)).values(),
         )
+
+    def _ring_max_voltage_word(self) -> int | None:
+        """The ``0x28 P1=2`` word read this session (the ring is package-level: whichever CPU answered); the lowest if several differ (fail closed)."""
+        words = [w for (cmd, _c, p1, p2), w in self._baselines.items() if cmd == int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ) and (p1, p2) == (2, 0)]
+        return min(words, key=hw_v_max_raw) if words else None
 
     def oc_cap_words(self, kind: str | None = None) -> dict[int, int]:
         """The ``0x01 P1=0 P2=0`` words read this session (cpu -> word), of one core kind if given: the CPU's own ratio limit (D-039, D-049) every raise is judged against."""

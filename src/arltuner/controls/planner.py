@@ -63,6 +63,12 @@ point's ratio is not its ``expect_ratio``, a point does not exist (rc ``0x11``) 
 ``ApplyPlan.ring_refused`` (the P/E steps stand; nothing is skipped silently). Ring steps are ordered by the same transition-safe rule as a core's (``controls.order``), on the
 ring's own curve; they never share a dictionary key with a core (``ring_words``: point -> word, key 0 = the OC word).
 
+D-049, positive point offsets: a ``[[point]]`` / ``[ring]`` offset above 0 is checked by the guard against the ``0x28`` limit of its domain (the core kind's, or the ring's ``P1=2`` limit): the
+point's own V target (else the unit's fused ``0x09`` voltage) + the offset must stay at or under it. The plan adds no extra read for that: the limit is the one bound to the policy from
+``tune.read`` (or this session's ``0x28``), the fused voltage is the one of the CPU's core reads when the profile also sets that core; a positive point offset whose base or limit is
+unread is predicted ``CPU_LIMIT_UNREAD`` (fail closed; a ring has no readable fused voltage, so it needs a V target in its point word). Residual cleanup (``controls.residual``) may now
+lower a leftover OC point's voltage in one step (no step limit, D-049: intended).
+
 Pre-flight mirrors the guard: ``Policy.cpu_allowed``, ``Policy.match`` and the entry's named predicate from ``guard.CHECKS``, with the same
 session facts (``guard.build_context``: the ``0x1C`` / ``0x09`` / ``0x28`` / ``0x01`` words, the planned ``0x11`` word, the CPU's own limits), so a
 predicted refusal is exactly what the guard would answer (the guard stays authoritative).
@@ -122,6 +128,7 @@ __all__ = [
     "PLATFORM_INFO_MSR",
     "RAISE_CAVEAT",
     "TURBO_MSR",
+    "Warn",
     "build_plan",
     "count_operations",
     "oc_cap_kinds",
@@ -533,6 +540,18 @@ def read_steps(
     if ring_targets:
         ring_reads()
     return with_oc_cap_reads()
+
+
+class Warn(str):
+    """A plan warning with a machine-readable ``code`` (contract 9 addendum: the result carries ``{code, text}``). Everything untagged is ``NOTE``. A ``str``, so every reader of the
+    plain-text warnings (CLI, executor report) keeps working."""
+
+    code: str
+
+    def __new__(cls, code: str, text: str) -> "Warn":
+        obj = super().__new__(cls, text)
+        obj.code = code
+        return obj
 
 
 #: Warning on every plan with a ``[[point]]`` (T-025). ASCII only.
@@ -977,7 +996,10 @@ def build_plan(
         except ValueError as exc:
             raise PlanError(f"{pt.label} point {pt.point}: requested offset does not fit the V/F word: {exc}") from exc
         raises = raises or goal_raw > base.offset_raw
-        ctx = build_context(policy, pt.cpu, favored_word=None, fused_word=None, vf_word_sent=None)
+        seen = baseline.get(pt.cpu)  # the facts the guard has of this CPU when the plan is applied: its fused 0x09 / 0x28 words, if the profile also reads the core
+        ctx = build_context(
+            policy, pt.cpu, favored_word=None, fused_word=None if seen is None else seen.fused, vf_word_sent=None, max_voltage_word=None if seen is None else seen.vmax
+        )
         purpose = f"apply: write V/F point {pt.point} offset (0x11 P2={pt.point}) of {pt.label}: {pt.describe()}"
         req = Request(pt.cpu, int(Cmd.VOLTAGE_FREQ_WRITE), 0, pt.point, new.to_u32(), purpose)
         verdict = predict(policy, req, word, ctx)
@@ -1142,9 +1164,9 @@ def build_plan(
         steps = [replace(s, number=remap[s.number]) for s in kept]
     warnings = list(plan_warnings(targets, policy, point_targets))
     warnings.extend(turbo_notes)
-    warnings.extend(f"{code}: {text}" for code, text in change_warns)
+    warnings.extend(Warn(code, f"{code}: {text}") for code, text in change_warns)
     warnings.extend(oc_notes)
-    warnings.extend(f"ring not written: {why}" for why in ring_refused)
+    warnings.extend(Warn("RING_NOT_RESTORED", f"ring not written: {why}") for why in ring_refused)
     if ring_steps and any(st.after is not None and st.before is not None and st.after.offset_raw > st.before.offset_raw for st in ring_steps):
         raises = True
     if raising:

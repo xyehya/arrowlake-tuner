@@ -38,10 +38,15 @@ class RuntimeTableIsIgnored(unittest.TestCase):
         self.assertIn("runtime.uncore_ratio", logs.records[0].getMessage())
 
     def test_the_old_values_are_not_validated(self) -> None:
-        for bad in ("cap_ratio_min = 0", "cap_ratio_min = 256", 'cap_ratio_min = "8"', "uncore_ratio = [40, 8]", "uncore_ratio = [8, 300]", "parking = true"):
+        for bad in ("cap_ratio_min = 0", "cap_ratio_min = 256", 'cap_ratio_min = "8"', "uncore_ratio = [40, 8]", "uncore_ratio = [8, 300]"):
             p = load("[runtime]\n" + bad + "\n")
             self.assertEqual(len(p.ignored_keys), 1, bad)
             self.assertTrue(p.ignored_keys[0].startswith("runtime."), bad)
+
+    def test_an_unknown_sub_key_of_a_removed_table_still_fails_closed(self) -> None:
+        for text in ("[runtime]\nparking = true\n", "[runtime]\ncap_ratio_min = 8\nparking = true\n", "[power]\npl3_w = 5\n"):
+            with self.assertRaises(PolicyError, msg=text):
+                load(text)
 
     def test_a_non_table_is_ignored_too_but_other_unknown_keys_are_not(self) -> None:
         self.assertEqual(load("runtime = 3\n").ignored_keys, ("runtime",))

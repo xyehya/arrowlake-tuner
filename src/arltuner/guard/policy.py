@@ -78,6 +78,8 @@ from arltuner.mailbox.encoding import (
     ENCODING_V_TARGET_MAX_MV,
 )
 from arltuner.topology.cpumap import KIND_E, KIND_P, Topology
+
+KIND_RING = "ring"  # the ring is addressed with P1=2; it is a limit domain here (cmd 0x28 P1=2), not a core kind
 from arltuner.topology.reference import arl_s_285k
 
 __all__ = [
@@ -219,9 +221,11 @@ class CheckContext:
     max_voltage_word: int | None = None  # 0x28 P1=0 P2=0 read this session: [11:0] max voltage S2.10 (XTU uses raw - 1)
     hw_ratio_max: int | None = None  # the CPU's own ratio limit of this kind (cmd 0x01 [7:0]); None = unread (or ratio overclocking not supported: see ``ratio_text``)
     hw_v_max_raw: int | None = None  # the CPU's own voltage limit of this kind (cmd 0x28 [11:0] - 1 LSB, raw S2.10); None = unread
+    hw_ring_v_max_raw: int | None = None  # the ring's own voltage limit (cmd 0x28 P1=2 [11:0] - 1 LSB, raw S2.10); None = unread
     top_fused_ratio: int | None = None  # G-120: the highest fused V/F point ratio of this CPU's kind; a P2 = 0 ratio at or below it has no OC point. None = not known
     ratio_text: str = field(default="", compare=False)  # where ``hw_ratio_max`` comes from, or why it is unknown (names the read), for refusal messages
     v_text: str = field(default="", compare=False)  # the same for ``hw_v_max_raw``
+    ring_v_text: str = field(default="", compare=False)  # the same for ``hw_ring_v_max_raw``
 
 
 def fused_top_ratio(fused_word: int | None) -> int | None:
@@ -272,18 +276,25 @@ def ratio_limit(policy: Policy, kind: str, oc_cap_words: Iterable[int | None] = 
 
 
 def v_target_limit(policy: Policy, kind: str, max_voltage_word: int | None) -> tuple[int | None, str]:
-    """``(the CPU's V limit of a core kind as raw S2.10 or None, source text)`` (D-049): the lowest of the ``0x28`` word of this session (``hw_v_max_raw``, XTU's raw - 1 rule) and
-    the live limit bound to the policy. ``None`` = unread (the text starts with ``CPU_LIMIT_UNREAD`` and names the read)."""
+    """``(the CPU's V limit of a core kind (``"P"`` / ``"E"``) or of the ring (``"ring"``, ``0x28 P1=2``) as raw S2.10 or None, source text)`` (D-049): the lowest of the ``0x28`` word of this
+    session (``hw_v_max_raw``, XTU's raw - 1 rule) and the live limit bound to the policy (raw, exact; a bound whole-mV value is rounded down to raw only when no raw was bound).
+    ``None`` = unread (the text starts with ``CPU_LIMIT_UNREAD`` and names the read)."""
     candidates: list[int] = []
     if max_voltage_word is not None:
         candidates.append(hw_v_max_raw(max_voltage_word))
-    bound = policy.hw_v_target_max_mv[kind]
-    if bound is not None:
-        candidates.append(_mv_to_raw_floor(bound))
+    if kind == KIND_RING:
+        bound_raw: int | None = policy.hw_ring_v_target_max_raw
+    else:
+        bound_raw = policy.hw_v_target_max_raw[kind]
+        if bound_raw is None and policy.hw_v_target_max_mv[kind] is not None:
+            bound_raw = _mv_to_raw_floor(policy.hw_v_target_max_mv[kind])  # type: ignore[arg-type]
+    if bound_raw is not None:
+        candidates.append(bound_raw)
+    where = "the ring (P1=2)" if kind == KIND_RING else f"a {kind} CPU"
     if candidates:
         raw = min(candidates)
-        return raw, f"CPU limit {raw * 1000 // 1024} mV (cmd 0x28 [11:0] - 1 LSB of a {kind} CPU, XTU's rule, registers.md)"
-    return None, f"{CPU_LIMIT_UNREAD}: the CPU's own voltage limit (cmd 0x28 [11:0] of a {kind} CPU) was not read this session"
+        return raw, f"CPU limit {raw * 1000 // 1024} mV (cmd 0x28 [11:0] - 1 LSB of {where}, XTU's rule, registers.md)"
+    return None, f"{CPU_LIMIT_UNREAD}: the CPU's own voltage limit (cmd 0x28 [11:0] of {where}) was not read this session"
 
 
 def v_target_limit_mv(policy: Policy, kind: str, max_voltage_word: int | None) -> tuple[int | None, str]:
@@ -301,12 +312,14 @@ def build_context(
     vf_word_sent: int | None,
     max_voltage_word: int | None = None,
     oc_cap_words_of_kind: Iterable[int | None] = (),
+    ring_max_voltage_word: int | None = None,
 ) -> CheckContext:
     """The bound context for a request on ``cpu``: the session facts plus the CPU's own limits for its core kind (``oc_cap_words_of_kind``: the ``0x01`` words of the kind read in this
     session; the ``0x28`` word and the limits bound to the policy as well)."""
     kind = policy.core_kind(cpu)
     ratio_cap, ratio_text = ratio_limit(policy, kind, oc_cap_words_of_kind)
     v_max_raw, v_text = v_target_limit(policy, kind, max_voltage_word)
+    ring_v_raw, ring_v_text = v_target_limit(policy, KIND_RING, ring_max_voltage_word)
     return CheckContext(
         bound=True,
         top_fused_ratio=fused_top_ratio(fused_word),
@@ -318,6 +331,8 @@ def build_context(
         hw_v_max_raw=v_max_raw,
         ratio_text=ratio_text,
         v_text=v_text,
+        hw_ring_v_max_raw=ring_v_raw,
+        ring_v_text=ring_v_text,
     )
 
 
@@ -394,8 +409,8 @@ def _check_vf_bounded(
        V ordering tests, every other bound applies;
     2. the ratio against the CPU's own limit (cmd ``0x01 [7:0]``, ``ctx.hw_ratio_max``): above it is refused; a **raise** (above the current ratio, ``max(baseline, 0x1C[7:0])``) with the
        limit unread is refused naming the read (``CPU_LIMIT_UNREAD``, fail closed);
-    3. the predicted voltage against the CPU's own limit (cmd ``0x28 [11:0] - 1 LSB``, XTU's rule, field 0 = 2.0 V): the V target of the word (else the fused ``0x09`` voltage) plus a positive
-       offset must not exceed it; a **raise** of that prediction over the baseline's with the limit unread is refused naming the read (``CPU_LIMIT_UNREAD``);
+    3. the predicted voltage against the CPU's own limit (cmd ``0x28 [11:0] - 1 LSB``, XTU's rule, field 0 = 2.0 V): ``max(V target of the word, fused 0x09 voltage)`` (the CPU clamps a
+       target below the top fused point up to it, cpu-rules-audit A:38) plus a positive offset must not exceed it; a positive offset with the fused voltage unread is ``CPU_LIMIT_UNREAD``; a **raise** of that prediction over the baseline's with the limit unread is refused naming the read (``CPU_LIMIT_UNREAD``);
     4. the offset fits the 11-bit field (always true of a decoded word) and the entry's optional ``offset_raw_min`` / ``offset_raw_max`` tighteners (the allow entry, not a policy value);
     5. ordering (registers.md "Ordering", XTU: raise => voltage first, lower => frequency first): one word may not move the ratio and the V target the same way relative to the last
        word sent this session (else the baseline). Raise the V target first, then the ratio; lower the ratio first, then the V target.
@@ -434,13 +449,16 @@ def _check_vf_bounded(
             return False, f"ratio {new.ratio} above the CPU limit {ctx.hw_ratio_max}x ({ctx.ratio_text}; baseline {base.ratio}, 0x1C[7:0] {favored_ratio})"
     elif new.ratio > ratio_noraise:
         return False, f"ratio {new.ratio} raises the ratio (now {ratio_noraise}) but {ctx.ratio_text}"
-    # predicted voltage: the V target of the word (else the fused top-point voltage) plus a positive offset; the baseline's own prediction is the "no raise" reference
-    v_ref = new.v_target_raw or (fused_v or 0)
+    # predicted voltage: the CPU clamps a V target below the top fused point UP to it ([cpu-rules-audit A:38]), so the reference is max(V target, fused V); a positive offset adds to it.
+    # A positive offset with the fused voltage unread has no reference: refused (CPU_LIMIT_UNREAD). The baseline's own prediction is the "no raise" reference.
+    if new.offset_raw > 0 and not fused_v:
+        return False, f"{CPU_LIMIT_UNREAD}: a positive offset needs the fused 0x09 voltage as the CPU clamps a lower V target up to it, and it was not read this session"
+    v_ref = max(new.v_target_raw, fused_v or 0)
     if v_ref == 0 and new.offset_raw > 0:
         return False, "no voltage reference: a positive offset on a word with no OC point needs the fused 0x09 voltage, which was not read this session"
     predicted = v_ref + max(new.offset_raw, 0)
     predicted_now = max(base.v_target_raw, fused_v or 0) + max(base.offset_raw, 0)
-    what = f"V target {new.v_target_raw:#x}" + (f" + offset {new.offset_raw}" if new.offset_raw > 0 else "") if new.v_target_raw else f"fused voltage {v_ref:#x} + offset {new.offset_raw}"
+    what = f"max(V target {new.v_target_raw:#x}, fused {fused_v or 0:#x})" + (f" + offset {new.offset_raw}" if new.offset_raw > 0 else "")
     if ctx.hw_v_max_raw is not None:
         if predicted > ctx.hw_v_max_raw:
             return False, f"predicted voltage {predicted:#x} raw ({what}) above the CPU limit {ctx.hw_v_max_raw:#x} ({ctx.v_text}; baseline {base.v_target_raw:#x}, fused {fused_v})"
@@ -488,8 +506,11 @@ def _check_vf_point_offset_bounded(
        is not a known fused point, so there is nothing to keep;
     3. the offset fits the 11-bit field (always true of a decoded word) and the entry's optional ``offset_raw_min`` / ``offset_raw_max`` tighteners.
 
-    No offset window and no step limit: the voltages of the fused points are not readable, so a point offset cannot be predicted against the cmd ``0x28`` limit -- the CPU's own
-    limit and V/F clamp apply, and a big or positive offset is a Review warning (``controls.planner``). The hardware's V(n) >= V(n-1) rule across points clamps a deeper offset up silently
+    4. a **positive** offset is checked against the cmd ``0x28`` limit of the point's domain (the core kind's; the ring's ``P1=2`` read for ``P1 = 2``): ``base + offset <= limit``
+       (raw, the raw - 1 rule), where ``base`` is the point word's own V target if it has one, else the unit's fused top voltage (cmd ``0x09``; a ring has none: unread). A positive
+       offset with the base or the limit unread is ``CPU_LIMIT_UNREAD`` (fail closed) unless it does not raise the point's offset (a lowering needs no ceiling). A negative offset needs none.
+
+    No offset window and no step limit; a big offset is a Review warning (``controls.planner``). The hardware's V(n) >= V(n-1) rule across points clamps a deeper offset up silently
     ``[MEASURED lnx 2026-10-02]``; it is not checked here (the read-back compares words, not voltages). A caller without a bound context is refused."""
     if ctx is None or not ctx.bound:
         return False, "no check context (the session facts are unknown); the bounds cannot be evaluated"
@@ -510,6 +531,21 @@ def _check_vf_point_offset_bounded(
     low, high = params.get("offset_raw_min", -1024), params.get("offset_raw_max", 1023)
     if not low <= new.offset_raw <= high:
         return False, f"offset_raw {new.offset_raw} outside {low}..{high} (the 11-bit offset field is -1024..1023; entry params {dict(params)})"
+    if new.offset_raw > 0 and new.offset_raw > base.offset_raw:  # a raise of a positive offset: the predicted voltage must stay under the CPU's limit of the domain
+        ring = int(req.p1) == 2
+        limit, limit_text = (ctx.hw_ring_v_max_raw, ctx.ring_v_text) if ring else (ctx.hw_v_max_raw, ctx.v_text)
+        fused_v = None if ctx.fused_word is None else (ctx.fused_word >> 8) & 0xFFF
+        base_v = base.v_target_raw or (None if ring else fused_v)
+        if limit is None:
+            return False, f"positive offset {new.offset_raw} raw: {limit_text}"
+        if not base_v:
+            return False, (
+                f"{CPU_LIMIT_UNREAD}: positive offset {new.offset_raw} raw on point {req.p2}: the point has no V target of its own and "
+                + ("the ring has no readable fused voltage" if ring else "the fused 0x09 voltage of the unit was not read this session")
+            )
+        predicted = base_v + new.offset_raw
+        if predicted > limit:
+            return False, f"predicted voltage {predicted:#x} raw (point {req.p2} base {base_v:#x} + offset {new.offset_raw}) above the CPU limit {limit:#x} ({limit_text})"
     return True, "ok"
 
 _PERCORE_ENABLE_BIT = 0x8  # registers.md 0x14/0x15 data: bit 3 = PerCore Voltage Enable (ARL client)
@@ -783,6 +819,8 @@ class Policy:
     msr_allow: tuple[MsrAllowEntry, ...] = ()  # T-023: plain MSR allowlist; empty (the default) = every plain MSR access is denied
     hw_ratio_max: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # the CPU's own ratio limit per kind (0x01 [7:0]) read by the helper; None = unread
     hw_v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # the CPU's own V limit per kind (0x28 - 1 LSB), whole mV; None = unread
+    hw_v_target_max_raw: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # the same limit as raw S2.10 (exact: E 0x56C -> raw 1387); wins over the mV value
+    hw_ring_v_target_max_raw: int | None = None  # the ring's own V limit (cmd 0x28 P1=2 [11:0] - 1 LSB), raw S2.10; None = unread
     source: str | None = field(default=None, compare=False)  # the policy file this policy was loaded from (named in every refusal that quotes it)
     ignored_keys: tuple[str, ...] = field(default=(), compare=False)  # D-049: keys of an older policy file that load but no longer apply
 
@@ -832,13 +870,24 @@ class Policy:
     def runtime(self) -> None:
         return None
 
-    def with_hw_limits(self, ratio_max_oc: Mapping[str, int | None] | None = None, v_target_max_mv: Mapping[str, int | None] | None = None) -> Policy:
-        """The same policy bound to the CPU's own limits read live: ``0x01 [7:0]`` per kind and ``0x28 - 1 LSB`` in mV per kind. Kinds not given keep their value; keys that
-        are not a core kind (``"ring"``) are not a policy matter and are dropped."""
+    def with_hw_limits(
+        self,
+        ratio_max_oc: Mapping[str, int | None] | None = None,
+        v_target_max_mv: Mapping[str, int | None] | None = None,
+        v_target_max_raw: Mapping[str, int | None] | None = None,
+    ) -> Policy:
+        """The same policy bound to the CPU's own limits read live: ``0x01 [7:0]`` per kind and ``0x28 - 1 LSB`` per kind (whole mV, and raw S2.10 -- exact -- when given; the raw wins).
+        Kinds not given keep their value. The key ``"ring"`` of the V limits is the ring's ``0x28 P1=2`` limit; the ring has no ratio limit here (a ratio key ``"ring"`` is dropped)."""
+        raw = dict(v_target_max_raw or {})
+        ring_raw = raw.get(KIND_RING)
+        if ring_raw is None and (v_target_max_mv or {}).get(KIND_RING) is not None:
+            ring_raw = _mv_to_raw_floor(int((v_target_max_mv or {})[KIND_RING]))  # type: ignore[index]
         return replace(
             self,
             hw_ratio_max={**self.hw_ratio_max, **{k: v for k, v in (ratio_max_oc or {}).items() if k in (KIND_P, KIND_E)}},
             hw_v_target_max_mv={**self.hw_v_target_max_mv, **{k: v for k, v in (v_target_max_mv or {}).items() if k in (KIND_P, KIND_E)}},
+            hw_v_target_max_raw={**self.hw_v_target_max_raw, **{k: v for k, v in raw.items() if k in (KIND_P, KIND_E)}},
+            hw_ring_v_target_max_raw=self.hw_ring_v_target_max_raw if ring_raw is None else ring_raw,
         )
 
     def __post_init__(self) -> None:
@@ -849,6 +898,13 @@ class Policy:
             "hw_v_target_max_mv",
             _kind_ceilings("hw_v_target_max_mv", self.hw_v_target_max_mv, {k: (0, ENCODING_V_TARGET_MAX_MV) for k in (KIND_P, KIND_E)}, "0x28 field [11:0]"),
         )
+        object.__setattr__(
+            self,
+            "hw_v_target_max_raw",
+            _kind_ceilings("hw_v_target_max_raw", self.hw_v_target_max_raw, {k: (0, 0xFFF) for k in (KIND_P, KIND_E)}, "0x28 field [11:0]"),
+        )
+        if self.hw_ring_v_target_max_raw is not None:
+            _int_in("hw_ring_v_target_max_raw", self.hw_ring_v_target_max_raw, 0, 0xFFF, "0x28 field [11:0]")
         if self.e_cpus is not None:
             if isinstance(self.e_cpus, (str, bytes, Mapping)) or not isinstance(self.e_cpus, Iterable):
                 raise PolicyError(f"e_cpus must be a collection of ints, got {type(self.e_cpus).__name__}")
@@ -999,7 +1055,11 @@ LEGACY_KEYS = (
     "power",
     "runtime",
 )
-_LEGACY_TABLES = frozenset({"power", "runtime"})
+#: The sub-keys the removed ``[power]`` / ``[runtime]`` tables had (G-214 / G-216). Only these are ignored; any other sub-key of those tables is still a ``PolicyError`` (fail closed).
+_LEGACY_TABLES = {
+    "power": frozenset({"pl1_w", "pl2_w", "tau_s", "max_step_w"}),
+    "runtime": frozenset({"cap_ratio_min", "uncore_ratio"}),
+}
 _TOP_KEYS = frozenset({"cpus", "max_operations_per_session", "max_operations_per_boot", "min_dwell_s", "allow", "msr_allow", "e_cpus", *LEGACY_KEYS})
 _ENTRY_KEYS = frozenset({"name", "cmd", "p1", "p2", "kind", "check", "params"})
 _ENTRY_REQUIRED = frozenset({"name", "cmd", "p1", "p2", "kind"})
@@ -1096,6 +1156,9 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
             continue
         value = doc[key]
         if key in _LEGACY_TABLES and isinstance(value, dict) and value:
+            unknown_sub = set(value) - _LEGACY_TABLES[key]
+            if unknown_sub:
+                raise PolicyError(f"{key}: unknown key(s) {sorted(unknown_sub)} (the removed {key} table had {sorted(_LEGACY_TABLES[key])}; D-049 ignores only those)")
             ignored.extend(f"{key}.{sub}" for sub in sorted(value))
         else:
             ignored.append(key)

@@ -13,6 +13,7 @@ from typing import Any
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig, SimMsrPort
 from arltuner.msr.sim import POINT_RATIOS_ARL_S
+from arltuner.topology import arl_s_285k
 
 from ._support import HelperCase, Harness, error_code
 
@@ -164,14 +165,40 @@ class PlanTests(TuneCase):
         quiet = [w["code"] for w in self.plan(h, rows(row("P2", curve=-30)))["warnings"]]
         self.assertFalse({"DEEP_WHOLE_CURVE", "LARGE_CHANGE", "POSITIVE_OFFSET"} & set(quiet), quiet)
 
+    def test_deep_whole_curve_is_warned_without_an_earlier_read_too(self) -> None:
+        """D-049: a unit with no earlier read is judged from the requested offset alone."""
+        h = self.boot()
+        deep = [w["code"] for w in self.plan(h, rows(row("P2", curve=-205)))["warnings"]]
+        self.assertIn("DEEP_WHOLE_CURVE", deep)
+        quiet = [w["code"] for w in self.plan(h, rows(row("P2", curve=-30)))["warnings"]]
+        self.assertNotIn("DEEP_WHOLE_CURVE", quiet)
+
+    def test_turbo_below_base_is_warned_on_the_plan_path(self) -> None:
+        """D-049: ``_turbo_shape_warnings`` gets the base ratio (cpufreq ``base_frequency``: P 37x, E 32x in the simulator) so ``TURBO_BELOW_BASE`` fires, as a warning only."""
+        from arltuner.profiles import Profile, TurboTables
+        from arltuner.helper import ops_tune
+
+        from types import SimpleNamespace
+
+        h = self.boot()
+        self.read(h)
+        base = {0: "3700000", 8: "3200000"}  # kHz, as the cpufreq store of the simulator answers (P 37x, E 32x)
+        h.helper.measure_wiring = SimpleNamespace(cpufreq=SimpleNamespace(read=lambda cpu, attr: base[cpu] if attr == "base_frequency" else ""))
+        low = Profile("t", (), TurboTables(e=None, p=(30,) * 8))
+        codes = [getattr(w, "code", None) for w in ops_tune._turbo_shape_warnings(h.helper, low, arl_s_285k())]
+        self.assertIn("TURBO_BELOW_BASE", codes)
+        ok = Profile("t", (), TurboTables(e=None, p=(57, 57, 55, 55, 55, 55, 55, 55)))
+        self.assertNotIn("TURBO_BELOW_BASE", [getattr(w, "code", None) for w in ops_tune._turbo_shape_warnings(h.helper, ok, arl_s_285k())])
+
     def test_the_cpu_limits_for_v_target_and_ratio(self) -> None:
         h = self.boot()
         self.read(h)
         self.plan(h, rows(row("P4", v=1.625)))
         self.plan(h, rows(row("EC0", v=1.354)))
+        self.plan(h, rows(row("EC0", v=1.355)))  # raw 1388 == the E limit exactly
         cases = {
             "P V target 1.626": (row("P4", v=1.626), "cmd 0x28"),
-            "E V target 1.355": (row("EC2", v=1.355), "cmd 0x28"),
+            "E V target 1.356": (row("EC2", v=1.356), "cmd 0x28"),  # 0x56D - 1 LSB = raw 1388 = 1355.47 mV: kept exact (raw), so 1.355 V (raw 1388) is at the limit
             "P ratio 121": (row("P4", ratio=121), "cmd 0x01"),
             "E ratio 121": (row("EC0", ratio=121), "cmd 0x01"),
         }

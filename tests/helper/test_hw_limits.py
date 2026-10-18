@@ -10,8 +10,8 @@ from arltuner.msr import SimConfig, measured_baseline
 
 from .test_tune import ADVANCED, TuneCase, row, rows
 
-LIMITS_P = {"ratio_max_oc": 120, "v_target_max_mv": 1625, "offset_mv": [-1000, 999]}  # 0x778, 0x681 [MEASURED win 2026-10-01]
-LIMITS_E = {"ratio_max_oc": 120, "v_target_max_mv": 1355, "offset_mv": [-1000, 999]}  # 0x778 (E answers P1=0 [UNVERIFIED]), 0x56D
+LIMITS_P = {"ratio_max_oc": 120, "v_target_max_mv": 1625, "v_target_max_raw": 1664, "offset_mv": [-1000, 999]}  # 0x778, 0x681 [MEASURED win 2026-10-01]
+LIMITS_E = {"ratio_max_oc": 120, "v_target_max_mv": 1355, "v_target_max_raw": 1388, "offset_mv": [-1000, 999]}  # 0x778 (E answers P1=0 [UNVERIFIED]), 0x56D
 
 
 def cpu_reports(ratio: int) -> SimConfig:
@@ -76,6 +76,7 @@ class ReadsTheCpuLimits(HwLimitsCase):
         h2 = self.boot()  # a new helper process over the same state directory: no tune.read yet
         policy = __import__("arltuner.helper.ops_tune", fromlist=["_load_policy"])._load_policy(h2.helper)
         self.assertEqual((dict(policy.hw_ratio_max), dict(policy.hw_v_target_max_mv)), ({"P": 120, "E": 120}, {"P": 1625, "E": 1355}))
+        self.assertEqual(dict(policy.hw_v_target_max_raw), {"P": 1664, "E": 1388})  # exact: E 0x56C stays 1388, not the 1387 of the whole-mV value
 
 
 class CpuLimitsDocument(HwLimitsCase):

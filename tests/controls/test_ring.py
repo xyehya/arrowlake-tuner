@@ -46,6 +46,13 @@ def live(offsets: dict[int, int] | None = None, oc: int = 0x28, points: int = 9)
     return {0: oc, **{n: word(r, (offsets or {}).get(n, 0)) for n, r in enumerate(RATIOS[:points], start=1)}}
 
 
+def live_with_v() -> dict[int, int]:
+    """``live()`` where point 8 carries a V target of its own (D-049: a positive ring offset is checked against the ring's 0x28 limit from that base; a ring has no fused voltage to fall back to)."""
+    words = live()
+    words[8] = VfWord(RATIOS[7], 0x500, False, 0).to_u32()
+    return words
+
+
 def plan(profile: Profile, words: dict[int, int], policy=None, **kw):
     return build_plan(profile, TOPO, {}, per_core_enabled=True, policy=policy or ring_policy(), ring_words=words, **kw)
 
@@ -160,8 +167,27 @@ class Plan(unittest.TestCase):
         self.assertTrue(big.allowed, big.refusals)
         self.assertTrue(any(w.startswith("LARGE_CHANGE") and "ring point 8" in w for w in big.warnings), big.warnings)
 
+    def test_a_positive_ring_offset_is_checked_against_the_rings_0x28_limit(self) -> None:
+        """D-049: base (the point word's own V target) + offset <= the ring's 0x28 limit (P1=2, raw - 1); a ring has no readable fused voltage, an unread base or limit is CPU_LIMIT_UNREAD."""
+        self.assertEqual((VfWord.mv_to_offset_raw(15), VfWord.mv_to_offset_raw(16), VfWord.mv_to_offset_raw(1)), (15, 16, 1))
+        limit = 0x5FF
+        pol = ring_policy(hw_ring_v_target_max_raw=limit)
+        words = live()
+        words[8] = VfWord(RATIOS[7], 0x5F0, False, 0).to_u32()  # point 8 carries a V target of its own
+        at = plan(ring_profile({8: 15}), words, policy=pol, only_changed=True)  # 0x5F0 + 15 == the limit
+        self.assertTrue(at.allowed, (at.refusals, at.ring_refused))
+        over = plan(ring_profile({8: 16}), words, policy=pol, only_changed=True)
+        self.assertFalse(over.allowed and not over.ring_refused)
+        self.assertTrue(any("above the CPU limit 0x5ff" in r for r in over.ring_refused), over.ring_refused)
+        no_base = plan(ring_profile({7: 5}), live(), policy=pol, only_changed=True)  # point 7 has no V target and a ring has no fused voltage
+        self.assertTrue(any("CPU_LIMIT_UNREAD" in r for r in no_base.ring_refused), no_base.ring_refused)
+        no_limit = plan(ring_profile({8: 1}), words, policy=ring_policy(), only_changed=True)
+        self.assertTrue(any("CPU_LIMIT_UNREAD" in r and "ring" in r for r in no_limit.ring_refused), no_limit.ring_refused)
+        neg = plan(ring_profile({7: -30}), live(), policy=ring_policy(), only_changed=True)  # a negative offset needs no ceiling
+        self.assertTrue(neg.allowed and not neg.ring_refused, (neg.refusals, neg.ring_refused))
+
     def test_the_writes_are_ordered_raising_first_on_the_rings_own_curve(self) -> None:
-        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(), only_changed=True)
+        p = plan(ring_profile({7: -20, 8: 10}), live_with_v(), policy=ring_policy(hw_ring_v_target_max_raw=0x600), only_changed=True)
         order = [s.p2 for s in p.steps if s.kind.is_write]
         self.assertEqual(order, [8, 7])  # the raise of point 8 goes before the lowering of point 7
 
@@ -193,9 +219,9 @@ def point_profile_p0_point8(offset_mv: int) -> Profile:
 
 class Order(unittest.TestCase):
     def test_the_ring_is_its_own_unit_and_is_modelled_from_the_ring_words(self) -> None:
-        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(), only_changed=True)
+        p = plan(ring_profile({7: -20, 8: 10}), live_with_v(), policy=ring_policy(hw_ring_v_target_max_raw=0x600), only_changed=True)
         steps = [s for s in p.steps if s.kind.is_write]
-        ordered, notes = reorder_writes(list(reversed(steps)), TOPO, {}, {}, live())
+        ordered, notes = reorder_writes(list(reversed(steps)), TOPO, {}, {}, live_with_v())
         self.assertEqual(notes, [])
         self.assertEqual([s.p2 for s in ordered], [8, 7])
 

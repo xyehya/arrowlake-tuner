@@ -255,7 +255,7 @@ class ExpectRatio(PointCase):
 class Bounds(PointCase):
     def test_there_is_no_policy_window_for_a_point_offset(self) -> None:
         # D-049: the D-015 window (-100 mV .. 0) is gone: any offset of the field passes preflight and applies
-        for mv in (-100, -101, -300, 5):
+        for mv in (-100, -101, -300):  # a positive offset is checked against the CPU's 0x28 limit (below)
             with self.subTest(mv=mv):
                 s = self.session()
                 prof = point_profile(point_entry("E", 0, 6, mv))
@@ -263,12 +263,39 @@ class Bounds(PointCase):
                 report = s.apply(prof)
                 self.assertTrue(report.ok, report.format_report())
 
-    def test_a_positive_offset_works_and_warns_about_the_raise(self) -> None:
-        s = self.session()
-        report = s.apply(point_profile(point_entry("P", 4, 8, 10)))
+    def test_a_positive_offset_with_the_cpu_limit_and_fused_voltage_read_works_and_warns_about_the_raise(self) -> None:
+        """D-049: a positive point offset is checked against the 0x28 limit (bound here) from the unit's fused 0x09 voltage, which this profile reads because it also sets the core."""
+        s = self.session(hw_v_target_max_raw={"P": 0x680, "E": 0x680})
+        report = s.apply(point_profile(point_entry("P", 4, 8, 10), entries=(p4(offset_mv=-10),)))
         self.assertTrue(report.ok, report.format_report())
         self.assertTrue(any("RAISES" in w for w in report.plan.warnings))
         self.assertFalse(any(w.startswith("LARGE_CHANGE") for w in report.plan.warnings))
+
+    def test_a_positive_offset_whose_fused_voltage_or_limit_is_unread_is_refused_cpu_limit_unread(self) -> None:
+        for label, changes, prof in (
+            ("point-only: no fused voltage read", dict(hw_v_target_max_raw={"P": 0x680, "E": 0x680}), point_profile(point_entry("P", 4, 8, 10))),
+            ("limit unbound and unread", {}, point_profile(point_entry("P", 4, 8, 10), entries=(p4(offset_mv=-10),))),
+        ):
+            with self.subTest(label):
+                s = self.session(**changes)
+                with self.assertRaises(PlanRefused) as cm:
+                    s.apply(prof)
+                self.assertIn("CPU_LIMIT_UNREAD", str(cm.exception))
+
+    def test_a_positive_offset_above_the_cpu_limit_is_refused_and_a_negative_one_never_needs_it(self) -> None:
+        s = self.session(hw_v_target_max_raw={"P": 0x500, "E": 0x500})  # below the P4 fused voltage + 10 mV
+        with self.assertRaises(PlanRefused) as cm:
+            s.apply(point_profile(point_entry("P", 4, 8, 10), entries=(p4(offset_mv=-10),)))
+        self.assertIn("above the CPU limit", str(cm.exception))
+        s = self.session()
+        report = s.apply(point_profile(point_entry("P", 4, 8, -10)))  # unbound, unread limit: lowering needs no ceiling
+        self.assertTrue(report.ok, report.format_report())
+
+    def test_the_plan_warnings_carry_their_codes(self) -> None:
+        s = self.session()
+        report = s.apply(point_profile(point_entry("E", 0, 6, -60, expect_ratio=46)))
+        coded = [w for w in report.plan.warnings if getattr(w, "code", None) == "LARGE_CHANGE"]
+        self.assertTrue(coded, report.plan.warnings)
 
     def test_a_big_step_is_one_write_and_a_large_change_warning(self) -> None:
         s = self.session()

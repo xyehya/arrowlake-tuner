@@ -98,8 +98,13 @@ class AcceptedPointOffset(PointCase):
     def test_there_is_no_window_floor_or_ceiling(self) -> None:
         # D-049: the D-015 floors (E -102 raw, P -51 raw with the assumed BIOS offset) and the offset ceiling are gone: the 11-bit field is the only bound
         guard = self.open(E8, 6, POINT6)
-        for raw in (-102, -103, -500, -1024, 26, 300, 1023):
+        for raw in (-102, -103, -500, -1024):
             self.assertIs(self.write(guard, point_word(46, raw)).verified, True, raw)
+        self.transport.state.clear()
+        # a positive offset is bounded only by the CPU's 0x28 limit (bound here as 0x7FF) from the point's own V target: 0x400 + 1023 == the limit
+        guard = self.open(E8, 6, point_word(46, 0, v_raw=0x400), hw_v_target_max_raw={"P": 0x7FF, "E": 0x7FF})
+        for raw in (26, 300, 1023):
+            self.assertIs(self.write(guard, point_word(46, raw, v_raw=0x400)).verified, True, raw)
         self.transport.state.clear()
         guard = self.open(P1CPU, 8, point_word(57))
         for raw in (-51, -52, -400):
@@ -148,9 +153,9 @@ class OnlyTheOffsetMayChange(PointCase):
         self.assertIs(self.write(guard, point_word(46, -200)).verified, True)  # D-049: 200 raw in one write
 
     def test_a_baseline_with_an_offset_moves_by_any_amount(self) -> None:
-        guard = self.open(word=point_word(46, -50))
-        self.assertIs(self.write(guard, point_word(46, -300)).verified, True)
-        self.assertIs(self.write(guard, point_word(46, 100)).verified, True)
+        guard = self.open(word=point_word(46, -50, v_raw=0x400), hw_v_target_max_raw={"P": 0x7FF, "E": 0x7FF})
+        self.assertIs(self.write(guard, point_word(46, -300, v_raw=0x400)).verified, True)
+        self.assertIs(self.write(guard, point_word(46, 100, v_raw=0x400)).verified, True)
 
 
 class BaselineIsThePointsOwn(PointCase):
