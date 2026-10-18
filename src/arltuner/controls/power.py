@@ -87,7 +87,7 @@ class Refused(PowerError):
 # --------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Units:
-    """``0x606``: power unit 2^-PU W (``[3:0]``), energy unit ``[12:8]``, time unit 2^-TU s (``[19:16]``). ``[MEASURED lnx 2026-09-29]`` 0.125 W / 2^-14 J / 2^-10 s on the 285K."""
+    """``0x606``: power unit 2^-PU W (``[3:0]``), energy unit ``[12:8]``, time unit 2^-TU s (``[19:16]``). ``[MEASURED lnx 2026-09-29]`` 0.125 W / 2^-14 J / 2^-10 s on the reference machine."""
 
     power_w: float
     time_s: float

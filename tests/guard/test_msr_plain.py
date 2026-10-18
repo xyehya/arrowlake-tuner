@@ -122,9 +122,9 @@ class PlainCase(unittest.TestCase):
 
 
 class DefaultPolicyIsInert(unittest.TestCase):
-    def test_default_allows_only_plain_reads_of_the_seven_msrs(self) -> None:
+    def test_default_allows_only_plain_reads_of_the_ten_msrs(self) -> None:
         p = default_m1_policy()
-        self.assertEqual({e.msr for e in p.msr_allow}, {0x1AD, 0x1AE, 0x650, 0x651, 0xCE, 0x194, 0x198})
+        self.assertEqual({e.msr for e in p.msr_allow}, {0x1AD, 0x1AE, 0x650, 0x651, 0xCE, 0x194, 0x198, 0x606, 0x610, 0x614})  # G-214: the RAPL units / limit / info registers, read-only
         self.assertTrue(all(e.kind == "read" and e.check is None for e in p.msr_allow))
         for msr in (0x1AD, 0x650, 0x1AE, 0x651, 0xCE, 0x194):
             self.assertIsNone(p.match_msr(msr, "write"))
