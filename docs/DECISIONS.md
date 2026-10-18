@@ -240,3 +240,8 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   without asking per sitting. Unchanged: SAFETY.md (one mailbox transaction at a time, no sweeps, guard refusals never worked around, read-back,
   health gate, cold-boot recovery plan); workers still never touch hardware; new policy keys get the most conservative values (the machine's
   current/BIOS values as ceilings, no widening of existing limits) and are recorded with backups; every sitting is logged in `captures/lnx/`.
+
+## D-048 · Core parking held (2026-10-18, orchestrator)
+G-216 Opus review: an offline CPU renumbers P-core indices (profile offsets would land on the wrong physical core) and unequal E clusters push the helper
+READ_ONLY so the unpark itself is refused. Parking is not an XTU control. Held out of G-216; the helper instead refuses tune/measure/stress/runtime writes
+while any CPU is offline. Revisit only with live evidence of how this kernel reports a parked CPU.
