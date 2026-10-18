@@ -15,12 +15,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
-from arltuner.guard import AuditState, AuditUnreadable, Policy, Refusal, read_state
+from arltuner.guard import AuditLog, AuditState, AuditUnreadable, Policy, Refusal, Request, read_state
 from arltuner.guard import audit as audit_module
 from arltuner.guard.audit import SCAN_STATS, parse_audit_ts
 
@@ -208,12 +209,13 @@ class IncrementalReadStateTests(unittest.TestCase):
         st = os.stat(self.path)
         with open(self.path, "rb") as handle:
             self.assertTrue(audit_module._cache_matches(tail, st, handle))
-            same = dict(st_dev=st.st_dev, st_ino=st.st_ino, st_size=st.st_size)
+            same = dict(st_dev=st.st_dev, st_ino=st.st_ino, st_size=st.st_size, st_mtime_ns=st.st_mtime_ns)
             for label, changed in (
                 ("another inode", dict(same, st_ino=st.st_ino + 1)),
                 ("another device", dict(same, st_dev=st.st_dev + 1)),
                 ("shorter than what was summarised", dict(same, st_size=tail.offset - 1)),
                 ("no inode number", dict(same, st_ino=0)),
+                ("same size, other mtime", dict(same, st_mtime_ns=st.st_mtime_ns + 1)),
             ):
                 with self.subTest(label):
                     self.assertFalse(audit_module._cache_matches(tail, SimpleNamespace(**changed), handle))  # type: ignore[arg-type]
@@ -238,6 +240,86 @@ class IncrementalReadStateTests(unittest.TestCase):
         body = "".join(attempt(boot_id="B") + "\n" for _ in range(20))
         self.put(body.replace("B", "C", 1))
         self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"C": 1, "B": 19}, "the head check catches the in-place edit near the start")
+
+    def test_a_same_size_rewrite_of_the_middle_rescans(self) -> None:
+        """Size == the cached offset, first and last 256 bytes untouched, but records 2-48 rewritten: only the mtime check can see it."""
+        self.put("".join(attempt(boot_id="A") + "\n" for _ in range(50)))
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 50})
+        _, scans = self.stats()
+        lines = [attempt(boot_id="A") + "\n"] + [attempt(boot_id="B") + "\n"] * 47 + [attempt(boot_id="A") + "\n"] * 2
+        rewritten = "".join(lines)
+        self.assertEqual(len(rewritten), self.path.stat().st_size)
+        before = self.path.stat().st_mtime_ns
+        self.put(rewritten)
+        os.utime(self.path, ns=(before + 5_000_000_000, before + 5_000_000_000))  # a coarse-grained filesystem clock must not hide the write
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 3, "B": 47})
+        self.assertEqual(self.stats()[1], scans + 1)
+        # and an untouched file of exactly the cached size is still served from the cache
+        read_state(self.path)
+        self.assertEqual(self.stats()[1], scans + 1)
+
+    def test_a_replacement_file_with_an_identical_start_rescans(self) -> None:
+        head = "".join(attempt(boot_id="A") + "\n" for _ in range(8))  # > 256 bytes, so the head anchor is full
+        self.put(head + "".join(attempt(boot_id="A") + "\n" for _ in range(4)))
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 12})
+        _, scans = self.stats()
+        replacement = self.dir / "new.jsonl"
+        replacement.write_text(head + "".join(attempt(boot_id="B") + "\n" for _ in range(9)), encoding="utf-8")  # same start, longer, new inode
+        os.replace(replacement, self.path)
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 8, "B": 9})
+        self.assertEqual(self.stats()[1], scans + 1)
+
+    def test_the_start_anchor_is_topped_up_while_it_is_short(self) -> None:
+        self.put(attempt(boot_id="A") + "\n")
+        read_state(self.path)
+        tail = audit_module._TAILS[os.path.abspath(self.path)]
+        self.assertEqual(len(tail.head), tail.offset)  # short file: the anchor is the whole of it
+        self.assertLess(len(tail.head), audit_module._ANCHOR)
+        for _ in range(10):
+            self.add(attempt(boot_id="A") + "\n")
+            read_state(self.path)
+        with open(self.path, "rb") as handle:
+            on_disk = handle.read(audit_module._ANCHOR)
+        self.assertEqual(len(tail.head), audit_module._ANCHOR)
+        self.assertEqual(tail.head, on_disk)
+        self.assertEqual(tail.anchor, self.path.read_bytes()[tail.offset - audit_module._ANCHOR : tail.offset])
+        _, scans = self.stats()
+        # an in-place edit inside the first 256 bytes is seen by the topped-up head even though the file only grew since
+        self.add(attempt(boot_id="A") + "\n")
+        read_state(self.path)
+        _, scans = self.stats()
+        data = self.path.read_bytes()
+        at = data.index(b'"A"', 100)
+        self.assertLess(at, audit_module._ANCHOR)
+        self.put(data[:at] + b'"B"' + data[at + 3 :] + attempt(boot_id="A").encode() + b"\n")
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 12, "B": 1})
+        self.assertEqual(self.stats()[1], scans + 1)
+
+    def test_readers_racing_an_appender_see_a_consistent_state(self) -> None:
+        log = AuditLog(self.path, fsync=False)
+        self.put("")
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    read_state(self.path)
+            except BaseException as exc:  # noqa: BLE001 - collected and asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=reader) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        try:
+            for _ in range(150):
+                log.append("attempt", request=Request(0, 0x10, 0, 0, 0, "race"), boot_id="A")
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(timeout=30)
+        self.assertEqual(errors, [])
+        self.assertEqual(dict(self.same_as_oracle().attempts_by_boot), {"A": 150})
 
     def test_the_file_disappearing_is_no_history_and_it_coming_back_is_read_afresh(self) -> None:
         self.put(attempt(boot_id="A") + "\n")

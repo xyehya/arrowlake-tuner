@@ -131,6 +131,7 @@ class RealGateStopsTheGuard(FakeRootCase):
     def test_a_fault_during_the_transaction_trips_the_guard(self) -> None:
         for label, (inject, text) in self.faults().items():
             with self.subTest(label):
+                self.doCleanups()  # drop the previous subtest's temp dir, then build a fresh fake root
                 self.setUp()
                 guard = self.guard()
                 self.transport.before_return = lambda call, inject=inject: inject()

@@ -282,11 +282,13 @@ parse_audit_ts = _parse_ts  # public name for other readers of the audit log, so
 #  * the cached summary covers exactly the *complete* ("\n"-terminated) lines before ``offset``; ``offset`` always sits right after a "\n" (or is 0);
 #  * the cache is used only if the file we just opened (fresh ``O_NOFOLLOW`` open + ``fstat`` regular/one-link check, as before) has the same
 #    ``(st_dev, st_ino)``, is at least ``offset`` bytes long, and the bytes at its start and just before ``offset`` are the ones we saw
-#    (``_ANCHOR`` bytes each). Anything else -- another inode, truncation, a rewrite in place -- discards the cache and rescans from byte 0;
+#    (``_ANCHOR`` bytes each); if its size is exactly ``offset`` its mtime must also be the one recorded at commit (an in-place rewrite of the same
+#    length changes it). Anything else -- another inode, truncation, a rewrite in place -- discards the cache and rescans from byte 0;
 #  * an unterminated last line is judged afresh on every call and never cached (counted if it parses as an event, ignored if it is cut short: the
 #    old rule), so a line another process is still writing is not consumed half way;
 #  * a malformed *complete* line raises ``AuditUnreadable`` and nothing is committed: the next call fails the same way (fail closed);
-#  * outside the model (documented, not detected): a byte of the already-summarised middle of the file edited in place without changing the size.
+#  * outside the model (documented, not detected): a byte of the already-summarised middle of the file edited in place after more bytes were appended
+#    (the size is then above ``offset``, so the mtime is not consulted) without changing the size.
 #    The log is root-owned 0600 and written with ``O_APPEND`` only; someone who can do that can equally delete or truncate it.
 _ANCHOR = 256  # bytes compared at the start of the file and just before ``offset`` to notice a file that was rewritten in place
 _TAIL_CACHE_MAX = 16  # paths remembered per process (the helper and the CLI use one; tests use many temp files)
@@ -295,7 +297,7 @@ _TAIL_CACHE_MAX = 16  # paths remembered per process (the helper and the CLI use
 class _Tail:
     """What ``read_state`` already knows of one audit file: the summary of its first ``offset`` bytes (``lines`` complete lines)."""
 
-    __slots__ = ("anchor", "by_boot", "dev", "head", "ino", "last", "lines", "offset")
+    __slots__ = ("anchor", "by_boot", "dev", "head", "ino", "last", "lines", "mtime_ns", "offset")
 
     def __init__(self) -> None:
         self.dev = self.ino = -1
@@ -305,6 +307,7 @@ class _Tail:
         self.by_boot: dict[str | None, int] = {}
         self.head = b""  # first bytes of the file as summarised
         self.anchor = b""  # the bytes just before ``offset``
+        self.mtime_ns: int | None = None  # st_mtime_ns of the file when it was exactly ``offset`` bytes long (``None`` = not seen so)
 
 
 _TAILS: dict[str, _Tail] = {}
@@ -342,6 +345,8 @@ def _cache_matches(tail: _Tail, st: os.stat_result, handle: io.BufferedReader) -
         return True  # nothing summarised yet: scanning from byte 0 is what extending it means
     if st.st_ino == 0 or (tail.dev, tail.ino) != (st.st_dev, st.st_ino) or st.st_size < tail.offset:
         return False
+    if st.st_size == tail.offset and st.st_mtime_ns != tail.mtime_ns:
+        return False  # nothing was appended (the size is the same) yet the file was written: an in-place rewrite of the same length
     handle.seek(0)
     if handle.read(len(tail.head)) != tail.head:
         return False
@@ -377,6 +382,7 @@ def read_state(path: Path | str) -> AuditState:
             tail.dev, tail.ino = st.st_dev, st.st_ino
             handle.seek(tail.offset)
             offset, lines, last, by_boot = tail.offset, tail.lines, tail.last, dict(tail.by_boot)
+            head, anchor = tail.head, tail.anchor  # extended from the bytes the loop reads, so they describe exactly what was summarised
             pending: bytes | None = None  # the unterminated last line, if any
             for raw in handle:
                 SCAN_STATS["bytes_read"] += len(raw)
@@ -385,18 +391,18 @@ def read_state(path: Path | str) -> AuditState:
                     break
                 lines += 1
                 offset += len(raw)
+                if len(head) < _ANCHOR:
+                    head = (head + raw)[:_ANCHOR]
+                anchor = (anchor + raw)[-_ANCHOR:]
                 counted = _fold_line(raw, f"{target}:{lines}", False)
                 if counted is not None:
                     stamp, boot = counted
                     last = stamp if last is None else max(last, stamp)
                     by_boot[boot] = by_boot.get(boot, 0) + 1
             if offset > tail.offset:  # commit what is complete; an exception above leaves the cache exactly as it was
-                if tail.offset == 0:
-                    handle.seek(0)
-                    tail.head = handle.read(min(_ANCHOR, offset))
-                handle.seek(offset - min(_ANCHOR, offset))
-                tail.anchor = handle.read(min(_ANCHOR, offset))
+                tail.head, tail.anchor = head, anchor
                 tail.offset, tail.lines, tail.last, tail.by_boot = offset, lines, last, dict(by_boot)
+                tail.mtime_ns = st.st_mtime_ns if st.st_size == offset else None
             if len(_TAILS) >= _TAIL_CACHE_MAX and key not in _TAILS:
                 _TAILS.pop(next(iter(_TAILS)))
             _TAILS[key] = tail
