@@ -1,0 +1,15 @@
+- G-207 is merged: use desktop/app/ui/lib/{units,draft,predict,intent,limits,format}.js; do not duplicate their logic (extend them only if needed and say so).
+- Sub-tab contract (shared with G-209 which builds views/tune/turbo.js in parallel): every Tune sub-tab module exports
+  `mount(el, ctx)` and `unmount()`, where ctx = {store, bridge, draft, units, limits} (the objects from G-205/G-207). tune.js owns the sub-tab bar
+  (Cores · Turbo ratios · Power · Ring & uncore · Ratios & parking), mounts views/tune/turbo.js for "Turbo ratios", and shows a "coming with G-217"
+  placeholder for Power / Ring & uncore / Ratios & parking. The ring must ALSO be a tile in the Cores grid with the same inspector (PLAN §4.2).
+- Decisions on G-207's open questions: ring whole-curve may cover P2 1..9 (D-045); ring window stand-in OK but label it; scope "unit" always;
+  REGENERATE the recorded tune.read fixture so it carries intent_features ["ring"] (fixtures/gen_fixtures.py; you own fixtures/ for this) ; pending
+  compares raw words; predictions: if a baseline curve exists (curves.list baseline + curves.get) inject it into predict so lower points get a
+  predicted V; otherwise show "—" with the reason "no baseline curve (Curves → Measure)".
+- The "Read CPU state" action lives on the Tune screen (PLAN §4.3, last bullet): tune.read with live progress events; show the measured duration.
+- Edits go to the shared draft; the pending bar (G-205) must count them. Review & Apply is G-210 (not yours): just leave the pending bar's button wired
+  to an event `tune:review` on the store.
+- Visual quality: XTU-like tiles (see desktop/discovery/xtu-reference.md and the image description there), favored ★, dense inspector table with
+  aligned tabular numerals. The orchestrator screenshots it.
+- Node 24: node --test "desktop/app/ui/tests/*.test.mjs"; Playwright via /usr/bin/python3.
