@@ -45,8 +45,8 @@ same CPU must equal the value written, then ``rdmsr`` on ``verify_cpu`` (a CPU o
 
 Session facts (T-021, ``[MEASURED win 2026-10-01]`` XTU's per-core Apply: ``0x11`` -> ``0x1D`` -> ``0x26`` read -> ``0x27``): the named
 checks also see what this session has read for the request's CPU (``0x1C`` favored word, ``0x09 P1=0x11`` fused point, and -- D-016 --
-``0x28`` hardware maximum voltage) and the ``0x11`` word it executed there (``policy.CheckContext``), together with the policy's bounds
-for the CPU's core kind (ratio / V target ceilings, offset window, step limits: safety by bounds, not by direction). Read twins:
+``0x28`` hardware maximum voltage, ``0x01`` ratio limit) and the ``0x11`` word it executed there (``policy.CheckContext``), together with the CPU's own limits
+for the CPU's core kind (D-049: ratio ``0x01 [7:0]``, voltage ``0x28 - 1 LSB``, read live; an unread limit refuses a raise: ``CPU_LIMIT_UNREAD``). Read twins:
 ``0x11->0x10``, ``0x15->0x14``, ``0x1D->0x1C``, ``0x27->0x26``; the read-back of ``0x1D`` compares only ``[7:0]`` (``0x1C`` also carries
 the fused ratio in ``[15:8]``), every other write compares the whole word. The read-backs are extra WRMSRs: they are exempt from this
 guard's session / per-boot counters (``audit.py`` logs them as ``readback``, never ``attempt``) and counted by the planner's pre-flight
@@ -85,6 +85,7 @@ from .policy import (
     MsrAllowEntry,
     Policy,
     build_context,
+    hw_v_max_raw,
     build_msr_context,
     fused_top_ratio,
     turbo_bytes,
@@ -396,7 +397,7 @@ class WriteGuard:
         self._journal: list[_Executed] = []
         self._msr_baselines: dict[tuple[int, int], int] = {}  # (cpu, msr) -> value of a successful plain rdmsr (T-023)
         self._msr_journal: list[_MsrExecuted] = []
-        # 0x1C words (cpu -> word) the helper read from the CPU earlier in this boot's session (tune.read): the data of an "auto" ratio ceiling for a plan that reads none itself
+        # 0x1C words (cpu -> word) the helper read from the CPU earlier in this boot's session (tune.read): kept for callers that seed a session with earlier reads
         self._seed_favored = {int(c): int(w) for c, w in (session_favored_words or {}).items() if w}
 
     # ---------------------------------------------------------------- public
@@ -701,17 +702,12 @@ class WriteGuard:
             self._refuse(Refusal.CHECK_FAILED, f"write entry {entry.name!r} has no evaluable check", req, confirm)
         assert check is not None and baseline is not None
         try:
-            context = build_msr_context(self._policy, int(req.msr), platform_info=self._platform_info(), favored_words=self.favored_words(), oc_cap_words=self.oc_cap_words())
+            context = build_msr_context(self._policy, int(req.msr), oc_cap_words=self.oc_cap_words())
             ok, detail = check(req, baseline, entry.params, context)
         except Exception as exc:
             ok, detail = False, f"check {entry.check!r} raised {type(exc).__name__}: {exc}"
         if ok is not True:
             self._refuse(Refusal.CHECK_FAILED, f"{entry.check}: {detail}", req, confirm)
-
-    def _platform_info(self) -> int | None:
-        """The ``0xCE`` word read this session (any CPU): the one with the highest base ratio ``[15:8]`` (the strictest floor), or ``None``."""
-        words = [v for (_, msr), v in self._msr_baselines.items() if msr == 0xCE]
-        return max(words, key=lambda w: (w >> 8) & 0xFF, default=None)
 
     def _send_and_verify_msr(self, req: MsrRequest, confirm: Confirmation, baseline: int | None) -> MsrResult:
         assert self._msr_port is not None
@@ -812,12 +808,17 @@ class WriteGuard:
             fused_word=self._baselines.get((int(Cmd.VOLTAGE_FLOOR_READ), cpu, 0x11, 0)),
             vf_word_sent=self._last_vf_word_sent(cpu),
             max_voltage_word=self._baselines.get((int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ), cpu, 0, 0)),
-            favored_words_of_kind=self.favored_words(self._policy.core_kind(cpu)).values() if self._policy.ratio_auto else None,
+            ring_max_voltage_word=self._ring_max_voltage_word(),
             oc_cap_words_of_kind=self.oc_cap_words(self._policy.core_kind(cpu)).values(),
         )
 
+    def _ring_max_voltage_word(self) -> int | None:
+        """The ``0x28 P1=2`` word read this session (the ring is package-level: whichever CPU answered); the lowest if several differ (fail closed)."""
+        words = [w for (cmd, _c, p1, p2), w in self._baselines.items() if cmd == int(Cmd.MAXIMUM_VOLTAGE_LIMIT_READ) and (p1, p2) == (2, 0)]
+        return min(words, key=hw_v_max_raw) if words else None
+
     def oc_cap_words(self, kind: str | None = None) -> dict[int, int]:
-        """The ``0x01 P1=0 P2=0`` words read this session (cpu -> word), of one core kind if given: the CPU's own ratio limit (D-039) that clamps every ratio ceiling."""
+        """The ``0x01 P1=0 P2=0`` words read this session (cpu -> word), of one core kind if given: the CPU's own ratio limit (D-039, D-049) every raise is judged against."""
         return {
             c: w
             for (cmd, c, p1, p2), w in self._baselines.items()
@@ -825,7 +826,7 @@ class WriteGuard:
         }
 
     def favored_words(self, kind: str | None = None) -> dict[int, int]:
-        """The ``0x1C`` words read this session (cpu -> word), of one core kind if given: the data an ``"auto"`` ratio ceiling is derived from."""
+        """The ``0x1C`` words read this session (cpu -> word), of one core kind if given: """
         words = {c: w for c, w in self._seed_favored.items() if kind is None or self._policy.core_kind(c) == kind}
         words.update(
             {

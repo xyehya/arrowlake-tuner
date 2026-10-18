@@ -31,7 +31,7 @@ from arltuner.guard import AuditLog, GuardRefused, MsrRequest, Policy, Refusal
 from arltuner.helper.config import INSTALLED_LOCK_DIR
 
 from .ops import OpContext, OpSpec, _only, _refuse, _trust, _trust_refusal, helper_topology
-from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _guarded_session, _load_policy, _validate_tune_apply
+from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _guarded_session, _load_policy, _validate_tune_apply, cpu_limits_doc
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, REFUSED, PLAN_STALE, OpError
 from .state import State
 from .trust import TrustError, check_lock_file, open_checked
@@ -184,15 +184,8 @@ def _msr_json(view: pw.MsrView) -> dict[str, Any] | None:
 
 
 def _policy_json(policy: Policy) -> dict[str, Any]:
-    """The ``[power]`` bounds as the policy has them; ``null`` = absent = that value may not be written."""
-    p = policy.power
-    return {
-        "source": policy.where,
-        "pl1_w": None if p is None or p.pl1_w is None else list(p.pl1_w),
-        "pl2_w": None if p is None or p.pl2_w is None else list(p.pl2_w),
-        "tau_s": None if p is None or p.tau_s is None else list(p.tau_s),
-        "max_step_w": None if p is None else p.max_step_w,
-    }
+    """D-049: the policy no longer bounds a power value (no ``[power]`` table), so only where it was read from. The limits that apply are in ``cpu_limits`` (MSR 0x610 / 0x606)."""
+    return {"source": policy.where}
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -402,6 +395,7 @@ def op_power_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     result: dict[str, Any] = {
         "available": False, "powercap": None, "msr": None, "msr_note": None, "locked": None, "writable": False, "read_only_reason": None,
         "policy": _policy_json(policy), "boot": None, "journal": str(w.journal_path), "note": None,
+        "cpu_limits": cpu_limits_doc(helper, power=pw.limits_json(None)),
     }
     try:
         state = pw.read_state(w.files)
@@ -414,6 +408,7 @@ def op_power_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     view = _msr_view(helper, ctx, policy, MSRS, "power.read")
     result["msr"] = _msr_json(view)
     result["msr_note"] = view.note
+    result["cpu_limits"] = cpu_limits_doc(helper, power=pw.limits_json(view))  # D-049: the lock bit and the field width, read now
     if view.limit is not None:
         result["locked"] = view.limit.locked
         # the file and the register must agree on what is in force: a difference is reported, not resolved
@@ -471,26 +466,14 @@ def _after(state: pw.State, steps: list[pw.PowerStep]) -> dict[str, Any]:
     }
 
 
-def _journal_policy_warnings(policy: Policy, boot: dict[str, int | None]) -> list[str]:
-    """A revert restores a recorded state and is not bounded by ``[power]``; say so when a recorded value lies outside what the policy would allow now."""
-    out: list[str] = []
-    p = policy.power
-    for key, field_name in (("pl1_w", "pl1_uw"), ("pl2_w", "pl2_uw"), ("tau_s", "tau_us")):
-        rng = None if p is None else getattr(p, key)
-        value = boot[field_name]
-        if rng is not None and value is not None and not rng[0] <= value / _UW <= rng[1]:
-            out.append(f"the boot value of {key} ({value / _UW:g}) is outside the policy's [power] {key} = [{rng[0]:g}, {rng[1]:g}]: the revert restores it anyway")
-    return out
-
-
 def op_power_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
     policy = _load_policy(helper)
     w = _wiring(helper)
     steps, state, view, boot = _steps_for(helper, ctx, policy, w, args, "power.plan")
     journal_new = boot is None and not args.get("revert")
     warnings = ["tau is rounded down to the window the register can encode (the step shows that window); the read-back must show exactly it"] if any(s.key == "tau_s" for s in steps) else []
-    if args.get("revert") and boot is not None:
-        warnings.extend(_journal_policy_warnings(policy, boot))
+    if not args.get("revert"):
+        warnings.extend(f"{code}: {text}" for code, text in pw.warnings(args["power"], state))  # D-049: PL2_BELOW_PL1 / LARGE_CHANGE only warn
     if journal_new:
         warnings.append(f"the values now in force are journaled before the first write ({pw.BIOS_NOTE}); \"revert\" puts them back")
     warnings.append("package power limits are runtime state: a reboot restores the firmware values")
@@ -501,7 +484,7 @@ def op_power_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     return {
         "plan_id": plan_id, "nonce": nonce, "revert": bool(args.get("revert")), "steps": [s.as_json() for s in steps], "writes": len(steps), "ops_needed": 0, "expires_s": int(PLAN_EXPIRES_S),
         "before": state.as_json(), "after": _after(state, steps), "locked": view.limit.locked if view.limit else None, "journal_new": journal_new, "warnings": warnings,
-        "policy": _policy_json(policy),
+        "policy": _policy_json(policy), "cpu_limits": cpu_limits_doc(helper, power=pw.limits_json(view)),
     }
 
 

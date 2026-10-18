@@ -1,4 +1,5 @@
-"""G-133 (D-036): ``tune.read`` / ``tune.last`` carry ``limits`` -- the bound policy with ``"auto"`` resolved -- so the page offers what the guard accepts and holds no literal.
+"""G-133 (D-036, D-049): ``tune.read`` / ``tune.last`` carry ``limits`` -- the shape the page reads. D-049 removed every operator value limit, so the policy part is empty (offset window =
+the 11-bit field, ratio / V target null with source ``none``); the CPU's own limits are in ``hw_limits`` / ``cpu_limits``.
 
 Through the real helper loop and the simulator; temp directories only. No hardware, no sudo."""
 from __future__ import annotations
@@ -9,54 +10,34 @@ from .test_continuity import LastReadCase
 
 
 class LimitsTests(LastReadCase):
-    def edit_policy(self, old: str, new: str) -> None:
-        text = self.policy.read_text()
-        self.assertIn(old, text)
-        self.policy.write_text(text.replace(old, new))
-
-    def test_the_read_carries_the_limits_of_the_shipped_policy(self) -> None:
+    def test_the_read_carries_no_operator_value_limits(self) -> None:
         h = self.boot()
-        lim = self.read(h)["limits"]
-        self.assertEqual(lim["offset_mv"], {"P": {"min": -200, "max": 200}, "E": {"min": -200, "max": 200}})   # policies/default.toml: ±200 mV (D-032)
-        self.assertEqual(lim["v_target_max_v"], {"P": 1.625, "E": 1.355})   # "auto": the sanity bound of the kind; the CPU's own 0x28 maximum is checked at apply
-        self.assertEqual(lim["ratio_max"]["E"], 49)   # the test policy states E = 49
-        self.assertEqual(lim["ratio_max"]["P"], 60)   # "auto": the 0x1C words read this boot + 3 (D-038)
-        self.assertEqual(lim["source"], {"ratio_max": {"P": "auto", "E": "policy"}, "v_target_max": {"P": "auto", "E": "auto"}})
-
-    def test_a_number_in_the_policy_is_the_limit(self) -> None:
-        self.edit_policy('[ratio_max]\nP = "auto"\nE = 49', "[ratio_max]\nP = 60\nE = 49")
-        h = self.boot()
-        lim = self.read(h)["limits"]
-        self.assertEqual((lim["ratio_max"]["P"], lim["source"]["ratio_max"]["P"]), (60, "policy"))
-
-    def test_no_ceiling_in_the_policy_is_none_not_a_guess(self) -> None:
-        self.edit_policy('[v_target_max_mv]\nP = "auto"\nE = "auto"', "[v_target_max_mv]\n")
-        h = self.boot()
-        lim = self.read(h)["limits"]
+        res = self.read(h)
+        lim = res["limits"]
+        self.assertEqual(lim["offset_mv"], {"P": {"min": -1000, "max": 999}, "E": {"min": -1000, "max": 999}})
         self.assertEqual(lim["v_target_max_v"], {"P": None, "E": None})
-        self.assertEqual(lim["source"]["v_target_max"], {"P": "none", "E": "none"})
+        self.assertEqual(lim["ratio_max"], {"P": None, "E": None})
+        self.assertEqual(lim["source"], {"ratio_max": {"P": "none", "E": "none"}, "v_target_max": {"P": "none", "E": "none"}})
+        self.assertEqual(res["cpu_limits"]["P"]["max_ratio"], 120)  # the CPU's own limit is where the page reads it now
 
-    def test_the_offset_floor_follows_the_policy(self) -> None:
-        self.edit_policy("effective_offset_floor_mv = -200", "effective_offset_floor_mv = -120")
-        self.edit_policy("assumed_bios_offset_mv = { P = 0, E = 0 }", "assumed_bios_offset_mv = { P = -20, E = 0 }")
+    def test_an_old_policy_with_the_removed_value_limits_still_loads_and_changes_nothing(self) -> None:
+        text = self.policy.read_text()
+        top = "effective_offset_floor_mv = -120\nassumed_bios_offset_mv = { P = -20, E = 0 }\nmax_ratio_step = 2\n"  # top-level keys come before the first table
+        tables = "\n[ratio_max]\nP = 60\nE = 49\n[v_target_max_mv]\nP = 1300\nE = 1300\n"
+        first = text.index("[[")
+        self.policy.write_text(text[:first] + top + text[first:] + tables)
         h = self.boot()
         lim = self.read(h)["limits"]
-        self.assertEqual((lim["offset_mv"]["P"]["min"], lim["offset_mv"]["E"]["min"]), (-100, -120))   # the floor of BIOS + runtime minus the BIOS offset
+        self.assertEqual((lim["offset_mv"]["P"]["min"], lim["offset_mv"]["E"]["min"]), (-1000, -1000))
+        self.assertEqual((lim["ratio_max"]["P"], lim["v_target_max_v"]["P"]), (None, None))
 
-    def test_tune_last_recomputes_the_limits_from_the_policy_as_it_is_now(self) -> None:
-        h = self.boot()
-        self.read(h)
-        self.edit_policy('[ratio_max]\nP = "auto"\nE = 49', '[ratio_max]\nP = "auto"\nE = 52')
-        h2 = self.restart(h)
-        last = self.last(h2)["result"]
-        self.assertEqual(last["limits"]["ratio_max"]["E"], 52)
-
-    def test_tune_last_after_a_helper_restart_still_resolves_the_auto_ratio(self) -> None:
+    def test_tune_last_still_carries_the_limits_after_a_helper_restart(self) -> None:
         h = self.boot()
         self.read(h)
         h2 = self.restart(h)
-        last = self.last(h2)["result"]   # nothing was read in this process: the 0x1C words stored with the read decide
-        self.assertEqual(last["limits"]["ratio_max"]["P"], 60)  # 0x1C 57 + 3 (D-038)
+        last = self.last(h2)["result"]  # nothing was read in this process: the stored read decides
+        self.assertEqual(last["limits"]["offset_mv"]["P"], {"min": -1000, "max": 999})
+        self.assertEqual(last["cpu_limits"]["P"]["max_ratio"], 120)
 
     def test_an_unloadable_policy_gives_null_limits_and_a_note_but_no_error(self) -> None:
         h = self.boot()

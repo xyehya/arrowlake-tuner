@@ -10,12 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from arltuner.controls import NeedsRamp, PlanRefused, StepKind, StopKind
+from arltuner.controls import PlanRefused, StepKind, StopKind
 from arltuner.guard import ENV_FLAG, AuditLog, Confirmation, Request, WriteGuard
 from arltuner.mailbox import VfWord
 from arltuner.msr import MailboxTransport, SimConfig, SimMsrPort
 
-from ._support import DEFAULT_STEPS, e_core, make_session, policy_with, profile
+from ._support import e_core, make_session, policy_with, profile
 
 XTU_READS = [0x14, 0x10, 0x1C, 0x09, 0x26]  # misc (bit 3 already set: no 0x15), then the four reads of the core
 
@@ -140,15 +140,16 @@ class ECurve(MeasuredCase):
         self.assertEqual(self.point7_rc(s, 12), 0x11)
 
 
-    def test_the_default_step_limits_pass_the_cold_e_word_and_stop_a_real_raise(self) -> None:
-        """G-122: max_ratio_step 1 (the shipped default): a cold E word at ratio 46 is no ratio step; an OC ratio two bins above the reference is still refused."""
-        s = self.session(config=SimConfig.measured(per_point=True), policy=policy_with(max_ops=400, dwell=0.0, boot_ops=2000, **DEFAULT_STEPS))
+    def test_the_cold_e_word_has_no_oc_point_and_a_real_raise_is_judged_by_the_cpu_limit(self) -> None:
+        """G-122 / D-049: a cold E word at ratio 46 has no OC point; there is no step limit, so an OC ratio two bins above the reference is only refused above the CPU's limit (cmd 0x01)."""
+        s = self.session(config=SimConfig.measured(per_point=True), policy=policy_with(max_ops=400, dwell=0.0, boot_ops=2000, hw_ratio_max={"P": 120, "E": 49}))
         report = s.apply(profile(e_core(4, offset_mv=-10)))
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual([(c, cmd) for c, cmd, _ in s.write_requests()], [(c, 0x11) for c in range(12, 16)])  # steps = [0x11 only]
         self.assertEqual(self.point7_rc(s, 12), 0x11)  # no OC point
-        with self.assertRaises((NeedsRamp, PlanRefused)):
-            s.apply(profile(e_core(0, ratio=50)))  # 48 -> 50: beyond max_ratio_step 1 (and above the policy ratio ceiling)
+        with self.assertRaises(PlanRefused) as ctx:
+            s.apply(profile(e_core(0, ratio=50)))  # above the E limit 49x
+        self.assertIn("cmd 0x01", ctx.exception.refusals[0].detail)
         self.assertEqual(len([r for r in s.write_requests() if r[1] == 0x11]), 4)
 
 
@@ -233,42 +234,41 @@ class RefusalsOnTheMeasuredMachine(MeasuredCase):
         self.assertEqual(s.write_requests(), [])  # nothing written
         return ctx.exception
 
-    def test_overvolt_above_the_fused_point(self) -> None:
-        # raw 1536 > fused 0x538 = 1336, the no-raise ceiling of the shipped policy; an OC-point voltage also reads 0x28
+    def test_overvolt_above_the_cpu_voltage_limit(self) -> None:
+        # raw 1741 (1700 mV) > the CPU's own limit 0x681 - 1 = 0x680 (1625 mV); an OC-point voltage also reads 0x28
         exc = self.refused(  # G-124: only an OC point carries a V target: P1 sits at 58 (> 57)
-            profile('kind = "P"\nindex = 1\noc_voltage_mv = 1500'), reads=[*XTU_READS, 0x28], config=SimConfig.measured(initial_vf={1: VfWord(58, 0x538, False, 0)})
+            profile('kind = "P"\nindex = 1\noc_voltage_mv = 1700'), reads=[*XTU_READS, 0x28], config=SimConfig.measured(initial_vf={1: VfWord(58, 0x538, False, 0)})
         )
-        self.assertIn("v_target_raw", exc.refusals[0].detail)
-        self.assertIn("no-raise value", exc.refusals[0].detail)
+        self.assertIn("predicted voltage", exc.refusals[0].detail)
+        self.assertIn("above the CPU limit", exc.refusals[0].detail)
+        self.assertIn("cmd 0x28", exc.refusals[0].detail)
 
-    def test_ratio_above_the_0x1c_low_byte(self) -> None:
-        exc = self.refused(profile('kind = "P"\nindex = 1\nratio = 56'))  # CPU 1: 0x1C[7:0] = 55
-        self.assertIn("ratio 56 above 55", exc.refusals[0].detail)
+    def test_ratio_above_the_cpu_limit(self) -> None:
+        exc = self.refused(profile('kind = "P"\nindex = 1\nratio = 121'))  # CPU 1: 0x1C[7:0] = 55; the CPU's own limit is bound as 120x
+        self.assertIn("ratio 121 above the CPU limit 120x", exc.refusals[0].detail)
         s = self.session()
         self.assertTrue(s.apply(profile('kind = "P"\nindex = 1\nratio = 55')).ok)  # at the reference: allowed
 
-    def test_the_d015_floor_end_to_end(self) -> None:
-        exc = self.refused(profile(p_core(1, -51)), reads=[])  # P: -50 mV is the runtime floor; refused before the first read (D-016)
-        self.assertIn("assumed BIOS offset", exc.refusals[0].detail)
-        self.assertIsNone(exc.report)
+    def test_the_d015_floor_is_gone_end_to_end(self) -> None:
+        # D-049: P -51 mV and E -101 mV used to be refused before the first read; now only the offset field bounds them
         s = self.session()
-        self.assertTrue(s.apply(profile(p_core(1, -50))).ok)
-        self.assertEqual(s.sim.vf(1).offset_raw, -51)
+        self.assertTrue(s.apply(profile(p_core(1, -51))).ok)
+        self.assertEqual(s.sim.vf(1).offset_raw, -52)
         tmp = self.tmp / "e"
         tmp.mkdir()
         s = make_session(tmp, config=SimConfig.measured(), policy=policy_with(max_ops=400, dwell=0.0, boot_ops=2000))
-        self.assertTrue(s.apply(profile(e_core(0, offset_mv=-100))).ok)  # E: -100 mV allowed
+        self.assertTrue(s.apply(profile(e_core(0, offset_mv=-100))).ok)
         self.assertEqual(s.sim.vf(8).offset_raw, -102)
         tmp = self.tmp / "e2"
         tmp.mkdir()
         s = make_session(tmp, config=SimConfig.measured(), policy=policy_with(max_ops=400, dwell=0.0, boot_ops=2000))
-        with self.assertRaises(PlanRefused):
-            s.apply(profile(e_core(0, offset_mv=-101)))
+        self.assertTrue(s.apply(profile(e_core(0, offset_mv=-101))).ok)
+        self.assertEqual(s.sim.vf(8).offset_raw, -103)
 
     def test_the_stage_of_a_refusal_is_after_the_reads_and_before_every_write(self) -> None:
         s = self.session()
         with self.assertRaises(PlanRefused) as ctx:
-            s.apply(profile('kind = "P"\nindex = 0\nratio = 58'))  # CPU 0: 0x1C[7:0] = 57, so 58 is judged on the words read
+            s.apply(profile('kind = "P"\nindex = 0\nratio = 121'))  # CPU 0: 0x1C[7:0] = 57; 121 is above the CPU's 120x and judged on the words read
         self.assertEqual([r.step.kind for r in ctx.exception.report.steps][-1], StepKind.READ_GRANULAR)
         self.assertEqual(ctx.exception.report.stop_kind, StopKind.NONE)
         self.assertEqual(s.sim.vf(0).to_u32(), 0x39)

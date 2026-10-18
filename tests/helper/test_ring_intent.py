@@ -138,15 +138,22 @@ class Plan(RingIntentCase):
         self.assertEqual(err["code"], "BAD_REQUEST")
         self.assertIn("1..8", err["message"])
 
-    def test_the_policy_window_bounds_every_ring_point(self) -> None:
+    def test_a_ring_offset_has_no_policy_window_only_the_field_and_warns(self) -> None:
+        """D-049: the old policy window (runtime floor / offset ceiling) is gone -- -300 / +300 mV fit the 11-bit field, so they are planned with warnings."""
         h = self.boot(COLD)
         self.read(h)
-        for intent in ({"ring": {"points": {"4": -300}}}, {"ring": {"points": {"4": 300}}}):  # below the runtime floor / above the offset ceiling
-            with self.subTest(intent=intent):
-                err = self.plan_error(h, intent)
-                self.assertEqual((err["code"], err["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
-                self.assertIn("ring point 4", err["message"])
-                self.assertIn("policy window", err["message"])
+        for offset, code in ((-300, "LARGE_CHANGE"), (300, "POSITIVE_OFFSET")):
+            with self.subTest(offset=offset):
+                plan = self.plan(h, {"ring": {"points": {"4": offset}}})
+                self.assertEqual(plan["units"], ["ring"])
+                self.assertIn(code, [w["code"] for w in plan["warnings"]])
+
+    def test_a_ring_offset_past_the_field_is_refused(self) -> None:
+        h = self.boot(COLD)
+        self.read(h)
+        r = h.call("ringbig", "tune.plan", {"intent": {"ring": {"points": {"4": -1001}}}})
+        self.assertFalse(r["ok"], r)
+        self.assertIn("-1000..999", r["error"]["message"])
 
     def test_a_ring_point_without_a_policy_write_entry_is_refused_by_name(self) -> None:
         h = self.boot(COLD)
@@ -201,21 +208,16 @@ class RingStale(RingIntentCase):
         self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, -26)
 
 
-class StepLimit(RingIntentCase):
-    def test_a_ring_intent_beyond_the_step_limit_is_refused_by_the_guard_like_a_core_row(self) -> None:
-        self.policy_steps(max_offset_step_mv=10)
+class NoStepLimit(RingIntentCase):
+    def test_a_ring_intent_is_one_round_whatever_its_distance_and_warns_when_large(self) -> None:
+        """D-049: no step limit -- a ring point and a core point move in one apply, in one round; a change over 50 mV only warns (LARGE_CHANGE)."""
         h = self.boot(COLD)
         self.read(h)
-        core_plan = self.plan(h, rows(row("P0", points={"53": -25})))
-        ring_plan = self.plan(h, {"ring": {"points": {"4": -25}}})
+        core_plan = self.plan(h, rows(row("P0", points={"53": -75})))
+        ring_plan = self.plan(h, {"ring": {"points": {"4": -75}}})
         for plan in (core_plan, ring_plan):
-            self.assertEqual(plan["rounds"], 1)  # an intent is not split into rounds (only a restore / complete profile is)
-            self.assertTrue([s for s in plan["steps"] if s["kind"].startswith("write")])
-        start = len(self.sim.requests)
-        r = self.apply(h, ring_plan)
-        self.assertFalse(r["ok"], r)
-        self.assertEqual(r["error"]["code"], "REFUSED")
-        self.assertEqual(ring_requests(self.sim, 0x11, start), [], "the guard refused the step before any ring word was sent")
-        self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, 0)
-        c = self.apply(h, core_plan)
-        self.assertEqual((c["ok"], c["error"]["code"]), (False, "REFUSED"))  # the same shape as a core row
+            self.assertEqual(plan["rounds"], 1)
+            self.assertIn("LARGE_CHANGE", [w["code"] for w in plan["warnings"]])
+        self.apply_ok(h, ring_plan)
+        self.assertEqual(self.sim.vf(0, int(Domain.RING), 4).offset_raw, -77)
+        self.apply_ok(h, core_plan)

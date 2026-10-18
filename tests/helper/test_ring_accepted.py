@@ -236,15 +236,15 @@ class Persistence(RingCase):
 
 
 class Rounds(RingCase):
-    def test_a_small_step_limit_splits_the_ring_into_rounds_like_a_core(self) -> None:
-        self.policy_steps(max_offset_step_mv=10)  # -25 mV (raw -26) from 0 on the ring: three steps; the cores need rounds too
+    def test_the_ring_is_restored_in_one_round_like_a_core(self) -> None:
+        """D-049: no step limit -- -25 mV (raw -26) from 0 on the ring is one write, in the one round."""
         h = self.boot(COLD, accepted_dir=self.accepted_with_ring())
         self.read(h)
         plan, result = self.restore(h)
-        self.assertGreater(plan["rounds"], 1)
+        self.assertEqual(plan["rounds"], 1)
         self.assertEqual(self.sim.vf(0, 2, 8).to_u32(), 0xFCC00027)
         self.assertEqual(self.sim.vf(0, 2, 9).to_u32(), 0xFCC00028)
-        self.assertGreaterEqual(len([r for r in ring_requests(self.sim, 0x11) if r.p2 == 9]), 3)
+        self.assertEqual(len([r for r in ring_requests(self.sim, 0x11) if r.p2 == 9]), 1)
         self.assert_expected_words()
         self.assertEqual(result["ring_refused"], [])
 

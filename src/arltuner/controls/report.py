@@ -328,12 +328,8 @@ def format_preview(
         lines.append(f"  read 0x10, 0x1C, 0x09 P1=0x11 and 0x26 on each of the {n} CPU(s) (and 0x28, the hardware maximum voltage, where an OC-point voltage is set);")
         lines.append("  then, per CPU, write 0x11 (the word XTU builds: ratio and V target filled in from 0x1C / 0x09, only the requested fields")
         lines.append("    changed; a ratio and V target moving the same way take two words - voltage first when rising, frequency first when falling),")
-        lines.append("    0x1D (= its ratio) and 0x27 (= the 0x26 word); a change larger than the policy's step limits is refused with the next allowed step")
-    bios = policy.assumed_bios_offset_mv
-    lines.append(
-        f"  effective offset = assumed BIOS offset (P {bios['P']:+d} mV, E {bios['E']:+d} mV) + runtime offset; "
-        f"floor {policy.effective_offset_floor_mv} mV; runtime offset ceiling {policy.offset_ceiling_mv:+d} mV"
-    )
+        lines.append("    0x1D (= its ratio) and 0x27 (= the 0x26 word); a large change is a warning, not a refusal (D-049)")
+    lines.append(f"  offsets: the 11-bit offset field is the only bound ({policy.effective_offset_floor_mv}..{policy.offset_ceiling_mv:+d} mV); a positive offset is also checked against the CPU's cmd 0x28 limit")
     lines.append(
         f"Operations required: at most {worst} mailbox WRMSRs (every read, every write and the guard's read-back of each write); "
         f"policy allows {policy.max_operations_per_session}; dwell {policy.min_dwell_s:g} s after each operation"

@@ -110,8 +110,8 @@ class ReadFactsTests(FactsCase):
         self.read(h, cpus=[0])  # the dump of CPU 0 (10 reads: OC word, 8 points, the rc 0x11) plus the extras of the same call
         cmds = [r.cmd for r in self.sim.requests]
         self.assertEqual((cmds.count(0x09), cmds.count(0x1C), cmds.count(0x10)), (12, 12, 10))  # 0x1C: 8 P-cores + 4 E clusters (G-137)
-        self.assertEqual((cmds.count(0x01), cmds.count(0x28)), (2, 2))  # G-137 (D-039): the CPU's own limits, one P CPU and one E CPU each
-        self.assertEqual([(r.cmd, r.cpu) for r in self.sim.requests if r.cmd in (0x01, 0x28)], [(0x01, 0), (0x28, 0), (0x01, 8), (0x28, 8)])
+        self.assertEqual((cmds.count(0x01), cmds.count(0x28)), (3, 3))  # G-137 (D-039) + D-049: the CPU's own limits, one P CPU, one E CPU and the ring (P1 = 2) each
+        self.assertEqual([(r.cmd, r.cpu, r.p1) for r in self.sim.requests if r.cmd in (0x01, 0x28)], [(0x01, 0, 0), (0x28, 0, 0), (0x01, 8, 0), (0x28, 8, 0), (0x01, 0, 2), (0x28, 0, 2)])
         self.assertEqual(len(self.sim.writes), len(self.sim.requests))  # every mailbox read is exactly one WRMSR 0x150, nothing else
         self.assertTrue(all(msr == 0x150 for _, msr, _ in self.sim.writes))
         self.assertTrue(all(r.cmd in (0x09, 0x1C, 0x10, 0x01, 0x28) for r in self.sim.requests))
@@ -263,14 +263,14 @@ class TurboOrderTests(FactsCase):
         (acc / "profiles/t.toml").write_text(f'[meta]\nname = "t"\nplatform = "arl-s-285k"\n[[point]]\nkind = "P"\nindex = 0\npoint = 5\noffset_mv = -50\nexpect_ratio = 53\n[turbo]\np = {p_table}\n')
         return acc
 
-    def test_a_table_that_rises_with_the_active_core_count_is_refused(self) -> None:
+    def test_a_table_that_rises_with_the_active_core_count_is_planned_and_warned(self) -> None:
+        """D-049: the CPU accepts any byte table, so TURBO_ORDER is no refusal; the plan carries TURBO_NOT_MONOTONIC."""
         h = self.boot_with(baseline=False, accepted_dir=self.accepted([55, 57, 55, 55, 55, 55, 55, 55]))
         r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
-        self.assertEqual(error_code(r), "REFUSED")
-        d = r["error"]["detail"]
-        self.assertEqual((d["check"], d["table"], d["bucket"]), ("TURBO_ORDER", "P", 1))
-        self.assertIn("not non-increasing", r["error"]["message"])
-        self.assertIn("Nothing was sent", r["error"]["message"])
+        self.assertTrue(r["ok"], r)
+        warn = [w for w in r["result"]["warnings"] if w["code"] == "TURBO_NOT_MONOTONIC"]
+        self.assertEqual(len(warn), 1, r["result"]["warnings"])
+        self.assertIn("bucket 0 (55x) is below bucket 1 (57x)", warn[0]["text"])
 
     def test_a_non_increasing_table_is_planned(self) -> None:
         h = self.boot_with(baseline=False, accepted_dir=self.accepted([57, 57, 56, 55, 55, 55, 55, 55]))
@@ -280,23 +280,25 @@ class TurboOrderTests(FactsCase):
     def table(self, cpu: int = 0, msr: int = 0x1AD) -> list[int]:
         return [(self.sim.rdmsr(cpu, msr) >> (8 * k)) & 0xFF for k in range(8)]
 
-    def test_an_intent_turbo_table_that_rises_is_refused_with_turbo_order(self) -> None:
+    def test_an_intent_turbo_table_that_rises_is_planned_with_turbo_not_monotonic(self) -> None:
         h = self.boot_with(baseline=False)
         self.read(h)
         for intent in ({"turbo": {"E": [48, 48, 49, 48, 48, 48, 48, 48]}}, {**rows(row("P1", curve=-10)), "turbo": {"P": [55, 57, 55, 55, 55, 55, 55, 55]}}):
             r = h.call(f"t{len(h.messages)}", "tune.plan", {"intent": intent})
-            self.assertEqual(error_code(r), "REFUSED", r)
-            self.assertEqual(r["error"]["detail"]["check"], "TURBO_ORDER")
-        self.assertEqual(r["error"]["detail"]["table"], "P")
+            self.assertTrue(r["ok"], r)
+            self.assertIn("TURBO_NOT_MONOTONIC", [w["code"] for w in r["result"]["warnings"]])
 
-    def test_an_intent_turbo_table_above_the_policy_is_a_range_refusal(self) -> None:
+    def test_an_intent_turbo_table_above_the_cpu_limit_is_a_range_refusal(self) -> None:
         h = self.boot_with(baseline=False)
-        self.read(h)  # "auto": the cap is the fused 0x1C value the read reported + 3 (D-038)
-        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [61] * 8}}})
+        self.read(h)  # the CPU's own ratio limit (cmd 0x01 [7:0]) is 120 here: the old "auto" cap (fused 0x1C + 3) is gone
+        ok = h.call("t0", "tune.plan", {"intent": {"turbo": {"P": [61] * 8}}})
+        self.assertTrue(ok["ok"], ok)
+        r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [121] * 8}}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "POLICY_RANGE"))
+        self.assertIn("CPU limit 120x (cmd 0x01", r["error"]["message"])
 
-    def test_an_intent_turbo_table_before_any_read_is_left_to_the_guard(self) -> None:
-        """Unread 0x1C = no raise: the plan-time range check has no number, the apply refuses (fail closed) -- nothing is sent above an unread cap."""
+    def test_an_intent_turbo_table_before_any_read_is_left_to_the_apply(self) -> None:
+        """Unread 0x01 = the plan-time range check has no number; the apply reads it itself (and its guard refuses a raise it could not read: CPU_LIMIT_UNREAD)."""
         h = self.boot_with(baseline=False)
         r = h.call("t", "tune.plan", {"intent": {"turbo": {"P": [60] * 8}}})
         self.assertTrue(r["ok"], r)
@@ -320,13 +322,14 @@ class TurboOrderTests(FactsCase):
         self.assertEqual(self.sim.rdmsr(0, 0x1AE), counts)
         self.assertEqual(self.sim.vf(0, 0, 0).to_u32(), 0x39)  # no per-core word was written
 
-    def test_a_turbo_raise_without_any_read_0x1c_is_refused_by_the_guard(self) -> None:
-        """Fail closed: no 0x1C read in the session (tune.read never ran) = no raise above the table's current bytes."""
+    def test_a_turbo_raise_without_a_tune_read_reads_the_cpu_limit_in_the_apply(self) -> None:
+        """D-049: no operator cap and no 0x1C basis any more -- the apply plans its own cmd 0x01 read, so the guard knows the CPU's limit before it judges the raise (the unread case itself is
+        refused fail closed at the guard: tests/guard/test_d049.py)."""
         h = self.boot_with(baseline=False)
         p = self.plan(h, {"turbo": {"P": [57, 57, 56, 55, 55, 55, 55, 55]}})
-        r = self.apply(h, p)
-        self.assertEqual(error_code(r), "REFUSED", r)
-        self.assertEqual(self.table(), [57, 57, 55, 55, 55, 55, 55, 55])
+        self.apply_ok(h, p)
+        self.assertIn(0x01, [r.cmd for r in self.sim.requests])
+        self.assertEqual(self.table(), [57, 57, 56, 55, 55, 55, 55, 55])
 
     def test_a_turbo_only_plan_still_predicts_vccia_from_the_new_table(self) -> None:
         h = self.boot_with()
@@ -365,13 +368,14 @@ class TurboOrderTests(FactsCase):
         res = self.apply_ok(h, p)
         self.assertEqual((res["steps"], res["readback"], res["writes_sent"]), ([], [], 0))
 
-    def test_a_turbo_only_order_violation_is_refused_before_anything_is_planned(self) -> None:
+    def test_a_turbo_only_order_violation_is_planned_with_a_warning_and_writes_nothing_at_plan_time(self) -> None:
         h = self.boot_with(baseline=False)
         self.read(h)
         before = (self.sim.rdmsr(0, 0x1AD), self.sim.rdmsr(0, 0x650))
         for table in ("P", "E"):
             r = h.call(f"bad{table}", "tune.plan", {"intent": {"turbo": {table: [48, 49, 48, 48, 48, 48, 48, 48]}}})
-            self.assertEqual((error_code(r), r["error"]["detail"]["check"], r["error"]["detail"]["table"]), ("REFUSED", "TURBO_ORDER", table))
+            self.assertTrue(r["ok"], r)
+            self.assertIn("TURBO_NOT_MONOTONIC", [w["code"] for w in r["result"]["warnings"]])
         self.assertEqual((self.sim.rdmsr(0, 0x1AD), self.sim.rdmsr(0, 0x650)), before)
 
     def test_a_raise_is_flagged_with_its_code(self) -> None:

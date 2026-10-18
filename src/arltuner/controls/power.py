@@ -5,7 +5,9 @@ Facts (``docs/knowledge/registers.md`` "Power limits"): the Linux powercap zone 
 MSR ``0x610`` holds the same limits (PL1 ``[14:0]``, PL2 ``[46:32]``, tau ``[23:17]``, lock ``[63]``) in the units of ``0x606``; ``0x614`` is the CPU's own power info.
 **Writes go to the powercap files only, never to MSR ``0x610``**; the MSRs are read (through the guard) to see the lock bit and to check what the kernel wrote.
 
-Nothing here has a default bound: ``policy.power`` (``[power]`` in the policy file) says what may be written, and an absent key refuses the write naming itself.
+D-049: no operator range, step or ceiling. A write is refused only for what the CPU / kernel decides: the lock bit of ``0x610`` (``POWER_LOCKED``; ``POWER_MSR_UNREADABLE`` when the bit
+cannot be read -- fail closed), a value the ``0x610`` field cannot hold (``POWER_RANGE``: PL ``[14:0]`` / ``[46:32]`` in the units of ``0x606``; the window ``[23:17]``), a value that is not a
+multiple of the power unit, a missing powercap file. PL2 below PL1, a big change are *warnings* (:func:`warnings`), never refusals.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from arltuner.guard.policy import ENCODING_PL_MAX_W, ENCODING_TAU_MAX_S, Policy
+from arltuner.guard.policy import ENCODING_PL_MAX_W, ENCODING_TAU_MAX_S, LARGE_POWER_CHANGE_W, Policy
 
 __all__ = [
     "BIOS_NOTE",
@@ -47,6 +49,8 @@ __all__ = [
     "tau_from_raw",
     "tau_snap",
     "tau_to_raw",
+    "limits_json",
+    "warnings",
 ]
 
 DEFAULT_ROOT = Path("/sys/class/powercap")
@@ -74,7 +78,7 @@ class PowerError(Exception):
 
 
 class Refused(PowerError):
-    """The plan or the write is refused. ``check`` names the reason (``POWER_POLICY_MISSING`` ...), ``key`` the ``[power]`` key / field it is about."""
+    """The plan or the write is refused. ``check`` names the reason (``POWER_LOCKED`` ...), ``key`` the intent key / field it is about."""
 
     def __init__(self, check: str, text: str, key: str | None = None) -> None:
         super().__init__(text)
@@ -301,16 +305,6 @@ class PowerStep:
         return {"n": self.number, "key": self.key, "file": self.file, "before": self.before, "value": self.value, "expect": list(self.expect)}
 
 
-def _policy_range(policy: Policy, key: str) -> tuple[float, float]:
-    where = policy.where
-    if policy.power is None:
-        raise Refused("POWER_POLICY_MISSING", f"the policy has no [power] table ({where}): no package power limit may be written. Add [power] {key} = [min, max] to the policy to allow it", key)
-    rng = getattr(policy.power, key)
-    if rng is None:
-        raise Refused("POWER_POLICY_MISSING", f"the policy has no [power] {key} ({where}): this value may not be written. Add [power] {key} = [min, max] to the policy to allow it", key)
-    return rng
-
-
 def _whole_watts(key: str, value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or float(value) != int(value):
         raise Refused("POWER_VALUE", f"{key} must be a whole number of watts", key)
@@ -354,29 +348,15 @@ def _writable(state: State, units: Units | None, msr: MsrView | None, keys: Mapp
     return units
 
 
-def _steps(new_uw: Mapping[str, int], state: State, units: Units, max_step_w: int | None, where: str) -> list[PowerStep]:
-    """Order and list the writes of ``new_uw`` (values in file units) over ``state``. ``max_step_w`` ``None`` = no step limit (a revert)."""
+def _steps(new_uw: Mapping[str, int], state: State, units: Units) -> list[PowerStep]:
+    """Order and list the writes of ``new_uw`` (values in file units) over ``state``. D-049: PL2 < PL1 and the size of a change are warnings (:func:`warnings`), not refusals; the order
+    keeps PL2 >= PL1 after every single write whenever the final pair satisfies it."""
     unit_uw = int(round(units.power_w * _UW_PER_W))
     for key in ("pl1_w", "pl2_w"):
         if key in new_uw and new_uw[key] % unit_uw:
-            raise Refused("POWER_VALUE", f"{key} is not a multiple of the power unit ({units.power_w:g} W)", key)
+            raise Refused("POWER_VALUE", f"{key} is not a multiple of the power unit ({units.power_w:g} W, MSR 0x606 [3:0])", key)
     pl1 = new_uw.get("pl1_w", state.pl1_uw)
-    pl2 = new_uw.get("pl2_w", state.pl2_uw)
-    if ("pl1_w" in new_uw or "pl2_w" in new_uw) and pl2 is None:
-        raise Refused("POWER_NO_FILE", "the powercap zone has no PL2 file (constraint_1): PL2 >= PL1 cannot be checked", "pl2_w")
-    if pl2 is not None and pl2 < pl1:
-        raise Refused("POWER_ORDER", f"PL2 ({pl2 / _UW_PER_W:g} W) would be below PL1 ({pl1 / _UW_PER_W:g} W): PL2 must be >= PL1", "pl2_w" if "pl2_w" in new_uw else "pl1_w")
     changing = {k: v for k, v in new_uw.items() if v != state.value(k)}
-    if max_step_w is not None:
-        step_uw = max_step_w * _UW_PER_W
-        for key in ("pl1_w", "pl2_w"):
-            if key in changing and abs(changing[key] - state.value(key)) > step_uw:  # type: ignore[operator]
-                raise Refused(
-                    "POWER_STEP",
-                    f"{key} would change by {abs(changing[key] - state.value(key)) / _UW_PER_W:g} W (from {state.value(key) / _UW_PER_W:g} to {changing[key] / _UW_PER_W:g}); "  # type: ignore[operator]
-                    f"[power] max_step_w = {max_step_w} W ({where})",
-                    key,
-                )
     order = ["pl1_w", "pl2_w"] if state.pl2_uw is None or pl1 <= state.pl2_uw else ["pl2_w", "pl1_w"]
     order.append("tau_s")
     steps: list[PowerStep] = []
@@ -388,50 +368,68 @@ def _steps(new_uw: Mapping[str, int], state: State, units: Units, max_step_w: in
     return steps
 
 
+def _field_max_w(units: Units) -> float:
+    """The largest PL the ``0x610`` 15-bit field holds, in watts (``0x7FFF`` power units; ``[DOC SDM]``)."""
+    return _PL_MASK * units.power_w
+
+
 def plan(intent: Mapping[str, Any], policy: Policy, state: State, units: Units | None, msr: MsrView | None) -> list[PowerStep]:
     """The write steps for ``intent`` (``{pl1_w?, pl2_w?, tau_s?}``) over the values in force, or :class:`Refused` -- nothing is written by planning.
 
-    Checks, in this order (each refusal names its check): the policy keys (``POWER_POLICY_MISSING``: names the key), the lock bit of ``0x610`` and its readability (``POWER_LOCKED`` /
-    ``POWER_MSR_UNREADABLE``: a write that may silently not take is not sent), the ranges (``POWER_RANGE``; a tau is snapped down to the encodable window first and *that* value is checked), the step (``POWER_STEP``; an absent ``max_step_w`` refuses like a missing
-    range), PL2 >= PL1 against the *final* pair (``POWER_ORDER``). Steps that change nothing are dropped. Write order: if the final PL1 does not exceed the current PL2
-    (``new PL1 <= old PL2``) PL1 goes first, else PL2 goes first -- the pair PL2 >= PL1 then holds after every single write (a PL1 that goes down before a PL2 that goes down; a PL2
-    that goes up before a PL1 that goes up); tau last.
+    D-049, checks in this order (each refusal names its check and the register it comes from): the lock bit of ``0x610`` and its readability (``POWER_LOCKED`` / ``POWER_MSR_UNREADABLE``: a
+    write that may silently not take is not sent), the field width (``POWER_RANGE``: a PL above ``0x7FFF`` power units of ``0x606``; ``POWER_VALUE``: a window below one time unit or above what the 5-bit exponent of
+    ``0x610 [23:17]`` holds -- a tau is snapped down to the encodable window first), the power unit (``POWER_VALUE``). ``policy`` is kept for the signature: no policy range, step or
+    ordering rule applies any more. Steps that change nothing are dropped. Write order: if the final PL1 does not exceed the current PL2 (``new PL1 <= old PL2``) PL1 goes first, else PL2
+    goes first -- the pair PL2 >= PL1 then holds after every single write; tau last.
     """
     want = _intent_values(intent)
     if not want:
         raise Refused("NOTHING_TO_DO", "the power intent changes nothing (set pl1_w, pl2_w and/or tau_s)")
-    ranges = {key: _policy_range(policy, key) for key in want}  # an absent key refuses first, by name: the operator's next step is the policy file, not the register
     units = _writable(state, units, msr, want)
     new_uw: dict[str, int] = {}
     for key, v in want.items():
-        lo, hi = ranges[key]
         value_uw = int(round(v * _UW_PER_W))
-        shown = f"{v:g}"
-        if key == "tau_s":  # the kernel rounds the window down: the value that will be in force is the one the policy bounds
-            snapped = _snap_tau(value_uw, units)
-            if snapped != value_uw:
-                shown = f"{v:g} (snapped down to the encodable {snapped / _UW_PER_W:g})"
-            value_uw = snapped
-        if not lo <= value_uw / _UW_PER_W <= hi:
-            raise Refused("POWER_RANGE", f"{key} = {shown} is outside [power] {key} = [{lo:g}, {hi:g}] ({policy.where})", key)
+        if key == "tau_s":  # the kernel rounds the window down: the value that will be in force is the one the field holds
+            value_uw = _snap_tau(value_uw, units)
+        elif v <= 0 or v > _field_max_w(units):
+            raise Refused("POWER_RANGE", f"{key} = {v:g} W is outside what MSR 0x610 holds (0 < PL <= {_field_max_w(units):g} W: a 15-bit field of {units.power_w:g} W units, MSR 0x606 [3:0])", key)
         new_uw[key] = value_uw
-    max_step = None
-    if any(k in new_uw and new_uw[k] != state.value(k) for k in ("pl1_w", "pl2_w")):
-        if policy.power is None or policy.power.max_step_w is None:
-            raise Refused("POWER_POLICY_MISSING", f"the policy has no [power] max_step_w ({policy.where}): a power limit may not be changed without a step limit. Add [power] max_step_w = <W>", "max_step_w")
-        max_step = policy.power.max_step_w
-    return _steps(new_uw, state, units, max_step, policy.where)
+    return _steps(new_uw, state, units)
+
+
+def warnings(intent: Mapping[str, Any], state: State) -> list[tuple[str, str]]:
+    """D-049 ``[(code, text)]`` warnings of an intent over the values in force; the Review shows them, none refuses: ``PL2_BELOW_PL1`` when the final PL2 is below the final PL1,
+    ``LARGE_CHANGE`` when PL1 or PL2 moves by more than ``LARGE_POWER_CHANGE_W`` in one apply. (Not the CPU's rules: nothing in the audit shows the CPU or the kernel enforcing them.)"""
+    try:
+        want = _intent_values(intent)
+    except Refused:
+        return []
+    out: list[tuple[str, str]] = []
+    pl1 = want.get("pl1_w", state.pl1_w)
+    pl2 = want.get("pl2_w", state.pl2_w)
+    if pl2 is not None and ("pl1_w" in want or "pl2_w" in want) and pl2 < pl1:
+        out.append(("PL2_BELOW_PL1", f"PL2 ({pl2:g} W) would be below PL1 ({pl1:g} W); the kernel accepts it, the CPU's behaviour is not documented"))
+    for key, now in (("pl1_w", state.pl1_w), ("pl2_w", state.pl2_w)):
+        if key in want and now is not None and abs(want[key] - now) > LARGE_POWER_CHANGE_W:
+            out.append(("LARGE_CHANGE", f"{key}: {now:g} -> {want[key]:g} W is a large single change (more than {LARGE_POWER_CHANGE_W} W); the CPU accepts it, take a stability and thermal check"))
+    return out
+
+
+def limits_json(msr: MsrView | None) -> dict[str, Any]:
+    """D-049 ``cpu_limits.power``: ``{"locked": bool|None, "pl_max_w": float|None, "source": text}`` from the guarded reads of ``0x610`` (lock bit 63) and ``0x606`` (units); ``null`` = not read."""
+    locked = None if msr is None or msr.limit is None else msr.limit.locked
+    pl_max = None if msr is None or msr.units is None else _field_max_w(msr.units)
+    return {"locked": locked, "pl_max_w": pl_max, "source": "MSR 0x610 bit 63 / [14:0] in the units of MSR 0x606" + ("" if locked is not None and pl_max is not None else " (not read)")}
 
 
 def plan_revert(values: Mapping[str, int | None], state: State, units: Units | None, msr: MsrView | None) -> list[PowerStep]:
-    """The writes that put the journaled boot values back (``values`` = pl1_uw / pl2_uw / tau_us). The lock and readability gate and PL2 >= PL1 apply; the policy's ranges and
-    step do not: this restores a recorded state, it does not choose a new one."""
+    """The writes that put the journaled boot values back (``values`` = pl1_uw / pl2_uw / tau_us). The lock and readability gate apply: this restores a recorded state, it does not choose a new one."""
     asked = {"pl1_w": values["pl1_uw"], "pl2_w": values["pl2_uw"], "tau_s": values["tau_us"]}
     new_uw = {k: v for k, v in asked.items() if v is not None}
     units = _writable(state, units, msr, new_uw)
     if "tau_s" in new_uw:
         new_uw["tau_s"] = _snap_tau(new_uw["tau_s"], units)
-    return _steps(new_uw, state, units, None, "the journal")
+    return _steps(new_uw, state, units)
 
 
 # --------------------------------------------------------------------------------------------------------------

@@ -83,50 +83,45 @@ class PlanBounds(unittest.TestCase):
         steps = self.plan({"pl1_w": 200})
         self.assertEqual([(s.key, s.file, s.before, s.value) for s in steps], [("pl1_w", "constraint_0_power_limit_uw", 250 * UW, 200 * UW)])
 
-    def test_outside_the_range_is_refused_with_the_range(self) -> None:
-        text = self.refused({"pl1_w": 99}, "POWER_RANGE", "pl1_w")
-        self.assertIn("[100, 253]", text)
-        self.refused({"pl1_w": 254}, "POWER_RANGE", "pl1_w")
-        self.refused({"pl2_w": 296}, "POWER_RANGE", "pl2_w")
-        self.refused({"tau_s": 0.5}, "POWER_RANGE", "tau_s")
-        self.refused({"tau_s": 260}, "POWER_RANGE", "tau_s")  # snaps to 255.8 s; 201 s would snap to 191.9 s, inside
+    def test_only_the_field_width_refuses_a_pl(self) -> None:
+        """D-049: a PL is refused only where ``0x610`` cannot hold it (0 < PL <= 0x7FFF power units of 0x606 [3:0]); the source is cited."""
+        text = self.refused({"pl1_w": 0}, "POWER_RANGE", "pl1_w")
+        self.assertIn("0x610", text)
+        self.assertIn("0x606", text)
+        self.refused({"pl2_w": -5}, "POWER_RANGE", "pl2_w")
+        top = int(0x7FFF * UNITS.power_w)  # 4095 W at 0.125 W
+        self.assertEqual(len(self.plan({"pl1_w": top}, st=state(pl1=250, pl2=295))), 1)
+        self.refused({"pl1_w": top + 1}, "POWER_RANGE", "pl1_w")
+        self.refused({"pl2_w": 100_000}, "POWER_RANGE", "pl2_w")
 
-    def test_absent_policy_keys_refuse_and_name_the_key(self) -> None:
-        for key, value in (("pl1_w", 200), ("pl2_w", 280), ("tau_s", 50)):
-            text = self.refused({key: value}, "POWER_POLICY_MISSING", key, pol=policy())  # no [power] table at all
-            self.assertIn(f"[power] {key}", text)
-            self.assertIn("the policy", text)
-        only_pl1 = policy("[power]\npl1_w = [100, 253]\nmax_step_w = 100\n")
-        self.assertIn("[power] pl2_w", self.refused({"pl2_w": 280}, "POWER_POLICY_MISSING", "pl2_w", pol=only_pl1))
-        self.assertEqual(len(self.plan({"pl1_w": 200}, pol=only_pl1)), 1)  # the key that is there still works
+    def test_the_removed_operator_ranges_are_now_allowed(self) -> None:
+        """The old [power] ranges ([100, 253] / [100, 295] / [1, 200]) no longer refuse: 99 W, 254 W, 296 W and a 0.5 s or 260 s window are all planned."""
+        for intent in ({"pl1_w": 99}, {"pl1_w": 254}, {"pl2_w": 296}, {"tau_s": 0.5}, {"tau_s": 260}):
+            with self.subTest(intent=intent):
+                self.assertEqual(len(self.plan(intent)), 1)
 
-    def test_a_missing_step_limit_refuses_a_pl_change_and_names_it(self) -> None:
-        no_step = policy("[power]\npl1_w = [100, 253]\n")
-        text = self.refused({"pl1_w": 200}, "POWER_POLICY_MISSING", "max_step_w", pol=no_step)
-        self.assertIn("[power] max_step_w", text)
-        tau_only = policy("[power]\ntau_s = [1, 200]\n")  # tau needs no step limit
-        self.assertEqual(len(self.plan({"tau_s": 100}, pol=tau_only)), 1)
+    def test_a_legacy_power_table_is_ignored(self) -> None:
+        """An operator policy that still carries ``[power]`` loads (the keys are named as ignored) and changes nothing: no key is missing any more, no range or step applies."""
+        legacy = policy(FULL)
+        self.assertIn("power.pl1_w", legacy.ignored_keys)
+        self.assertEqual(len(self.plan({"pl1_w": 50}, pol=legacy)), 1)  # 200 W down, below the old range and over the old 100 W step
+        self.assertEqual(len(self.plan({"pl1_w": 200}, pol=policy())), 1)  # no [power] table at all: nothing is missing
 
-    def test_the_step_limit(self) -> None:
-        pol = policy("[power]\npl1_w = [50, 253]\npl2_w = [50, 295]\nmax_step_w = 40\n")
-        self.refused({"pl1_w": 200}, "POWER_STEP", "pl1_w", pol=pol)  # 50 W down
-        self.assertEqual(len(self.plan({"pl1_w": 210}, pol=pol)), 1)  # exactly 40 W is allowed
+    def test_the_step_is_no_longer_limited(self) -> None:
+        self.assertEqual(len(self.plan({"pl1_w": 120})), 1)  # 130 W down in one apply
+        self.assertEqual(len(self.plan({"pl1_w": 120, "pl2_w": 120})), 2)
 
-    def test_tau_is_snapped_down_and_the_snapped_value_is_what_is_bounded(self) -> None:
-        pol = policy("[power]\ntau_s = [1, 128]\n")
-        steps = self.plan({"tau_s": 128}, pol=pol, st=state(tau_us=50_000_000))  # 128 s snaps to 127.926272 s, inside [1, 128]: never the next window up (159.9 s)
+    def test_tau_is_snapped_down_to_the_encodable_window(self) -> None:
+        steps = self.plan({"tau_s": 128}, st=state(tau_us=50_000_000))  # 128 s snaps to 127.926272 s: never the next window up (159.9 s)
         snapped = pw.tau_snap(128 * UW, UNIT_US)
         self.assertEqual([(s.key, s.value, s.expect) for s in steps], [("tau_s", snapped, (snapped, snapped))])
         self.assertLessEqual(steps[0].value, 128 * UW)
-        steps = self.plan({"tau_s": 140}, pol=policy("[power]\ntau_s = [1, 130]\n"), st=state(tau_us=50_000_000))  # 140 s > max 130 but snaps to 127.9 s: the snapped value is checked
+        steps = self.plan({"tau_s": 140}, st=state(tau_us=50_000_000))
         self.assertEqual(steps[0].value, 127926272)
-        self.refused({"tau_s": 130}, "POWER_RANGE", "tau_s", pol=policy("[power]\ntau_s = [128, 200]\n"))  # snaps to 127.9 s < 128
 
-    def test_tau_that_snaps_below_the_minimum_is_refused(self) -> None:
-        pol = policy("[power]\ntau_s = [1, 200]\n")
-        text = self.refused({"tau_s": 1}, "POWER_RANGE", "tau_s", pol=pol)  # 1 s = 1024 units - a hair; snaps to 0.999424 s
-        self.assertIn("snapped down", text)
-        self.assertEqual(len(self.plan({"tau_s": 1.3}, pol=pol)), 1)  # 1.3 s snaps to 1.249 s
+    def test_tau_below_one_time_unit_is_refused_by_the_field(self) -> None:
+        self.refused({"tau_s": 0.0005}, "POWER_VALUE", "tau_s")  # shorter than one time unit (MSR 0x606 [19:16]): nothing to encode
+        self.assertEqual(len(self.plan({"tau_s": 1.3})), 1)  # 1.3 s snaps to 1.249 s
 
     def test_the_nothing_to_do_intent(self) -> None:
         self.refused({}, "NOTHING_TO_DO")
@@ -136,16 +131,33 @@ class PlanBounds(unittest.TestCase):
         self.refused({"pl1_w": 200.5}, "POWER_VALUE", "pl1_w")
         self.refused({"pl1_w": True}, "POWER_VALUE", "pl1_w")
         self.refused({"tau_s": -1}, "POWER_VALUE", "tau_s")
-        self.refused({"tau_s": 0.0005}, "POWER_VALUE", "tau_s", pol=policy("[power]\ntau_s = [0.001, 200]\n"))  # below one time unit
 
-    def test_pl2_must_not_be_below_pl1(self) -> None:
-        self.refused({"pl2_w": 240}, "POWER_ORDER", "pl2_w")  # against the PL1 in force (250)
-        self.refused({"pl1_w": 253}, "POWER_ORDER", "pl1_w", st=state(pl1=200, pl2=250))  # a single PL1 is checked against the PL2 in force
-        self.refused({"pl1_w": 253, "pl2_w": 252}, "POWER_ORDER", "pl2_w")  # the pair as a whole
-        self.assertEqual(len(self.plan({"pl1_w": 250, "pl2_w": 250})), 1)  # equal is allowed
+    def test_pl2_below_pl1_is_allowed_and_warned(self) -> None:
+        """D-049: no CPU/kernel rule orders PL2 against PL1 -- the plan is made and ``warnings`` says PL2_BELOW_PL1."""
+        self.assertEqual(len(self.plan({"pl2_w": 240})), 1)  # against the PL1 in force (250)
+        self.assertEqual(len(self.plan({"pl1_w": 253}, st=state(pl1=200, pl2=250))), 1)
+        self.assertEqual(len(self.plan({"pl1_w": 253, "pl2_w": 252})), 2)
+        for intent, st in (({"pl2_w": 240}, state()), ({"pl1_w": 253}, state(pl1=200, pl2=250)), ({"pl1_w": 253, "pl2_w": 252}, state())):
+            with self.subTest(intent=intent):
+                self.assertIn("PL2_BELOW_PL1", [code for code, _ in pw.warnings(intent, st)])
+        self.assertEqual([c for c, _ in pw.warnings({"pl1_w": 250, "pl2_w": 250}, state())], [])  # equal: nothing to say
+        self.assertEqual(len(self.plan({"pl1_w": 250, "pl2_w": 250})), 1)
+
+    def test_a_large_change_is_allowed_and_warned(self) -> None:
+        self.assertEqual(len(self.plan({"pl1_w": 120})), 1)
+        codes = [c for c, _ in pw.warnings({"pl1_w": 120}, state())]  # 130 W in one apply
+        self.assertEqual(codes, ["LARGE_CHANGE"])
+        self.assertEqual(pw.warnings({"pl1_w": 200}, state()), [])  # 50 W is not more than 50 W
+        self.assertEqual(pw.warnings({"tau_s": 30}, state()), [])
+        self.assertEqual(pw.warnings({"pl1_w": 200.5}, state()), [])  # an intent the plan refuses has no warnings to add
+
+    def test_the_write_order_keeps_pl2_at_or_above_pl1_when_it_can(self) -> None:
+        steps = self.plan({"pl1_w": 280, "pl2_w": 350}, st=state(pl1=100, pl2=150))
+        self.assertEqual([s.key for s in steps], ["pl2_w", "pl1_w"])  # the order is a process rule: raise PL2 first
 
     def test_no_pl2_file(self) -> None:
-        self.refused({"pl1_w": 200}, "POWER_NO_FILE", "pl2_w", st=state(pl2=None))
+        self.refused({"pl2_w": 280}, "POWER_NO_FILE", "pl2_w", st=state(pl2=None))  # nothing to write to
+        self.assertEqual(len(self.plan({"pl1_w": 200}, st=state(pl2=None))), 1)  # PL1 alone no longer needs the PL2 file (no ordering rule)
         self.assertEqual(len(self.plan({"tau_s": 100}, st=state(pl2=None))), 1)
 
 
@@ -162,10 +174,20 @@ class PlanLock(unittest.TestCase):
                 pw.plan({"pl1_w": 200}, policy(FULL), state(), UNITS, v)
             self.assertEqual(ctx.exception.check, "POWER_MSR_UNREADABLE")
 
-    def test_the_policy_key_is_named_before_the_lock(self) -> None:
+    def test_the_lock_is_refused_with_no_policy_keys_needed(self) -> None:
         with self.assertRaises(pw.Refused) as ctx:
             pw.plan({"pl1_w": 200}, policy(), state(), UNITS, view(locked=True))
-        self.assertEqual(ctx.exception.check, "POWER_POLICY_MISSING")
+        self.assertEqual(ctx.exception.check, "POWER_LOCKED")
+        self.assertIn("0x610", str(ctx.exception))  # the source of the rule is cited
+
+    def test_the_limits_json_carries_the_lock_and_the_field_width_with_their_source(self) -> None:
+        doc = pw.limits_json(view())
+        self.assertEqual((doc["locked"], doc["pl_max_w"]), (False, 0x7FFF * UNITS.power_w))
+        self.assertIn("0x610", doc["source"])
+        self.assertTrue(pw.limits_json(view(locked=True))["locked"])
+        unread = pw.limits_json(None)
+        self.assertEqual((unread["locked"], unread["pl_max_w"]), (None, None))
+        self.assertIn("not read", unread["source"])
 
 
 class WriteOrder(unittest.TestCase):

@@ -33,12 +33,11 @@ E_V = 0x4A0  # the fused V target of E8 (1184 raw, 1.156 V)
 P_V = 0x538  # the fused V target of P1 (1336 raw, 1.3047 V)
 ALL = ("10", "1C", "09", "26", "28")
 
-#: a reviewed policy that allows a raise: E up to ratio 50 / 1.250 V, P up to ratio 58 / 1.500 V, offsets up to +25 mV (the shipped steps)
-# hw_ratio_max: the CPU's own limit (cmd 0x01, D-039) as the reference machine reports it (0x778 = 120x); a ratio ceiling is the policy value clamped by it
+# hw_ratio_max: the CPU's own limit (cmd 0x01, D-039) as the reference machine reports it (0x778 = 120x). D-049: it is the ONLY ratio bound; the voltage limit is the 0x28 word of the session.
 CPU_LIMIT = dict(hw_ratio_max={"P": 120, "E": 120})
-RAISE = dict(ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250, "P": 1500}, offset_ceiling_mv=25, **CPU_LIMIT)
-SHIPPED_STEPS = dict(max_ratio_step=1, max_v_step_mv=20, max_offset_step_mv=25)
-RELAXED_STEPS = dict(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200)
+RAISE = dict(CPU_LIMIT)  # kept for the importers: a raise is allowed within the CPU's limits, no policy number is needed any more
+SHIPPED_STEPS: dict = {}  # D-049: no step limits; the names stay so that the importers (test_hw_limits ...) and the `steps=` argument of `open` keep working
+RELAXED_STEPS: dict = {}
 
 
 def word(ratio: int, v_raw: int, offset_raw: int = 0) -> int:
@@ -127,66 +126,78 @@ class RaiseWithinTheBounds(BoundsCase):
         self.accept(guard, E8, word(47, E_V, -20))
 
 
-class AboveTheCeilings(BoundsCase):
-    def test_ratio_above_the_policy_ceiling_is_refused(self) -> None:
-        guard = self.open(E8, **RAISE)
+class AboveTheCpuLimits(BoundsCase):
+    """D-049: the only ceilings are the CPU's own (cmd 0x01 [7:0] ratio, cmd 0x28 [11:0] - 1 LSB voltage), refused at the CPU value with the register cited."""
+
+    def test_ratio_above_the_cpu_limit_is_refused(self) -> None:
+        guard = self.open(E8, hw_ratio_max={"E": 50, "P": 50})
         self.accept(guard, E8, word(50, E_V))
-        exc = self.refuse(guard, E8, word(51, E_V), "ratio 51 above 50 (policy ratio_max E = 50")
-        self.assertIn("ratio_max", exc.detail)
+        exc = self.refuse(guard, E8, word(51, E_V), "ratio 51 above the CPU limit 50x")
+        self.assertIn("cmd 0x01", exc.detail)
 
-    def test_v_target_above_the_policy_ceiling_is_refused(self) -> None:
-        ceiling = VfWord.v_to_raw(1.25)  # 1280
-        guard = self.open(E8, **RAISE)
-        self.accept(guard, E8, word(48, ceiling))
-        self.refuse(guard, E8, word(48, ceiling + 1), "policy v_target_max_mv")
+    def test_v_target_above_the_cpu_limit_is_refused_at_raw_minus_one(self) -> None:
+        guard = self.open(E8)  # the session read 0x28 = 0x56D: limit 0x56C
+        self.accept(guard, E8, word(48, 0x56C))
+        exc = self.refuse(guard, E8, word(48, 0x56C + 1), "CPU limit")
+        self.assertIn("cmd 0x28", exc.detail)
 
-    def test_offset_above_the_policy_ceiling_is_refused(self) -> None:
-        guard = self.open(E8, **RAISE)
-        self.refuse(guard, E8, word(48, E_V, 27), "outside")  # +25 mV = raw 26 is the ceiling
-        self.accept(guard, E8, word(48, E_V, 26))
+    def test_offset_above_the_cpu_voltage_limit_is_refused(self) -> None:
+        guard = self.open(E8)
+        over = 0x56C - E_V  # E_V + over = the limit
+        self.refuse(guard, E8, word(48, E_V, over + 1), "predicted voltage")
+        self.accept(guard, E8, word(48, E_V, over))
 
-    def test_a_ceiling_per_core_kind(self) -> None:
-        guard = self.open(P1, ratio_max={"E": 50, "P": None}, v_target_max_mv={"E": 1250, "P": None})
-        self.refuse(guard, P1, word(56, P_V), "no-raise value")  # P has no ratio number: the default no-raise ceiling (55)
-        self.fresh()
-        guard = self.open(P1, ratio_max={"E": 50, "P": 56}, v_target_max_mv={"E": 1250, "P": None})
+    def test_a_limit_per_core_kind(self) -> None:
+        guard = self.open(P1, hw_ratio_max={"E": 50, "P": 56})
         self.accept(guard, P1, word(56, P_V))
-        self.refuse(guard, P1, word(56, P_V + 1), "no-raise value")  # the P V target number is blank: fused is the ceiling
+        self.refuse(guard, P1, word(57, P_V), "56x")
+        self.fresh()
+        guard = self.open(E8, hw_ratio_max={"E": 49, "P": 120})
+        self.refuse(guard, E8, word(50, E_V), "49x")  # E uses the E limit, not the P one
 
-    def test_ceilings_are_judged_before_the_step_limit(self) -> None:
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        exc = self.refuse(guard, E8, word(53, E_V), "above 50")  # both too big a step AND above the ceiling: the root cause is named
-        self.assertNotIn("per-operation limit", exc.detail)
+    def test_big_changes_are_not_refused(self) -> None:
+        # D-049: no step limit: +10 bins, a 100 mV offset, a 150 mV V target move each in ONE word
+        guard = self.open(E8, **RAISE)
+        self.accept(guard, E8, word(58, E_V))
+        self.accept(guard, E8, word(58, E_V, -102))
+        self.accept(guard, E8, word(58, E_V + 100, -102))
 
 
-class TheShippedPolicyCannotOverclock(BoundsCase):
-    """No policy numbers -> the ceilings are the no-raise values max(baseline, 0x1C[7:0] / fused voltage): every raise is refused."""
+class WithoutTheCpuLimits(BoundsCase):
+    """The CPU's limits not read -> a raise is refused naming the read (``CPU_LIMIT_UNREAD``); lowering and staying put are not raises."""
+
+    UNREAD = dict(hw_ratio_max={"P": None, "E": None})
 
     def test_every_raise_is_refused_and_every_undervolt_allowed(self) -> None:
         policy = default_m1_policy()
-        self.assertEqual((dict(policy.ratio_max), dict(policy.v_target_max_mv), policy.offset_ceiling_mv), ({"P": None, "E": None}, {"P": None, "E": None}, 0))
+        self.assertEqual(dict(policy.hw_ratio_max), {"P": None, "E": None})
         for core, v in ((E8, E_V), (P1, P_V)):
             ratio = core["favored"] & 0xFF
             with self.subTest(core=core["cpu"]):
                 self.fresh()
-                guard = self.open(core, steps=SHIPPED_STEPS)
-                self.refuse(guard, core, word(ratio + 1, v), "no-raise value")
-                self.refuse(guard, core, word(ratio, v + 1), "no-raise value")
-                self.refuse(guard, core, word(ratio, v, 1), "outside")  # a positive offset
+                guard = self.open(core, which=("10", "1C", "09", "26"), **self.UNREAD)  # no 0x28 either
+                self.refuse(guard, core, word(ratio + 1, v), "CPU_LIMIT_UNREAD")
+                self.refuse(guard, core, word(ratio, v + 1), "CPU_LIMIT_UNREAD")
+                self.refuse(guard, core, word(ratio, v, 1), "CPU_LIMIT_UNREAD")  # a positive offset raises the predicted voltage
                 self.accept(guard, core, word(ratio, v, -10))  # an undervolting offset is still fine
                 self.accept(guard, core, word(ratio - 1, v, -10))  # and so is lowering
 
-    def test_a_policy_cannot_be_raised_by_the_request_itself(self) -> None:
-        # a request carries no limits: the only raise is a number in the policy (here: absent), whatever the word says
-        guard = self.open(E8)
+    def test_the_refusal_names_the_read(self) -> None:
+        guard = self.open(E8, which=("10", "1C", "09", "26"), **self.UNREAD)
+        self.refuse(guard, E8, word(49, E_V), "cmd 0x01")
+        self.refuse(guard, E8, word(48, E_V + 1), "cmd 0x28")
+
+    def test_a_request_cannot_raise_the_cpu_limit(self) -> None:
+        # a request carries no limits: with the limit unread every raise is refused, whatever the word says
+        guard = self.open(E8, **self.UNREAD)
         for ratio in (49, 60, 255):
             self.refuse(guard, E8, word(ratio, E_V), "ratio")
 
     def test_an_already_raised_core_may_stay_where_it_is_and_come_down(self) -> None:
-        # baseline 0x10 word says ratio 50: the no-raise ceiling is the current ratio (the larger of baseline and 0x1C[7:0])
-        guard = self.open(dict(E8, vf=word(50, E_V + 20)), steps=SHIPPED_STEPS)
+        # baseline 0x10 word says ratio 50: the current ratio is the larger of baseline and 0x1C[7:0]
+        guard = self.open(dict(E8, vf=word(50, E_V + 20)), **self.UNREAD)
         self.accept(guard, E8, word(50, E_V + 20, -5))
-        self.refuse(guard, E8, word(51, E_V + 20), "no-raise value")
+        self.refuse(guard, E8, word(51, E_V + 20), "CPU_LIMIT_UNREAD")
         self.accept(guard, E8, word(49, E_V + 20))
 
 
@@ -202,22 +213,27 @@ class HardwareMaximumVoltage(BoundsCase):
         self.refuse(guard, E8, word(48, E_V + 1), "0x28")
         self.accept(guard, E8, word(48, E_V))  # not raising the V target needs no hardware maximum
 
-    def test_a_v_target_above_the_hardware_maximum_is_refused_even_if_the_policy_allows_it(self) -> None:
+    def test_a_v_target_above_the_hardware_maximum_is_refused(self) -> None:
         low_vmax = dict(E8, vmax=0x500)  # hardware max 0x4FF = 1279 raw
-        guard = self.open(low_vmax, **RAISE)  # policy ceiling 1.250 V = 1280 raw
+        guard = self.open(low_vmax, **RAISE)
         self.refuse(guard, low_vmax, word(48, 1280), "CPU limit")
         self.accept(guard, low_vmax, word(48, 1279))
 
     def test_the_hardware_maximum_binds_at_exactly_raw_minus_one(self) -> None:
-        policy = dict(ratio_max={"E": 60, "P": 62}, v_target_max_mv={"E": 1355, "P": 1625})  # the sanity maxima of this CPU
         for core, top in ((E8, 0x56C), (P1, 0x680)):
             ratio = core["favored"] & 0xFF
-            near_top = dict(core, vf=word(ratio, top - 10))  # a current V target close to the maximum, so that the step limit is no issue
+            near_top = dict(core, vf=word(ratio, top - 10))
             with self.subTest(cpu=core["cpu"]):
                 self.fresh()
-                guard = self.open(near_top, **policy)
+                guard = self.open(near_top)
                 self.accept(guard, core, word(ratio, top))
                 self.refuse(guard, core, word(ratio, top + 1), "above")
+
+    def test_field_0_of_0x28_is_a_2_volt_limit_not_an_unread_one(self) -> None:
+        zero = dict(E8, vmax=0)  # a word that WAS read as 0
+        guard = self.open(zero)
+        self.accept(guard, zero, word(48, 2048))
+        self.refuse(guard, zero, word(48, 2049), "CPU limit")
 
     def test_the_0x28_word_of_another_cpu_does_not_count(self) -> None:
         self.seed(E8)
@@ -229,54 +245,34 @@ class HardwareMaximumVoltage(BoundsCase):
         self.refuse(guard, E8, word(48, E_V + 1), "0x28")
 
 
-class StepLimits(BoundsCase):
-    def test_a_ratio_step_of_one_is_allowed_two_is_not(self) -> None:
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        self.refuse(guard, E8, word(50, E_V), "ratio step +2")
-        self.accept(guard, E8, word(49, E_V))
+class NoStepLimits(BoundsCase):
+    """D-049: the per-operation step limits are gone. Any change inside the CPU's limits goes in ONE word; the ordering rule is the only thing that splits a move."""
 
-    def test_a_v_target_step_is_limited_both_ways(self) -> None:
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        limit = VfWord.v_to_raw(0.020)
-        self.refuse(guard, E8, word(48, E_V + limit + 1), "V target step")
-        self.refuse(guard, E8, word(48, E_V - limit - 1), "V target step")  # lowering too: a big drop is as risky as a big rise
-        self.accept(guard, E8, word(48, E_V + limit))
-
-    def test_an_offset_step_is_limited_both_ways(self) -> None:
-        guard = self.open(E8, steps=SHIPPED_STEPS, **dict(RAISE, offset_ceiling_mv=50))
-        limit = VfWord.mv_to_offset_raw(25)
-        self.refuse(guard, E8, word(48, E_V, limit + 1), "offset step")
-        self.refuse(guard, E8, word(48, E_V, -limit - 1), "offset step")
-        self.accept(guard, E8, word(48, E_V, -limit))
-
-    def test_steps_are_measured_from_the_baseline_not_from_the_last_word(self) -> None:
-        # a session cannot walk further than one step from where it started by repeating writes
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        self.accept(guard, E8, word(49, E_V))
-        self.refuse(guard, E8, word(50, E_V), "ratio step +2")
-
-    def test_the_reference_is_the_xtu_shaped_current_word_when_the_baseline_is_zero(self) -> None:
-        # baseline 0x0: the current ratio is 0x1C[7:0] = 48 and the current V target the fused 1184, not 0
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        self.accept(guard, E8, word(49, E_V))
-        self.fresh()
-        guard = self.open(E8, steps=SHIPPED_STEPS, **RAISE)
-        self.refuse(guard, E8, word(1, E_V), "ratio step")  # 1 is a legal ratio field; the step from 48 is not
-
-    def test_a_baseline_with_a_v_target_is_its_own_reference(self) -> None:
-        guard = self.open(dict(E8, vf=word(49, E_V + 20)), steps=SHIPPED_STEPS, **RAISE)
-        self.accept(guard, E8, word(50, E_V + 20))
-        self.refuse(guard, E8, word(49, E_V + 41), "V target step")
-
-    def test_the_policy_step_values_are_used(self) -> None:
-        steps = dict(max_ratio_step=2, max_v_step_mv=40, max_offset_step_mv=25)
-        high = dict(RAISE, ratio_max={"E": 60, "P": 62}, v_target_max_mv={"E": 1355, "P": 1625})  # ceilings out of the way
-        guard = self.open(E8, steps=steps, **high)
+    def test_a_ratio_jump_is_one_word(self) -> None:
+        guard = self.open(E8, **RAISE)
         self.accept(guard, E8, word(50, E_V))
-        self.refuse(guard, E8, word(51, E_V), "ratio step +3")
-        self.fresh()
-        guard = self.open(E8, steps=steps, **high)
-        self.accept(guard, E8, word(48, E_V + VfWord.v_to_raw(0.040)))
+        self.accept(guard, E8, word(60, E_V))
+
+    def test_a_v_target_jump_is_one_word_both_ways(self) -> None:
+        guard = self.open(E8, **RAISE)
+        self.accept(guard, E8, word(48, E_V + 150))
+        self.accept(guard, E8, word(48, E_V - 150))
+
+    def test_an_offset_jump_is_one_word_both_ways(self) -> None:
+        guard = self.open(E8, **RAISE)
+        self.accept(guard, E8, word(48, E_V, 100))
+        self.accept(guard, E8, word(48, E_V, -500))
+        self.accept(guard, E8, word(48, E_V, -1024))
+
+    def test_a_cold_word_is_no_longer_judged_against_a_ratio_step_from_the_fill(self) -> None:
+        # baseline 0x0: the current ratio is 0x1C[7:0] = 48; 1 is a legal ratio field and a lowering
+        guard = self.open(E8, **RAISE)
+        self.accept(guard, E8, word(1, E_V))
+
+    def test_a_baseline_with_a_v_target_is_its_own_reference_for_the_raise_check(self) -> None:
+        guard = self.open(dict(E8, vf=word(49, E_V + 20)), hw_ratio_max={"E": 49, "P": 49})
+        self.refuse(guard, E8, word(50, E_V + 20), "49x")
+        self.accept(guard, E8, word(49, E_V + 20, -5))
 
 
 class Ordering(BoundsCase):
@@ -338,7 +334,7 @@ class Fundamentals(BoundsCase):
         self.accept(guard, E8, word(46, 0, -10))  # E top fused ratio: no OC point, whole-curve offset
         self.refuse(guard, E8, word(47, 0, -10), "v_target_raw 0")  # above the top fused ratio an OC point needs a real target
         self.refuse(guard, E8, word(0, 0, -10), "ratio 0")
-        self.refuse(guard, E8, word(46, 0, -200), "offset_raw")  # every other bound still applies (floor)
+        self.accept(guard, E8, word(46, 0, -200))  # D-049: no offset floor any more
         self.fresh()
         guard = self.open(P1, **RAISE)
         self.accept(guard, P1, word(55, 0, -10))  # P1's 0x1C ratio; the top fused ratio of a P core is 57
@@ -348,31 +344,32 @@ class Fundamentals(BoundsCase):
         from arltuner.guard.policy import _check_vf_bounded
 
         req = type("R", (), {"p2": 0, "data": word(46, 0, -10)})()
-        ok, why = _check_vf_bounded(req, 0x2E, {}, CheckContext(offset_floor_raw=-102, favored_word=0x2E30, fused_word=0x4A02E))
+        ok, why = _check_vf_bounded(req, 0x2E, {}, CheckContext(bound=True, favored_word=0x2E30, fused_word=0x4A02E))
         self.assertFalse(ok)
         self.assertIn("v_target_raw 0", why)
 
-    def test_a_cold_word_at_or_below_the_top_fused_ratio_is_no_ratio_step(self) -> None:
-        """G-122: baseline ratio field 0 (a cold E word; 0x1C[7:0] = 48) written at 46 (target 0, no OC point) is "no ratio change" under max_ratio_step 1; the reference is
-        capped at the top fused ratio only for such a word. A warm baseline, an OC ratio and a real ratio change keep the step rule."""
+    def test_a_cold_word_at_or_below_the_top_fused_ratio_is_no_ratio_raise(self) -> None:
+        """G-122 / D-049: baseline ratio field 0 (a cold E word; 0x1C[7:0] = 48) written at 46 (target 0, no OC point) is a lowering; a ratio above 0x1C[7:0] is a raise that needs the
+        CPU's cmd 0x01 limit (unread here = refused, ``CPU_LIMIT_UNREAD``); with the limit bound it only has to fit it."""
         from arltuner.guard.policy import _check_vf_bounded
 
-        def check(base: int, data: int, top: int | None = 46, favored: int = 0x2E30):
+        def check(base: int, data: int, top: int | None = 46, favored: int = 0x2E30, limit: int | None = None):
             req = type("R", (), {"p2": 0, "data": data})()
-            return _check_vf_bounded(req, base, {}, CheckContext(offset_floor_raw=-102, favored_word=favored, fused_word=0x4A02E, top_fused_ratio=top))
+            return _check_vf_bounded(req, base, {}, CheckContext(bound=True, favored_word=favored, fused_word=0x4A02E, top_fused_ratio=top, hw_ratio_max=limit, ratio_text="CPU_LIMIT_UNREAD: cmd 0x01 not read"))
 
-        self.assertTrue(check(0x0, word(46, 0, -10))[0])  # cold E word: 0 -> 46, reference min(48, 46)
-        self.assertTrue(check(0x0, word(46, E_V, 0))[0])  # the offset-0 word keeps the filled target; still no step
-        ok, why = check(0x0, word(44, 0, -10))
-        self.assertFalse(ok)
-        self.assertIn("ratio step", why)  # a real change (2 below the capped reference) is refused
-        self.assertFalse(check(word(48, E_V), word(46, 0, -10))[0])  # a warm baseline at 48 (an OC point): 48 -> 46 is two bins
-        self.assertTrue(check(0x0, word(46, 0, -10), top=None)[0] is False)  # without the top fused ratio the rule is off (48 -> 46)
+        self.assertTrue(check(0x0, word(46, 0, -10))[0])  # cold E word: 0 -> 46, no OC point
+        self.assertTrue(check(0x0, word(46, E_V, 0))[0])  # the offset-0 word keeps the filled target
+        self.assertTrue(check(0x0, word(44, 0, -10))[0])  # no step limit: 4 below is fine
+        self.assertTrue(check(word(48, E_V), word(46, 0, -10))[0])  # a warm baseline at 48 (an OC point): 48 -> 46 is a lowering
         self.assertTrue(check(0x0, word(55, 0, -10), top=57, favored=0x3737)[0])  # P: 0x1C[7:0] = 55 <= top, unchanged
-        self.assertFalse(check(0x0, word(57, 0, -10), top=57, favored=0x3737)[0])  # a raise past 0x1C[7:0] by two bins is refused
+        ok, why = check(0x0, word(57, 0, -10), top=57, favored=0x3737)  # past 0x1C[7:0], limit unread
+        self.assertFalse(ok)
+        self.assertIn("CPU_LIMIT_UNREAD", why)
+        self.assertTrue(check(0x0, word(57, 0, -10), top=57, favored=0x3737, limit=120)[0])
+        self.assertFalse(check(0x0, word(57, 0, -10), top=57, favored=0x3737, limit=56)[0])
 
     def test_refusals_send_nothing_and_leave_no_revert(self) -> None:
-        guard = self.open(E8)
+        guard = self.open(E8, which=("10", "1C", "09", "26"), hw_ratio_max={"P": None, "E": None})  # the CPU limits unread: each of these is a raise
         before = list(self.transport.calls)
         for data in (word(49, E_V), word(48, E_V + 1), word(48, E_V, 5)):
             self.refuse(guard, E8, data)
@@ -461,90 +458,50 @@ class RevertOfARaise(BoundsCase):
 class PolicyBounds(unittest.TestCase):
     def test_defaults(self) -> None:
         p = default_m1_policy()
-        self.assertEqual((p.max_ratio_step, p.max_v_step_mv, p.max_offset_step_mv, p.offset_ceiling_mv), (1, 20, 25, 0))
         q = load_policy("cpus = [0]\n")
-        self.assertEqual((dict(q.ratio_max), dict(q.v_target_max_mv)), ({"P": None, "E": None}, {"P": None, "E": None}))
+        for policy in (p, q):
+            self.assertEqual((dict(policy.hw_ratio_max), dict(policy.hw_v_target_max_mv)), ({"P": None, "E": None}, {"P": None, "E": None}))  # the CPU's limits start unread
+            self.assertEqual(policy.ignored_keys, ())
 
-    def test_a_policy_file_can_set_every_bound(self) -> None:
+    def test_a_policy_file_with_the_old_bounds_loads_but_sets_nothing(self) -> None:
         q = load_policy(
             "cpus = [0, '8-23']\noffset_ceiling_mv = 20\nmax_ratio_step = 2\nmax_v_step_mv = 30\nmax_offset_step_mv = 40\n"
             "[ratio_max]\nE = 50\nP = 58\n[v_target_max_mv]\nE = 1250\n"
         )
-        self.assertEqual(dict(q.ratio_max), {"P": 58, "E": 50})
-        self.assertEqual(dict(q.v_target_max_mv), {"P": None, "E": 1250})  # a blank kind keeps the no-raise default
-        self.assertEqual((q.offset_ceiling_mv, q.max_ratio_step, q.max_v_step_mv, q.max_offset_step_mv), (20, 2, 30, 40))
+        self.assertEqual(dict(q.ratio_max), {"P": None, "E": None})  # the neutral stand-ins: the old numbers are NOT in force
+        self.assertEqual(dict(q.v_target_max_mv), {"P": None, "E": None})
+        self.assertEqual((q.offset_ceiling_mv, q.max_ratio_step, q.max_v_step_mv, q.max_offset_step_mv), (999, 255, 1000, 2000))
+        self.assertEqual(dict(q.hw_ratio_max), {"P": None, "E": None})
+        self.assertEqual(set(q.ignored_keys), {"offset_ceiling_mv", "max_ratio_step", "max_v_step_mv", "max_offset_step_mv", "ratio_max", "v_target_max_mv"})
 
-    def test_the_tables_are_read_only(self) -> None:
-        q = load_policy("cpus = [0]\n[ratio_max]\nE = 50\n")
+    def test_the_cpu_limit_tables_are_read_only(self) -> None:
+        q = default_m1_policy()
         with self.assertRaises(TypeError):
-            q.ratio_max["E"] = 60  # type: ignore[index]
+            q.hw_ratio_max["E"] = 60  # type: ignore[index]
 
-    def test_field_encoding_bounds_are_refused_at_load(self) -> None:
-        """D-039: only what the word cannot carry is refused at load; every number the CPU might allow is accepted (the CPU's own limits apply per request)."""
+    def test_field_encoding_bounds_of_the_cpu_limits(self) -> None:
+        """D-039: only what the word cannot carry is refused; the CPU limits bound to a policy are checked against the field they come from."""
         self.assertEqual((ENCODING_RATIO_MAX, ENCODING_V_TARGET_MAX_MV), (255, 3999))
         self.assertEqual((ENCODING_OFFSET_FLOOR_MV, ENCODING_OFFSET_CEILING_MV), (-1000, 999))
-        base = "cpus = [0]\n"
-        cases = {
-            "ratio above the 8-bit field": (base + f"[ratio_max]\nE = {ENCODING_RATIO_MAX + 1}\n", "ratio_max"),
-            "ceiling above the 12-bit S2.10 field": (base + f"[v_target_max_mv]\nP = {ENCODING_V_TARGET_MAX_MV + 1}\n", "v_target_max_mv"),
-            "offset ceiling above the 11-bit field": (base + f"offset_ceiling_mv = {ENCODING_OFFSET_CEILING_MV + 1}\n", "offset_ceiling_mv"),
-            "offset floor below the 11-bit field": (base + f"effective_offset_floor_mv = {ENCODING_OFFSET_FLOOR_MV - 1}\n", "effective_offset_floor_mv"),
-            "negative offset ceiling": (base + "offset_ceiling_mv = -1\n", "offset_ceiling_mv"),
-            "ratio zero": (base + "[ratio_max]\nE = 0\n", "ratio_max"),
-            "voltage below 500 mV": (base + "[v_target_max_mv]\nE = 499\n", "v_target_max_mv"),
-            "step zero": (base + "max_ratio_step = 0\n", "max_ratio_step"),
-            "ratio step too big": (base + f"max_ratio_step = {ENCODING_RATIO_MAX + 1}\n", "max_ratio_step"),
-            "v step too small": (base + "max_v_step_mv = 1\n", "max_v_step_mv"),
-            "v step too big": (base + "max_v_step_mv = 1001\n", "max_v_step_mv"),
-            "offset step too small": (base + "max_offset_step_mv = 1\n", "max_offset_step_mv"),
-            "offset step too big": (base + "max_offset_step_mv = 1001\n", "max_offset_step_mv"),
-        }
-        for label, (text, fragment) in cases.items():
-            with self.subTest(label):
-                with self.assertRaises(PolicyError) as cm:
-                    load_policy(text)
-                self.assertIn(fragment, str(cm.exception))
-                self.assertIn("field encoding", str(cm.exception))  # the refusal says where the bound comes from
-
-    def test_the_encoding_maxima_and_the_old_code_constants_are_accepted(self) -> None:
-        """The old code constants (ratio P 62 / E 60, V target P 1625 / E 1355 mV, offset ceiling 200 mV, steps 8 / 200 / 200) are plain policy values now, as are the encodings."""
-        for text in (
-            "cpus = [0]\noffset_ceiling_mv = 200\nmax_ratio_step = 8\nmax_v_step_mv = 200\nmax_offset_step_mv = 200\n[ratio_max]\nE = 60\nP = 62\n[v_target_max_mv]\nE = 1355\nP = 1625\n",
-            "cpus = [0]\noffset_ceiling_mv = 999\neffective_offset_floor_mv = -1000\nmax_ratio_step = 255\nmax_v_step_mv = 1000\nmax_offset_step_mv = 1000\n"
-            "[ratio_max]\nE = 255\nP = 90\n[v_target_max_mv]\nE = 3999\nP = 1700\n",
-        ):
-            with self.subTest(text=text):
-                q = load_policy(text)
-                self.assertIsNotNone(q.ratio_max["E"])
-                self.assertIsNotNone(q.v_target_max_mv["P"])
-
-    def test_unknown_keys_and_bad_shapes_are_refused(self) -> None:
-        cases = {
-            "unknown top-level key": "cpus = [0]\nratio_cap = 50\n",
-            "unknown kind in ratio_max": "cpus = [0]\n[ratio_max]\nX = 50\n",
-            "unknown kind in v_target_max_mv": "cpus = [0]\n[v_target_max_mv]\nG = 1000\n",
-            "ratio_max is not a table": "cpus = [0]\nratio_max = 50\n",
-            "v_target_max_mv is a list": "cpus = [0]\nv_target_max_mv = [1250]\n",
-            "boolean ceiling": "cpus = [0]\n[ratio_max]\nE = true\n",
-            "float ceiling": "cpus = [0]\n[v_target_max_mv]\nE = 1250.5\n",
-            "string step": "cpus = [0]\nmax_ratio_step = '1'\n",
-        }
-        for label, text in cases.items():
-            with self.subTest(label), self.assertRaises(PolicyError):
-                load_policy(text)
-
-    def test_direct_construction_is_validated_too(self) -> None:
         for kwargs in (
-            {"ratio_max": {"E": ENCODING_RATIO_MAX + 1, "P": None}},
-            {"ratio_max": {"X": 5}},
+            {"hw_ratio_max": {"E": ENCODING_RATIO_MAX + 1, "P": None}},
             {"hw_ratio_max": {"E": 0}},
-            {"v_target_max_mv": {"E": ENCODING_V_TARGET_MAX_MV + 1}},
-            {"v_target_max_mv": 1250},
-            {"offset_ceiling_mv": ENCODING_OFFSET_CEILING_MV + 1},
-            {"max_v_step_mv": True},
+            {"hw_ratio_max": {"X": 5}},
+            {"hw_v_target_max_mv": {"E": ENCODING_V_TARGET_MAX_MV + 1}},
+            {"hw_v_target_max_mv": 1250},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(PolicyError):
                 Policy(cpus=frozenset({0}), **kwargs)
+
+    def test_the_removed_fields_cannot_be_constructed(self) -> None:
+        for kwargs in ({"ratio_max": {"E": 50}}, {"v_target_max_mv": {"E": 1250}}, {"offset_ceiling_mv": 0}, {"max_ratio_step": 1}, {"assumed_bios_offset_mv": {"P": 0, "E": 0}}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(TypeError):
+                Policy(cpus=frozenset({0}), **kwargs)  # type: ignore[arg-type]
+
+    def test_unknown_top_level_keys_are_still_refused(self) -> None:
+        for text in ("cpus = [0]\nratio_cap = 50\n", "cpus = [0]\n[ratio_cap]\nE = 50\n"):
+            with self.subTest(text=text), self.assertRaises(PolicyError):
+                load_policy(text)
 
     def test_old_check_name_is_gone(self) -> None:
         # an old policy file naming vf_undervolt is refused loudly instead of being silently reinterpreted
@@ -553,8 +510,10 @@ class PolicyBounds(unittest.TestCase):
             load_policy(text)
         self.assertIn("unknown check", str(cm.exception))
 
-    def test_the_context_defaults_are_the_shipped_policy(self) -> None:
-        self.assertEqual(CheckContext(), CheckContext(None, None, None, None, None, None, None, 0, 1, 20, 26))
+    def test_the_context_is_unbound_by_default(self) -> None:
+        c = CheckContext()
+        self.assertFalse(c.bound)  # only build_context binds: the explicit "there is a context" flag that replaced the offset-floor sentinel
+        self.assertEqual((c.hw_ratio_max, c.hw_v_max_raw), (None, None))
 
 
 if __name__ == "__main__":

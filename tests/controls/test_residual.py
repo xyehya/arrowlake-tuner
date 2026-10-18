@@ -18,7 +18,7 @@ from arltuner.msr import SimConfig
 from arltuner.profiles import load_profile
 from arltuner.topology import arl_s_285k
 
-from ._support import E_READINGS, DEFAULT_STEPS, e_core, make_session, policy_with, point_entry, point_profile, point_text, profile, readings_of, with_point_entries
+from ._support import E_READINGS, e_core, make_session, policy_with, point_entry, point_profile, point_text, profile, readings_of, with_point_entries
 
 TOPO = arl_s_285k()
 EC1, EC2 = (12, 13, 14, 15), (16, 17, 18, 19)
@@ -229,23 +229,24 @@ class Restore(Case):
         self.assertNotIn(12, scan)
         self.assertEqual(len(scan), 2 * 11)
 
-    def test_the_policy_ratio_ceiling_is_never_widened(self) -> None:
-        pol = with_point_entries(policy_with(max_ops=400, dwell=0.0, boot_ops=2000, ratio_max={"P": None, "E": 47}))
+    def test_there_is_no_policy_ratio_ceiling_to_respect(self) -> None:
+        # D-049: the residual OC point is neutralised whatever its ratio (the old policy ratio_max note is gone); the CPU's own limit is the only bound
+        pol = with_point_entries(policy_with(max_ops=400, dwell=0.0, boot_ops=2000, hw_ratio_max={"P": 120, "E": 120}))
         s = self.session(policy=pol)
         report = self.apply(s)
         self.assertTrue(report.ok, report.format_report())
-        self.assertEqual(s.sim.vf(12).to_u32(), EC1_WORD)  # left as it is
-        self.assertTrue(any("ratio_max" in w for w in report.warnings), report.warnings)
+        self.assertNotEqual(s.sim.vf(12).to_u32(), EC1_WORD)  # neutralised
+        self.assertFalse(any("ratio_max" in w for w in report.warnings), report.warnings)
 
-    def test_a_step_limit_that_cannot_reach_the_goal_still_moves_toward_it_by_one_step(self) -> None:
-        pol = with_point_entries(policy_with(max_ops=400, dwell=0.0, boot_ops=2000, **DEFAULT_STEPS))
+    def test_the_neutralisation_reaches_the_goal_in_one_step(self) -> None:
+        # no step limit: the V target goes straight to the neutral value (below the top fused point), not 20 mV at a time
+        pol = with_point_entries(policy_with(max_ops=400, dwell=0.0, boot_ops=2000))
         s = self.session(policy=pol)
         report = self.apply(s)
         self.assertTrue(report.ok, report.format_report())
         word = s.sim.vf(12)
         self.assertEqual(word.ratio, 48)
-        self.assertGreaterEqual(word.v_target_raw, 0x48C - 21)  # one 20 mV step
-        self.assertLess(word.v_target_raw, 0x48C)
+        self.assertLess(word.v_target_raw, 0x48C - 21)  # more than the old 20 mV step
 
     def test_the_scan_reads_count_against_the_session_limit(self) -> None:
         from arltuner.controls import NeedsHigherLimit

@@ -45,12 +45,14 @@ class Item1PlanMatchesGuardRatio(LastReadCase):
         self.assertTrue(self.apply_ok(h2, plan)["complete"])
         self.assertEqual(self.word(1).ratio, 59)
 
-    def test_a_ratio_above_the_kind_ceiling_is_still_refused_at_plan_time(self) -> None:
+    def test_a_ratio_above_the_cpu_limit_is_still_refused_at_plan_time(self) -> None:
         h = self.boot()
         self.read(h)
-        r = h.call("pp", "tune.plan", {"intent": rows(row("P1", ratio=61))})
+        self.plan(h, rows(row("P1", ratio=61)))  # D-049: the old "auto" cap (fused 0x1C + 3 = 60) is gone; the CPU's own limit (cmd 0x01) is 120 here
+        r = h.call("pp", "tune.plan", {"intent": rows(row("P1", ratio=121))})
         self.assertEqual(error_code(r), "REFUSED")
         self.assertEqual(r["error"]["detail"]["check"], "POLICY_RANGE")
+        self.assertIn("CPU limit 120x (cmd 0x01", r["error"]["message"])
 
 
 class Item2ExtrasArePaced(TuneCase):
@@ -60,7 +62,7 @@ class Item2ExtrasArePaced(TuneCase):
         res = self.read(h)
         self.assertEqual(res["extras_notes"], {}, res["extras_notes"])
         self.assertEqual(sorted(res["hw_limits"]), ["E", "P"])
-        self.assertEqual(res["limits"]["ratio_max"]["P"], 60)  # "auto" resolved: the 0x1C words were read
+        self.assertEqual(res["cpu_limits"]["P"]["max_ratio"], 120)  # the CPU's own limit group was read despite the dwell
         self.assertIsNotNone(res["fused"])
 
     def test_a_refusal_other_than_the_allowlist_is_worded_by_its_reason(self) -> None:
@@ -131,11 +133,12 @@ class Item5RestoreOrdering(LastReadCase):
 
 
 class Item6NoHiddenCeilings(TuneCase):
-    def test_a_ratio_and_a_v_target_above_the_old_sanity_ranges_reach_the_policy_check(self) -> None:
+    def test_a_ratio_and_a_v_target_above_the_old_sanity_ranges_reach_the_cpu_limit_check(self) -> None:
         h = self.boot()
         self.read(h)
-        # 101x and 2.5 V were refused as BAD_REQUEST by a private 1..100 / 0.5..2.0 range; now the policy / the CPU's limits answer (POLICY_RANGE)
-        for intent in (rows(row("P0", ratio=101)), rows(row("P0", v=2.5))):
+        # 101x and 2.5 V were refused as BAD_REQUEST by a private 1..100 / 0.5..2.0 range; now only the CPU's limits answer (POLICY_RANGE): 101x is inside 120x
+        self.plan(h, rows(row("P0", ratio=101)))
+        for intent in (rows(row("P0", ratio=121)), rows(row("P0", v=2.5))):
             r = h.call(f"p{len(h.messages)}", "tune.plan", {"intent": intent})
             self.assertEqual(error_code(r), "REFUSED", r)
             self.assertEqual(r["error"]["detail"]["check"], "POLICY_RANGE", r)

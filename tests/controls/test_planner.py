@@ -90,7 +90,7 @@ class RaiseFromNoOcPoint(unittest.TestCase):
     """G-124: at or below the top fused ratio the hardware keeps no V target, so a voltage-first word there cannot be verified: ratio + voltage together is a plan
     error; the ratio alone first (the OC point appears at the current target), then the voltage, passes the guard."""
 
-    RAISE = policy_with(ratio_max={"P": 58}, v_target_max_mv={"P": 1500}, max_ratio_step=1, max_v_step_mv=20)
+    RAISE = policy_with()  # D-049: the CPU's ratio limit (120x) is the only ceiling bound
     P57 = {4: readings_of(P4_BASELINE.with_(ratio=57))}
 
     def test_ratio_and_voltage_together_is_refused_at_plan_time(self) -> None:
@@ -282,11 +282,11 @@ class MeasuredShapes(unittest.TestCase):
         refused = build_plan(profile(e_core(0, ratio=47)), TOPO, {c: dataclasses.replace(measured_readings(c), fused=0x2E) for c in range(8, 12)}, per_core_enabled=True, policy=POLICY)
         self.assertTrue(any("v_target_raw 0" in r.detail for r in refused.refusals), refused.refusals)
 
-    def test_the_e_offset_only_word_passes_the_default_step_limit_and_a_ratio_raise_does_not(self) -> None:
-        """G-122: the E offset-only word has ratio 46 (no OC point); the guard measures a cold word at or below the top fused ratio from min(0x1C[7:0], top fused), so
-        0 -> 46 is no ratio step under max_ratio_step 1. A user-set OC ratio keeps the XTU fill and its step rules."""
+    def test_the_e_offset_only_word_has_no_oc_point_and_a_ratio_raise_is_judged_by_the_cpu_limit(self) -> None:
+        """G-122: the E offset-only word has ratio 46 (no OC point); the guard measures a cold word at or below the top fused ratio from min(0x1C[7:0], top fused).
+        A user-set OC ratio keeps the XTU fill. D-049: there is no step limit; a raise is judged by the CPU's own ratio limit."""
         readings = {c: measured_readings(c) for c in range(12, 16)}
-        small = policy_with(max_ops=200, max_ratio_step=1)
+        small = policy_with(max_ops=200)
         plan = build_plan(profile(e_core(4, offset_mv=-10)), TOPO, readings, per_core_enabled=True, policy=small)
         self.assertEqual({write_words(plan, c) for c in range(12, 16)}, {(0xFEC0002E, None, None)})  # ratio 46, target 0, -10 mV; no 0x1D / 0x27
         self.assertTrue(plan.allowed, plan.refusals)
@@ -297,10 +297,13 @@ class MeasuredShapes(unittest.TestCase):
             self.assertEqual({VfWord.from_u32(write_words(own, c)[0]).ratio for c in range(12, 16)}, {48}, entry)
         raise_p = build_plan(profile(p_core(1, -5)), TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=small)
         self.assertEqual(VfWord.from_u32(write_words(raise_p, 1)[0]).ratio, 55)  # a P core is unaffected
-        # a real ratio raise is still refused beyond max_ratio_step: P1 cold (0x1C[7:0] = 55) asking for 57 is two bins
-        two = build_plan(profile('kind = "P"\nindex = 1\nratio = 57'), TOPO, {1: measured_readings(1)}, per_core_enabled=True,
-                         policy=dataclasses.replace(small, ratio_max={"P": 57, "E": None}))
-        self.assertFalse(two.allowed)
+        # a ratio raise is allowed up to the CPU's limit and refused above it: P1 cold (0x1C[7:0] = 55) asking for 57 is two bins
+        ask = profile('kind = "P"\nindex = 1\nratio = 57')
+        two = build_plan(ask, TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=dataclasses.replace(small, hw_ratio_max={"P": 57, "E": 120}))
+        self.assertTrue(two.allowed, two.refusals)
+        low = build_plan(ask, TOPO, {1: measured_readings(1)}, per_core_enabled=True, policy=dataclasses.replace(small, hw_ratio_max={"P": 56, "E": 120}))
+        self.assertFalse(low.allowed)
+        self.assertTrue(any("cmd 0x01" in r.detail for r in low.refusals), low.refusals)
 
     def test_fill_ratio_caps_a_zero_baseline_at_the_top_fused_ratio_only(self) -> None:
         self.assertEqual(fill_ratio(0, 0x2E30, 46), 46)
@@ -317,10 +320,10 @@ class MeasuredShapes(unittest.TestCase):
 
     def test_effective_offsets_are_shown_in_the_plan_text(self) -> None:
         text = format_plan(self.plan(profile(p_core(0, -5), e_core(0, offset_mv=-5)), [0, 8, 9, 10, 11]))
-        self.assertIn("runtime offset -4.88 mV, effective -54.88 mV (assumed BIOS offset -50 mV)", text)  # P core
+        # D-049: no BIOS offset is assumed for either kind and the plan no longer explains a policy floor
+        self.assertIn("runtime offset -4.88 mV, effective -4.88 mV (assumed BIOS offset +0 mV)", text)  # P core
         self.assertIn("runtime offset -4.88 mV, effective -4.88 mV (assumed BIOS offset +0 mV)", text)  # E core
-        self.assertIn("effective offset = assumed BIOS offset (P -50 mV, E +0 mV", text)
-        self.assertIn("-100 mV", text)
+        self.assertNotIn("effective offset = assumed BIOS offset", text)
 
 
 class Targets(unittest.TestCase):
@@ -477,37 +480,39 @@ class PredictedVerdicts(unittest.TestCase):
         return refusals[0]
 
     def test_overvolt(self) -> None:
-        # raw 1434 > 0x544 = 1348, the no-raise ceiling of the shipped policy; step 8: an OC-point voltage adds the 0x28 read before the writes
-        self.assertIn("v_target_raw", self.refused(profile(p4(oc_voltage_mv=1400)), {4: readings_of(P4_BASELINE.with_(ratio=58))}, step=8).detail)  # G-124: P4 needs an OC point (58 > 57) to carry a V target
+        # step 8: an OC-point voltage adds the 0x28 read before the writes; this reading has none (vmax None) = the CPU's voltage limit is unread and a raise is refused naming it
+        detail = self.refused(profile(p4(oc_voltage_mv=1400)), {4: readings_of(P4_BASELINE.with_(ratio=58))}, step=8).detail  # G-124: P4 needs an OC point (58 > 57) to carry a V target
+        self.assertIn("predicted voltage", detail)
+        self.assertIn("CPU_LIMIT_UNREAD", detail)
+        self.assertIn("cmd 0x28", detail)
 
-    def test_ratio_above_baseline(self) -> None:
-        self.assertIn("ratio", self.refused(profile(p4(ratio=57))).detail)
+    def test_overvolt_above_the_cpu_limit(self) -> None:
+        read = dataclasses.replace(readings_of(P4_BASELINE.with_(ratio=58)), vmax=0x681)  # 0x28 = 1625 mV
+        self.assertTrue(plan_for(profile(p4(oc_voltage_mv=1600)), {4: read}).allowed)
+        detail = self.refused(profile(p4(oc_voltage_mv=1650)), {4: read}, step=8).detail
+        self.assertIn("above the CPU limit", detail)
+        self.assertIn("cmd 0x28", detail)
 
-    def test_offset_below_the_policy_minimum(self) -> None:
-        self.assertIn("offset_raw", self.refused(profile(p4(offset_mv=-150))).detail)  # raw -154 < -102
+    def test_ratio_above_the_cpu_limit(self) -> None:
+        self.assertTrue(plan_for(profile(p4(ratio=57))).allowed)  # D-049: a raise within the CPU's 120x is allowed
+        self.assertIn("cmd 0x01", self.refused(profile(p4(ratio=121))).detail)
 
-    def test_offset_boundary_on_a_p_core_is_the_d015_runtime_floor(self) -> None:
-        self.assertTrue(plan_for(profile(p4(offset_mv=-50))).allowed)  # raw -51 == the P runtime floor (-100 effective - -50 BIOS)
-        detail = self.refused(profile(p4(offset_mv=-51))).detail  # raw -52
-        self.assertIn("-51", detail)
-        self.assertIn("assumed BIOS offset", detail)
+    def test_ratio_raise_with_the_cpu_limit_unread(self) -> None:
+        detail = self.refused(profile(p4(ratio=57)), policy=dataclasses.replace(default_m1_policy(), max_operations_per_session=400, max_operations_per_boot=1000), step=8).detail  # the shipped policy has no limit bound: the plan reads 0x01 itself, the verdict needs its word
+        self.assertIn("CPU_LIMIT_UNREAD", detail)
 
-    def test_offset_boundary_on_an_e_core_is_minus_100_mv(self) -> None:
+    def test_the_old_offset_window_is_gone(self) -> None:
+        for mv in (-50, -51, -100, -150, -500, -1000):
+            self.assertTrue(plan_for(profile(p4(offset_mv=mv))).allowed, mv)
         base = {c: E_READINGS for c in (20, 21, 22, 23)}
-        self.assertTrue(plan_for(profile(e_core(12, offset_mv=-100)), base).allowed)  # raw -102
-        plan = plan_for(profile(e_core(12, offset_mv=-101)), base)  # raw -103: refused on every core of the cluster
-        self.assertEqual(len(plan.refusals), 4)
-        self.assertEqual({r.cmd for r in plan.refusals}, {0x11})
+        for mv in (-100, -101, -300):
+            self.assertTrue(plan_for(profile(e_core(12, offset_mv=mv)), base).allowed, mv)
 
-    def test_the_floor_follows_the_policy_values(self) -> None:
-        lenient = dataclasses.replace(POLICY, assumed_bios_offset_mv={"P": 0, "E": 0})
-        self.assertTrue(plan_for(profile(p4(offset_mv=-100)), policy=lenient).allowed)  # no BIOS offset assumed: -100 mV runtime
-        strict = dataclasses.replace(POLICY, assumed_bios_offset_mv={"P": -80, "E": 0})
-        self.assertTrue(plan_for(profile(p4(offset_mv=-20)), policy=strict).allowed)  # floor -100 - -80 = -20 mV
-        self.refused(profile(p4(offset_mv=-21)), policy=strict)
-
-    def test_positive_offset_is_refused(self) -> None:
-        self.refused(profile(p4(offset_mv=10)))
+    def test_positive_offset_needs_the_cpu_voltage_limit(self) -> None:
+        detail = self.refused(profile(p4(offset_mv=10)), step=8).detail  # step 8: the positive offset adds the 0x28 read
+        self.assertIn("CPU_LIMIT_UNREAD", detail)
+        read = dataclasses.replace(P4_READINGS, vmax=0x681)
+        self.assertTrue(plan_for(profile(p4(offset_mv=10)), {4: read}).allowed)
 
     def test_static_baseline_cannot_be_evaluated(self) -> None:
         detail = self.refused(profile(p4(offset_mv=-30)), {4: P4_BASELINE.with_(static=True)}).detail
@@ -594,9 +599,29 @@ class Warnings(unittest.TestCase):
         self.assertTrue(any("cluster" in w and "UNVERIFIED" in w for w in warnings))
         self.assertFalse(any("cluster" in w for w in plan_for(profile(p4(offset_mv=-30))).warnings))
 
-    def test_bios_offset_note_appears_with_an_offset_only(self) -> None:
-        self.assertTrue(any("assumed BIOS offset" in w for w in plan_for(profile(p4(offset_mv=-30))).warnings))
-        self.assertFalse(any("assumed BIOS offset" in w for w in plan_for(profile(p4(ratio=50))).warnings))
+    def test_no_bios_offset_note_any_more(self) -> None:
+        for prof in (profile(p4(offset_mv=-30)), profile(p4(ratio=50))):
+            self.assertFalse(any("assumed BIOS offset" in w or "floors the" in w for w in plan_for(prof).warnings))
+
+    def test_d049_warnings_for_large_positive_and_deep_changes(self) -> None:
+        def codes(prof, **kw):
+            return [w.split(":", 1)[0] for w in plan_for(prof, **kw).warnings if w.split(":", 1)[0].isupper() and "_" in w.split(":", 1)[0]]
+
+        read = dataclasses.replace(P4_READINGS, vmax=0x681)
+        self.assertEqual(codes(profile(p4(offset_mv=-30))), [])  # a small undervolt warns about nothing
+        self.assertIn("LARGE_CHANGE", codes(profile(p4(offset_mv=-60))))  # |delta| > 50 mV
+        self.assertNotIn("DEEP_WHOLE_CURVE", codes(profile(p4(offset_mv=-60))))
+        self.assertIn("DEEP_WHOLE_CURVE", codes(profile(p4(offset_mv=-150))))  # deeper than -100 mV
+        self.assertIn("POSITIVE_OFFSET", codes(profile(p4(offset_mv=20)), baseline={4: read}))
+        self.assertIn("LARGE_CHANGE", codes(profile(p4(ratio=60))))  # +5 bins
+        self.assertNotIn("LARGE_CHANGE", codes(profile(p4(ratio=58))))  # +3 bins
+        text = " ".join(plan_for(profile(p4(offset_mv=-150))).warnings)
+        self.assertIn("does not protect a whole-curve offset", text)
+
+    def test_the_warnings_never_refuse(self) -> None:
+        plan = plan_for(profile(p4(offset_mv=-700, ratio=58)))
+        self.assertTrue(plan.allowed, plan.refusals)
+        self.assertGreaterEqual(len([w for w in plan.warnings if w.startswith(("LARGE_CHANGE", "DEEP_WHOLE_CURVE"))]), 2)
 
     def test_revert_note_text(self) -> None:
         self.assertIn("a reboot restores the BIOS-programmed state", REVERT_NOTE)
@@ -606,28 +631,33 @@ class Warnings(unittest.TestCase):
         self.assertTrue(REVERT_NOTE.isascii())
 
 
-class AutoRatioCeilingIsKindWide(unittest.TestCase):
-    """G-141: with ``ratio_max = "auto"`` the plan's verdict for a write uses the 0x1C words of the whole kind -- the context the guard builds -- not the target CPU's own word."""
+class RatioLimitIsTheCpusKindWideWord(unittest.TestCase):
+    """G-141 / D-049: the plan's verdict for a ratio write uses the CPU's own ``0x01`` limit of the whole kind (the word of any CPU of the kind) -- the context the guard builds."""
 
-    AUTO = policy_with(ratio_auto=frozenset({"P"}), ratio_max={"P": None, "E": None}, hw_ratio_max={"P": 120, "E": 120})
-    P1 = CoreReadings(vf=VfWord(55, 0x544, False, 0), favored=0x3737, fused=0x538 << 8 | 55, granular=3)  # P1 (cpu 1): fused 55 -> its own ceiling alone would be 58
-    P0_WORD = 0x3939  # P0 (cpu 0): fused 57 -> the kind's ceiling is 57 + 3 = 60
+    UNBOUND = policy_with(hw_ratio_max={"P": None, "E": None})
+    P1 = CoreReadings(vf=VfWord(55, 0x544, False, 0), favored=0x3737, fused=0x538 << 8 | 55, granular=3)  # P1 (cpu 1)
+    P0_LIMIT_59 = 0x100 | 59  # cmd 0x01 of P0 (cpu 0): 59x, ratio OC ok
 
     def plan(self, ratio: int, **kwargs: object):
-        return build_plan(profile('kind = "P"\nindex = 1\nratio = %d' % ratio), TOPO, {1: self.P1}, per_core_enabled=True, policy=self.AUTO, **kwargs)
+        return build_plan(profile('kind = "P"\nindex = 1\nratio = %d' % ratio), TOPO, {1: self.P1}, per_core_enabled=True, policy=self.UNBOUND, **kwargs)
 
-    def test_a_ratio_within_the_kind_ceiling_is_allowed_on_a_non_favored_core(self) -> None:
-        plan = self.plan(59, favored_words={0: self.P0_WORD, 1: 0x3737})
+    def test_a_ratio_within_the_limit_read_on_another_cpu_of_the_kind_is_allowed(self) -> None:
+        plan = self.plan(59, oc_cap_words={0: self.P0_LIMIT_59})
         refused = [(st.number, st.verdict.reason, st.verdict.detail) for st in plan.steps if not st.verdict.allowed]
         self.assertEqual(refused, [])
 
-    def test_the_kind_ceiling_is_still_a_ceiling(self) -> None:
-        plan = self.plan(61, favored_words={0: self.P0_WORD, 1: 0x3737})
-        self.assertTrue(any(not st.verdict.allowed and "60" in st.verdict.detail for st in plan.steps), [st.verdict for st in plan.steps])
+    def test_the_limit_is_still_a_limit(self) -> None:
+        plan = self.plan(60, oc_cap_words={0: self.P0_LIMIT_59})
+        self.assertTrue(any(not st.verdict.allowed and "59x" in st.verdict.detail and "cmd 0x01" in st.verdict.detail for st in plan.steps), [st.verdict for st in plan.steps])
 
-    def test_with_only_its_own_word_known_the_ceiling_is_its_own(self) -> None:
-        plan = self.plan(59)  # nothing else was read: 55 + 3 = 58 (the guard would say the same in that session)
-        self.assertTrue(any(not st.verdict.allowed for st in plan.steps))
+    def test_an_e_word_does_not_answer_for_the_p_kind(self) -> None:
+        plan = self.plan(59, oc_cap_words={8: self.P0_LIMIT_59})
+        self.assertTrue(any(not st.verdict.allowed and "CPU_LIMIT_UNREAD" in st.verdict.detail for st in plan.steps), [st.verdict for st in plan.steps])
+
+    def test_without_any_word_the_raise_is_refused_naming_the_read(self) -> None:
+        plan = self.plan(59)
+        self.assertTrue(any(not st.verdict.allowed and "CPU_LIMIT_UNREAD" in st.verdict.detail and "cmd 0x01" in st.verdict.detail for st in plan.steps))
+        self.assertIn(StepKind.READ_OC_CAP, [st.kind for st in plan.steps])  # the plan itself reads the limit, for the apply that follows
 
 
 class Shape(unittest.TestCase):

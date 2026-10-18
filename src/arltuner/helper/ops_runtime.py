@@ -44,7 +44,7 @@ from arltuner.topology import Topology
 from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _no_args, _only, _trust, _trust_refusal, helper_topology
 from .ops_power import _boot_id, _NotSent, _open_audit, _release_lock, _take_lock
-from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _load_policy, _validate_tune_apply
+from .ops_tune import _NONCE_ALPHABET, PLAN_EXPIRES_S, PlanStore, _load_policy, _validate_tune_apply, cpu_limits_doc
 from .protocol import BAD_REQUEST, CANCELLED, INTERNAL, PLAN_STALE, REFUSED, OpError
 from .state import State
 from .trust import TrustError, open_checked
@@ -335,13 +335,23 @@ def _refused(exc: cp.Refused) -> OpError:
 
 
 def _policy_json(policy: Policy) -> dict[str, Any]:
-    """The ``[runtime]`` keys as the policy has them; ``null`` = absent = that control may not be used."""
-    r = policy.runtime
-    return {
-        "source": policy.where,
-        "cap_ratio_min": None if r is None else r.cap_ratio_min,
-        "uncore_ratio": None if r is None or r.uncore_ratio is None else list(r.uncore_ratio),
-    }
+    """D-049: the policy no longer bounds a cap or an uncore ratio (no ``[runtime]`` table), so only where it was read from. The limits that apply are in ``cpu_limits``."""
+    return {"source": policy.where}
+
+
+def _limits_doc(helper: Helper, w: RuntimeWiring, topo: Topology) -> dict[str, Any]:
+    """D-049 ``cpu_limits`` with the live cpufreq (``cpuinfo_min/max_freq``) and uncore (``initial_min/max_freq_khz``) bounds; a part that cannot be read stays ``null``."""
+    caps: dict[str, Any] | None = None
+    uncore: list[int] | None = None
+    try:
+        caps = cp.limits_json(cp.read_state(w.files, _cpus(w, topo)))
+    except cp.SysfsError:
+        pass
+    try:
+        uncore = un.limits_json(un.read_state(w.files))
+    except cp.SysfsError:
+        pass
+    return cpu_limits_doc(helper, caps=caps, uncore=uncore)
 
 
 def _journal_json(j: Journal | None) -> dict[str, Any] | None:
@@ -357,7 +367,7 @@ def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     cpus = _cpus(w, topo)
     result: dict[str, Any] = {
         "caps": None, "offline": None, "uncore": None, "uncore_note": None, "policy": _policy_json(policy), "held": _held(helper), "journal": None, "journal_path": str(w.journal_path),
-        "note": None,
+        "note": None, "cpu_limits": cpu_limits_doc(helper),
     }
     try:
         freq = cp.read_state(w.files, cpus)
@@ -374,6 +384,7 @@ def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
             "cpufreq": None if f is None else f.as_json(),
         })
     result["caps"] = rows
+    result["cpu_limits"] = _limits_doc(helper, w, topo)
     result["offline"] = [cpu for cpu in cpus if online[cpu] is False]
     try:
         result["uncore"] = un.read_state(w.files).as_json()
@@ -513,19 +524,17 @@ def _planned(helper: Helper, w: RuntimeWiring, args: dict[str, Any]) -> tuple[li
     return steps, notes, journal, policy
 
 
-def _journal_policy_warnings(policy: Policy, journal: Journal) -> list[str]:
-    """A revert restores a recorded state and is not bounded by ``[runtime]``; say so when a recorded value lies outside what the policy would allow now."""
-    out: list[str] = []
-    r = policy.runtime
-    if r is not None and r.cap_ratio_min is not None:
-        low = [c for c, khz in journal.caps.items() if khz < r.cap_ratio_min * cp.KHZ_PER_RATIO]
-        if low:
-            out.append(f"the journaled cap of cpu {', '.join(map(str, sorted(low)))} is below [runtime] cap_ratio_min = {r.cap_ratio_min}: the revert restores it anyway")
-    if r is not None and r.uncore_ratio is not None:
-        for key, khz in journal.uncore.items():
-            if not r.uncore_ratio[0] * cp.KHZ_PER_RATIO <= khz <= r.uncore_ratio[1] * cp.KHZ_PER_RATIO:
-                out.append(f"the journaled {key} ({khz / cp.KHZ_PER_RATIO:g}) is outside [runtime] uncore_ratio = {list(r.uncore_ratio)}: the revert restores it anyway")
-    return out
+def _intent_warnings(w: RuntimeWiring, topo: Topology, args: dict[str, Any]) -> list[str]:
+    """D-049 ``CODE: text`` warnings of a caps / uncore intent (LARGE_CHANGE); nothing here refuses."""
+    out: list[tuple[str, str]] = []
+    try:
+        if "caps" in args:
+            out += cp.warnings({int(k): v for k, v in args["caps"].items()}, cp.read_state(w.files, _cpus(w, topo)), topo)
+        if "uncore" in args:
+            out += un.warnings(args["uncore"], un.read_state(w.files))
+    except (cp.SysfsError, cp.Refused):
+        pass
+    return [f"{code}: {text}" for code, text in out]
 
 
 def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -535,8 +544,8 @@ def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     steps, notes, journal, policy = _planned(helper, w, args)
     revert = bool(args.get("revert"))
     warnings = list(notes)
-    if revert and journal is not None:
-        warnings.extend(_journal_policy_warnings(policy, journal))
+    if not revert:
+        warnings.extend(_intent_warnings(w, helper_topology(helper), args))
     if not revert:
         warnings.append("the values now in force are journaled before the first write of each key in this boot; \"revert\" puts them back")
     warnings.append("these are runtime values: a reboot restores the firmware / kernel defaults")
@@ -547,6 +556,7 @@ def op_runtime_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
     return {
         "plan_id": plan_id, "nonce": nonce, "revert": revert, "steps": [s.as_json() for s in steps], "writes": len(steps), "ops_needed": 0, "expires_s": int(PLAN_EXPIRES_S),
         "journal_new": not revert and (journal is None or _would_add(journal, steps)), "warnings": warnings, "policy": _policy_json(policy),
+        "cpu_limits": _limits_doc(helper, w, helper_topology(helper)),
     }
 
 

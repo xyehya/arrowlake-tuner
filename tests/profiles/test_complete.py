@@ -172,18 +172,17 @@ class Planner(unittest.TestCase):
         refused = [s for s in plan.steps if not s.verdict.allowed]
         self.assertTrue(any("fused_top_ratio" in s.verdict.detail for s in refused), [s.verdict.detail for s in refused])
 
-    def test_rounds_follow_the_step_limit(self) -> None:
+    def test_there_are_no_rounds_without_a_step_limit(self) -> None:
+        """D-049: no step limit in the policy, so a profile is always one round (``ramp_rounds`` is kept for its callers); the session-budget check of ``check_rounds`` stays."""
         prof = reference()
         base, pts = self.baseline(prof)
         self.assertEqual(ramp_rounds(prof, TOPO, base, pts, _policy(), only_changed=True), (1, None))
-        rounds, worst = ramp_rounds(prof, TOPO, base, pts, _policy(max_offset_step_mv=25), only_changed=True)
-        self.assertEqual(rounds, 4)  # -91 mV = -93 raw, 25 mV = 26 raw per step (25 counted: a whole-mV step can fall one raw short)
-        self.assertIn("point 6", worst)
+        self.assertEqual(ramp_rounds(prof, TOPO, base, pts, _policy(), only_changed=False), (1, None))
         self.assertEqual(check_rounds(1, None, 100, 10, _policy()), 110)
         with self.assertRaises(NeedsRounds):
-            check_rounds(4, worst, 300, 0, _policy(max_operations_per_session=1000))
+            check_rounds(4, "P7 point 6", 300, 0, _policy(max_operations_per_session=1000))
         with self.assertRaises(NeedsRounds):
-            check_rounds(MAX_RAMP_ROUNDS + 1, worst, 1, 0, _policy())
+            check_rounds(MAX_RAMP_ROUNDS + 1, "P7 point 6", 1, 0, _policy())
 
 
 def _policy(**changes: int):

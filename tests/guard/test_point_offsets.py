@@ -95,23 +95,20 @@ class AcceptedPointOffset(PointCase):
                 guard = self.open(cpu, point, point_word(ratio))
                 self.assertIs(self.write(guard, point_word(ratio, -5), cpu, point).verified, True)
 
-    def test_the_window_floor_follows_the_assumed_bios_offset(self) -> None:
-        # E: floor -100 mV effective, BIOS 0 -> raw -102 allowed, -103 refused; P: BIOS -50 -> raw -51 allowed, -52 refused (step limits relaxed)
+    def test_there_is_no_window_floor_or_ceiling(self) -> None:
+        # D-049: the D-015 floors (E -102 raw, P -51 raw with the assumed BIOS offset) and the offset ceiling are gone: the 11-bit field is the only bound
         guard = self.open(E8, 6, POINT6)
-        self.assertIs(self.write(guard, point_word(46, -102)).verified, True)
-        self.refuse(guard, point_word(46, -103), "outside")
+        for raw in (-102, -103, -500, -1024):
+            self.assertIs(self.write(guard, point_word(46, raw)).verified, True, raw)
         self.transport.state.clear()
-        guard = self.open(P1CPU, 8, point_word(57), )
-        self.refuse(guard, point_word(57, -52), "outside", P1CPU, 8)
-        self.assertIs(self.write(guard, point_word(57, -51), P1CPU, 8).verified, True)
-
-    def test_a_positive_offset_needs_a_raised_ceiling(self) -> None:
-        guard = self.open()
-        self.refuse(guard, point_word(46, 1), "outside")
+        # a positive offset is bounded only by the CPU's 0x28 limit (bound here as 0x7FF) from the point's own V target: 0x400 + 1023 == the limit
+        guard = self.open(E8, 6, point_word(46, 0, v_raw=0x400), hw_v_target_max_raw={"P": 0x7FF, "E": 0x7FF})
+        for raw in (26, 300, 1023):
+            self.assertIs(self.write(guard, point_word(46, raw, v_raw=0x400)).verified, True, raw)
         self.transport.state.clear()
-        guard = self.open(offset_ceiling_mv=25)
-        self.assertIs(self.write(guard, point_word(46, 26)).verified, True)  # +25 mV = raw 26
-        self.refuse(guard, point_word(46, 27), "outside")
+        guard = self.open(P1CPU, 8, point_word(57))
+        for raw in (-51, -52, -400):
+            self.assertIs(self.write(guard, point_word(57, raw), P1CPU, 8).verified, True, raw)
 
     def test_entry_params_can_only_tighten_the_window(self) -> None:
         entry = AllowEntry(
@@ -151,15 +148,14 @@ class OnlyTheOffsetMayChange(PointCase):
         guard = self.open(word=point_word(46, 0, static=True))
         self.refuse(guard, point_word(46, -5, static=True), "static")
 
-    def test_step_limit_is_measured_from_the_baseline_offset(self) -> None:
-        guard = self.open(max_offset_step_mv=25)  # 25 mV = raw 26
-        self.refuse(guard, point_word(46, -27), "per-operation limit")
-        self.assertIs(self.write(guard, point_word(46, -26)).verified, True)
+    def test_there_is_no_step_limit(self) -> None:
+        guard = self.open()
+        self.assertIs(self.write(guard, point_word(46, -200)).verified, True)  # D-049: 200 raw in one write
 
-    def test_a_baseline_with_an_offset_is_the_step_reference(self) -> None:
-        guard = self.open(word=point_word(46, -50), max_offset_step_mv=25)
-        self.refuse(guard, point_word(46, -77), "per-operation limit")  # 27 raw from -50
-        self.assertIs(self.write(guard, point_word(46, -76)).verified, True)
+    def test_a_baseline_with_an_offset_moves_by_any_amount(self) -> None:
+        guard = self.open(word=point_word(46, -50, v_raw=0x400), hw_v_target_max_raw={"P": 0x7FF, "E": 0x7FF})
+        self.assertIs(self.write(guard, point_word(46, -300, v_raw=0x400)).verified, True)
+        self.assertIs(self.write(guard, point_word(46, 100, v_raw=0x400)).verified, True)
 
 
 class BaselineIsThePointsOwn(PointCase):
@@ -207,7 +203,7 @@ class ReadBackAndRevert(PointCase):
         self.assertEqual([(r.cpu, r.cmd, r.p1, r.p2, r.data, r.purpose) for r in undo], [(E8, 0x11, 0, 6, POINT6, "revert")])
 
     def test_two_writes_undo_newest_first_through_the_state_each_left(self) -> None:
-        guard = self.open(max_offset_step_mv=200)
+        guard = self.open()
         first, second = point_word(46, -10), point_word(46, -20)
         self.write(guard, first)
         self.write(guard, second)
@@ -249,7 +245,7 @@ class CheckLevel(unittest.TestCase):
     """The predicates themselves: fail closed on a missing context, a wrong address, and the OC point."""
 
     def ctx(self, **kw) -> CheckContext:
-        return CheckContext(**{"offset_floor_raw": -102, **kw})
+        return CheckContext(**{"bound": True, **kw})
 
     def req(self, data: int, p1: int = 0, p2: int = 6):
         return SimpleNamespace(cpu=E8, cmd=0x11, p1=p1, p2=p2, data=data, purpose="t")
@@ -269,7 +265,7 @@ class CheckLevel(unittest.TestCase):
 
     def test_p2_16_and_p1_not_0_or_2_are_refused(self) -> None:
         for p1, p2 in ((0, 16), (1, 6), (7, 1), (3, 6), (0, 255), (2, 16)):
-            self.assertFalse(CHECKS["vf_point_offset_bounded"](self.req(point_word(46, -5), p1, p2), POINT6, {}, self.ctx(max_offset_step_raw=200))[0], (p1, p2))
+            self.assertFalse(CHECKS["vf_point_offset_bounded"](self.req(point_word(46, -5), p1, p2), POINT6, {}, self.ctx())[0], (p1, p2))
 
     def test_vf_bounded_refuses_a_point_address(self) -> None:
         # a policy that (mis)routed P2 != 0 through vf_bounded would judge a point word by OC-point rules: refuse that at the check as well
@@ -396,10 +392,7 @@ def with_ring(policy, p1=(0, 2), **changes):
 class RingPoints(GuardCase):
     def setUp(self) -> None:
         super().setUp()
-        # the shipped policy assumes a -50 mV P BIOS offset (floor -51 raw): the ring's -77 baseline needs the operator's P = 0 to be inside the window
-        self.base_policy = dataclasses.replace(
-            self.policy, max_operations_per_session=40, max_operations_per_boot=400, assumed_bios_offset_mv={"P": 0, "E": 0}
-        )
+        self.base_policy = dataclasses.replace(self.policy, max_operations_per_session=40, max_operations_per_boot=400)
         self.policy = with_ring(self.base_policy)
         self.transport.state[(0, 0x10, 2, 8)] = RING8
 
@@ -432,11 +425,10 @@ class RingPoints(GuardCase):
         guard = self.open()
         self.assert_refused(guard, self.write_req(point_word(39, -80), cpu=0, p1=7, p2=8), Refusal.NOT_ALLOWLISTED)
 
-    def test_the_step_limit_applies_to_ring_points(self) -> None:
-        self.policy = with_ring(dataclasses.replace(self.base_policy, max_offset_step_mv=2))
+    def test_there_is_no_step_limit_on_ring_points(self) -> None:
         guard = self.open()
-        exc = self.assert_refused(guard, self.write_req(point_word(39, -90), cpu=0, p1=2, p2=8), Refusal.CHECK_FAILED)
-        self.assertIn("step", exc.detail)
+        result = guard.execute(self.write_req(point_word(39, -400), cpu=0, p1=2, p2=8), self.confirm)  # D-049
+        self.assertTrue(result.verified)
 
     def test_a_ring_write_may_not_change_the_ratio(self) -> None:
         guard = self.open()

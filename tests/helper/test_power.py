@@ -33,7 +33,8 @@ name = "r614"
 msr = 0x614
 kind = "read"
 """
-POWER = "\n[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 200]\nmax_step_w = 100\n"
+POWER = ""  # D-049: no [power] table -- the CPU's own rules (MSR 0x610 lock and field width) are all that bound a write
+LEGACY_POWER = "\n[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 200]\nmax_step_w = 100\n"  # an old operator policy: loads, ignored
 BASE = 'cpus = ["0-23"]\nmax_operations_per_session = 300\nmax_operations_per_boot = 400\nmin_dwell_s = 0.0\n'
 
 
@@ -91,7 +92,9 @@ class Read(PowerCase):
         self.assertEqual(r["msr"]["info"]["tdp_w"], 125.0)
         self.assertTrue(r["writable"])
         self.assertIsNone(r["read_only_reason"])
-        self.assertEqual(r["policy"]["pl1_w"], [100, 253])
+        self.assertEqual(r["cpu_limits"]["power"], {"locked": False, "pl_max_w": 0x7FFF * 0.125, "source": r["cpu_limits"]["power"]["source"]})  # D-049: read from MSR 0x610 / 0x606
+        self.assertIn("0x610", r["cpu_limits"]["power"]["source"])
+        self.assertNotIn("pl1_w", r["policy"])  # no operator range any more
         self.assertIsNone(r["boot"])  # nothing written this boot
         self.assertEqual(self.power_records(), [])  # a read audits no powercap action
 
@@ -186,21 +189,33 @@ class Apply(PowerCase):
         self.assertTrue(all(r["match"] for r in res["readback"]))
         self.assertEqual([r["event"] for r in self.power_records()], ["powercap_attempt", "readback"] * 3)
 
-    def test_no_policy_keys_no_write_and_the_refusal_names_the_key(self) -> None:
+    def test_no_policy_keys_are_needed_to_plan(self) -> None:
         h = self.boot(BASE + MSR_READS)  # no [power] table
         for key, value in (("pl1_w", 200), ("pl2_w", 280), ("tau_s", 50)):
-            err = self.refused(h, "power.plan", {"power": {key: value}}, "POWER_POLICY_MISSING")
-            self.assertEqual(err["detail"]["key"], key)
-            self.assertIn(f"[power] {key}", err["message"])
-        self.assertEqual(self.zone.writes, [])
+            plan = self.ok(h, "power.plan", {"power": {key: value}})
+            self.assertEqual([s["key"] for s in plan["steps"]], [key])
+        self.assertEqual(self.zone.writes, [])  # a plan writes nothing
         self.assertFalse(self.journal.exists())
 
-    def test_bounds_and_steps_are_refused_with_nothing_written(self) -> None:
+    def test_an_old_power_table_is_ignored(self) -> None:
+        h = self.boot(BASE + MSR_READS + LEGACY_POWER)
+        plan = self.ok(h, "power.plan", {"power": {"pl1_w": 120, "pl2_w": 120}})  # 130 W down: over the old max_step_w = 100
+        self.assertEqual(len(plan["steps"]), 2)
+        plan = self.ok(h, "power.plan", {"power": {"pl1_w": 90}})  # below the old range
+        self.assertEqual([s["value"] for s in plan["steps"]], [90 * UW])
+
+    def test_only_the_cpu_refuses_a_power_value(self) -> None:
         h = self.boot()
-        self.refused(h, "power.plan", {"power": {"pl1_w": 254}}, "POWER_RANGE")
-        self.refused(h, "power.plan", {"power": {"pl2_w": 90}}, "POWER_RANGE")
-        self.refused(h, "power.plan", {"power": {"pl1_w": 100, "pl2_w": 295}}, "POWER_STEP")  # 150 W down, max_step_w = 100
-        self.refused(h, "power.plan", {"power": {"pl2_w": 200}}, "POWER_ORDER")  # below the PL1 in force
+        self.refused(h, "power.plan", {"power": {"pl1_w": 4096}}, "POWER_RANGE")  # 0x7FFF units of 0.125 W = 4095.875 W is the field's top
+        self.refused(h, "power.plan", {"power": {"pl2_w": 0}}, "POWER_RANGE")
+        self.assertEqual(self.zone.writes, [])
+
+    def test_the_removed_power_rules_are_now_warnings(self) -> None:
+        h = self.boot()
+        plan = self.ok(h, "power.plan", {"power": {"pl1_w": 100, "pl2_w": 295}})  # 150 W down: the old max_step_w = 100 is gone
+        self.assertTrue(any(w.startswith("LARGE_CHANGE") for w in plan["warnings"]), plan["warnings"])
+        plan = self.ok(h, "power.plan", {"power": {"pl2_w": 200}})  # below the PL1 in force: no ordering rule
+        self.assertTrue(any(w.startswith("PL2_BELOW_PL1") for w in plan["warnings"]), plan["warnings"])
         self.assertEqual(self.zone.writes, [])
 
     def test_the_lock_bit_makes_the_plan_refuse(self) -> None:
@@ -340,7 +355,7 @@ class Safeguards(PowerCase):
         self.assertTrue(all(c.kwargs == {"want": "file", "must_exist": False} for c in journal_checks))
 
     def test_tau_is_snapped_down_in_the_plan_and_read_back_exactly(self) -> None:
-        h = self.boot(BASE + MSR_READS + "\n[power]\npl1_w = [100, 253]\npl2_w = [100, 295]\ntau_s = [1, 128]\nmax_step_w = 100\n")
+        h = self.boot(BASE + MSR_READS)
         self.apply(h, self.plan(h, {"tau_s": 60}))
         plan = self.plan(h, {"tau_s": 128})
         self.assertEqual(plan["steps"][0]["value"], 127926272)  # 127.9 s: never the next window up (159.9 s)
@@ -350,10 +365,9 @@ class Safeguards(PowerCase):
         self.assertEqual((res["readback"][0]["file"], res["readback"][0]["msr"]), (127926272, 127926272))
         self.assertEqual(self.zone.read_int(pw.FILES["tau_s"]), 127926272)
 
-    def test_a_tau_that_snaps_below_the_minimum_is_refused(self) -> None:
-        h = self.boot(BASE + MSR_READS + "\n[power]\ntau_s = [1, 200]\n")
-        err = self.refused(h, "power.plan", {"power": {"tau_s": 1}}, "POWER_RANGE")
-        self.assertIn("snapped down", err["message"])
+    def test_a_tau_below_one_time_unit_is_refused_by_the_register_field(self) -> None:
+        h = self.boot(BASE + MSR_READS)
+        self.refused(h, "power.plan", {"power": {"tau_s": 0.0005}}, "POWER_VALUE")  # shorter than one time unit of MSR 0x606: nothing to encode
         self.assertEqual(self.zone.writes, [])
 
 
@@ -368,14 +382,13 @@ class Revert(PowerCase):
                 self.refused(h, "power.plan", {"revert": True}, "JOURNAL_UNUSABLE")
         self.assertEqual(self.zone.writes, [])
 
-    def test_a_revert_warns_when_a_boot_value_is_outside_the_policy(self) -> None:
+    def test_a_revert_restores_the_boot_value_whatever_a_policy_says(self) -> None:
         h = self.boot()
         self.apply(h, self.plan(h, {"pl1_w": 200}))
-        self.policy.write_text(BASE + MSR_READS + "\n[power]\npl1_w = [100, 200]\ntau_s = [1, 200]\nmax_step_w = 100\n", encoding="utf-8", newline="\n")
-        plan = self.ok(h, "power.plan", {"revert": True})  # the boot PL1 is 250 W, the policy now says <= 200
-        self.assertTrue(any("boot value of pl1_w (250)" in w for w in plan["warnings"]), plan["warnings"])
-        self.assertFalse(any("pl2_w" in w for w in plan["warnings"]))  # no [power] pl2_w: nothing to compare with
-        self.assertTrue(self.apply(h, plan)["complete"])  # and it still restores
+        self.policy.write_text(BASE + MSR_READS + "\n[power]\npl1_w = [100, 200]\n", encoding="utf-8", newline="\n")  # an old range the boot value is outside: ignored (D-049)
+        plan = self.ok(h, "power.plan", {"revert": True})
+        self.assertFalse(any("boot value" in w for w in plan["warnings"]), plan["warnings"])
+        self.assertTrue(self.apply(h, plan)["complete"])  # and it restores
         self.assertEqual(self.zone.pl1_uw, 250 * UW)
 
     def test_revert_puts_the_boot_values_back(self) -> None:

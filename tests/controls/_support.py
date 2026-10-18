@@ -98,23 +98,12 @@ def _entry(kind: str, index: int, offset_mv: int | None, ratio: int | None, oc_v
     return "\n".join(lines)
 
 
-#: The sanity maxima of the per-operation step limits (``guard.policy``): tests that are not about the step limits use them so that a plan may
-#: move a value by more than the shipped one-step defaults (1 ratio bin / 20 mV / 25 mV); tests about the steps pass ``**DEFAULT_STEPS``.
-RELAXED_STEPS = dict(max_ratio_step=8, max_v_step_mv=200, max_offset_step_mv=200)
-DEFAULT_STEPS = dict(max_ratio_step=1, max_v_step_mv=20, max_offset_step_mv=25)
-
-
 def policy_with(*, max_ops: int = 400, dwell: float = 60.0, boot_ops: int = 1000, **changes: object) -> Policy:
     """The default M1 policy with higher session / per-boot limits (the defaults of 1 / 12 cannot run any plan: a plan is
-    ``2 + 7 per CPU`` operations since T-021, plus one read-back per write since T-022) and **relaxed step limits** (``RELAXED_STEPS``);
-    every other D-016 bound stays at the shipped no-raise default. These tests exercise the D-015 mechanism, so they state a BIOS offset (P -50 mV, E 0); the
-    shipped default is 0 for both (D-036: nothing is assumed). The CPU's own ratio limit (cmd 0x01, D-039) is bound as 120x (the P value of the reference
-    machine, ``measured_baseline`` ``0x778``) unless a test passes ``hw_ratio_max``. ``changes`` replace any ``Policy`` field."""
+    ``2 + 7 per CPU`` operations since T-021, plus one read-back per write since T-022). D-049: the policy has no value limits; the CPU's own ratio limit (cmd 0x01, D-039) is bound as
+    120x (the P value of the reference machine, ``measured_baseline`` ``0x778``) unless a test passes ``hw_ratio_max``. ``changes`` replace any ``Policy`` field."""
     changes.setdefault("hw_ratio_max", {"P": 120, "E": 120})
-    base = dataclasses.replace(
-        default_m1_policy(), max_operations_per_session=max_ops, min_dwell_s=dwell, max_operations_per_boot=boot_ops,
-        assumed_bios_offset_mv={"P": -50, "E": 0}, **RELAXED_STEPS,
-    )
+    base = dataclasses.replace(default_m1_policy(), max_operations_per_session=max_ops, min_dwell_s=dwell, max_operations_per_boot=boot_ops)
     return dataclasses.replace(base, **changes) if changes else base
 
 
