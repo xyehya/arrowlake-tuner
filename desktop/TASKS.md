@@ -158,3 +158,8 @@ only), `policies/default.toml`, their tests. Goal: remove every operator-policy 
 only CPU/kernel rules (§A rows 1, 3, 5, 6, 9 lock/fields, 10, 11) read at runtime, fail closed when a CPU limit is unread; demote non-CPU rules to warnings;
 keep every PROCESS invariant. Expose the limits as `cpu_limits` (contract in notes). Accept: tests per removed limit (now allowed + warned) and per CPU rule
 (refused at the CPU value, source cited); Opus review.
+
+**G-227 · Bug: tiles/inspector don't show applied offsets until a re-read** · S · deps G-210
+Owns `desktop/app/ui/views/tune/apply.js` (afterApply), `views/tune.js` / inspector render paths as needed, `src/arltuner/helper/ops_tune.py`
+(`_record_apply`/`op_tune_last` only), tests. Reported live by the operator 2026-10-18. Accept: a test that fails before the fix and passes after, at the layer
+where the bug is; Playwright smoke shows the applied value in tile + inspector right after Apply with no Read.
