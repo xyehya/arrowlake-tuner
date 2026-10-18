@@ -488,9 +488,10 @@ class TestTabs(unittest.TestCase):
             page.evaluate("location.hash = '#/system'")
             page.wait_for_selector("#sys-limits-body tr", timeout=5000)
             seen.append(page.evaluate(grab))
-            page.evaluate("location.hash = '#/profiles'")
-            page.wait_for_timeout(500)
-            seen.append(page.evaluate(grab))
+            for screen in ("profiles", "audit", "dashboard", "curves", "stress"):
+                page.evaluate(f"location.hash = '#/{screen}'")
+                page.wait_for_timeout(500)
+                seen.append(page.evaluate(grab))
             for text in seen:
                 self.assertNotRegex(text, r"(?i)polic", text[:300])
             self.assert_clean(page)
