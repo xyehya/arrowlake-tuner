@@ -27,3 +27,12 @@ D-032). Speed comes only from making the bookkeeping cheaper.
 health snapshots 3.5 -> 1.5 ms (fake tree, indicative). Lock 0.05 ms and fsync ~1 ms unchanged. The 194 ms live gap was the audit parse.
 First scan per helper process still reads the whole log once (~100 ms). Live confirmation = hardware sitting H2 (needs `sudo bash install.sh` +
 helper restart, then one timed `tune.read`). The full test suite went from ~405 s to ~222 s as a side effect.
+
+## Live after G-211 (H2, 2026-10-18) `[MEASURED lnx 2026-10-18]`
+Installed (`install.sh`, 21/21 self-checks), fresh socket-activated helper. `captures/lnx/desktop-h2-20261018.txt`, `desktop-h2-restore-20261018.txt`.
+| Operation | Before (live) | After (live) |
+|---|---|---|
+| gap between transactions (median / p90) | 194 / 197 ms | **5 / 5 ms** |
+| `tune.read` (155 ops) | ~30 s | **1.06 s** |
+| restore accepted after a reboot (311 ops, 6 writes, 6/6 read back) | ~70 s (353-op restore) | **1.85 s** |
+MCE 0, taint unchanged (12292 = CPU_OUT_OF_SPEC + OOT/unsigned NVIDIA module). Accepted match 13/13 afterwards.

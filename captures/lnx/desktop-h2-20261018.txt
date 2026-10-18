@@ -1,0 +1,5 @@
+connect+preflight 0.17 s; tune.read ok=True wall 1.06 s; ops_done=155; error=None
+accepted_match: 11 match / 13
+attempt->result: n=100 median 1.0 ms  p90 1.0 ms  max 23.0 ms
+result->next attempt: n=95 median 5.0 ms  p90 5.0 ms  max 17.0 ms
+records in window: 200

@@ -1,0 +1,8 @@
+plan_id a8759085b563… writes=9 reads=283 ops_needed=785 complete=True
+apply wall 1.85 s; ops_used=311 msr_writes=0 writes_sent=6 complete=True
+readback 6/6 match; residual=[] ring_refused=[] stop=None
+Traceback (most recent call last):
+  File "/home/yk/AI/arrowlake-tuner/desktop/progress/logs/restore_accepted.py", line 31, in <module>
+    for w in res.get("warnings", []): print("  warning:", w.get("code"), w.get("text", "")[:140])
+                                                          ^^^^^
+AttributeError: 'str' object has no attribute 'get'
