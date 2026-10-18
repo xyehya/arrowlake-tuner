@@ -52,7 +52,7 @@ def e_table(*buckets: int) -> int:
 def policy_plain(*, write_entries: bool = True, **changes: object) -> Policy:
     """The default policy (plain reads only) plus, optionally, write entries for both tables; high caps, no dwell."""
     # hw_ratio_max: the CPU's own limit (cmd 0x01, D-039) as the reference machine reports it (0x778 = 120x); these tests are about the table checks
-    fields: dict[str, object] = dict(max_operations_per_session=20, max_operations_per_boot=50, min_dwell_s=0.0, max_ratio_step=8, hw_ratio_max={"P": 120, "E": 120})
+    fields: dict[str, object] = dict(max_operations_per_session=20, max_operations_per_boot=50, min_dwell_s=0.0, hw_ratio_max={"P": 120, "E": 120})
     fields.update(changes)
     base = dataclasses.replace(default_m1_policy(), **fields)
     if not write_entries:
@@ -140,7 +140,7 @@ class DefaultPolicyIsInert(unittest.TestCase):
     def test_the_example_policy_stays_inert_for_plain_writes(self) -> None:
         p = load_policy(Path(__file__).resolve().parents[2] / "examples" / "reference-285k" / "policies" / "example-oc-ramp.toml")
         self.assertFalse([e for e in p.msr_allow if e.kind == "write"])
-        self.assertEqual(p.ratio_max["E"], 49)  # D-017
+        self.assertIn("ratio_max", p.ignored_keys)  # D-049: the example's operator limits load, ignored
 
     def test_the_registry_names_the_check_and_the_mailbox_checks_do_not_accept_it(self) -> None:
         self.assertIn("turbo_ratio_bounded", MSR_CHECKS)
@@ -203,71 +203,55 @@ class TurboCheck(unittest.TestCase):
 
     CHECK = staticmethod(MSR_CHECKS["turbo_ratio_bounded"])
 
-    def run_check(
-        self, new: int, old: int = E_TABLE, msr: int = 0x650, ratio_max: int | None = None, step: int = 1, base: int | None = 37
-    ) -> tuple[bool, str]:
-        ctx = MsrCheckContext(kind={0x650: "E", 0x1AD: "P"}.get(msr), ratio_max=ratio_max, max_ratio_step=step, base_ratio=base)
+    def run_check(self, new: int, old: int = E_TABLE, msr: int = 0x650, limit: int | None = None) -> tuple[bool, str]:
+        text = f"CPU limit {limit}x (cmd 0x01 [7:0])" if limit is not None else "CPU_LIMIT_UNREAD: the CPU's own ratio limit (cmd 0x01 [7:0]) was not read this session"
+        ctx = MsrCheckContext(kind={0x650: "E", 0x1AD: "P"}.get(msr), hw_ratio_max=limit, ratio_text=text)
         return self.CHECK(MsrRequest(0, msr, new, "t", "write", 8), old, {}, ctx)
 
-    def test_no_change_and_a_lowering_pass_by_default(self) -> None:
+    def test_no_change_and_a_lowering_pass_without_the_cpu_limit(self) -> None:
         self.assertEqual(self.run_check(E_TABLE), (True, "ok"))
         self.assertTrue(self.run_check(table(*([47] * 8)))[0])
+        self.assertTrue(self.run_check(table(*([20] * 8)))[0])  # D-049: no base-ratio floor, no step limit
 
-    def test_no_ceiling_means_no_raise_per_byte(self) -> None:
+    def test_a_raise_needs_the_cpu_limit_per_byte(self) -> None:
         ok, why = self.run_check(table(49, *([48] * 7)))
         self.assertFalse(ok)
         self.assertIn("bucket 0", why)
-        self.assertIn("no-raise", why)
-        # per byte, not against the maximum: a table whose bucket 7 was 46 may not climb back to 47 even though 47 < its own maximum
+        self.assertIn("CPU_LIMIT_UNREAD", why)
+        self.assertIn("cmd 0x01", why)
+        # per byte, not against the maximum: a table whose bucket 7 was 46 may not climb back to 47 while the limit is unread
         old = table(48, 48, 48, 48, 48, 48, 48, 46)
         self.assertFalse(self.run_check(table(48, 48, 48, 48, 48, 48, 48, 47), old)[0])
 
-    def test_a_ceiling_allows_up_to_itself_and_no_more(self) -> None:
-        self.assertTrue(self.run_check(table(*([49] * 8)), ratio_max=49)[0])
-        ok, why = self.run_check(table(50, *([49] * 7)), table(*([49] * 8)), ratio_max=49)
+    def test_the_cpu_limit_allows_up_to_itself_and_no_more(self) -> None:
+        self.assertTrue(self.run_check(table(*([49] * 8)), limit=49)[0])
+        ok, why = self.run_check(table(50, *([49] * 7)), table(*([49] * 8)), limit=49)
         self.assertFalse(ok)
-        self.assertIn("ratio_max", why)
+        self.assertIn("above the CPU limit 49x", why)
+        self.assertIn("cmd 0x01", why)
 
-    def test_the_p_table_uses_the_p_kind_whatever_the_cpu(self) -> None:
-        hw = {"P": 120, "E": 120}
-        ctx = build_msr_context(
-            dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}, hw_ratio_max=hw), 0x1AD, platform_info=PLATFORM
-        )
-        self.assertEqual((ctx.kind, ctx.ratio_max, ctx.base_ratio), ("P", 58, 37))
-        ctx = build_msr_context(dataclasses.replace(default_m1_policy(), ratio_max={"P": 58, "E": 49}, hw_ratio_max=hw), 0x650, platform_info=None)
-        self.assertEqual((ctx.kind, ctx.ratio_max, ctx.base_ratio), ("E", 49, None))
+    def test_the_context_follows_the_kind_of_the_msr_whatever_the_cpu(self) -> None:
+        p = dataclasses.replace(default_m1_policy(), hw_ratio_max={"P": 58, "E": 49})
+        ctx = build_msr_context(p, 0x1AD)
+        self.assertEqual((ctx.kind, ctx.hw_ratio_max), ("P", 58))
+        ctx = build_msr_context(p, 0x650)
+        self.assertEqual((ctx.kind, ctx.hw_ratio_max), ("E", 49))
 
     def test_every_byte_must_be_non_zero(self) -> None:
-        ok, why = self.run_check(table(48, 48, 48, 48, 48, 48, 48, 0), step=255, ratio_max=60)
+        ok, why = self.run_check(table(48, 48, 48, 48, 48, 48, 48, 0), limit=60)
         self.assertFalse(ok)
         self.assertIn("is 0", why)
 
-    def test_bytes_must_not_increase_with_more_cores(self) -> None:
-        ok, why = self.run_check(table(48, 48, 48, 48, 48, 48, 47, 48), ratio_max=60, step=8)
-        self.assertFalse(ok)
-        self.assertIn("must not increase", why)
+    def test_the_table_shape_is_not_the_cpus_rule(self) -> None:
+        # D-049: bytes that rise with the active-core count are a Review warning (TURBO_NOT_MONOTONIC), the CPU accepts the table
+        self.assertTrue(self.run_check(table(48, 48, 48, 48, 48, 48, 47, 48), limit=60)[0])
 
-    def test_the_step_limit_applies_per_byte_in_both_directions(self) -> None:
-        ok, why = self.run_check(table(*([50] * 8)), ratio_max=60, step=1)
-        self.assertFalse(ok)
-        self.assertIn("exceeds the per-operation limit", why)
-        self.assertFalse(self.run_check(table(*([46] * 8)), ratio_max=60, step=1)[0])
-        self.assertTrue(self.run_check(table(*([46] * 8)), ratio_max=60, step=2)[0])
+    def test_there_is_no_step_limit(self) -> None:
+        self.assertTrue(self.run_check(table(*([55] * 8)), limit=60)[0])
+        self.assertTrue(self.run_check(table(*([30] * 8)), limit=60)[0])
 
-    def test_the_floor_is_the_base_ratio_if_0xce_was_read(self) -> None:
-        old = table(*([38] * 8))
-        self.assertTrue(self.run_check(table(*([37] * 8)), old, base=37)[0])
-        ok, why = self.run_check(table(*([36] * 8)), old, base=37, step=8)
-        self.assertFalse(ok)
-        self.assertIn("0xCE", why)
-
-    def test_without_0xce_the_floor_is_the_baseline_minimum_minus_the_step(self) -> None:
-        self.assertTrue(self.run_check(table(*([47] * 8)), E_TABLE, base=None, step=1)[0])
-        old = table(48, 48, 48, 48, 48, 48, 48, 40)  # minimum 40
-        self.assertTrue(self.run_check(table(48, 48, 48, 48, 48, 48, 48, 39), old, base=None, step=1)[0])
-        ok, why = self.run_check(table(48, 48, 48, 48, 48, 48, 48, 32), old, base=None, step=8)
-        self.assertTrue(ok, why)  # 32 >= 40 - 8, the lowest value the floor allows
-        self.assertFalse(self.run_check(table(48, 48, 48, 48, 48, 48, 48, 31), old, base=None, step=8)[0])
+    def test_there_is_no_base_ratio_floor(self) -> None:
+        self.assertTrue(self.run_check(table(*([36] * 8)), table(*([38] * 8)), limit=60)[0])  # below 0xCE[15:8] = 37: a TURBO_BELOW_BASE warning, not a refusal
 
     def test_an_unknown_msr_and_a_missing_context_are_refused(self) -> None:
         self.assertFalse(self.run_check(E_TABLE, msr=0x651)[0])
@@ -358,15 +342,20 @@ class ChainOfRefusals(PlainCase):
         self.refused(g, self.wr(E_TABLE), Refusal.CHECK_FAILED)  # verify cpu 8 is not covered by the read entry
 
     def test_the_check_is_applied_and_names_the_clause(self) -> None:
-        g = self.guard()
+        g = self.guard(policy_plain(hw_ratio_max={"P": 120, "E": None}))
         self.baseline(g)
         self.baseline(g, 0xCE)
-        exc = self.refused(g, self.wr(e_table(*([49] * 8))), Refusal.CHECK_FAILED)  # no ratio_max: no raise
+        exc = self.refused(g, self.wr(e_table(*([49] * 8))), Refusal.CHECK_FAILED)  # the E limit (cmd 0x01) is unread: no raise
         self.assertIn("turbo_ratio_bounded", exc.detail)
+        self.assertIn("CPU_LIMIT_UNREAD", exc.detail)
         self.assertEqual(self.sim.plain_msr(0, 0x650), E_TABLE)  # nothing was written
+        g = self.guard(policy_plain(hw_ratio_max={"P": 120, "E": 48}), lock_path=self.dir / "l2")
+        self.baseline(g)
+        exc = self.refused(g, self.wr(e_table(*([49] * 8))), Refusal.CHECK_FAILED)  # above the CPU limit
+        self.assertIn("above the CPU limit 48x", exc.detail)
 
     def test_session_limit_counts_plain_writes_but_not_reads(self) -> None:
-        p = policy_plain(max_operations_per_session=1, ratio_max={"P": None, "E": 49}, max_ratio_step=1)
+        p = policy_plain(max_operations_per_session=1, hw_ratio_max={"P": 120, "E": 49})
         g = self.guard(p)
         for _ in range(5):
             self.baseline(g)  # five plain reads: not counted
@@ -375,7 +364,7 @@ class ChainOfRefusals(PlainCase):
         self.refused(g, self.wr(e_table(*([48] * 8))), Refusal.SESSION_LIMIT)
 
     def test_boot_limit_counts_plain_writes_only(self) -> None:
-        p = policy_plain(max_operations_per_boot=1, ratio_max={"P": None, "E": 49})
+        p = policy_plain(max_operations_per_boot=1, hw_ratio_max={"P": 120, "E": 49})
         g = self.guard(p)
         for _ in range(3):
             self.baseline(g)
@@ -387,7 +376,7 @@ class ChainOfRefusals(PlainCase):
         self.refused(g2, self.rd(), Refusal.BOOT_LIMIT)
 
     def test_dwell_separates_plain_writes(self) -> None:
-        p = policy_plain(min_dwell_s=60.0, ratio_max={"P": None, "E": 49})
+        p = policy_plain(min_dwell_s=60.0, hw_ratio_max={"P": 120, "E": 49})
         g = self.guard(p)
         self.baseline(g)
         self.baseline(g)  # a plain read neither waits nor starts a dwell
@@ -413,7 +402,7 @@ class ChainOfRefusals(PlainCase):
 
 class Executed(PlainCase):
     def p49(self) -> Policy:
-        return policy_plain(ratio_max={"P": None, "E": 49})
+        return policy_plain(hw_ratio_max={"P": 120, "E": 49})  # the CPU's own limit of the E kind
 
     def test_a_read_returns_the_word_is_audited_as_msr_read_and_is_not_an_attempt(self) -> None:
         g = self.guard()
@@ -425,7 +414,7 @@ class Executed(PlainCase):
         self.assertEqual(self.sim.writes, [])
         self.assertEqual(self.transport.calls, [])
 
-    def test_a_raise_within_the_ceiling_is_written_and_read_back_on_both_cpus(self) -> None:
+    def test_a_raise_within_the_cpu_limit_is_written_and_read_back_on_both_cpus(self) -> None:
         g = self.guard(self.p49())
         self.baseline(g)
         self.baseline(g, 0xCE)
@@ -442,8 +431,8 @@ class Executed(PlainCase):
         self.assertEqual(attempt["boot_id"], "test-boot")
         self.assertFalse(g.tripped)
 
-    def test_the_p_table_is_bounded_by_the_p_ceiling(self) -> None:
-        g = self.guard(policy_plain(ratio_max={"P": 58, "E": None}))
+    def test_the_p_table_is_bounded_by_the_p_limit(self) -> None:
+        g = self.guard(policy_plain(hw_ratio_max={"P": 58, "E": None}))
         self.baseline(g, 0x1AD)
         new = table(58, 58, 56, 56, 56, 56, 56, 56)
         res = g.execute(self.wr(new, 0x1AD), self.confirm)

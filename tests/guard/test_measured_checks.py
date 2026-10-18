@@ -25,7 +25,7 @@ CPU8 = dict(cpu=8, vf=0x0, favored=0x2E30, fused=0x4A02E, granular=0x3)  # E cor
 
 
 def ctx(**kw) -> CheckContext:
-    return CheckContext(**{"offset_floor_raw": -51, **kw})
+    return CheckContext(**{"bound": True, **kw})
 
 
 class MeasuredCase(GuardCase):
@@ -79,8 +79,9 @@ class VfWithSessionFacts(MeasuredCase):
                 self.assertIn("no ratio reference" if "1C" not in which else "no voltage reference", exc.detail)
                 self.assertEqual(len(self.transport.calls), n)
 
-    def test_a_full_baseline_without_facts_keeps_the_pre_t021_ceilings(self) -> None:
-        # a core whose 0x10 word is complete is its own reference; the facts only tighten (the planner always reads them)
+    def test_a_full_baseline_without_facts_is_its_own_reference_for_the_unread_limits(self) -> None:
+        # a core whose 0x10 word is complete is its own reference; with the CPU's limits unread nothing above it may be raised (the planner always reads the facts)
+        self.policy = dataclasses.replace(self.policy, hw_ratio_max={"P": None, "E": None})
         word = VfWord(55, 0x4A0, False, 0)
         self.transport.state[(0, 0x10, 0, 0)] = word.to_u32()
         guard = self.make_guard()
@@ -101,9 +102,9 @@ class VfWithSessionFacts(MeasuredCase):
                 self.assertIn(" 0 ", exc.detail)
         self.assertEqual(guard.revert_plan(), [])
 
-    def test_no_raise_ratio_ceiling_is_the_larger_of_baseline_and_0x1c_low_byte(self) -> None:
-        # D-016: with no policy ratio_max the ceiling is the no-raise value max(baseline ratio, 0x1C[7:0]); a lower baseline ratio does not
-        # tighten it any more (the step limit, relaxed in this fixture, is what limits the jump from 50 to 55)
+    def test_no_raise_ratio_is_the_larger_of_baseline_and_0x1c_low_byte_while_the_cpu_limit_is_unread(self) -> None:
+        # D-016 / D-049: with cmd 0x01 unread the no-raise value is max(baseline ratio, 0x1C[7:0]); a lower baseline ratio does not tighten it
+        self.policy = dataclasses.replace(self.policy, hw_ratio_max={"P": None, "E": None})
         guard = self.session(dict(CPU1, vf=0x32))  # baseline ratio 50 < 0x1C[7:0] 55
         self.assert_refused(guard, self.write_req(VfWord(56, 0x538, False, -5).to_u32(), cpu=1), Refusal.CHECK_FAILED)
         self.assertIs(self.vf_write(guard, 1, VfWord(55, 0x538, False, -5).to_u32()).verified, True)
@@ -112,7 +113,7 @@ class VfWithSessionFacts(MeasuredCase):
         self.assert_refused(guard, self.write_req(VfWord(56, 0x538, False, -5).to_u32(), cpu=1), Refusal.CHECK_FAILED)
         self.assertIs(self.vf_write(guard, 1, VfWord(55, 0x538, False, -5).to_u32()).verified, True)
 
-    def test_no_raise_v_target_ceiling_is_the_larger_of_baseline_and_the_fused_voltage(self) -> None:
+    def test_no_raise_v_target_is_the_larger_of_baseline_and_the_fused_voltage_while_cmd_0x28_is_unread(self) -> None:
         guard = self.session(dict(CPU1, vf=0x50037))  # baseline V target 0x500 < fused 0x538
         self.assert_refused(guard, self.write_req(VfWord(55, 0x539, False, -5).to_u32(), cpu=1), Refusal.CHECK_FAILED)
         self.assertIs(self.vf_write(guard, 1, VfWord(55, 0x538, False, -5).to_u32()).verified, True)
@@ -149,8 +150,8 @@ class VfWithSessionFacts(MeasuredCase):
         self.assert_refused(guard, self.write_req(0xFF653837, cpu=1), Refusal.CHECK_FAILED)
 
 
-class EffectiveOffsetFloor(MeasuredCase):
-    """D-015: the runtime offset adds to the BIOS offset, so the floor of the runtime offset is (effective floor - assumed BIOS offset)."""
+class OffsetField(MeasuredCase):
+    """D-049 (replaces the D-015 effective-offset floor): the offset is bounded by the 11-bit field, the entry's optional params and, upward, by the CPU's voltage limit."""
 
     def accepted(self, core: dict, raw: int) -> bool:
         self.transport = RecordingTransport()
@@ -164,31 +165,14 @@ class EffectiveOffsetFloor(MeasuredCase):
             self.assertIs(exc.reason, Refusal.CHECK_FAILED)
             return False
 
-    def test_p_core_floor_is_minus_50_mv(self) -> None:
-        self.assertEqual(self.policy.offset_floor_raw(1), -51)
-        self.assertTrue(self.accepted(CPU1, -51))  # -50 mV (XTU rounding: (50*1024+512)//1000 = 51)
-        self.assertFalse(self.accepted(CPU1, -52))  # -51 mV
-        self.assertTrue(self.accepted(CPU1, 0))
+    def test_no_core_has_an_offset_floor(self) -> None:
+        # D-049: the D-015 floors (P -50 mV with the assumed BIOS offset, E -100 mV) are gone: the 11-bit field is the only bound
+        for core, raws in ((CPU1, (-51, -52, -300, -1024, 0)), (CPU8, (-102, -103, -500, -1024, 0))):
+            for raw in raws:
+                self.assertTrue(self.accepted(core, raw), (core["cpu"], raw))
 
-    def test_e_core_floor_is_minus_100_mv(self) -> None:
-        self.assertEqual(self.policy.offset_floor_raw(8), -102)
-        self.assertTrue(self.accepted(CPU8, -102))
-        self.assertFalse(self.accepted(CPU8, -103))
-
-    def test_the_policy_values_move_the_floor(self) -> None:
-        self.policy = dataclasses.replace(self.policy, assumed_bios_offset_mv={"P": 0, "E": -30})
-        self.assertEqual((self.policy.offset_floor_raw(1), self.policy.offset_floor_raw(8)), (-102, -72))  # -100 / -70 mV
-        self.assertTrue(self.accepted(CPU1, -102))
-        self.assertTrue(self.accepted(CPU8, -72))
-        self.assertFalse(self.accepted(CPU8, -73))
-        self.policy = dataclasses.replace(self.policy, effective_offset_floor_mv=-60)
-        self.assertEqual(self.policy.offset_floor_raw(1), -61)
-
-    def test_a_floor_above_zero_is_clamped_so_zero_stays_allowed(self) -> None:
-        self.policy = dataclasses.replace(self.policy, assumed_bios_offset_mv={"P": -150, "E": 0})  # BIOS already beyond the floor
-        self.assertEqual(self.policy.offset_floor_raw(1), 0)
-        self.assertTrue(self.accepted(CPU1, 0))
-        self.assertFalse(self.accepted(CPU1, -1))
+    def test_a_positive_offset_needs_the_cpu_voltage_limit(self) -> None:
+        self.assertFalse(self.accepted(CPU1, 1))  # cmd 0x28 is not part of this fixture's reads: the predicted voltage cannot be bounded
 
     def test_the_entry_minimum_still_applies_when_it_is_tighter(self) -> None:
         entries = tuple(dataclasses.replace(e, params={"offset_raw_min": -20}) if e.cmd == 0x11 else e for e in self.policy.allow)
@@ -199,45 +183,22 @@ class EffectiveOffsetFloor(MeasuredCase):
     def test_e_cpus_decide_the_kind_and_unknown_cpus_count_as_p(self) -> None:
         self.policy = dataclasses.replace(self.policy, e_cpus=frozenset({1}))  # CPU 1 listed as an E core
         self.assertEqual((self.policy.core_kind(1), self.policy.core_kind(8), self.policy.core_kind(500)), ("E", "P", "P"))
-        self.assertEqual((self.policy.offset_floor_raw(1), self.policy.offset_floor_raw(8)), (-102, -51))
 
-    def test_build_context_carries_the_floor_the_bounds_and_the_facts(self) -> None:
-        c = build_context(self.policy, 8, favored_word=1, fused_word=0x4A02E, vf_word_sent=3, max_voltage_word=4)  # top fused ratio = [7:0] of the live 0x09 word
-        # this fixture relaxes the step limits to their sanity maxima (8 ratio bins / 200 mV / 200 mV); every other bound is the default
+    def test_build_context_carries_the_bound_flag_the_cpu_limits_and_the_facts(self) -> None:
+        policy = dataclasses.replace(self.policy, hw_ratio_max={"E": 99, "P": 120})
+        c = build_context(policy, 8, favored_word=1, fused_word=0x4A02E, vf_word_sent=3, max_voltage_word=0x56D)  # top fused ratio = [7:0] of the live 0x09 word
+        self.assertTrue(c.bound)
         self.assertEqual(
-            c,
-            CheckContext(
-                top_fused_ratio=46,
-                offset_floor_raw=-102,
-                favored_word=1,
-                fused_word=0x4A02E,
-                vf_word_sent=3,
-                max_voltage_word=4,
-                ratio_max=None,
-                v_target_max_raw=None,
-                offset_ceiling_raw=0,
-                max_ratio_step=8,
-                max_v_step_raw=VfWord.v_to_raw(0.2),
-                max_offset_step_raw=VfWord.mv_to_offset_raw(200),
-            ),
+            (c.top_fused_ratio, c.favored_word, c.fused_word, c.vf_word_sent, c.max_voltage_word, c.hw_ratio_max, c.hw_v_max_raw),
+            (46, 1, 0x4A02E, 3, 0x56D, 99, 0x56C),
         )
-        self.assertEqual(build_context(self.policy, 1, favored_word=None, fused_word=None, vf_word_sent=None).offset_floor_raw, -51)
+        self.assertEqual(build_context(policy, 1, favored_word=None, fused_word=None, vf_word_sent=None).hw_ratio_max, 120)  # P: its own kind's limit
 
-    def test_the_shipped_defaults_are_the_check_context_defaults(self) -> None:
+    def test_the_unread_limits_are_none_and_the_context_is_still_bound(self) -> None:
         shipped = build_context(default_m1_policy(), 8, favored_word=1, fused_word=0x4A02E, vf_word_sent=3)
-        self.assertEqual(shipped, CheckContext(offset_floor_raw=-102, favored_word=1, fused_word=0x4A02E, vf_word_sent=3, top_fused_ratio=46))
+        self.assertTrue(shipped.bound)
+        self.assertEqual((shipped.hw_ratio_max, shipped.hw_v_max_raw, shipped.top_fused_ratio), (None, None, 46))
         self.assertIsNone(build_context(default_m1_policy(), 8, favored_word=None, fused_word=None, vf_word_sent=None).top_fused_ratio)  # 0x09 not read: unknown, never a default
-        self.assertEqual((shipped.max_ratio_step, shipped.max_v_step_raw, shipped.max_offset_step_raw, shipped.offset_ceiling_raw), (1, 20, 26, 0))
-
-    def test_policy_bounds_are_resolved_per_core_kind(self) -> None:
-        policy = dataclasses.replace(
-            default_m1_policy(), ratio_max={"E": 50, "P": 58}, v_target_max_mv={"E": 1250}, offset_ceiling_mv=10, max_ratio_step=2,
-            hw_ratio_max={"E": 120, "P": 120},  # the CPU's own limit (cmd 0x01, D-039)
-        )
-        e, p = (build_context(policy, cpu, favored_word=None, fused_word=None, vf_word_sent=None) for cpu in (8, 0))
-        self.assertEqual((e.ratio_max, e.v_target_max_raw), (50, VfWord.v_to_raw(1.25)))
-        self.assertEqual((p.ratio_max, p.v_target_max_raw), (58, None))  # P: no V target number -> the no-raise value
-        self.assertEqual((e.offset_ceiling_raw, e.max_ratio_step), (VfWord.mv_to_offset_raw(10), 2))
 
 
 class FavoredCoreWrite(MeasuredCase):
@@ -271,7 +232,7 @@ class FavoredCoreWrite(MeasuredCase):
 
     def test_a_refused_or_failed_0x11_does_not_license_a_0x1d(self) -> None:
         guard = self.session(CPU1)
-        self.assert_refused(guard, self.write_req(VfWord(0x37, 0x538, False, -80).to_u32(), cpu=1), Refusal.CHECK_FAILED)  # P floor
+        self.assert_refused(guard, self.write_req(VfWord(0x37, 0x538, False, 80).to_u32(), cpu=1), Refusal.CHECK_FAILED)  # a positive offset with cmd 0x28 unread
         self.assert_refused(guard, self.fav_write(1, 0x37), Refusal.CHECK_FAILED)
         self.transport = RecordingTransport()
         guard = self.session(CPU1, transport=self.transport, lock_path=self.dir / "rc.lock")
@@ -444,60 +405,32 @@ class RevertPlanIsXtuShaped(MeasuredCase):
 
 
 class PolicyFields(unittest.TestCase):
-    def test_defaults_are_the_d015_values(self) -> None:
+    def test_defaults(self) -> None:
         p = default_m1_policy()
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})  # G-141: no BIOS offset is assumed by default (it was P -50, one operator's old BIOS value)
-        self.assertEqual(p.effective_offset_floor_mv, -100)
         self.assertEqual(p.e_cpus, frozenset(range(8, 24)))  # the unbound default: the simulated reference CPU's E CPUs
-        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(7), p.offset_floor_raw(8), p.offset_floor_raw(23)), (-102, -102, -102, -102))
         self.assertEqual(p.core_kind(7), "P")
         self.assertEqual(p.core_kind(8), "E")
+        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": 0, "E": 0})  # D-049: the removed D-015 fields read as neutral stand-ins
+        self.assertEqual((p.effective_offset_floor_mv, p.offset_ceiling_mv), (-1000, 999))
 
-    def test_the_mapping_is_read_only_and_copied(self) -> None:
-        source = {"P": -50, "E": 0}
-        p = Policy(cpus=frozenset({0}), assumed_bios_offset_mv=source)
-        source["P"] = 0
-        self.assertEqual(p.assumed_bios_offset_mv["P"], -50)
-        with self.assertRaises(TypeError):
-            p.assumed_bios_offset_mv["P"] = 0  # type: ignore[index]
+    def test_the_removed_d015_fields_cannot_be_set(self) -> None:
+        for kwargs in ({"assumed_bios_offset_mv": {"P": -50, "E": 0}}, {"effective_offset_floor_mv": -100}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(TypeError):
+                Policy(cpus=frozenset({0}), **kwargs)  # type: ignore[arg-type]
 
     def test_invalid_values_are_rejected(self) -> None:
-        for kwargs in (
-            {"assumed_bios_offset_mv": {"P": -50}},  # both kinds
-            {"assumed_bios_offset_mv": {"P": -50, "E": 0, "X": 1}},
-            {"assumed_bios_offset_mv": {"P": True, "E": 0}},
-            {"assumed_bios_offset_mv": {"P": -1001, "E": 0}},
-            {"assumed_bios_offset_mv": {"P": -50.5, "E": 0}},
-            {"assumed_bios_offset_mv": [("P", 0)]},
-            {"effective_offset_floor_mv": 1},
-            {"effective_offset_floor_mv": -1001},
-            {"effective_offset_floor_mv": True},
-            {"effective_offset_floor_mv": -100.0},
-            {"e_cpus": "8-23"},
-            {"e_cpus": [True]},
-            {"e_cpus": [-1]},
-        ):
+        for kwargs in ({"e_cpus": "8-23"}, {"e_cpus": [True]}, {"e_cpus": [-1]}):
             with self.subTest(kwargs=kwargs), self.assertRaises(PolicyError):
                 Policy(cpus=frozenset({0}), **kwargs)
 
     def test_toml_keys(self) -> None:
         p = load_policy('cpus = [0, "8-9"]\ne_cpus = ["8-9"]\neffective_offset_floor_mv = -80\n[assumed_bios_offset_mv]\nP = -60\n')
-        self.assertEqual(dict(p.assumed_bios_offset_mv), {"P": -60, "E": 0})  # a missing kind keeps its default
-        self.assertEqual((p.effective_offset_floor_mv, p.e_cpus), (-80, frozenset({8, 9})))
-        self.assertEqual((p.offset_floor_raw(0), p.offset_floor_raw(8)), (-20, -82))  # -20 mV / -80 mV
-        q = load_policy('cpus = [0]\nassumed_bios_offset_mv = { P = 0, E = -10 }\n')
-        self.assertEqual(dict(q.assumed_bios_offset_mv), {"P": 0, "E": -10})
-        self.assertEqual(load_policy("cpus = [0]\n").offset_floor_raw(0), -102)  # absent keys: the defaults
+        self.assertEqual(p.e_cpus, frozenset({8, 9}))
+        self.assertEqual(p.ignored_keys, ("effective_offset_floor_mv", "assumed_bios_offset_mv"))  # D-049: loaded, ignored, named
+        self.assertEqual((p.effective_offset_floor_mv, dict(p.assumed_bios_offset_mv)), (-1000, {"P": 0, "E": 0}))  # nothing of it is in force
 
     def test_bad_toml_values_are_load_errors(self) -> None:
-        for text in (
-            "cpus = [0]\nassumed_bios_offset_mv = { P = -50, X = 1 }\n",
-            "cpus = [0]\nassumed_bios_offset_mv = 5\n",
-            "cpus = [0]\nassumed_bios_offset_mv = { P = 'a' }\n",
-            "cpus = [0]\neffective_offset_floor_mv = 5\n",
-            "cpus = [0]\neffective_offset_floor_mv = 'x'\n",
-            "cpus = [0]\ne_cpus = 8\n",
-        ):
+        for text in ("cpus = [0]\ne_cpus = 8\n",):
             with self.subTest(text=text), self.assertRaises(PolicyError):
                 load_policy(text)
 
@@ -506,7 +439,7 @@ class PolicyFields(unittest.TestCase):
         ok, detail = CHECKS["vf_bounded"](req, 0, {"offset_raw_min": -102})
         self.assertFalse(ok)
         self.assertIn("no check context", detail)
-        self.assertFalse(CHECKS["vf_bounded"](req, 0, {"offset_raw_min": -102}, CheckContext())[0])  # floor unknown
+        self.assertFalse(CHECKS["vf_bounded"](req, 0, {"offset_raw_min": -102}, CheckContext())[0])  # not bound: the explicit flag replaced the old offset-floor sentinel
 
 
 if __name__ == "__main__":

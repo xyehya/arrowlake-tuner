@@ -1,4 +1,4 @@
-"""G-216: the ``[runtime]`` table of the policy (caps floor, uncore ratio range) and the ``runtime_attempt`` audit event. Policy parsing only; no hardware."""
+"""G-216 / D-049: the ``[runtime]`` table is gone from the policy (an old file still loads, the table is ignored) and the ``runtime_attempt`` audit event stays. Policy parsing only; no hardware."""
 from __future__ import annotations
 
 import tempfile
@@ -7,7 +7,6 @@ from pathlib import Path
 
 from arltuner.guard import AuditLog, PolicyError, load_policy, read_state
 from arltuner.guard.audit import EVENTS
-from arltuner.guard.policy import Policy, RuntimePolicy
 from arltuner.topology import arl_s_285k
 
 SHIPPED = Path(__file__).resolve().parents[2] / "policies/default.toml"
@@ -18,45 +17,36 @@ def load(extra: str):
     return load_policy(BASE + extra, arl_s_285k())
 
 
-class RuntimeTable(unittest.TestCase):
+class RuntimeTableIsIgnored(unittest.TestCase):
     def test_absent_means_none(self) -> None:
         self.assertIsNone(load("").runtime)
 
-    def test_the_shipped_policy_has_no_runtime_table(self) -> None:
-        """The keys are the operator's; the shipped file keeps them commented out."""
-        self.assertIsNone(load_policy(SHIPPED, arl_s_285k()).runtime)
+    def test_the_shipped_policy_has_no_runtime_table_and_no_commented_example(self) -> None:
+        policy = load_policy(SHIPPED, arl_s_285k())
+        self.assertIsNone(policy.runtime)
+        self.assertEqual(policy.ignored_keys, ())
         text = SHIPPED.read_text(encoding="utf-8")
-        self.assertIn("# [runtime]", text)
         self.assertNotIn("\n[runtime]", text)
+        self.assertNotIn("# [runtime]", text)
 
-    def test_a_full_table(self) -> None:
-        r = load("[runtime]\ncap_ratio_min = 8\nuncore_ratio = [8, 40]\n").runtime
-        self.assertEqual((r.cap_ratio_min, r.uncore_ratio), (8, (8, 40)))
+    def test_an_old_table_loads_is_ignored_and_named_once(self) -> None:
+        with self.assertLogs("arltuner.policy", level="WARNING") as logs:
+            p = load("[runtime]\ncap_ratio_min = 8\nuncore_ratio = [8, 40]\n")
+        self.assertIsNone(p.runtime)
+        self.assertEqual(p.ignored_keys, ("runtime.cap_ratio_min", "runtime.uncore_ratio"))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("runtime.uncore_ratio", logs.records[0].getMessage())
 
-    def test_every_key_is_optional_and_an_empty_table_allows_nothing(self) -> None:
-        self.assertEqual(load("[runtime]\n").runtime, RuntimePolicy())
-        r = load("[runtime]\nuncore_ratio = [10, 38]\n").runtime
-        self.assertEqual((r.cap_ratio_min, r.uncore_ratio), (None, (10, 38)))
+    def test_the_old_values_are_not_validated(self) -> None:
+        for bad in ("cap_ratio_min = 0", "cap_ratio_min = 256", 'cap_ratio_min = "8"', "uncore_ratio = [40, 8]", "uncore_ratio = [8, 300]", "parking = true"):
+            p = load("[runtime]\n" + bad + "\n")
+            self.assertEqual(len(p.ignored_keys), 1, bad)
+            self.assertTrue(p.ignored_keys[0].startswith("runtime."), bad)
 
-    def test_bad_values_are_load_errors(self) -> None:
-        for bad in (
-            "cap_ratio_min = 0", "cap_ratio_min = 256", "cap_ratio_min = 4.5", 'cap_ratio_min = "8"', "cap_ratio_min = true",
-            "uncore_ratio = [8]", "uncore_ratio = [40, 8]", "uncore_ratio = [0, 40]", "uncore_ratio = [8, 300]", "uncore_ratio = [8.5, 40]", 'uncore_ratio = "8-40"',
-        ):
-            with self.assertRaises(PolicyError, msg=bad):
-                load("[runtime]\n" + bad + "\n")
-
-    def test_unknown_keys_and_a_non_table_are_load_errors(self) -> None:
+    def test_a_non_table_is_ignored_too_but_other_unknown_keys_are_not(self) -> None:
+        self.assertEqual(load("runtime = 3\n").ignored_keys, ("runtime",))
         with self.assertRaises(PolicyError):
-            load("[runtime]\nuncore_max = 40\n")
-        with self.assertRaises(PolicyError):
-            load("[runtime]\nparking = true\n")  # core parking is held: no such key
-        with self.assertRaises(PolicyError):
-            load("runtime = 3\n")
-
-    def test_the_policy_object_checks_the_type(self) -> None:
-        with self.assertRaises(PolicyError):
-            Policy(cpus=frozenset({0}), runtime={"cap_ratio_min": 8})  # type: ignore[arg-type]
+            load("uncore_max = 40\n")
 
 
 class AuditEvent(unittest.TestCase):

@@ -16,7 +16,7 @@ from arltuner.profiles.serialize import dump_profile
 from arltuner.topology import arl_s_285k
 from arltuner.vfdump import Pacer
 
-from ._support import DEFAULT_STEPS, policy_with, profile
+from ._support import policy_with, profile
 
 TOPO = arl_s_285k()
 RATIOS = (8, 14, 20, 28, 34, 37, 38, 39, 40)
@@ -148,18 +148,20 @@ class Plan(unittest.TestCase):
         p = plan(ring_profile({8: -26}), {}, policy=policy, only_changed=True)  # nothing could be read
         self.assertTrue(any("was not read: the guard refuses the read (NOT_ALLOWLISTED" in r for r in p.ring_refused), p.ring_refused)
 
-    def test_a_step_limit_gives_a_ramp_with_the_ring_in_the_next_profile(self) -> None:
-        p = plan(ring_profile({8: -45}), live(), policy=ring_policy(**DEFAULT_STEPS), only_changed=True)
-        self.assertTrue(p.needs_ramp, p.refusals)
-        self.assertIn("[ring]", p.next_profile_text)
-        stage = load_profile(p.next_profile_text)
-        self.assertEqual(stage.ring.oc_word, 0x28)
-        by_point = {rp.point: rp.offset_mv for rp in stage.ring.points}
-        self.assertEqual((by_point[8], by_point[1]), (-25, 0))  # one step limit (25 mV = 26 raw) of the way to -45 mV; the others as requested
+    def test_a_big_ring_offset_is_one_write_with_a_large_change_warning_and_no_next_profile(self) -> None:
+        p = plan(ring_profile({8: -45}), live(), policy=ring_policy(), only_changed=True)  # D-049: no step limit
+        self.assertTrue(p.allowed, p.refusals)
+        self.assertFalse(p.needs_ramp)
+        self.assertIsNone(p.next_profile_text)
+        self.assertEqual([s.p2 for s in p.steps if s.kind.is_write], [8])
         self.assertEqual(p.ring_refused, ())
+        self.assertFalse(any(w.startswith("LARGE_CHANGE") for w in p.warnings))  # 45 mV is below the 50 mV threshold
+        big = plan(ring_profile({8: -120}), live(), policy=ring_policy(), only_changed=True)
+        self.assertTrue(big.allowed, big.refusals)
+        self.assertTrue(any(w.startswith("LARGE_CHANGE") and "ring point 8" in w for w in big.warnings), big.warnings)
 
     def test_the_writes_are_ordered_raising_first_on_the_rings_own_curve(self) -> None:
-        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(offset_ceiling_mv=50), only_changed=True)
+        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(), only_changed=True)
         order = [s.p2 for s in p.steps if s.kind.is_write]
         self.assertEqual(order, [8, 7])  # the raise of point 8 goes before the lowering of point 7
 
@@ -191,7 +193,7 @@ def point_profile_p0_point8(offset_mv: int) -> Profile:
 
 class Order(unittest.TestCase):
     def test_the_ring_is_its_own_unit_and_is_modelled_from_the_ring_words(self) -> None:
-        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(offset_ceiling_mv=50), only_changed=True)
+        p = plan(ring_profile({7: -20, 8: 10}), live(), policy=ring_policy(), only_changed=True)
         steps = [s for s in p.steps if s.kind.is_write]
         ordered, notes = reorder_writes(list(reversed(steps)), TOPO, {}, {}, live())
         self.assertEqual(notes, [])

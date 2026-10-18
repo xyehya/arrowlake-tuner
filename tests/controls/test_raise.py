@@ -134,13 +134,13 @@ class RaiseNeedsTheCpuLimits(RaiseCase):
         self.assertTrue(s.apply(profile(e_core(0, ratio=49, offset_mv=-10))).ok)
         self.assertTrue(self.session(config=config).apply(profile(e_core(0, ratio=50))).ok)  # one bin higher is a raise: no step limit, the CPU limit (120) allows it
 
-    def test_a_raise_with_the_ratio_limit_unread_is_refused_by_the_guard(self) -> None:
-        # the plan is built with the limit bound (as the helper does after tune.read); a guard that does not know it refuses the raise, fail closed
+    def test_a_raise_with_no_policy_limit_reads_the_cpu_limit_first(self) -> None:
+        # no operator limit: the plan reads cmd 0x01 itself, so the guard knows the CPU limit before the raise is judged
+        # (the unread case is covered at the guard in tests/guard/test_d049.py)
         s = self.session(hw_ratio_max={"P": None, "E": None})
-        with self.assertRaises(PlanRefused) as ctx:
-            s.apply(profile(e_core(0, ratio=49)), policy=self.session().policy)
-        self.assertIn("CPU_LIMIT_UNREAD", ctx.exception.refusals[0].detail)
-        self.assertEqual(s.write_requests(), [])
+        report = s.apply(profile(e_core(0, ratio=49)))
+        self.assertTrue(report.ok, report.format_report())
+        self.assertIn(0x01, [c for cpu, c, d in s.requests() if cpu == 8])
 
     def test_a_lowering_with_the_limits_unread_passes(self) -> None:
         s = self.session(hw_ratio_max={"P": None, "E": None})

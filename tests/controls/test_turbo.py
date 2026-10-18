@@ -67,7 +67,7 @@ def e_plan(text: str, *, policy=None, per_core: bool | None = True, msr_words: d
     readings = {c: E_READINGS for c in range(8, 24)}
     readings[4] = P4_READINGS
     words = {0xCE: 0x08040838F1812500, 0x650: E_TABLE, 0x1AD: P_TABLE} if msr_words is None else msr_words
-    return build_plan(prof, TOPO, readings, per_core_enabled=per_core, policy=policy or turbo_policy(ratio_max={"P": None, "E": 49}), msr_words=words)
+    return build_plan(prof, TOPO, readings, per_core_enabled=per_core, policy=policy or turbo_policy(hw_ratio_max={"P": 120, "E": 49}), msr_words=words)
 
 
 def kinds(plan) -> list[StepKind]:
@@ -107,7 +107,7 @@ class PlannerOrdering(unittest.TestCase):
 
     def test_each_table_is_ordered_by_its_own_direction(self) -> None:
         text = turbo_text(e_core(0, ratio=49), e=[49] * 8, p=[56, 56, 54, 54, 54, 54, 54, 54])  # E raised, P lowered
-        plan = e_plan(text, policy=turbo_policy(ratio_max={"P": 58, "E": 49}, max_ratio_step=2))
+        plan = e_plan(text, policy=turbo_policy(hw_ratio_max={"P": 58, "E": 49}))
         order = [(s.msr) for s in plan.steps if s.kind is StepKind.WRITE_MSR]
         self.assertEqual(order, [0x1AD, 0x650])  # the lowering P table first, the raising E table last
         self.assertEqual(kinds(plan)[-1], StepKind.WRITE_MSR)
@@ -115,7 +115,7 @@ class PlannerOrdering(unittest.TestCase):
     def test_a_table_that_raises_and_lowers_is_refused_by_the_planner(self) -> None:
         old = table(48, 48, 48, 48, 48, 48, 48, 48)
         mixed = [49, 49, 48, 48, 48, 48, 47, 47]
-        plan = e_plan(turbo_text(e_core(0, ratio=49), e=mixed), policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        plan = e_plan(turbo_text(e_core(0, ratio=49), e=mixed), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
         step = next(s for s in plan.steps if s.kind is StepKind.WRITE_MSR)
         self.assertFalse(step.verdict.allowed)
         self.assertIn("both raises and lowers", step.verdict.detail)
@@ -134,16 +134,28 @@ class PlannerOrdering(unittest.TestCase):
             e_plan(self.RAISE, msr_words={0xCE: 0x08040838F1812500})
 
     def test_the_guard_bounds_are_predicted_per_step(self) -> None:
-        # no ceiling configured: the raise is a refused step with the guard's reason
-        plan = e_plan(self.RAISE, policy=turbo_policy())
+        # D-049: the CPU's ratio limit (cmd 0x01) unread: the raise is a refused step with the guard's reason, naming the read
+        plan = e_plan(self.RAISE, policy=turbo_policy(hw_ratio_max={"P": None, "E": None}))
         step = next(s for s in plan.steps if s.kind is StepKind.WRITE_MSR)
         self.assertEqual(step.verdict.reason, "CHECK_FAILED")
-        self.assertIn("no-raise", step.verdict.detail)
-        # a table above an explicit ceiling, and a bigger step than allowed
-        plan = e_plan(turbo_text(e_core(0, ratio=49), e=[50] * 8), policy=turbo_policy(ratio_max={"P": None, "E": 49}))
-        self.assertIn("ratio_max", next(s for s in plan.steps if s.kind is StepKind.WRITE_MSR).verdict.detail)
-        plan = e_plan(self.RAISE, policy=turbo_policy(ratio_max={"P": None, "E": 49}, max_ratio_step=1))
+        self.assertIn("CPU_LIMIT_UNREAD", step.verdict.detail)
+        self.assertIn("cmd 0x01", step.verdict.detail)
+        # a table above the CPU's limit is refused at the limit
+        plan = e_plan(turbo_text(e_core(0, ratio=49), e=[50] * 8), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
+        detail = next(s for s in plan.steps if s.kind is StepKind.WRITE_MSR).verdict.detail
+        self.assertIn("above the CPU limit 49x", detail)
+        self.assertIn("cmd 0x01", detail)
+        # a big raise within the limit is one allowed plan: there is no step limit
+        plan = e_plan(self.RAISE, policy=turbo_policy(hw_ratio_max={"P": 120, "E": 120}))
         self.assertTrue(plan.allowed)
+        big = e_plan(turbo_text(e_core(0, ratio=56), e=[56] * 8), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 120}))
+        self.assertTrue(big.allowed, big.refusals)
+        self.assertTrue(any(w.startswith("LARGE_CHANGE") for w in big.warnings), big.warnings)
+
+    def test_a_table_that_rises_with_the_active_core_count_is_a_warning(self) -> None:
+        plan = e_plan(turbo_text(e_core(0, ratio=47), e=[47, 47, 47, 47, 47, 47, 46, 47]))
+        self.assertTrue(plan.allowed, plan.refusals)
+        self.assertTrue(any(w.startswith("TURBO_NOT_MONOTONIC") for w in plan.warnings), plan.warnings)
 
     def test_the_plan_text_shows_the_bytes_before_and_after(self) -> None:
         text = format_plan(e_plan(self.RAISE))
@@ -172,9 +184,9 @@ class Budget(unittest.TestCase):
         targets = resolve_targets(prof, TOPO)
         exact = count_operations(targets, None)
         with self.assertRaises(NeedsHigherLimit) as cm:
-            preflight(prof, TOPO, turbo_policy(max_operations_per_session=exact, ratio_max={"P": None, "E": 49}))
+            preflight(prof, TOPO, turbo_policy(max_operations_per_session=exact, hw_ratio_max={"P": 120, "E": 49}))
         self.assertEqual(cm.exception.required, exact + 1)
-        preflight(prof, TOPO, turbo_policy(max_operations_per_session=exact + 1, ratio_max={"P": None, "E": 49}))
+        preflight(prof, TOPO, turbo_policy(max_operations_per_session=exact + 1, hw_ratio_max={"P": 120, "E": 49}))
 
     def test_plan_flags_needs_higher_limit_with_the_plain_write(self) -> None:
         plan = e_plan(turbo_text(e_core(0, ratio=49), e=[49] * 8))
@@ -205,7 +217,7 @@ class ReadsAndWarnings(unittest.TestCase):
         self.assertEqual([s for s in self.reads(profile_text(p4(ratio=56))) if s.kind.is_msr], [])
 
     def test_a_raise_above_the_table_maximum_without_a_table_warns_that_it_is_capped(self) -> None:
-        plan = e_plan(profile_text(e_core(0, ratio=49)), policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        plan = e_plan(profile_text(e_core(0, ratio=49)), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
         warning = [w for w in plan.warnings if "capped" in w]
         self.assertEqual(len(warning), 1, plan.warnings)
         self.assertIn("ratio 49 is above the E turbo table maximum 48", warning[0])
@@ -219,7 +231,7 @@ class ReadsAndWarnings(unittest.TestCase):
         self.assertFalse([w for w in e_plan(profile_text(e_core(0, offset_mv=-10))).warnings if "capped" in w])
 
     def test_the_warning_is_once_per_cluster_and_per_target(self) -> None:
-        plan = e_plan(profile_text(e_core(0, ratio=49), e_core(4, ratio=49)), policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        plan = e_plan(profile_text(e_core(0, ratio=49), e_core(4, ratio=49)), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
         self.assertEqual(len([w for w in plan.warnings if "capped" in w]), 2)  # two clusters, one line each
 
 
@@ -231,21 +243,23 @@ class Preflight(unittest.TestCase):
             preflight(prof, TOPO, policy)
         self.assertTrue(any(r.msr == 0x650 and r.reason == "NOT_ALLOWLISTED" for r in cm.exception.refusals), cm.exception)
 
-    def test_a_table_above_an_explicit_ceiling_is_refused_in_preflight(self) -> None:
+    def test_a_table_above_the_cpu_limit_is_judged_by_the_plan_not_by_preflight(self) -> None:
         prof = load_profile(turbo_text(e_core(0, ratio=49), e=[50] * 8))
-        with self.assertRaises(PlanRefused) as cm:
-            preflight(prof, TOPO, turbo_policy(ratio_max={"P": None, "E": 49}))
-        self.assertTrue(any("ratio_max" in r.detail and r.msr == 0x650 for r in cm.exception.refusals))
+        self.assertEqual(len(preflight(prof, TOPO, turbo_policy(hw_ratio_max={"P": 120, "E": 49}))), 4)  # D-049: the limit is a runtime read
+        plan = e_plan(turbo_text(e_core(0, ratio=49), e=[50] * 8), policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
+        step = next(s for s in plan.steps if s.kind is StepKind.WRITE_MSR)
+        self.assertFalse(step.verdict.allowed)
+        self.assertIn("cmd 0x01", step.verdict.detail)
 
     def test_a_policy_without_the_plain_reads_refuses_the_reads(self) -> None:
         prof = load_profile(turbo_text(e_core(0, ratio=49), e=[49] * 8))
         with self.assertRaises(PlanRefused) as cm:
-            preflight(prof, TOPO, dataclasses.replace(turbo_policy(ratio_max={"P": None, "E": 49}), msr_allow=()))
+            preflight(prof, TOPO, dataclasses.replace(turbo_policy(hw_ratio_max={"P": 120, "E": 49}), msr_allow=()))
         self.assertTrue(any(r.msr == 0xCE and r.reason == "NOT_ALLOWLISTED" for r in cm.exception.refusals))
 
     def test_an_allowed_table_passes(self) -> None:
         prof = load_profile(turbo_text(e_core(0, ratio=49), e=[49] * 8))
-        self.assertEqual(len(preflight(prof, TOPO, turbo_policy(ratio_max={"P": None, "E": 49}))), 4)
+        self.assertEqual(len(preflight(prof, TOPO, turbo_policy(hw_ratio_max={"P": 120, "E": 49}))), 4)
 
 
 class ApplyThroughTheGuard(unittest.TestCase):
@@ -255,7 +269,7 @@ class ApplyThroughTheGuard(unittest.TestCase):
         self.tmp = Path(tmp.name)
 
     def session(self, **kw):
-        policy = kw.pop("policy", None) or turbo_policy(ratio_max={"P": 58, "E": 49})
+        policy = kw.pop("policy", None) or turbo_policy(hw_ratio_max={"P": 58, "E": 49})
         return make_session(self.tmp, policy=policy, **kw)
 
     @staticmethod
@@ -291,7 +305,7 @@ class ApplyThroughTheGuard(unittest.TestCase):
         self.assertIn("plain wrmsr 0x650 value 0x3030303030303030", report.format_report())
 
     def test_a_lowering_applies_the_table_first(self) -> None:
-        s = self.session(policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        s = self.session(policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
         report = s.apply(load_profile(turbo_text(e_core(0, ratio=47), e=[47] * 8)))
         self.assertTrue(report.ok, report.format_report())
         order = self.order(s)
@@ -301,7 +315,7 @@ class ApplyThroughTheGuard(unittest.TestCase):
         self.assertEqual(report.revert_plan[-1], MsrRequest(0, 0x650, E_TABLE, "revert", "write", 8))  # raising a bucket back: after the mailbox undos
 
     def test_the_p_table_and_both_tables_at_once(self) -> None:
-        s = self.session(policy=turbo_policy(ratio_max={"P": 58, "E": 49}, max_ratio_step=2))
+        s = self.session(policy=turbo_policy(hw_ratio_max={"P": 58, "E": 49}))
         text = turbo_text(p4(ratio=56), e=[49] * 8, p=[58, 58, 56, 56, 56, 56, 56, 56])
         text = text.replace("[turbo]", "[[core]]\nkind = \"E\"\nindex = 0\nratio = 49\n\n[turbo]", 1)
         report = s.apply(load_profile(text))
@@ -335,7 +349,7 @@ class ApplyThroughTheGuard(unittest.TestCase):
         self.assertEqual(self.order(s), [])  # reads only
 
     def test_without_a_write_entry_nothing_at_all_is_sent(self) -> None:
-        s = self.session(policy=policy_with(ratio_max={"P": None, "E": 49}))  # the default allowlist: plain reads, no plain write
+        s = self.session(policy=policy_with(hw_ratio_max={"P": 120, "E": 49}))  # the default allowlist: plain reads, no plain write
         with self.assertRaises(PlanRefused):
             s.apply(load_profile(turbo_text(e_core(0, ratio=49), e=[49] * 8)))
         self.assertEqual((s.sim.reads, s.sim.writes), ([], []))
@@ -393,20 +407,20 @@ class TurboOnly(unittest.TestCase):
 
     def test_the_plan_has_the_table_write_and_no_0x15(self) -> None:
         prof = self.profile(e=[47] * 8)
-        plan = build_plan(prof, TOPO, {}, per_core_enabled=None, policy=turbo_policy(ratio_max={"P": None, "E": 49}), msr_words={0xCE: 0x08040838F1812500, 0x650: E_TABLE})
+        plan = build_plan(prof, TOPO, {}, per_core_enabled=None, policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}), msr_words={0xCE: 0x08040838F1812500, 0x650: E_TABLE})
         self.assertEqual(kinds(plan), [StepKind.READ_MSR, StepKind.READ_MSR, StepKind.WRITE_MSR])
         self.assertTrue(plan.allowed)
         self.assertEqual(plan.required_operations, 1)
 
-    def test_preflight_judges_the_table_against_the_policy(self) -> None:
-        self.assertEqual(preflight(self.profile(e=[47] * 8), TOPO, turbo_policy(ratio_max={"P": None, "E": 49})), ())
-        with self.assertRaises(PlanRefused):
-            preflight(self.profile(e=[50] * 8), TOPO, turbo_policy(ratio_max={"P": None, "E": 49}))
+    def test_preflight_judges_the_table_against_the_allowlist_only(self) -> None:
+        self.assertEqual(preflight(self.profile(e=[47] * 8), TOPO, turbo_policy(hw_ratio_max={"P": 120, "E": 49})), ())
+        # D-049: the CPU's ratio limit needs the cmd 0x01 read, so preflight (no read yet) leaves a high table to the plan / the guard
+        self.assertEqual(preflight(self.profile(e=[50] * 8), TOPO, turbo_policy(hw_ratio_max={"P": 120, "E": 49})), ())
         with self.assertRaises(PlanRefused):  # no msr_allow write entry: default deny
-            preflight(self.profile(e=[47] * 8), TOPO, policy_with(ratio_max={"P": None, "E": 49}))
+            preflight(self.profile(e=[47] * 8), TOPO, policy_with(hw_ratio_max={"P": 120, "E": 49}))
 
     def test_apply_sends_no_mailbox_request_and_reads_back_on_two_cpus(self) -> None:
-        s = make_session(self.tmp, policy=turbo_policy(ratio_max={"P": None, "E": 49}))
+        s = make_session(self.tmp, policy=turbo_policy(hw_ratio_max={"P": 120, "E": 49}))
         report = s.apply(self.profile(e=[47] * 8))
         self.assertTrue(report.ok, report.format_report())
         self.assertEqual([r.step.kind for r in report.steps], [StepKind.READ_MSR, StepKind.READ_MSR, StepKind.WRITE_MSR])
@@ -438,8 +452,7 @@ check = "turbo_ratio_bounded"
 
     def setUp(self) -> None:
         super().setUp()
-        text = self.POLICY.replace("min_dwell_s = 60.0\n", "min_dwell_s = 60.0\nratio_max = { E = 49 }\n", 1)
-        self.turbo_policy = self.write("turbo-policy.toml", text)
+        self.turbo_policy = self.write("turbo-policy.toml", self.POLICY)  # D-049: no ratio_max line; the CPU's own limit (cmd 0x01) bounds the raise
         self.turbo_profile = self.write("turbo.toml", turbo_text('kind = "E"\nindex = 0\nratio = 49', e=[49] * 8))
 
     def test_plan_shows_the_table_before_and_after_and_exits_0(self) -> None:

@@ -15,7 +15,6 @@ from arltuner.controls import (
     ApplyReport,
     NeedsBootBudget,
     NeedsHigherLimit,
-    NeedsRamp,
     PlanError,
     PlanRefused,
     StepKind,
@@ -37,7 +36,7 @@ from arltuner.msr import SimConfig
 from arltuner.profiles import load_profile
 from arltuner.topology import arl_s_285k
 
-from ._support import DEFAULT_STEPS, P4_READINGS, e_core, make_session, p4, point_entry, point_profile, point_text, policy_with, profile, with_point_entries
+from ._support import P4_READINGS, e_core, make_session, p4, point_entry, point_profile, point_text, policy_with, profile, with_point_entries
 
 POINT6 = 0x0000002E
 E_CPUS = (8, 9, 10, 11)
@@ -60,11 +59,11 @@ class PointCase(unittest.TestCase):
         self.tmp = Path(tmp.name)
         self._n = 0
 
-    def session(self, *, steps=None, config=None, points=True, **policy_changes):
+    def session(self, *, config=None, points=True, **policy_changes):
         self._n += 1
         sub = self.tmp / f"s{self._n}"
         sub.mkdir()
-        policy = policy_with(max_ops=400, dwell=0.0, boot_ops=2000, **({} if steps is None else steps), **policy_changes)
+        policy = policy_with(max_ops=400, dwell=0.0, boot_ops=2000, **policy_changes)
         if points:
             policy = with_point_entries(policy)
         return make_session(sub, config=sim_cfg() if config is None else config, policy=policy)
@@ -172,7 +171,7 @@ class ProfilesAreTheSameWithoutPoints(PointCase):
 
 class Ordering(PointCase):
     def test_points_are_written_before_the_core_words_and_all_reads_before_any_write(self) -> None:
-        s = self.session(offset_ceiling_mv=0)
+        s = self.session()
         prof = point_profile(point_entry("P", 4, 8, -5), point_entry("E", 0, 6, -20), entries=(p4(offset_mv=-30),))
         report = s.apply(prof)
         self.assertTrue(report.ok, report.format_report())
@@ -205,7 +204,7 @@ class Ordering(PointCase):
     def test_a_lowering_turbo_table_comes_before_the_points_and_a_raising_one_after_the_cores(self) -> None:
         # documented order: 0x15, lowering-only turbo table, point writes, core words, raising turbo table
         topo = arl_s_285k()
-        policy = with_point_entries(policy_with(ratio_max={"P": None, "E": 49}))
+        policy = with_point_entries(policy_with(hw_ratio_max={"P": 120, "E": 49}))
         policy = dataclasses.replace(
             policy,
             msr_allow=policy.msr_allow
@@ -254,45 +253,31 @@ class ExpectRatio(PointCase):
 
 
 class Bounds(PointCase):
-    def test_an_offset_outside_the_policy_window_is_refused_in_preflight_before_any_request(self) -> None:
-        for mv, ok in ((-100, True), (-101, False), (5, False)):
+    def test_there_is_no_policy_window_for_a_point_offset(self) -> None:
+        # D-049: the D-015 window (-100 mV .. 0) is gone: any offset of the field passes preflight and applies
+        for mv in (-100, -101, -300, 5):
             with self.subTest(mv=mv):
                 s = self.session()
                 prof = point_profile(point_entry("E", 0, 6, mv))
-                if ok:
-                    self.assertIsInstance(preflight(prof, arl_s_285k(), s.policy), tuple)
-                    continue
-                with self.assertRaises(PlanRefused) as ctx:
-                    s.apply(prof)
-                self.assertIn("vf_point_offset_bounded", ctx.exception.refusals[0].detail)
-                self.assertEqual(s.requests(), [])
+                self.assertIsInstance(preflight(prof, arl_s_285k(), s.policy), tuple)
+                report = s.apply(prof)
+                self.assertTrue(report.ok, report.format_report())
 
-    def test_a_positive_offset_works_with_a_raised_ceiling_and_warns_about_the_raise(self) -> None:
-        s = self.session(offset_ceiling_mv=20)
+    def test_a_positive_offset_works_and_warns_about_the_raise(self) -> None:
+        s = self.session()
         report = s.apply(point_profile(point_entry("P", 4, 8, 10)))
         self.assertTrue(report.ok, report.format_report())
         self.assertTrue(any("RAISES" in w for w in report.plan.warnings))
+        self.assertFalse(any(w.startswith("LARGE_CHANGE") for w in report.plan.warnings))
 
-    def test_a_step_larger_than_the_limit_gets_the_next_allowed_step_as_a_profile(self) -> None:
-        s = self.session(steps=DEFAULT_STEPS)  # 25 mV per word
-        with self.assertRaises(NeedsRamp) as ctx:
-            s.apply(point_profile(point_entry("E", 0, 6, -60, expect_ratio=46)))
-        nxt = load_profile(ctx.exception.next_profile_text)
-        self.assertEqual(nxt.entries, ())
-        (entry,) = nxt.points
-        self.assertEqual((entry.kind, entry.index, entry.point, entry.expect_ratio), ("E", 0, 6, 46))
-        self.assertEqual(VfWord.mv_to_offset_raw(entry.offset_mv), -26)  # 25 mV = 26 raw: the step limit, not beyond it
-        self.assertEqual([c for c in s.sim.requests if c.cmd == 0x11], [])  # nothing written
-        # and the next step is itself allowed and applies
-        s2 = self.session(steps=DEFAULT_STEPS)
-        self.assertTrue(s2.apply(nxt).ok)
-        self.assertEqual(s2.sim.vf(8, 0, 6).offset_raw, -26)
-
-    def test_a_hard_refusal_beside_a_step_refusal_offers_no_ramp(self) -> None:
-        s = self.session(steps=DEFAULT_STEPS)
-        prof = point_profile(point_entry("E", 0, 6, -60), point_entry("P", 4, 8, -300))  # -300 mV is below any window
-        with self.assertRaises(PlanRefused):  # preflight sees the absolute bound first
-            s.apply(prof)
+    def test_a_big_step_is_one_write_and_a_large_change_warning(self) -> None:
+        s = self.session()
+        report = s.apply(point_profile(point_entry("E", 0, 6, -60, expect_ratio=46)))  # D-049: no step limit, no next-step profile
+        self.assertTrue(report.ok, report.format_report())
+        self.assertEqual(s.sim.vf(8, 0, 6).offset_raw, -61)
+        self.assertEqual(len([r for r in s.sim.requests if r.cmd == 0x11 and r.p2 == 6 and r.cpu == 8]), 1)
+        self.assertTrue(any(w.startswith("LARGE_CHANGE") and "point 6" in w for w in report.plan.warnings), report.plan.warnings)
+        self.assertIsNone(report.plan.next_profile_text)
 
 
 class Budget(PointCase):
