@@ -19,3 +19,5 @@ Follow-ups (not yet tasks): relabel 0x6B0 as graphics in `telemetry/msrio.py`, `
 reader to telemetry (core limit reasons for the strip); `apply-latency.md` after-numbers once G-211 is merged + H2 measured.
 Main suite: OK (skipped=74), 6m24s after the G-202 merge.
 Lessons: dispatcher allowlist must include `Bash(desktop/tools/*)` (fixed); never `pgrep -f` a string that is in the polling command itself.
+Known dependency advisory (accepted, tracked): Dependabot #1 / RUSTSEC-2024-0429 — glib 0.18 `VariantStrIter` unsoundness (fixed in 0.20). Pinned by
+Tauri 2's gtk-rs 0.18 stack (every Tauri 2 Linux app, incl. the Unsloth AppImage); our code never calls VariantStrIter. Re-check at each Tauri bump.
