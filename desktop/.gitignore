@@ -1,0 +1,10 @@
+# discovery images: third-party screenshots, local only (public repo)
+discovery/xtu-img/
+discovery/xtu-image-candidates.json
+# raw worker outputs (prompts stay tracked)
+progress/logs/*.out
+progress/logs/*.log
+# build outputs
+dist/
+app/src-tauri/target/
+app/src-tauri/gen/schemas/

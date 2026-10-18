@@ -1,0 +1,16 @@
+Read AGENTS.md first. You are a READ-ONLY discovery worker. No hardware, no sudo, do not run the helper or touch /dev, do not edit any file except the one output file below.
+
+Goal: produce desktop/discovery/repo-inventory.md — a precise capability inventory of the existing arrowlake-tuner app that a new desktop (Tauri AppImage) front-end must reuse. Cite path:line for every claim.
+
+Cover, as tables:
+1. Every HTTP/JSON endpoint in src/arltuner/web/server.py (method, path, request fields, response shape, whether it goes through the root helper, auth/CSRF/token mechanism, streaming/SSE/long-poll).
+2. The root helper protocol (src/arltuner/helper/, src/arltuner/web/helperlink.py): socket path, framing, request kinds, peer-cred checks, which ops write hardware.
+3. Every tunable control the backend can READ and WRITE today: per-core / per-cluster V/F point offsets, OC ratio + OC point target voltage, turbo ratio tables (P/E), ring (P1=2) ratio/offset, power limits (PL1/PL2/PL4, tau, powercap vs MSR), TVB, IccMax, cpufreq caps, anything else. For each: read source (MSR/mailbox/sysfs), write path, unit/encoding reference into docs/knowledge/registers.md, policy limit name (policies/, /etc/arltuner/policy.toml keys), guard checks. Say plainly which of these are read-only today and which have no write path at all.
+4. Telemetry available (src/arltuner/telemetry/): metrics, sources, sample rate, how the page polls.
+5. The current web page (web/index.html, web/app.js, web/style.css): list of tabs and every control/panel on each, and the apply flow (plan -> review -> apply -> readback) step by step with the number of round trips; identify concretely why "apply" is slow/clunky (count requests, blocking steps, confirmations, re-reads).
+6. Profiles/accepted state/restore (src/arltuner/profiles/), stress (src/arltuner/stress/), health gate, audit log.
+7. Packaging today (install.sh, packaging/, systemd units, launcher.py): what is installed where, what runs as root, and what must stay outside an AppImage (root helper, socket unit, policy).
+8. Hard constraints from docs/SPEC.md, docs/SAFETY.md, docs/DECISIONS.md that a new GUI must preserve (cite D-numbers): stdlib-only D-012, no CDN/npm, one mailbox transaction at a time, guard refusals, root code not from user-writable path SPEC 4.4, etc.
+9. Gaps: controls that exist in the backend but have no GUI, and GUI pieces that are hard to use.
+
+Keep it factual, dense, under ~600 lines. Finish with a 10-line summary. Then print "DONE" and the line count.

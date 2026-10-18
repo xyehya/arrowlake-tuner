@@ -220,3 +220,18 @@ Format: `D-NNN · date · decision — why`. Supersede by adding a new entry, no
   point 8 does not, MEASURED 2026-10-15); the ring OC word is BIOS-owned, recorded and compared, never written. A changed ring OC word refuses the
   ring unit alone. `EXPECTED-words.txt` gets a `ring` line; older states without it stay valid. The operator policy allows ring writes P2 1..9
   (operator yes 2026-10-15, backup `policy.toml.bak-2026-10-15`). Task G-154.
+- **D-046 · 2026-10-18 · Desktop app: a Tauri 2 AppImage replaces the browser GUI as the primary front-end (operator).** Operator: "migrate a
+  .appimage instead of the GUI ... a nice app GUI with features all in front of me, labeled right, settings easily tweaked, apply quickly".
+  Operator answers 2026-10-18: (1) **Tauri 2 (stable) + plain HTML/CSS/JS ES modules, no npm, no bundler** (`window.__TAURI__`), same stack as the
+  Unsloth AppImage on this host (Tauri 2.12, WebKitGTK 4.1, linuxdeploy). (2) **The Rust core speaks the helper's JSON-lines protocol on
+  `/run/arltuner/helper.sock` directly** (lstat root-owned socket + `SO_PEERCRED` listener uid 0, op allowlist, events relayed); no Python, no HTTP,
+  no token/cookie layer inside the AppImage; while the app is connected the web GUI / CLI-via-helper get `CLIENT_BUSY`. (3) **New write paths**
+  (each a guarded, audited, policy-bounded helper op with its own hardware gate; SPEC §2 "out of v1: PL1/PL2, ring writes" is lifted for these):
+  power limits PL1/PL2/tau via powercap + decoded limit reasons; a ring editor row (ring points already writable, D-045) + ring ratio min/max via
+  `intel_uncore_frequency`; per-core max-ratio caps (cpufreq) and core parking (CPU online). TVB / IccMax writes stay out. (4) **Apply speed:**
+  measure (done, `docs/knowledge/apply-latency.md`: 1 ms per transaction, 194 ms overhead between transactions) and optimise the helper's
+  bookkeeping keeping one transaction at a time, the health bracket, read-back and the plan nonce (reviewer-gated). (5) Downloads approved:
+  tauri-cli 2.x, Tauri 2 crates, linuxdeploy + gtk/appimage plugins. Scope: supersedes **O-2** (browser UI) and **D-012** for the unprivileged
+  front-end only; the root helper, guard, policy, CLI and restore scripts stay Python stdlib (D-012 holds for every privileged line). The
+  AppImage never contains root code (SPEC §4.4): the helper is still installed by `install.sh`. The web GUI stays as a fallback until the desktop
+  app reaches parity. Plan, tasks and progress: `desktop/PLAN.md`, `desktop/TASKS.md`, `desktop/progress/`.
