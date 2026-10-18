@@ -82,6 +82,7 @@ pub fn check(op: &str, args: &Value) -> Result<OpInfo, Refusal> {
         "vf.dump" | "tune.read" => (vf_dump(a), true),
         "tune.plan" => (tune_plan(a), false),
         "tune.apply" | "power.apply" | "runtime.apply" => (apply(a), true),
+        // The helper registers both *.plan ops long=True; here they are short like tune.plan, so the link sees the answer and remembers its plan_id.
         "power.plan" => (power_plan(a), false),
         "runtime.plan" => (runtime_plan(a), false),
         "profiles.save" => (profiles_save(a), false),
