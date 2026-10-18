@@ -1,0 +1,165 @@
+{
+ "request": {
+  "args": {
+   "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+   "typed": "CONFIRM <nonce>"
+  },
+  "op": "runtime.apply"
+ },
+ "response": {
+  "id": "c13",
+  "ok": true,
+  "result": {
+   "after": {
+    "caps": {
+     "0": 5000000,
+     "10": 2201449,
+     "11": 2201449,
+     "8": 2201449,
+     "9": 2201449
+    },
+    "uncore": {
+     "domain": "package_00_die_00",
+     "initial_max_khz": 4000000,
+     "initial_max_ratio": 40.0,
+     "initial_min_khz": 800000,
+     "initial_min_ratio": 8.0,
+     "max_khz": 3800000,
+     "max_ratio": 38.0,
+     "min_khz": 800000,
+     "min_ratio": 8.0
+    }
+   },
+   "complete": true,
+   "journal": "/var/lib/arltuner/runtime-journal.json",
+   "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+   "readback": [
+    {
+     "domain": "caps",
+     "expected": [
+      5000000,
+      5000000
+     ],
+     "file": 5000000,
+     "key": "cpu0",
+     "match": true
+    },
+    {
+     "domain": "caps",
+     "expected": [
+      2150000,
+      2250000
+     ],
+     "file": 2201449,
+     "key": "cpu8",
+     "match": true
+    },
+    {
+     "domain": "caps",
+     "expected": [
+      2150000,
+      2250000
+     ],
+     "file": 2201449,
+     "key": "cpu9",
+     "match": true
+    },
+    {
+     "domain": "caps",
+     "expected": [
+      2150000,
+      2250000
+     ],
+     "file": 2201449,
+     "key": "cpu10",
+     "match": true
+    },
+    {
+     "domain": "caps",
+     "expected": [
+      2150000,
+      2250000
+     ],
+     "file": 2201449,
+     "key": "cpu11",
+     "match": true
+    },
+    {
+     "domain": "uncore",
+     "expected": [
+      3800000,
+      3800000
+     ],
+     "file": 3800000,
+     "key": "max_ratio",
+     "match": true
+    }
+   ],
+   "revert": false,
+   "steps": [
+    {
+     "before": 5700000,
+     "domain": "caps",
+     "file": "cpu0/cpufreq/scaling_max_freq",
+     "file_value": 5000000,
+     "key": "cpu0",
+     "n": 1,
+     "status": "ok",
+     "value": 5000000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "file": "cpu8/cpufreq/scaling_max_freq",
+     "file_value": 2201449,
+     "key": "cpu8",
+     "n": 2,
+     "status": "ok",
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "file": "cpu9/cpufreq/scaling_max_freq",
+     "file_value": 2201449,
+     "key": "cpu9",
+     "n": 3,
+     "status": "ok",
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "file": "cpu10/cpufreq/scaling_max_freq",
+     "file_value": 2201449,
+     "key": "cpu10",
+     "n": 4,
+     "status": "ok",
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "file": "cpu11/cpufreq/scaling_max_freq",
+     "file_value": 2201449,
+     "key": "cpu11",
+     "n": 5,
+     "status": "ok",
+     "value": 2200000
+    },
+    {
+     "before": 4000000,
+     "domain": "uncore",
+     "file": "intel_uncore_frequency/package_00_die_00/max_freq_khz",
+     "file_value": 3800000,
+     "key": "max_ratio",
+     "n": 6,
+     "status": "ok",
+     "value": 3800000
+    }
+   ],
+   "warnings": [],
+   "writes_sent": 6
+  }
+ }
+}

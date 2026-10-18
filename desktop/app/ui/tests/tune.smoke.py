@@ -316,18 +316,20 @@ class TestTune(unittest.TestCase):
 
     # ---- limits, predictions, OC ----
     @browser
-    def test_limit_hints_name_the_policy_source(self):
+    def test_limit_hints_name_the_cpu_source(self):
+        # D-049 (G-217): the inspector shows the CPU's own limits, never the operator's policy
         with self.page() as page:
             page.click(".tile[data-unit='P0']")
             line = page.inner_text(".insp-section[data-kind='P'] .curve-editor > .limit-line")
-            self.assertIn("/etc/arltuner/policy.toml", line)
-            self.assertIn("from your policy", line)
-            self.assertIn(f"{MINUS}200\u2026+200 mV", line)
-            self.assertIn("your CPU allows", line)
+            self.assertIn("CPU limit", line)
+            self.assertIn(f"{MINUS}1000\u2026+999 mV", line)
+            self.assertNotIn("policy", line)
             cell = page.locator(".insp-section[data-kind='P'] tr[data-ratio='48'] .c-lim")
-            self.assertIn("policy", cell.inner_text())
-            self.assertIn("policy.toml", cell.get_attribute("title"))
-            self.assertIn("from your policy", page.inner_text(".oc-section .limit-line"))
+            self.assertIn("CPU", cell.inner_text())
+            self.assertNotIn("policy", cell.inner_text() + (cell.get_attribute("title") or ""))
+            oc = page.inner_text(".oc-section .limit-line")
+            self.assertIn("CPU limit", oc)
+            self.assertNotIn("policy", oc)
             self.assert_clean(page)
 
     @browser
@@ -465,17 +467,18 @@ class TestTune(unittest.TestCase):
     def test_sub_tabs_placeholders_and_keyboard(self):
         with self.page() as page:
             tabs = page.locator("[role='tab']")
-            self.assertEqual(tabs.all_inner_texts(), ["Cores", "Turbo ratios", "Power", "Ring & uncore", "Ratios & parking"])
+            self.assertEqual(tabs.all_inner_texts(), ["Cores", "Turbo ratios", "Power", "Ring & uncore", "Ratio caps"])  # "Ratios & parking" minus parking (D-048), G-217
             self.assertEqual(page.get_attribute("#subtab-cores", "aria-selected"), "true")
             page.focus("#subtab-cores")
             page.keyboard.press("ArrowRight")  # Turbo ratios (G-209: its own module; a stand-in text while it is not there)
             self.assertEqual(page.get_attribute("#subtab-turbo", "aria-selected"), "true")
             expect(page.locator("#tune-panel")).not_to_have_text(re.compile(r"Loading|^\s*$"), timeout=5000)
             page.keyboard.press("ArrowRight")
-            self.assertIn("G-217", page.inner_text("#tune-panel"))
+            page.wait_for_selector("#tune-panel .rt-table", timeout=5000)  # G-217: the Power tab (views/tune/power.js)
+            self.assertIn("Processor Core Power Limit (PL1)", page.inner_text("#tune-panel"))
             page.keyboard.press("End")
             self.assertEqual(page.get_attribute("#subtab-ratios", "aria-selected"), "true")
-            self.assertIn("G-217", page.inner_text("#tune-panel"))
+            page.wait_for_selector("#tune-panel .rt-table tr[data-unit='P0']", timeout=5000)
             page.click("#subtab-cores")
             page.wait_for_selector(".tile[data-unit='P0']")
             self.assert_clean(page)

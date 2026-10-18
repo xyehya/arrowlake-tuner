@@ -1,0 +1,116 @@
+{
+ "request": {
+  "args": {
+   "caps": {
+    "0": 50,
+    "8": 23
+   },
+   "uncore": {
+    "max_ratio": 38
+   }
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "id": "c12",
+  "ok": true,
+  "result": {
+   "expires_s": 600,
+   "journal_new": true,
+   "nonce": "TZ2HXR",
+   "ops_needed": 0,
+   "plan_id": "b49c426ca3c8b2af564eb85f343a3fe8db760e8446cc85f2b1cbe027b71e992d",
+   "revert": false,
+   "steps": [
+    {
+     "before": 5700000,
+     "domain": "caps",
+     "expect": [
+      5000000,
+      5000000
+     ],
+     "file": "cpu0/cpufreq/scaling_max_freq",
+     "key": "cpu0",
+     "n": 1,
+     "ratio": 50,
+     "value": 5000000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "expect": [
+      2150000,
+      2250000
+     ],
+     "file": "cpu8/cpufreq/scaling_max_freq",
+     "key": "cpu8",
+     "n": 2,
+     "note": "ratio 23 is unreachable by a cpufreq cap: capped at 22",
+     "ratio": 22,
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "expect": [
+      2150000,
+      2250000
+     ],
+     "file": "cpu9/cpufreq/scaling_max_freq",
+     "key": "cpu9",
+     "n": 3,
+     "note": "ratio 23 is unreachable by a cpufreq cap: capped at 22",
+     "ratio": 22,
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "expect": [
+      2150000,
+      2250000
+     ],
+     "file": "cpu10/cpufreq/scaling_max_freq",
+     "key": "cpu10",
+     "n": 4,
+     "note": "ratio 23 is unreachable by a cpufreq cap: capped at 22",
+     "ratio": 22,
+     "value": 2200000
+    },
+    {
+     "before": 4900000,
+     "domain": "caps",
+     "expect": [
+      2150000,
+      2250000
+     ],
+     "file": "cpu11/cpufreq/scaling_max_freq",
+     "key": "cpu11",
+     "n": 5,
+     "note": "ratio 23 is unreachable by a cpufreq cap: capped at 22",
+     "ratio": 22,
+     "value": 2200000
+    },
+    {
+     "before": 4000000,
+     "domain": "uncore",
+     "expect": [
+      3800000,
+      3800000
+     ],
+     "file": "intel_uncore_frequency/package_00_die_00/max_freq_khz",
+     "key": "max_ratio",
+     "n": 6,
+     "value": 3800000
+    }
+   ],
+   "warnings": [
+    "an E-cluster runs one ratio: the cap was also set on cpu 9, 10, 11 of the same cluster(s)",
+    "cpu 8, 9, 10, 11: ratio 23 is unreachable by a cpufreq cap: capped at 22",
+    "the values now in force are journaled before the first write of each key in this boot; \"revert\" puts them back",
+    "these are runtime values: a reboot restores the firmware / kernel defaults"
+   ],
+   "writes": 6
+  }
+ }
+}

@@ -557,8 +557,10 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
 
 // G-218: Curves/Stress fixtures and run simulation are layered on top of the base transport.
 import { wrapMockTransport } from "./mock-backend-g218.js";
+// G-217: power.* / runtime.* (Tune → Power, Ring & uncore, Ratio caps) and `cpu_limits` on the reads, layered on top
+import { wrapMockTransportG217 } from "./mock-backend-g217.js";
 export function createMockTransport(opts = {}) {
   // the recorded simulator curves seed the library (incl. a baseline for Tune predictions) unless ?nobaseline asks for none
   const seed = opts.seed ?? (noBaselineParam() ? "none" : "recorded");
-  return wrapMockTransport(createBaseMockTransport(opts), { ...opts, seed });
+  return wrapMockTransportG217(wrapMockTransport(createBaseMockTransport(opts), { ...opts, seed }), opts);
 }

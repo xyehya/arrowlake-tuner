@@ -1,0 +1,98 @@
+{
+ "request": {
+  "args": {
+   "revert": true
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "id": "c15",
+  "ok": true,
+  "result": {
+   "expires_s": 600,
+   "journal_new": false,
+   "nonce": "IRJB42",
+   "ops_needed": 0,
+   "plan_id": "d08fd59b8543ca7d8379a5bcf1d1609d55b2442723c0fb5cfdab6684e059b75f",
+   "revert": true,
+   "steps": [
+    {
+     "before": 5000000,
+     "domain": "caps",
+     "expect": [
+      5700000,
+      5700000
+     ],
+     "file": "cpu0/cpufreq/scaling_max_freq",
+     "key": "cpu0",
+     "n": 1,
+     "value": 5700000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu8/cpufreq/scaling_max_freq",
+     "key": "cpu8",
+     "n": 2,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu9/cpufreq/scaling_max_freq",
+     "key": "cpu9",
+     "n": 3,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu10/cpufreq/scaling_max_freq",
+     "key": "cpu10",
+     "n": 4,
+     "value": 4900000
+    },
+    {
+     "before": 2201449,
+     "domain": "caps",
+     "expect": [
+      4900000,
+      4900000
+     ],
+     "file": "cpu11/cpufreq/scaling_max_freq",
+     "key": "cpu11",
+     "n": 5,
+     "value": 4900000
+    },
+    {
+     "before": 3800000,
+     "domain": "uncore",
+     "expect": [
+      4000000,
+      4000000
+     ],
+     "file": "intel_uncore_frequency/package_00_die_00/max_freq_khz",
+     "key": "max_ratio",
+     "n": 6,
+     "value": 4000000
+    }
+   ],
+   "warnings": [
+    "these are runtime values: a reboot restores the firmware / kernel defaults"
+   ],
+   "writes": 6
+  }
+ }
+}

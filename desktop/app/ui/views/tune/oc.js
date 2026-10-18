@@ -7,7 +7,8 @@ import { createStepper } from "../../components/stepper.js";
 import { isNum, fmtV, fmtMv, fmtAgg, fmtRatio, TIMES, DASH } from "../../lib/format.js";
 import { aggregate, sameMv, ocClass, aboveTop, fusedTopOf, ocRatioWindow } from "../../lib/units.js";
 import { curRatio, effRatio, effVt, ocRatioValue, vtValue, ocOffsetOf, setOcRatio, setVt, setOcOffset, clearOcEdits } from "../../lib/draft.js";
-import { limitsFor, limitLine, vtWindow, GRID } from "../../lib/limits.js";
+import { limitsFor, vtWindow, GRID } from "../../lib/limits.js";
+import { modelCpuLine } from "../../lib/cpulimits.js";
 
 const units = (model, ids) => ids.map((id) => model.units[id]).filter((u) => u && u.kind !== "R");
 
@@ -99,7 +100,7 @@ export function createOcSection(tc, section) {
       emptyStart: w.min === null ? undefined : w.min,
     });
     ratioBack.disabled = !ids.some((id) => draft.units[id] && (draft.units[id].ratio !== undefined || draft.units[id].vt !== undefined));
-    ratioHint.textContent = noWin && w.reason ? w.reason + "." : limitLine(model, kind, "ratio") + (w.min !== null ? " Choosable: " + w.min + TIMES + "…" + w.max + TIMES + "." : "");
+    ratioHint.textContent = noWin && w.reason ? w.reason + "." : modelCpuLine(model, kind, "ratio") + (w.min !== null ? " Choosable: " + w.min + TIMES + "…" + w.max + TIMES + "." : "");
     const ocUnits = us.filter((u) => ocClass(u, effRatio(draft, u)) === "oc");
     const vw = vtWindow(model, kind);
     const vNow = vtValue(model, draft, ids, true);
@@ -116,7 +117,7 @@ export function createOcSection(tc, section) {
       min: GRID.vtMin,
       max: vw ? vw.max : undefined,
     });
-    vtHint.textContent = vtReason ? vtReason + "." : limitLine(model, kind, "vt");
+    vtHint.textContent = vtReason ? vtReason + "." : modelCpuLine(model, kind, "vt");
     const ou = offsetUnits(model, draft, ids);
     const offs = aggregate(ou.map((u) => ocOffsetOf(model, draft, u.id)), sameMv);
     const offsRead = aggregate(ou.map((u) => ocOffsetOf(model, { units: {}, turbo: {} }, u.id)), sameMv);

@@ -1,0 +1,19 @@
+{
+ "request": {
+  "args": {
+   "revert": true
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "error": {
+   "code": "REFUSED",
+   "detail": {
+    "check": "NO_JOURNAL"
+   },
+   "message": "there is nothing to revert to: no runtime value was written in this boot (no journal for this boot). Nothing was written."
+  },
+  "id": "c2",
+  "ok": false
+ }
+}

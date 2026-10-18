@@ -1,0 +1,92 @@
+{
+ "request": {
+  "args": {
+   "plan_id": "9d489fea3a27b2f3eba21f61100c55ddcc0bc2541bc625030170e1dfac850d52",
+   "typed": "CONFIRM <nonce>"
+  },
+  "op": "power.apply"
+ },
+ "response": {
+  "id": "c7",
+  "ok": true,
+  "result": {
+   "after": {
+    "max_power_uw": 125000000,
+    "pl1_uw": 230000000,
+    "pl1_w": 230.0,
+    "pl2_tau_us": 2440,
+    "pl2_uw": 280000000,
+    "pl2_w": 280.0,
+    "tau_s": 55.967744,
+    "tau_us": 55967744
+   },
+   "complete": true,
+   "journal": "/var/lib/arltuner/power-journal.json",
+   "plan_id": "9d489fea3a27b2f3eba21f61100c55ddcc0bc2541bc625030170e1dfac850d52",
+   "readback": [
+    {
+     "expected": [
+      230000000,
+      230000000
+     ],
+     "file": 230000000,
+     "key": "pl1_w",
+     "match": true,
+     "msr": 230000000
+    },
+    {
+     "expected": [
+      280000000,
+      280000000
+     ],
+     "file": 280000000,
+     "key": "pl2_w",
+     "match": true,
+     "msr": 280000000
+    },
+    {
+     "expected": [
+      55967744,
+      55967744
+     ],
+     "file": 55967744,
+     "key": "tau_s",
+     "match": true,
+     "msr": 55967744
+    }
+   ],
+   "revert": false,
+   "steps": [
+    {
+     "before": 250000000,
+     "file": "constraint_0_power_limit_uw",
+     "file_value": 230000000,
+     "key": "pl1_w",
+     "n": 1,
+     "status": "ok",
+     "value": 230000000
+    },
+    {
+     "before": 295000000,
+     "file": "constraint_1_power_limit_uw",
+     "file_value": 280000000,
+     "key": "pl2_w",
+     "n": 2,
+     "status": "ok",
+     "value": 280000000
+    },
+    {
+     "before": 127926272,
+     "file": "constraint_0_time_window_us",
+     "file_value": 55967744,
+     "key": "tau_s",
+     "n": 3,
+     "status": "ok",
+     "value": 55967744
+    }
+   ],
+   "warnings": [],
+   "writes_sent": 3
+  }
+ }
+}

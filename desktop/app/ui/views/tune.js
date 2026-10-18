@@ -12,7 +12,8 @@
 //     units:  the lib/units.js module,   limits: the lib/limits.js module,
 //     model:  () -> the units model of the current read (null before the first read; the tab is remounted when a new read replaces it),
 //     tune:   the controller (state(), setSelection(), readCpu(), ...) }
-// tune.js owns the tab bar and mounts views/tune/turbo.js (G-209) for "Turbo ratios"; Power / Ring & uncore / Ratios & parking show a placeholder until G-217.
+// tune.js owns the tab bar and mounts the modules of SUBTAB_MODULES: turbo.js (G-209, needs a tune.read), power.js / ring.js / runtime.js (G-217: they read power.read / runtime.read themselves, so no
+// tune.read is needed; the ring tab shows its V/F editor once there is one). "Ratio caps" is PLAN's "Ratios & parking" without parking (held, D-048).
 //
 // app.js integration: `VIEWS.tune = tuneView`; the pending bar's Discard calls `discardDraft(store)` and Review calls `requestReview(store)`, which bumps `tune.reviewSeq` and dispatches the
 // DOM event "tune:review" ({detail: {changes, units}}) on `store.events` (an EventTarget; it exists from the first discardDraft / requestReview / Tune mount on). G-210 listens to that.
@@ -28,10 +29,17 @@ import { createInspector } from "./tune/inspector.js";
 export const SUBTABS = [
   { id: "cores", label: "Cores" },
   { id: "turbo", label: "Turbo ratios" },
-  { id: "power", label: "Power", task: "G-217" },
-  { id: "ring", label: "Ring & uncore", task: "G-217" },
-  { id: "ratios", label: "Ratios & parking", task: "G-217" },
+  { id: "power", label: "Power" },
+  { id: "ring", label: "Ring & uncore" },
+  { id: "ratios", label: "Ratio caps" }, // "Ratios & parking" of PLAN §4.2 minus parking (held, D-048)
 ];
+/** The sub-tabs that are separate modules (`mount(el, ctx)` / `unmount()`), and whether they need a tune.read first (the runtime tabs read power.read / runtime.read themselves, G-217). */
+export const SUBTAB_MODULES = {
+  turbo: { path: "./tune/turbo.js", needsRead: true },
+  power: { path: "./tune/power.js", needsRead: false },
+  ring: { path: "./tune/ring.js", needsRead: false },
+  ratios: { path: "./tune/runtime.js", needsRead: false },
+};
 export const NO_BASELINE_REASON = "no baseline curve (Curves → Measure)";
 
 // ---- the store slice ----------------------------------------------------------------------------------------------------------------------
@@ -353,12 +361,8 @@ export function tuneView() {
         unmountSub();
         const def = SUBTABS.find((x) => x.id === t.subtab);
         panel.dataset.tab = t.subtab;
-        if (def.task) {
-          panel.append(h("div", { class: "card placeholder" }, h("p", { text: def.label + " is coming with " + def.task + "." }), h("p", { class: "muted", text: "The backend ops it needs (PLAN §6) land first; the editors reuse the Cores inspector." })));
-          sub = { id: t.subtab, model: t.model, unmount() {} };
-          return;
-        }
-        if (!t.model) {
+        const spec = SUBTAB_MODULES[t.subtab];
+        if (!t.model && (!spec || spec.needsRead)) {
           panel.append(h("div", { class: "card empty-read" }, h("p", { text: "Nothing to edit yet." }), h("p", { class: "muted", text: 'Use "Read CPU state" above: the app reads the V/F points, the turbo tables and the limits once per boot. Nothing is written.' })));
           sub = { id: t.subtab, model: t.model, unmount() {} };
           return;
@@ -373,7 +377,7 @@ export function tuneView() {
         sub = mine;
         const note = h("p", { class: "muted", text: "Loading…" });
         panel.append(note);
-        import("./tune/turbo.js").then(
+        import(spec.path).then(
           (mod) => {
             if (sub !== mine) return;
             clear(panel);
@@ -382,7 +386,7 @@ export function tuneView() {
           },
           () => {
             if (sub !== mine) return;
-            note.textContent = "Turbo ratios are coming with G-209.";
+            note.textContent = def.label + " could not be loaded.";
           },
         );
       }

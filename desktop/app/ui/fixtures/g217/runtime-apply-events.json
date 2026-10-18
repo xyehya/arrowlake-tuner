@@ -1,0 +1,12 @@
+[
+ {
+  "event": "state",
+  "op_id": "c12",
+  "state": "idle"
+ },
+ {
+  "event": "state",
+  "op_id": "c13",
+  "state": "applying"
+ }
+]

@@ -67,3 +67,62 @@ export const restoreIntent = () => ({ restore: "accepted" });
 export function profileIntent(name) {
   return typeof name === "string" && PROFILE_NAME_RE.test(name) ? { profile: name } : { error: "a profile name is 1..64 characters of a-z 0-9 . _ -" };
 }
+
+// ---- power / runtime (G-217) -----------------------------------------------------------------------------------------------------------------------
+// The helper's power.plan / runtime.plan take their fields at the top level, NOT wrapped in {intent} like tune.plan (ops_power.py _validate_power_plan: {power:{pl1_w?, pl2_w?, tau_s?}} | {revert:true};
+// ops_runtime.py _validate_runtime_plan: {caps?:{"<cpu>": ratio}, uncore?:{min_ratio?, max_ratio?}} | {revert:true}). The functions below return exactly those argument objects as `intent`.
+// Parking is never built: the helper refuses it (D-048).
+export const POWER_KEYS = Object.freeze(["pl1_w", "pl2_w", "tau_s"]); // controls/power.py KEYS
+export const UNCORE_KEYS = Object.freeze(["min_ratio", "max_ratio"]); // controls/uncore.py KEYS
+export const POWER_REVERT = Object.freeze({ revert: true });
+export const RUNTIME_REVERT = Object.freeze({ revert: true });
+const MAX_CPU = 1024; // ops_runtime.py _CPU_MAX
+const isWhole = (x) => typeof x === "number" && Number.isInteger(x);
+
+/**
+ * `edit` = {pl1_w?, pl2_w?, tau_s?} (only what was edited; a value equal to `cur` (the same keys, as in force) is dropped, the helper would answer NOTHING_TO_DO).
+ * -> {intent: {power: {...}}} | {intent: null} (nothing pending) | {error}. The PLs are whole watts (ops_power.py: "whole watts"), tau any positive number of seconds.
+ */
+export function powerIntent(edit, cur = {}) {
+  const power = {};
+  for (const key of Object.keys(edit || {})) {
+    if (!POWER_KEYS.includes(key)) return { error: "unknown power key " + key };
+    const v = edit[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "number" || !Number.isFinite(v)) return { error: key + " must be a number" };
+    if (key === "tau_s" ? v <= 0 : !isWhole(v) || v < 1) return { error: key === "tau_s" ? "tau_s must be positive seconds" : key + " must be whole watts" };
+    if (cur && typeof cur[key] === "number" && Math.abs(cur[key] - v) < 1e-9) continue;
+    power[key] = v;
+  }
+  return { intent: Object.keys(power).length ? { power } : null };
+}
+
+/**
+ * `edit` = {caps?: {cpu: ratio}, uncore?: {min_ratio?, max_ratio?}} (cpu = CPU number, whole ratio 1..255; 1 ratio = 100 MHz). -> {intent: {caps?: {"<cpu>": ratio}, uncore?: {...}}} | {intent: null} | {error}.
+ * An E cluster's cap is given for every CPU of the cluster by the caller (the helper expands it anyway; two CPUs of one cluster asking differently is a refusal).
+ */
+export function runtimeIntent(edit) {
+  const intent = {};
+  const caps = (edit && edit.caps) || {};
+  const capKeys = Object.keys(caps).sort((a, b) => Number(a) - Number(b));
+  if (capKeys.length) {
+    const out = {};
+    for (const k of capKeys) {
+      if (!/^[0-9]{1,4}$/.test(k) || Number(k) >= MAX_CPU) return { error: "caps keys must be CPU numbers, got " + k };
+      const r = caps[k];
+      if (!isWhole(r) || r < 1 || r > 255) return { error: "caps." + k + " must be a whole ratio 1..255" };
+      out[String(Number(k))] = r;
+    }
+    intent.caps = out;
+  }
+  const uncore = {};
+  for (const k of Object.keys((edit && edit.uncore) || {})) {
+    if (!UNCORE_KEYS.includes(k)) return { error: "unknown uncore key " + k };
+    const r = edit.uncore[k];
+    if (r === undefined || r === null) continue;
+    if (!isWhole(r) || r < 1 || r > 255) return { error: "uncore." + k + " must be a whole ratio 1..255" };
+    uncore[k] = r;
+  }
+  if (Object.keys(uncore).length) intent.uncore = uncore;
+  return { intent: Object.keys(intent).length ? intent : null };
+}

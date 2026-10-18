@@ -1,0 +1,22 @@
+{
+ "request": {
+  "args": {
+   "uncore": {
+    "max_ratio": 45
+   }
+  },
+  "op": "runtime.plan"
+ },
+ "response": {
+  "error": {
+   "code": "REFUSED",
+   "detail": {
+    "check": "UNCORE_RANGE",
+    "key": "max_ratio"
+   },
+   "message": "max_ratio = 45 is outside the hardware's own uncore range 8..40 (initial_min/max_freq_khz). Nothing was written."
+  },
+  "id": "c18",
+  "ok": false
+ }
+}

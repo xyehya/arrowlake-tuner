@@ -1,0 +1,325 @@
+{
+ "id": "c14",
+ "ok": true,
+ "result": {
+  "caps": [
+   {
+    "cpu": 0,
+    "cpufreq": {
+     "cap_khz": 5000000,
+     "cap_ratio": 50.0,
+     "cpuinfo_max_khz": 5700000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P0"
+   },
+   {
+    "cpu": 1,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P1"
+   },
+   {
+    "cpu": 2,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P2"
+   },
+   {
+    "cpu": 3,
+    "cpufreq": {
+     "cap_khz": 5700000,
+     "cap_ratio": 57.0,
+     "cpuinfo_max_khz": 5700000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P3"
+   },
+   {
+    "cpu": 4,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P4"
+   },
+   {
+    "cpu": 5,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P5"
+   },
+   {
+    "cpu": 6,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P6"
+   },
+   {
+    "cpu": 7,
+    "cpufreq": {
+     "cap_khz": 5500000,
+     "cap_ratio": 55.0,
+     "cpuinfo_max_khz": 5500000,
+     "min_khz": 800000
+    },
+    "kind": "P",
+    "online": true,
+    "unit": "P7"
+   },
+   {
+    "cpu": 8,
+    "cpufreq": {
+     "cap_khz": 2201449,
+     "cap_ratio": 22.01449,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC0"
+   },
+   {
+    "cpu": 9,
+    "cpufreq": {
+     "cap_khz": 2201449,
+     "cap_ratio": 22.01449,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC0"
+   },
+   {
+    "cpu": 10,
+    "cpufreq": {
+     "cap_khz": 2201449,
+     "cap_ratio": 22.01449,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC0"
+   },
+   {
+    "cpu": 11,
+    "cpufreq": {
+     "cap_khz": 2201449,
+     "cap_ratio": 22.01449,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC0"
+   },
+   {
+    "cpu": 12,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC1"
+   },
+   {
+    "cpu": 13,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC1"
+   },
+   {
+    "cpu": 14,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC1"
+   },
+   {
+    "cpu": 15,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC1"
+   },
+   {
+    "cpu": 16,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC2"
+   },
+   {
+    "cpu": 17,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC2"
+   },
+   {
+    "cpu": 18,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC2"
+   },
+   {
+    "cpu": 19,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC2"
+   },
+   {
+    "cpu": 20,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC3"
+   },
+   {
+    "cpu": 21,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC3"
+   },
+   {
+    "cpu": 22,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC3"
+   },
+   {
+    "cpu": 23,
+    "cpufreq": {
+     "cap_khz": 4900000,
+     "cap_ratio": 49.0,
+     "cpuinfo_max_khz": 4900000,
+     "min_khz": 800000
+    },
+    "kind": "E",
+    "online": true,
+    "unit": "EC3"
+   }
+  ],
+  "held": null,
+  "journal": {
+   "caps": {
+    "0": 5700000,
+    "10": 4900000,
+    "11": 4900000,
+    "8": 4900000,
+    "9": 4900000
+   },
+   "in_flight": false,
+   "uncore": {
+    "max_ratio": 4000000
+   }
+  },
+  "journal_path": "/var/lib/arltuner/runtime-journal.json",
+  "note": null,
+  "offline": [],
+  "uncore": {
+   "domain": "package_00_die_00",
+   "initial_max_khz": 4000000,
+   "initial_max_ratio": 40.0,
+   "initial_min_khz": 800000,
+   "initial_min_ratio": 8.0,
+   "max_khz": 3800000,
+   "max_ratio": 38.0,
+   "min_khz": 800000,
+   "min_ratio": 8.0
+  },
+  "uncore_note": null
+ }
+}

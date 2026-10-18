@@ -9,7 +9,8 @@ import { isNum, fmtV, fmtMv, fmtAgg, fmtRatio, MINUS, DASH } from "../../lib/for
 import { aggregate, sameMv, sameV, pointAt, ringPoint } from "../../lib/units.js";
 import { emptyDraft, effPointMv, pointValue, ringValue, curveValue, setPoint, setRingPoint, setCurve } from "../../lib/draft.js";
 import { predictUnit, predictedAt } from "../../lib/predict.js";
-import { limitsFor, limitLine, NO_LIMITS } from "../../lib/limits.js";
+import { limitsFor, NO_LIMITS } from "../../lib/limits.js";
+import { modelCpuLine, cpuOffsetCell } from "../../lib/cpulimits.js";
 
 export const NO_BASELINE = "no baseline curve (Curves → Measure)";
 export const STEP_MV = 5;
@@ -131,7 +132,7 @@ export function createCurveEditor(tc, section) {
     h("th", { class: "c-off", text: "Offset (mV)", title: "V/F point offset (mV); " + title }),
     h("th", { class: "c-num", text: "Predicted V", title: "Base V + offset, raised to the previous point's voltage when lower (V(n) ≥ V(n−1)). Not a CPU read." }),
     h("th", { class: "c-num", text: "Read-back V", title: "The same on the offsets the CPU reported at the last read" }),
-    h("th", { class: "c-lim", text: "Limit (mV)", title: "Offset window and who sets it (your policy, the CPU's V/F word range)" })));
+    h("th", { class: "c-lim", text: "Limit (mV)", title: "The CPU's own offset range (its V/F word); the helper refuses a value outside it" })));
   const tbody = h("tbody", {});
   const table = h("table", { class: "vf-table", "aria-label": (ringSec ? "Ring" : kind === "P" ? "P-core" : "E-cluster") + " V/F points" }, thead, tbody);
 
@@ -371,13 +372,13 @@ export function createCurveEditor(tc, section) {
       c.read.textContent = fmtVText(r.readback);
       c.read.title = r.readback.state === "none" ? r.why : "base V + the offsets read from the CPU";
       c.read.classList.toggle("na", r.readback.state === "none");
-      c.lim.textContent = limitCell(model, kind);
-      c.lim.title = (w ? "Offsets outside " + sgn(w.min) + "…" + sgn(w.max) + " mV are not accepted. " : "") + (limitLine(model, kind, "offset") || "");
+      c.lim.textContent = cpuOffsetCell(model, kind) || limitCell(model, kind);
+      c.lim.title = (w ? "Offsets outside " + sgn(w.min) + "…" + sgn(w.max) + " mV are not accepted. " : "") + modelCpuLine(model, kind, "offset");
       row.tr.classList.toggle("pending", r.pending);
     }
     ensureMarkers(rowsNow);
     chartUpdate();
-    hint.textContent = why || limitLine(model, kind, "offset");
+    hint.textContent = why || modelCpuLine(model, kind, "offset");
     hint.classList.toggle("warn", !!why);
     noteBase.hidden = !!base || ringSec;
     noteBase.textContent = base ? "" : "Predicted voltages need a baseline curve (Curves → Measure); until then only the fused top point has a voltage.";
