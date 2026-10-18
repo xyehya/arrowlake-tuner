@@ -1,0 +1,12 @@
+CONTINUATION (your previous turn was stopped by the account's session limit, not by the task). The worktree has your commit 5b947c9 plus
+uncommitted work (.g226/, tests/guard/test_d049.py, edits to policy.py, tests/*/_support.py, test_raise.py, test_guard.py).
+Current state of the suite: 132 failures + 185 errors (`python3 tools/run_tests.py`). Finish the task:
+1. Read the facts audit again if needed: desktop/progress/logs/cpu-rules-audit.md (main checkout).
+2. Every remaining failure/error is a test asserting a REMOVED policy limit or a signature the refactor changed. For each: if it asserted a policy value limit
+   (offset ceiling/floor, step limits, ratio_max, v_target_max, [power], [runtime]) rewrite it to "now allowed, warns" per D-049; if it tested a CPU rule that
+   stays, keep the assertion. Do not weaken a test that guards a PROCESS invariant (one transaction at a time, [[allow]], read-back, write order, counters).
+3. Make sure the pieces the notes require actually exist: cpu_limits in tune.read/tune.last/power.read/runtime.read; fail-closed CPU_LIMIT_UNREAD; the 0x28
+   field-0 fix (both call sites agree, tested); old policy files with removed keys load with one warning naming them; LARGE_CHANGE / TURBO_NOT_MONOTONIC /
+   PL2_BELOW_PL1 / DEEP_WHOLE_CURVE warnings; explicit context flag replacing the offset-floor "no context" signal; transition-safe write order intact.
+4. Delete the .g226/ scratch dir before finishing.
+5. `python3 tools/run_tests.py` must be GREEN; commit `G-226: tests for CPU-enforced limits only`; print a short summary of what changed vs before.
