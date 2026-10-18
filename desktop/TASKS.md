@@ -124,6 +124,11 @@ Accept: sim tests per rule; journal restore at helper start.
 Owns `desktop/app/ui/views/tune/{power,ring,runtime}.js` + tests; `lib/intent.js` extension (coordinate: G-207 must be merged).
 Accept: Playwright (mock) per sub-tab; intents validate against the helper schema.
 
+**G-223 · Telemetry: 0x6B0 relabel + 0x64F core limit reasons** · F · deps G-215
+Owns `src/arltuner/telemetry/{msrio.py,cpu.py,sampler.py}`, `docs/knowledge/telemetry-sources.md`, `web/index.html` (label only), tests in `tests/telemetry/`.
+Goal: 0x6B0 is the graphics word (G-215): rename labels/keys; add `limit_reasons` = `decode_core_64f(rdmsr 0x64F)` (+ `limit_reasons_gfx` from 0x6B0) to the
+telemetry snapshot as `{raw, status, log, unknown_bits}`; keep `limit_reasons_raw` for compatibility one release. Accept: tests; suite green.
+
 **H3–H5 · Hardware gates** · H — H3 ring row edit (one point, read back, restore); H4 PL1/PL2/tau write + revert; H5 one cap, one park/unpark, uncore
 max −1 bin + revert. Each with operator go, evidence in `captures/lnx/desktop-h*.txt`, gate recorded in SPEC §5 table.
 
