@@ -1151,7 +1151,7 @@ def default_m1_policy(topology: Topology | None = None) -> Policy:
       Apply, ``[MEASURED win 2026-10-01]`` -- ``0x1D`` p1 0 p2 0 with ``favored_ratio_follows_vf`` and ``0x27`` p1 0 p2 0 with
       ``granular_equals_read``; reads ``0x26`` p1 0 p2 0 (with ``0x1C``/``0x09``/``0x28`` above). Everything else, including every other
       write command, is denied.
-    * T-023 plain MSRs: ``rdmsr`` of ``0x1AD 0x1AE 0x650 0x651 0xCE 0x194`` (``msr_allow``); **no plain write** (a turbo table write needs a
+    * T-023 plain MSRs: ``rdmsr`` of ``0x1AD 0x1AE 0x650 0x651 0xCE 0x194 0x198`` and (G-214, read-only RAPL registers) ``0x606 0x610 0x614`` (``msr_allow``); **no plain write** (a turbo table write needs a
       reviewed policy file with a ``turbo_ratio_bounded`` entry, D-017).
 
     ``[UNVERIFIED]`` as a whole: entries join a real allowlist only with a DECISIONS.md entry and a MEASURED read.
