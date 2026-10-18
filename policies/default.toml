@@ -240,3 +240,10 @@ kind = "read"
 # pl2_w = [125, 295]       # [min, max] W, short-term limit (powercap constraint_1); PL2 >= PL1 is always enforced
 # tau_s = [1, 128]         # [min, max] s, PL1 time window
 # max_step_w = 50          # the largest change of one PL in one apply
+
+# --- runtime controls (G-216, D-039): THE KEYS BELOW ARE COMMENTED OUT ON PURPOSE. Until you set them in /etc/arltuner/policy.toml the control they gate refuses and the refusal names the
+# missing key. runtime.read always works. All of it is runtime state: a reboot restores the kernel / firmware values. The numbers are an EXAMPLE of the shape, not a recommendation.
+# A revert to the values this boot started with (runtime.plan {revert: true}) needs none of these keys.
+# [runtime]
+# cap_ratio_min = 8        # the lowest per-CPU max-ratio cap that may be written (ratio x 100 MHz); the highest is always the CPU's own cpuinfo_max_freq
+# uncore_ratio = [8, 40]   # [min, max] ratio the uncore (ring) frequency limits may be set to, inside the hardware's own initial_min/max_freq_khz

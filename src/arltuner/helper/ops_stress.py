@@ -37,6 +37,7 @@ from arltuner.stress import (
 )
 from arltuner.stress.parse import MAX_ERROR_LINES
 
+from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only, helper_topology
 from .ops_measure import (
     CAP_ATTR, EPP_ATTR, _cpus_text, _remove_journal, _restore, _turbo_tables, _unit_maxima, _write_journal, epp_pinned_cpus, recover_journal,
@@ -638,6 +639,7 @@ def _stop_child(w: StressWiring, proc: Any, reader: threading.Thread | None) -> 
 
 
 def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    refuse_if_cpu_offline(helper, "stress.start")
     w = _wiring(helper)
     cancel = ctx.cancel
     kind, method, cap = args["kind"], args["method"], args["ratio_cap"]

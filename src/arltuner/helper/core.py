@@ -223,6 +223,9 @@ class Helper:
         self._lock = lock
         self._derive_tuned_this_boot()
         self._recover_measure_journal()  # a stale journal = a measurement that died with the previous helper: put cpufreq back before anything else runs
+        from .ops_runtime import recover_journal as recover_runtime_journal  # lazy: ops_runtime imports ops_tune, which imports this module's package
+
+        recover_runtime_journal(self)  # G-216: a runtime apply (caps / uncore) that died in flight: restore it; never raises
         return None
 
     def stop(self) -> None:

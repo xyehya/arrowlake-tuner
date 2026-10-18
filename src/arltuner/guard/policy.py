@@ -118,6 +118,7 @@ __all__ = [
     "Policy",
     "PolicyError",
     "PowerPolicy",
+    "RuntimePolicy",
     "RequestLike",
     "build_context",
     "default_m1_policy",
@@ -942,6 +943,33 @@ class PowerPolicy:
             _int_in("power.max_step_w", self.max_step_w, 1, ENCODING_PL_MAX_W, "PL field 15 bits in 1/8 W")
 
 
+#: G-216: the ratio fields of ``[runtime]`` are whole multiples of 100 MHz in a byte (the ``scaling_max_freq`` / uncore ``*_freq_khz`` files hold ratio x 100000 kHz).
+RUNTIME_RATIO_MAX = 255
+
+
+@dataclass(frozen=True)
+class RuntimePolicy:
+    """G-216 ``[runtime]``: what the runtime sysfs controls may do. **Every key is optional and absent means refused** (the refusal names the key): ``cap_ratio_min`` is the lowest
+    per-CPU ratio cap that may be written (the highest is always the CPU's own ``cpuinfo_max_freq``); ``uncore_ratio = [min, max]`` bounds the uncore (ring) ratio limits, inside the
+    hardware's ``initial_min/max``. (Core parking is held out of G-216: there is no ``parking`` key.)"""
+
+    cap_ratio_min: int | None = None
+    uncore_ratio: tuple[int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.cap_ratio_min is not None:
+            _int_in("runtime.cap_ratio_min", self.cap_ratio_min, 1, RUNTIME_RATIO_MAX, "a ratio in 100 MHz steps")
+        if self.uncore_ratio is not None:
+            value = self.uncore_ratio
+            if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise PolicyError("runtime.uncore_ratio must be [min, max]")
+            for v in value:
+                _int_in("runtime.uncore_ratio", v, 1, RUNTIME_RATIO_MAX, "a ratio in 100 MHz steps")
+            if value[0] > value[1]:
+                raise PolicyError(f"runtime.uncore_ratio = {list(value)!r} must satisfy min <= max")
+            object.__setattr__(self, "uncore_ratio", (int(value[0]), int(value[1])))
+
+
 @dataclass(frozen=True)
 class Policy:
     """The whole policy. ``max_operations_per_session`` counts every executed mailbox request (reads included, because
@@ -987,6 +1015,7 @@ class Policy:
     hw_v_target_max_mv: Mapping[str, int | None] = field(default_factory=lambda: {"P": None, "E": None})  # D-039: the CPU's own V target limit per kind (0x28 - 1 LSB), whole mV
     source: str | None = field(default=None, compare=False)  # the policy file this policy was loaded from (named in every refusal that quotes a policy limit)
     power: PowerPolicy | None = None  # G-214: the ``[power]`` table; ``None`` = absent = no package power limit may be written
+    runtime: RuntimePolicy | None = None  # G-216: the ``[runtime]`` table; ``None`` = absent = no cap / uncore limit may be written
 
     @property
     def where(self) -> str:
@@ -1088,6 +1117,8 @@ class Policy:
         object.__setattr__(self, "msr_allow", msr_entries)
         if self.power is not None and not isinstance(self.power, PowerPolicy):
             raise PolicyError(f"power must be a PowerPolicy, got {type(self.power).__name__}")
+        if self.runtime is not None and not isinstance(self.runtime, RuntimePolicy):
+            raise PolicyError(f"runtime must be a RuntimePolicy, got {type(self.runtime).__name__}")
 
     def cpu_allowed(self, cpu: object) -> bool:
         return _is_int(cpu) and cpu in self.cpus
@@ -1207,9 +1238,11 @@ _TOP_KEYS = frozenset(
         "max_v_step_mv",
         "max_offset_step_mv",
         "power",
+        "runtime",
     }
 )
 _POWER_KEYS = frozenset({"pl1_w", "pl2_w", "tau_s", "max_step_w"})
+_RUNTIME_KEYS = frozenset({"cap_ratio_min", "uncore_ratio"})
 _KIND_TABLE_KEYS = ("ratio_max", "v_target_max_mv")
 _SCALAR_KEYS = ("offset_ceiling_mv", "max_ratio_step", "max_v_step_mv", "max_offset_step_mv")
 _ENTRY_KEYS = frozenset({"name", "cmd", "p1", "p2", "kind", "check", "params"})
@@ -1385,4 +1418,11 @@ def load_policy(source: str | os.PathLike[str], topology: Topology | None = None
         if set(table) - _POWER_KEYS:
             raise PolicyError(f"power: unknown key(s) {sorted(set(table) - _POWER_KEYS)} (known: {sorted(_POWER_KEYS)})")
         kwargs["power"] = PowerPolicy(**table)
+    if "runtime" in doc:
+        table = doc["runtime"]
+        if not isinstance(table, dict):
+            raise PolicyError(f"runtime must be a table with the keys {sorted(_RUNTIME_KEYS)}")
+        if set(table) - _RUNTIME_KEYS:
+            raise PolicyError(f"runtime: unknown key(s) {sorted(set(table) - _RUNTIME_KEYS)} (known: {sorted(_RUNTIME_KEYS)})")
+        kwargs["runtime"] = RuntimePolicy(**table)
     return Policy(**kwargs)

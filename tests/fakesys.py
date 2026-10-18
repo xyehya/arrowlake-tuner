@@ -109,3 +109,36 @@ def make_powercap(
         put("constraint_1_power_limit_uw", pl2_uw)
         put("constraint_1_time_window_us", 2440)
     return root
+
+
+def make_runtime_sysfs(
+    root: Path,
+    p_count: int = 8,
+    e_count: int = 16,
+    *,
+    p_khz: int = 5_700_000,
+    e_khz: int = 4_900_000,
+    uncore: tuple[int, int] | None = (800_000, 4_000_000),
+    offline: Sequence[int] = (),
+) -> Path:
+    """G-216: ``<root>`` as ``/sys/devices/system/cpu`` shows the runtime controls on the reference machine ``[MEASURED lnx 2026-10-18]``: per CPU ``cpufreq/{cpuinfo_max_freq,
+    scaling_max_freq,scaling_min_freq}`` (none for ``offline`` CPUs), ``online`` for every CPU **except cpu0**, and ``intel_uncore_frequency/package_00_die_00/{min,max,initial_min,
+    initial_max}_freq_khz`` (``uncore=None`` leaves the directory out)."""
+    for cpu in range(p_count + e_count):
+        d = root / f"cpu{cpu}"
+        d.mkdir(parents=True, exist_ok=True)
+        if cpu != 0:
+            (d / "online").write_text("0\n" if cpu in offline else "1\n", encoding="ascii")
+        if cpu in offline:
+            continue
+        (d / "cpufreq").mkdir(exist_ok=True)
+        khz = p_khz if cpu < p_count else e_khz
+        (d / "cpufreq" / "cpuinfo_max_freq").write_text(f"{khz}\n", encoding="ascii")
+        (d / "cpufreq" / "scaling_max_freq").write_text(f"{khz}\n", encoding="ascii")
+        (d / "cpufreq" / "scaling_min_freq").write_text("800000\n", encoding="ascii")
+    if uncore is not None:
+        u = root / "intel_uncore_frequency" / "package_00_die_00"
+        u.mkdir(parents=True, exist_ok=True)
+        for name, value in (("min", uncore[0]), ("max", uncore[1]), ("initial_min", uncore[0]), ("initial_max", uncore[1])):
+            (u / f"{name}_freq_khz").write_text(f"{value}\n", encoding="ascii")
+    return root
