@@ -226,9 +226,12 @@ export function subTabContext(tc, ctx) {
       discard: () => discardDraft(store),
       lib: draftLib,
     },
+    getDraft: () => tc.state().draft, // the turbo tab (G-209) reads/writes the shared draft through these accessors
+    setDraft: (next) => patchTune(store, { draft: next }),
     units: unitsLib,
     limits: limitsLib,
-    model: () => tc.state().model,
+    model: tc.state().model, // the units model at mount time (a new read remounts the sub-tab); getModel() for the live value
+    getModel: () => tc.state().model,
     tune: tc,
   };
 }
