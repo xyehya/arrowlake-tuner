@@ -1,0 +1,121 @@
+{
+ "events": [
+  {
+   "event": "state",
+   "op_id": "c13",
+   "state": "idle"
+  },
+  {
+   "event": "state",
+   "op_id": "c14",
+   "state": "stressing"
+  },
+  {
+   "elapsed_s": 0.0,
+   "errors": 0,
+   "event": "progress",
+   "of_s": 30,
+   "op_id": "c14"
+  },
+  {
+   "event": "heartbeat",
+   "op_id": "c14",
+   "ops_budget": 100000,
+   "ops_used": 0,
+   "state": "stressing"
+  },
+  {
+   "elapsed_s": 12.0,
+   "errors": 0,
+   "event": "progress",
+   "of_s": 30,
+   "op_id": "c14"
+  },
+  {
+   "elapsed_s": 24.1,
+   "errors": 0,
+   "event": "progress",
+   "of_s": 30,
+   "op_id": "c14"
+  }
+ ],
+ "request": {
+  "args": {
+   "duration_s": 30,
+   "kind": "memory",
+   "memory_mb": 2048
+  },
+  "op": "stress.start"
+ },
+ "response": {
+  "id": "c14",
+  "ok": true,
+  "result": {
+   "achieved": {
+    "EC0": {
+     "mhz_mean": 3800.0,
+     "ratio_mode": 48
+    },
+    "EC1": {
+     "mhz_mean": 3800.0,
+     "ratio_mode": 48
+    },
+    "EC2": {
+     "mhz_mean": 3800.0,
+     "ratio_mode": 48
+    },
+    "EC3": {
+     "mhz_mean": 3800.0,
+     "ratio_mode": 48
+    },
+    "P0": {
+     "mhz_mean": 4475.0,
+     "ratio_mode": 57
+    },
+    "P1": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    },
+    "P2": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    },
+    "P3": {
+     "mhz_mean": 4475.0,
+     "ratio_mode": 57
+    },
+    "P4": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    },
+    "P5": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    },
+    "P6": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    },
+    "P7": {
+     "mhz_mean": 4325.0,
+     "ratio_mode": 55
+    }
+   },
+   "cap_valid": null,
+   "duration_s": 30,
+   "elapsed_s": 30.1,
+   "ended": "2026-10-18T10:29:31Z",
+   "error_lines": [],
+   "errors": 0,
+   "health": "clean",
+   "id": "20261018T102928Z-swfk",
+   "kind": "memory",
+   "max_pkg_w": 176.8,
+   "max_temp_c": 64.0,
+   "mce_new": 0,
+   "record_path": "/var/lib/arltuner/state/stress/20261018T102928Z-swfk.json",
+   "started": "2026-10-18T10:29:28Z",
+   "stopped_by": "time"
+  }
+ }
+}

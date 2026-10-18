@@ -1,0 +1,400 @@
+{
+ "cancel": {
+  "request": {
+   "args": {
+    "op_id": "c8"
+   },
+   "op": "cancel"
+  },
+  "response": {
+   "id": "c9",
+   "ok": true,
+   "result": {
+    "cancelled": true,
+    "op_id": "c8",
+    "state": "measuring"
+   }
+  }
+ },
+ "events": [
+  {
+   "event": "state",
+   "op_id": "c8",
+   "state": "measuring"
+  },
+  {
+   "eta_s": 181,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": null,
+   "step": 0,
+   "unit": null
+  },
+  {
+   "event": "vf.point",
+   "mhz": 800,
+   "op_id": "c8",
+   "ratio": 8,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.6934
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 8,
+   "step": 1,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 900,
+   "op_id": "c8",
+   "ratio": 9,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.6955
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 9,
+   "step": 2,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1000,
+   "op_id": "c8",
+   "ratio": 10,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.6976
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 10,
+   "step": 3,
+   "unit": "P0"
+  },
+  {
+   "event": "heartbeat",
+   "op_id": "c8",
+   "ops_budget": 100000,
+   "ops_used": 0,
+   "state": "measuring"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1100,
+   "op_id": "c8",
+   "ratio": 11,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7001
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 11,
+   "step": 4,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1200,
+   "op_id": "c8",
+   "ratio": 12,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7025
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 12,
+   "step": 5,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1300,
+   "op_id": "c8",
+   "ratio": 13,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7053
+  },
+  {
+   "eta_s": 14,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 13,
+   "step": 6,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1400,
+   "op_id": "c8",
+   "ratio": 14,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7065
+  },
+  {
+   "eta_s": 13,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 14,
+   "step": 7,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1500,
+   "op_id": "c8",
+   "ratio": 15,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7092
+  },
+  {
+   "eta_s": 13,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 15,
+   "step": 8,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1600,
+   "op_id": "c8",
+   "ratio": 16,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7122
+  },
+  {
+   "eta_s": 13,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 16,
+   "step": 9,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1700,
+   "op_id": "c8",
+   "ratio": 17,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7139
+  },
+  {
+   "eta_s": 13,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 17,
+   "step": 10,
+   "unit": "P0"
+  },
+  {
+   "event": "vf.point",
+   "mhz": 1800,
+   "op_id": "c8",
+   "ratio": 18,
+   "status": "ok",
+   "unit": "P0",
+   "vid_v": 0.7167
+  },
+  {
+   "eta_s": 13,
+   "event": "progress",
+   "of": 139,
+   "op_id": "c8",
+   "ratio": 18,
+   "step": 11,
+   "unit": "P0"
+  }
+ ],
+ "request": {
+  "args": {
+   "mode": "dense",
+   "name": "to-cancel",
+   "units": [
+    "P0",
+    "P1",
+    "EC0"
+   ]
+  },
+  "op": "vf.measure"
+ },
+ "response": {
+  "error": {
+   "code": "CANCELLED",
+   "detail": {
+    "curve_id": "20261018T102910Z-7oma",
+    "partial": {
+     "baseline": false,
+     "boot_id": "00000000-0000-4000-8000-000000000000",
+     "complete": false,
+     "created": "2026-10-18T10:29:10Z",
+     "id": "20261018T102910Z-7oma",
+     "kernel": "sim",
+     "mode": "dense",
+     "name": "to-cancel",
+     "plan": "dense",
+     "temps": {
+      "max_c": 40.4,
+      "min_c": 34.2
+     },
+     "tuning_state": {
+      "kind": "unknown"
+     },
+     "units": {
+      "P0": {
+       "cpus": [
+        0
+       ],
+       "points": [
+        {
+         "kept": 10,
+         "mhz": 800,
+         "ratio": 8,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.6945,
+         "vid_min": 0.6915,
+         "vid_v": 0.6934
+        },
+        {
+         "kept": 8,
+         "mhz": 900,
+         "ratio": 9,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.6968,
+         "vid_min": 0.6943,
+         "vid_v": 0.6955
+        },
+        {
+         "kept": 10,
+         "mhz": 1000,
+         "ratio": 10,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.6985,
+         "vid_min": 0.6963,
+         "vid_v": 0.6976
+        },
+        {
+         "kept": 10,
+         "mhz": 1100,
+         "ratio": 11,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7014,
+         "vid_min": 0.6986,
+         "vid_v": 0.7001
+        },
+        {
+         "kept": 10,
+         "mhz": 1200,
+         "ratio": 12,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7036,
+         "vid_min": 0.701,
+         "vid_v": 0.7025
+        },
+        {
+         "kept": 8,
+         "mhz": 1300,
+         "ratio": 13,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7061,
+         "vid_min": 0.7043,
+         "vid_v": 0.7053
+        },
+        {
+         "kept": 10,
+         "mhz": 1400,
+         "ratio": 14,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7083,
+         "vid_min": 0.7057,
+         "vid_v": 0.7065
+        },
+        {
+         "kept": 10,
+         "mhz": 1500,
+         "ratio": 15,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7106,
+         "vid_min": 0.7079,
+         "vid_v": 0.7092
+        },
+        {
+         "kept": 10,
+         "mhz": 1600,
+         "ratio": 16,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7131,
+         "vid_min": 0.7103,
+         "vid_v": 0.7122
+        },
+        {
+         "kept": 9,
+         "mhz": 1700,
+         "ratio": 17,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7152,
+         "vid_min": 0.7129,
+         "vid_v": 0.7139
+        },
+        {
+         "kept": 10,
+         "mhz": 1800,
+         "ratio": 18,
+         "status": "ok",
+         "total": 10,
+         "vid_max": 0.7177,
+         "vid_min": 0.7153,
+         "vid_v": 0.7167
+        }
+       ]
+      }
+     }
+    }
+   },
+   "message": "vf.measure was cancelled; cpufreq was restored, the points measured so far are stored as 20261018T102910Z-7oma."
+  },
+  "id": "c8",
+  "ok": false
+ }
+}

@@ -1,0 +1,40 @@
+{
+ "id": "c4",
+ "ok": true,
+ "result": {
+  "curves": [
+   {
+    "baseline": false,
+    "complete": true,
+    "created": "2026-10-18T10:28:58Z",
+    "id": "20261018T102858Z-0z2g",
+    "mode": "dense",
+    "name": "second",
+    "tuning_state": {
+     "kind": "unknown"
+    },
+    "units": [
+     "P0",
+     "EC0"
+    ]
+   },
+   {
+    "baseline": false,
+    "complete": true,
+    "created": "2026-10-18T10:28:55Z",
+    "id": "20261018T102855Z-3vza",
+    "mode": "quick",
+    "name": "stock",
+    "tuning_state": {
+     "kind": "unknown"
+    },
+    "units": [
+     "P0",
+     "P1",
+     "EC0"
+    ]
+   }
+  ],
+  "no_turbo": false
+ }
+}

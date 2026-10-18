@@ -1,0 +1,29 @@
+{
+ "request": {
+  "args": {
+   "baseline": true,
+   "id": "20261018T102855Z-3vza"
+  },
+  "op": "curves.update"
+ },
+ "response": {
+  "id": "c7",
+  "ok": true,
+  "result": {
+   "baseline": true,
+   "complete": true,
+   "created": "2026-10-18T10:28:55Z",
+   "id": "20261018T102855Z-3vza",
+   "mode": "quick",
+   "name": "stock",
+   "tuning_state": {
+    "kind": "unknown"
+   },
+   "units": [
+    "P0",
+    "P1",
+    "EC0"
+   ]
+  }
+ }
+}

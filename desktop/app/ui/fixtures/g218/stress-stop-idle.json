@@ -1,0 +1,14 @@
+{
+ "request": {
+  "args": {},
+  "op": "stress.stop"
+ },
+ "response": {
+  "id": "c18",
+  "ok": true,
+  "result": {
+   "cancelled": false,
+   "state": "idle"
+  }
+ }
+}
