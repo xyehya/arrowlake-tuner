@@ -566,6 +566,28 @@ test("controller: a run begun elsewhere is adopted from its vf.point / progress 
   assert.equal(ctl.cv.list[0].name, "elsewhere");
 });
 
+test("controller: a tune.read / tune.apply in progress (recorded events) is never adopted as a measurement; step/of progress without a 'measuring' state is ignored", async () => {
+  const emitters = {};
+  const bridge = new Bridge({ connect: async () => ({ state: "connected" }), call: async () => ({ ok: true, result: { curves: [] } }), listen: (ev, cb) => { emitters[ev] = cb; return () => {}; } });
+  const store = createAppStore();
+  setLink(store, await bridge.connect());
+  setPreflight(store, pre);
+  const ctl = createCurvesController({ bridge, store });
+  for (const events of [FIXTURES.tuneReadEvents, FIXTURES.tuneApplyEvents]) {
+    for (const { event, ...payload } of events) emitters[event](payload);
+    assert.equal(ctl.view.run, null);
+    assert.equal(ctl.cv.live, null);
+    assert.equal(ctl.view.progress, null);
+    assert.equal(ctl.cv.view, "chart");
+  }
+  emitters.progress({ op_id: "x9", step: 1, of: 20, unit: "P0", ratio: 8 }); // no state seen for this op at all
+  assert.equal(ctl.view.run, null);
+  emitters.heartbeat({ op_id: "x9", state: "measuring", ops_used: 1, ops_budget: 100 }); // a heartbeat names the op's state too
+  emitters.progress({ op_id: "x9", step: 2, of: 20, unit: "P0", ratio: 13 });
+  assert.equal(ctl.view.run.id, "x9");
+  assert.equal(ctl.view.progress.step, 2);
+});
+
 test("controller: failed result with a partial curve keeps it; one without shows Failed:", async () => {
   let emit = () => {};
   const list = [];

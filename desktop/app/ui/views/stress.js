@@ -330,10 +330,18 @@ export function createStressController({ bridge, store }) {
     bridge.wait(id).then((fin) => onResult(fin));
   }
 
+  // What the helper said each op is doing (`state` / `heartbeat` carry {op_id, state}): a run begun elsewhere is adopted only when it is a stress run, never a read or an apply.
+  const opState = new Map();
+  function noteState(p) {
+    if (!isObj(p) || !isStr(p.op_id) || !isStr(p.state)) return;
+    opState.set(p.op_id, p.state);
+    if (opState.size > 32) opState.delete(opState.keys().next().value);
+  }
+
   function onProgress(p) {
     if (!isObj(p) || !(isNum(p.elapsed_s) || isNum(p.of_s)) || p.step !== undefined) return; // stress progress only (a measurement carries `step`)
     if (!view.run) {
-      if (!isStr(p.op_id) || view.done.has(p.op_id)) return;
+      if (!isStr(p.op_id) || view.done.has(p.op_id) || opState.get(p.op_id) !== "stressing") return;
       view.run = { id: p.op_id, kind: "cpu", of: 0, elapsed: 0, errors: 0, units: ids(), adopted: true }; // adopted after a reload: the settings are not known
       watchRun(p.op_id);
     }
@@ -406,6 +414,8 @@ export function createStressController({ bridge, store }) {
     paint();
   }
 
+  bridge.on("state", noteState);
+  bridge.on("heartbeat", noteState);
   bridge.on("progress", onProgress);
   store.watch((s) => s.link.state, (state) => {
     if (state === "connected" && !view.loaded) loadList();

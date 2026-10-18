@@ -337,6 +337,26 @@ test("controller: a run begun elsewhere is adopted from its progress events and 
   assert.equal(ctl.view.done.has(first.id), true);
 });
 
+test("controller: a tune.read / tune.apply in progress (recorded events) is never adopted as a stress run; progress without a 'stressing' state is ignored", async () => {
+  const emitters = {};
+  const bridge = new Bridge({ connect: async () => ({ state: "connected" }), call: async () => ({ ok: true, result: { results: [] } }), listen: (ev, cb) => { emitters[ev] = cb; return () => {}; } });
+  const store = createAppStore();
+  setLink(store, await bridge.connect());
+  setPreflight(store, pre);
+  const ctl = createStressController({ bridge, store });
+  for (const events of [FIXTURES.tuneReadEvents, FIXTURES.tuneApplyEvents]) {
+    for (const { event, ...payload } of events) emitters[event](payload);
+    assert.equal(ctl.view.run, null);
+    assert.equal(ctl.view.result, null);
+  }
+  emitters.progress({ op_id: "x9", elapsed_s: 3, of_s: 30, errors: 0 }); // no state seen for this op at all
+  assert.equal(ctl.view.run, null);
+  emitters.state({ op_id: "x9", state: "stressing" });
+  emitters.progress({ op_id: "x9", elapsed_s: 4, of_s: 30, errors: 0 });
+  assert.equal(ctl.view.run.id, "x9");
+  assert.equal(ctl.view.run.elapsed, 4);
+});
+
 test("controller: a failed result is shown as Failed: ... and there is no result card", async () => {
   let emit = () => {};
   const bridge = new Bridge({

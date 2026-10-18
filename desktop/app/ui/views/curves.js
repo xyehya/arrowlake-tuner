@@ -638,9 +638,18 @@ export function createCurvesController({ bridge, store }) {
     paint();
   }
 
+  // What the helper said each op is doing (`state` / `heartbeat` carry {op_id, state}): tune.read and tune.apply also report `step`/`of` progress, so a run begun elsewhere
+  // is adopted from its progress only when the helper called it "measuring".
+  const opState = new Map();
+  function noteState(ev) {
+    if (!isObj(ev) || !isStr(ev.op_id) || !isStr(ev.state)) return;
+    opState.set(ev.op_id, ev.state);
+    if (opState.size > 32) opState.delete(opState.keys().next().value);
+  }
+
   function onProgress(ev) {
     if (!isObj(ev) || ev.step === undefined) return; // a measurement's progress carries `step`/`of` (a stress run's `elapsed_s`)
-    if (!view.run && !adopt(ev.op_id)) return;
+    if (!view.run && (opState.get(ev.op_id) !== "measuring" || !adopt(ev.op_id))) return;
     if (view.run.id !== ev.op_id) return;
     const p = progressText(ev);
     if (p) {
@@ -787,6 +796,8 @@ export function createCurvesController({ bridge, store }) {
   }
 
   bridge.on("vf.point", onVfPoint);
+  bridge.on("state", noteState);
+  bridge.on("heartbeat", noteState);
   bridge.on("progress", onProgress);
   store.watch((s) => s.link.state, (state) => {
     if (state === "connected" && !cv.loaded) {
