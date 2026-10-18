@@ -1,0 +1,18 @@
+FIX ROUND on your branch (Opus review: desktop/progress/logs/G-228-review.out in the main checkout — read it). Fix all:
+1. (MED) The confirm diff must never say "no differences" when there are some: compare the RING points and each unit's OC-word whole-curve offset (and E OC
+   ratio/voltage, turbo). Prefer doing the diff in the helper: a read-only `profiles.diff {a: <name>|"accepted", b: <name>|"read"}` returning per-unit
+   differences from the same profile writer (complete_from_words for "read"), if that is clean — else extend the JS contents. Allow it in ops.rs (exact shape).
+   Until something is compared, the empty-diff text names what was not compared. UI tests: ring-only change and OC-offset-only change are shown.
+2. (MED) Always refresh tune.last before computing the diff (await tc.loadLast() or use the helper diff from 1).
+3. (LOW) Corrupt/empty CURRENT: the refusal tells the operator how to recover WITHOUT hand-editing: add the recovery to the helper: accept may move the whole
+   unreadable accepted dir aside to /etc/arltuner/accepted.unreadable-<UTC stamp> (keeps everything) when the request carries `"set_aside_unreadable": true`;
+   the UI offers that as an explicit button in the refusal banner. Test it (empty CURRENT, garbage CURRENT). Fix the ".)." text.
+4. (LOW) `accepted-before-*` do not count toward MAX_PROFILES; and when the store is full the refusal names the directory.
+5. (LOW) Accepting over an older multi-profile chain: refuse with "run accepted-migrate first" (as the Profiles card already says).
+6. (LOW) Result shape: reply previous_saved_as: str|None + previous_saved_names: list; audit logs previous_saved_names only.
+7. (NIT) The header for a from:"read" save must not mention the Tune editor's rows.
+Missing tests from the review: corrupt/empty CURRENT, replace failure after the copy (stray accepted-before-* allowed, message accurate: "the previous state was
+saved as X; the accepted state is unchanged"), save_unique exhaustion.
+Also: test_measure.QuickRunTests.test_events_progress_and_state failed once under load in the review run — run that module alone 5x and report (do not change it
+unless it fails alone).
+`python3 tools/run_tests.py` green; commit `G-228: review fixes`. Do NOT run build-appimage.sh.
