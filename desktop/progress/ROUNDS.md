@@ -78,3 +78,4 @@
 - G-232 merged (read-back poll 10 ms/500 ms, labels, runtime partial wording). Item 4 (pending runtime draft after a tripped apply + revert) not confirmed fixed -> recheck live. Install G-231+G-232 when the operator closes the app.
 - Live session 3: caps P7+EC3 apply/revert CLEAN after G-232 (polls 1-2, 10 ms; EC3 46x ran 4601 MHz); uncore max 40->39 applied and back to 40 (via edit, since 'Revert to boot values' stays disabled without an in-app read: G-234). Bugs: digits switch screens when focus leaves an input; Ctrl+A selects the page. G-233 (E ratio display) running.
 - G-233 merged (E effective ratio; fixtures still say 49 in mock -> regenerate later; ARCHITECTURE/D-036 contract note pending).
+- G-234 merged. Orchestrator error: regex conflict resolution dropped a '});' -> node 311/1 fail (SyntaxError); rebuilt with git merge-file (558 lines = base+40+31), node green. Lesson: resolve with git merge-file, then node --check.
