@@ -1,0 +1,485 @@
+# p53p55-e46 step A (2026-10-19, PASSED 15/15 compile stress uv-p53p55-e46): P offsets (53x <= 1.200 V, 55x 1.270 V, accepted 56/57x on P0/P3),
+# P turbo buckets 1-2 lowered to 55, E turbo 46x8, E point 6 offset 0 (stock). Apply after a boot, then step B. Script: tools-local apply-p53p55-e46.sh
+[meta]
+name = "p53p55-e46-a"
+platform = "arl-s"
+
+[turbo]
+p = [55, 55, 54, 54, 54, 54, 54, 54]  # step A lowers P buckets 1-2 (BIOS 57 -> 55); step B raises 3-8 (54 -> 55)
+e = [46, 46, 46, 46, 46, 46, 46, 46]  # E capped at the fused top 46x (48x failed the compile test)
+
+[[point]]
+kind = "P"
+index = 0
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 0
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 0
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 0
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 0
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 0
+point = 6
+offset_mv = -28
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 0
+point = 7
+offset_mv = -26
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 0
+point = 8
+offset_mv = -43
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 1
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 1
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 1
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 1
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 1
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 1
+point = 6
+offset_mv = -36
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 1
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 1
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 2
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 2
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 2
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 2
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 2
+point = 5
+offset_mv = -71
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 2
+point = 6
+offset_mv = -96
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 2
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 2
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 3
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 3
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 3
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 3
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 3
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 3
+point = 6
+offset_mv = -28
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 3
+point = 7
+offset_mv = -28
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 3
+point = 8
+offset_mv = -31
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 4
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 4
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 4
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 4
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 4
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 4
+point = 6
+offset_mv = -49
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 4
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 4
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 5
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 5
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 5
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 5
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 5
+point = 5
+offset_mv = -61
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 5
+point = 6
+offset_mv = -88
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 5
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 5
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 6
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 6
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 6
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 6
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 6
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 6
+point = 6
+offset_mv = -76
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 6
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 6
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 7
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 7
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 7
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 7
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 7
+point = 5
+offset_mv = -71
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 7
+point = 6
+offset_mv = -106
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 7
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 7
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = 0
+expect_ratio = 46
