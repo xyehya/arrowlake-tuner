@@ -1,0 +1,36 @@
+# 2026-10-19 operator: E clusters pinned to 46x at stock voltage, no offsets: E turbo 46x8 (the 48x OC point stays until a cold boot, never reached), point 6 offset 0. P untouched.
+[meta]
+name = "e-46-stock"
+platform = "arl-s"
+
+[turbo]
+e = [46, 46, 46, 46, 46, 46, 46, 46]
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = 0
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = 0
+expect_ratio = 46
+

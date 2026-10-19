@@ -55,3 +55,14 @@ an E-core offset), so bisect by reverting groups of offsets, one variable at a t
 - E OC 49x worked with `0x11` + `0x1D` + `0x650` on the cluster; between the top fused point and the OC point the voltage is linear. HWP highest and
   `cpuinfo_max_freq` rose with `0x1D`, `scaling_max_freq` did not (uncapped load stayed at 48x until it was raised; the app raises and lowers it with the
   ratio since G-126).
+
+## 2026-10-19 — compile stress (15 uncached llama.cpp builds, -j24, 6400 MT/s 36-38-38-80) [MEASURED lnx]
+P state for all three runs: accepted P offsets + 53x <= 1.200 V (P2 -71, P5 -61, P7 -71) + 55x 1.270 V group (P2 -96, P4 -49, P5 -88, P6 -76, P7 -106),
+P turbo 55x8 (`captures/lnx/profiles/p53-1200-p55-1270-*.toml`). Only the E state changed:
+| TAG | E state | result |
+|---|---|---|
+| uv-p53p55 | 48x with no OC point (BIOS 0x1C 48 > fused 46: ran at the 46x voltage, EC0 1.157 V) | ICE in build 4 on cpu 8 (EC0), GCC 15 .cu |
+| uv-p53p55-eacc | accepted: OC 48x EC0 1.123 / EC1-3 1.112 V, 46x -50/-40 mV | ICE in build 2 on cpu 13 (EC1), GCC 15 .cu |
+| uv-p53p55-e46 | E turbo 46x8, point 6 offset 0 (stock 46x: EC0 1.1575 / EC1-3 1.1375 V) | **15/15, 0 ICE**, 111-114 s, MCE 0, btrfs clean, 0 SIGSEGV |
+Reading: the P undervolt above passes this test; E at 48x failed at both voltages tried (two events, both GCC 15 at version.h:1). E 48x needs more voltage
+than the accepted 1.11-1.12 V, or 48x is not worth it. Under load P ran 55x ~37% / 54x ~56%, rail 1.271 V, package ~245 W.
