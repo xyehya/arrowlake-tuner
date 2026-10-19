@@ -124,3 +124,8 @@ Caps that give each ratio (smallest cap; the cap -> ratio map is a step function
    measured; report "turbo is off (power-saver): switch to Balanced or Performance in GNOME Settings" and skip those points instead of reporting MISMATCH. Do not flip `no_turbo` yourself.
 5. Mark ratios that no cap can produce as "not reachable by cpufreq cap (hybrid perf step)" rather than MISMATCH: E 23x (neighbours 22x/24x), E 13/18/21/26/29/31/34/39, P cpu 1 42/47/52; their voltage cannot be measured this way, only interpolated or left unknown.
 6. Use the app's settle (2.5 s; with 0.3 s the first target sample arrives at 0.3-0.7 s depending on EPP, A-window hit rate 70-80 % at `balance_power`). Tell the user: the profile does not matter except power-saver; a profile switch resets EPP/no_turbo but not the caps; E cores idle at 46-48x only under Performance (cosmetic).
+
+## 7. A cap write takes effect asynchronously `[MEASURED lnx 2026-10-19]`
+`scaling_max_freq` is applied through freq_qos and the cpufreq policy update worker: a read 1 ms after writing cpu7 5500000 -> 5400000 still returned 5500000
+(audit, runtime.apply), and the file read 5400000 about a second later; cpu7 then ran exactly 5400 MHz under a pinned load. powercap limit writes are synchronous
+(PL2 read back immediately the same session). The helper polls the caps / uncore read-back every 10 ms for up to 500 ms (G-232, `ops_runtime.READBACK_*`).
