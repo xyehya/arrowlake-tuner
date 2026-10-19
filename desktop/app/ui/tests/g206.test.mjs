@@ -466,6 +466,12 @@ test("audit: auditRow flags mismatches and non-pass results, and survives an unp
   assert.equal(ok.seq, "5");
   const bad = auditRow({ event: "result", rc: 3, rc_name: "UNKNOWN_0x11" });
   assert.equal(bad.resultKind, "warn");
+  // G-230: rc 0x11 at the end of a V/F read walk is the expected end of the table (grey); the same rc on a write stays amber
+  const end = auditRow({ event: "result", cmd: "0x10", p1: "0x02", p2: "0x0A", rc: 17, rc_name: "UNKNOWN_0x11" });
+  assert.deepEqual([end.result, end.resultKind], ["end of table (0x11)", ""]);
+  const badWrite = auditRow({ event: "result", cmd: "0x11", rc: 17, rc_name: "UNKNOWN_0x11" });
+  assert.deepEqual([badWrite.result, badWrite.resultKind], ["UNKNOWN_0x11", "warn"]);
+  assert.equal(auditRow({ event: "result", cmd: "0x10", rc: 3, rc_name: "RATIO_LIMIT" }).resultKind, "warn");
   const mm = auditRow({ event: "readback", verified: false, rc_name: "Pass" });
   assert.deepEqual([mm.verdict, mm.resultKind, mm.eventKind], ["MISMATCH", "error", "error"]);
   assert.equal(auditRow({ event: "readback", verified: true, rc_name: "Pass" }).verdict, "verified");

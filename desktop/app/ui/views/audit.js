@@ -30,6 +30,7 @@ export const MB_NAMES = {
 export const MSR_NAMES = { 0xce: "platform info", 0x198: "perf status", 0x1ad: "P turbo ratios", 0x1ae: "P turbo core counts", 0x650: "E turbo ratios", 0x651: "E turbo core counts" };
 /** Mailbox commands that change the CPU. */
 export const WRITE_CMDS = [0x11, 0x15, 0x1d, 0x27];
+const READ_VF_CMD = 0x10;
 
 export const hex = (v) => (isNum(v) ? "0x" + v.toString(16) : v === undefined || v === null ? "" : String(v));
 
@@ -73,6 +74,12 @@ export function auditRow(r) {
   const rc = o.rc_name !== undefined ? o.rc_name : o.rc !== undefined ? o.rc : "";
   const rcOk = rc === 0 || rc === "Pass" || rc === "OK";
   let kind = rc === "" ? "" : rcOk ? "ok" : "warn";
+  let result = String(rc === "" && o.value !== undefined ? o.value : rc);
+  // G-230: a V/F read (0x10) that walks past the last point answers rc 0x11: the expected end of the table, not an error (a write or anything else with 0x11 stays amber)
+  if ((rc === 17 || rc === "UNKNOWN_0x11") && toNum(o.cmd) === READ_VF_CMD) {
+    result = "end of table (0x11)";
+    kind = "";
+  }
   let verdict = "";
   if (o.event === "readback") {
     verdict = o.verified === true ? "verified" : o.verified === false ? "MISMATCH" : "";
@@ -89,7 +96,7 @@ export function auditRow(r) {
     eventKind,
     cpu: o.cpu === undefined || o.cpu === null ? "" : String(o.cpu),
     request: auditRequest(o),
-    result: String(rc === "" && o.value !== undefined ? o.value : rc),
+    result,
     resultKind: kind,
     verdict,
     detail,
