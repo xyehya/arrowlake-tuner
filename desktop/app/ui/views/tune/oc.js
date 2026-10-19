@@ -6,7 +6,7 @@ import { h } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum, fmtV, fmtMv, fmtAgg, fmtRatio, TIMES, DASH } from "../../lib/format.js";
 import { aggregate, sameMv, ocClass, aboveTop, fusedTopOf, ocRatioWindow } from "../../lib/units.js";
-import { curRatio, effRatio, effVt, ocRatioValue, vtValue, ocOffsetOf, setOcRatio, setVt, setOcOffset, clearOcEdits } from "../../lib/draft.js";
+import { curRatio, effRatio, effVt, ocRatioValue, vtValue, ocOffsetOf, setOcRatio, setVt, setOcOffset, clearOcEdits, turboEff } from "../../lib/draft.js";
 import { limitsFor, vtWindow, GRID } from "../../lib/limits.js";
 import { modelCpuLine } from "../../lib/cpulimits.js";
 
@@ -40,6 +40,27 @@ export function offsetUnits(model, draft, ids) {
   return units(model, ids).filter((u) => ocClass(u, effRatio(draft, u)) === "oc" || aboveTop(model, u, effRatio(draft, u)));
 }
 
+/**
+ * D-050: the OC ratio never changes a turbo table, so a unit of `kind` whose (drafted) ratio is above the top bucket of the kind's table (the draft's table if edited, else the one read)
+ * runs at most that bucket. -> {kind, top (highest bucket), table (the effective one), units: [{id, ratio}]} or null (no table read, or nothing above it).
+ */
+export function ocAboveTable(model, draft, kind) {
+  const table = model && model.turbo && model.turbo[kind] ? turboEff(model, draft, kind) : null;
+  if (!Array.isArray(table) || !table.length) return null;
+  const top = Math.max(...table);
+  const over = [];
+  for (const id of model.order) {
+    const u = model.units[id];
+    if (!u || u.kind !== kind) continue;
+    const r = effRatio(draft, u);
+    if (isNum(r) && r > top) over.push({ id, ratio: r });
+  }
+  return over.length ? { kind, top, table, units: over } : null;
+}
+
+/** "1 active core" when the highest bucket is the first one (the usual case), else the bucket number. */
+const bucketLabelText = (table, top) => (table[0] === top ? "1 active core" : "bucket " + (table.indexOf(top) + 1));
+
 const eqAgg = (a, b, eq) => a.state === b.state && (a.state === "none" || (a.state === "same" ? eq(a.value, b.value) : eq(a.min, b.min) && eq(a.max, b.max)));
 const sameN = (a, b) => a === b;
 
@@ -68,12 +89,15 @@ export function createOcSection(tc, section) {
   });
   const offTop = h("button", { type: "button", class: "btn small", text: "= top point", title: "Same voltage as the top fused point (drops the OC point you drafted)", on: { click: () => edit((m, d) => setOcOffset(m, d, ids, null)) } });
   const ratioHint = h("p", { class: "limit-line muted" });
+  const tableNoteText = h("span", { class: "turbo-cap-text" });
+  const tableNoteGo = h("button", { type: "button", class: "btn small", text: "Open Turbo ratios", title: "Go to the Turbo ratios tab (nothing is edited for you)", on: { click: () => tc.setSubtab("turbo") } });
+  const tableNote = h("p", { class: "oc-turbo-note", role: "note", props: { hidden: true } }, h("span", { class: "info-i", "aria-hidden": "true", text: "i" }), tableNoteText, tableNoteGo);
   const vtHint = h("p", { class: "limit-line muted" });
   const rules = h("p", { class: "muted oc-rules", text: "The OC point can only be cleared by a cold boot. Static/override voltage is never offered (D-016)." });
 
   const row = (label, ...cells) => h("div", { class: "oc-row" }, h("span", { class: "field-label", text: label }), h("span", { class: "oc-cells" }, ...cells));
   const offLabel = h("span", { class: "field-label", text: "OC offset" });
-  const el = h("div", { class: "oc-section", dataset: { kind } }, h("h4", { text: "OC" }), info, row("OC ratio", ratioField.el, ratioBack), ratioHint,
+  const el = h("div", { class: "oc-section", dataset: { kind } }, h("h4", { text: "OC" }), info, row("OC ratio", ratioField.el, ratioBack), ratioHint, tableNote,
     row("Target voltage", vtField.el), vtHint, h("div", { class: "oc-row" }, offLabel, h("span", { class: "oc-cells" }, offField.el, offTop)), rules);
 
   function update() {
@@ -101,6 +125,13 @@ export function createOcSection(tc, section) {
     });
     ratioBack.disabled = !ids.some((id) => draft.units[id] && (draft.units[id].ratio !== undefined || draft.units[id].vt !== undefined));
     ratioHint.textContent = noWin && w.reason ? w.reason + "." : modelCpuLine(model, kind, "ratio") + (w.min !== null ? " Choosable: " + w.min + TIMES + "…" + w.max + TIMES + "." : "");
+    const over = ocAboveTable(model, draft, kind);
+    const mine = over ? over.units.filter((x) => ids.includes(x.id)) : [];
+    tableNote.hidden = !mine.length;
+    if (mine.length) {
+      const r = Math.max(...mine.map((x) => x.ratio));
+      tableNoteText.textContent = "Turbo ratios cap " + (mine.length === 1 ? "this core" : "these cores") + " at " + over.top + TIMES + " (" + bucketLabelText(over.table, over.top) + "). Raise the table on the Turbo ratios tab to run " + r + TIMES + ".";
+    }
     const ocUnits = us.filter((u) => ocClass(u, effRatio(draft, u)) === "oc");
     const vw = vtWindow(model, kind);
     const vNow = vtValue(model, draft, ids, true);

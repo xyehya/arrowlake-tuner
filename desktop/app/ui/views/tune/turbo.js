@@ -26,6 +26,7 @@ import * as draftLib from "../../lib/draft.js";
 import * as unitsLib from "../../lib/units.js";
 import * as limitsLib from "../../lib/limits.js";
 import { setPendingAll } from "../tune.js";
+import { ocAboveTable } from "./oc.js";
 import { isNum, fmtRatio, MINUS, TIMES } from "../../lib/format.js";
 
 export const TURBO_CSS = "styles/turbo.css";
@@ -274,6 +275,7 @@ function buildKind(inst, kind) {
   const chip = h("span", { class: "turbo-dirty", props: { hidden: true } });
   const undo = h("button", { class: ["btn", "turbo-undo"], type: "button", text: "Undo " + KIND_TITLE[kind] + " changes", props: { disabled: true } });
   const chartHost = h("div", { class: "turbo-chart-host" });
+  const ocBanner = h("p", { class: "turbo-oc-note", role: "note", props: { hidden: true } });
 
   const table = h("table", { class: "turbo-table", "aria-label": KIND_TITLE[kind] + " turbo ratio by active cores" });
   const thead = h(
@@ -295,6 +297,7 @@ function buildKind(inst, kind) {
       chip,
       undo,
     ),
+    ocBanner,
     table,
     chartHost,
     h("p", { class: "turbo-limit", text: limitHint(inst.model, kind) }),
@@ -311,7 +314,7 @@ function buildKind(inst, kind) {
   });
 
   inst.card = inst.card || {};
-  inst.card[kind] = { card, chip, undo, chartHost, tbody };
+  inst.card[kind] = { card, chip, undo, chartHost, tbody, ocBanner };
   return card;
 }
 
@@ -477,10 +480,22 @@ function paint(inst) {
       card.chip.hidden = dirty === 0;
       card.chip.textContent = dirty + (dirty === 1 ? " bucket changed" : " buckets changed");
       card.undo.disabled = dirty === 0;
+      paintOcNote(card.ocBanner, ocAboveTable(inst.model, getDraft(inst), kind));
       clear(card.chartHost);
       card.chartHost.append(chartFor(kind, cur, eff, t.counts));
     }
   }
+}
+
+/** D-050: the (i) banner of a table that is below the OC ratio of some of its units (drafted or read): the units and their ratios; the table is not touched for you. */
+function paintOcNote(el, over) {
+  el.hidden = !over;
+  if (!over) {
+    el.textContent = "";
+    return;
+  }
+  const list = over.units.map((x) => x.id + " " + x.ratio + TIMES).join(", ");
+  el.textContent = "\u24D8 OC ratio above this table: " + list + ". The table is separate from the OC ratio (D-050), so " + (over.units.length === 1 ? "that core runs" : "those cores run") + " at most " + over.top + TIMES + " until you raise it here.";
 }
 
 function chartFor(kind, read, eff, counts) {

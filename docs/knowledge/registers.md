@@ -103,7 +103,8 @@ ARL-S constants in XTU `decomp`: 8 P-cores (max 32 E capacity, 16 present), 8 tu
 ## Measured on the reference machine (decodes) `measured`
 Values: `examples/reference-285k/notes/platform.md` §4-5. What the readings established:
 - `0x1AD` / `0x650`: one ratio byte per bucket, byte 0 = bucket 1; `0x1AE` / `0x651`: bucket core counts in the same byte order (285K: P 1..8, E
-  1,2,3,4,6,8,12,16). `0x1AE`/`0x651` are readable on ARL-S.
+  1,2,3,4,6,8,12,16). `0x1AE`/`0x651` are readable on ARL-S. The tool never derives or raises these tables from an OC ratio (D-050, supersedes the D-017
+  "bundled with the per-core apply" part): an OC ratio above the table's top bucket stays capped by the table until the operator edits it (plan warning `TURBO_BELOW_OC`).
 - `0x610` decodes as the SDM layout (PL1 `[14:0]`, PL2 `[46:32]`, lock `[63]`) with `0x606` units (0.125 W, 2^-14 J, 2^-10 s on the 285K).
 - `0x601` reads a design current (425 A on the 285K = PL4/TDC design current, **not** IccMax; IccMax comes from cmd `0x16`).
 - `0x620` = ring min/max ratio, `0x621` = current ring ratio. `0x1A2` = Tjmax `[23:16]` (105 C), TCC offset, lock bit 31.

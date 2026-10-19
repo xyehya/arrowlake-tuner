@@ -57,6 +57,11 @@ test("stepRows keeps the helper's order and labels each kind; unitOrder follows 
   assert.equal(planWrites({ steps: [{}, {}, {}] }), 3);
 });
 
+test("planWarnings: D-050 TURBO_BELOW_OC is an amber warning with its own label (not a NOTE)", () => {
+  const [w] = planWarnings({ warnings: [{ code: "TURBO_BELOW_OC", text: "P0 OC ratio 58x is above the P turbo table" }] });
+  assert.deepEqual([w.code, w.cls, w.label], ["TURBO_BELOW_OC", "warn", "OC above turbo table"]);
+});
+
 test("planWarnings: codes decide the class, bare strings are NOTEs, empty ones are dropped", () => {
   const w = planWarnings({ warnings: [{ code: "E40_OFFSET", text: "a" }, { code: "NO_BASELINE", text: "b" }, "plain", { code: "ZZZ", text: "c" }, { code: "NOTE", text: "" }, 5] });
   assert.deepEqual(w.map((x) => [x.code, x.cls]), [["E40_OFFSET", "bad"], ["NO_BASELINE", "warn"], ["NOTE", ""], ["ZZZ", ""]]);

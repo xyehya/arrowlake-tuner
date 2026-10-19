@@ -390,17 +390,41 @@ class ApplyWordTests(TuneCase):
         self.assertEqual({self.word(c).v_target_raw for c in range(12, 16)}, {round(1.1367 * 1024)})
         self.assertEqual(self.word(12, 5).v_target_raw, 0)
 
-    def test_ratio_raise_adds_the_turbo_table_write(self) -> None:
+    def test_an_oc_ratio_above_the_table_writes_no_table_and_warns(self) -> None:
+        """D-050: the OC ratio never derives a turbo table (the old T-023 / D-017 bundling is gone): the ratio is planned as asked, TURBO_BELOW_OC says what the table caps."""
         h = self.boot()
         self.read(h)
         plan = self.plan(h, rows(row("EC0", ratio=49)))
-        self.assertTrue(any(s["kind"] == "write_msr" and s["table"] == "e" for s in plan["steps"]), plan["steps"])
+        self.assertFalse(any(s["kind"] == "write_msr" for s in plan["steps"]), plan["steps"])
+        warn = [w for w in plan["warnings"] if w["code"] == "TURBO_BELOW_OC"]
+        self.assertEqual(len(warn), 1, plan["warnings"])
+        self.assertIn("EC0 OC ratio 49x is above the E turbo table (48x, 48x", warn[0]["text"])
+        self.assertIn("Turbo ratios tab (MSR 0x650)", warn[0]["text"])
+        self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in plan["warnings"]))
+        before = self.sim.plain_msr(0, 0x650)
         res = self.apply_ok(h, plan)
         self.assertEqual({self.word(c).ratio for c in range(8, 12)}, {49})
-        self.assertEqual(self.sim.plain_msr(0, 0x650), 0x3131313131313131)  # every bucket raised to 49
-        table = next(rb for rb in res["readback"] if rb["point"] == "turbo")
-        self.assertTrue(table["match"])
+        self.assertEqual(self.sim.plain_msr(0, 0x650), before)  # the table is untouched
+        self.assertFalse([rb for rb in res["readback"] if rb["point"] == "turbo"])
+        self.assertEqual(res["msr_writes"], 0)
+
+    def test_an_explicit_table_is_still_written_beside_the_ratio(self) -> None:
+        """D-050: `turbo: {E}` in the intent (what a profile carries) is unchanged: it is written, and the ratio under it raises no warning."""
+        h = self.boot()
+        self.read(h)
+        plan = self.plan(h, {**rows(row("EC0", ratio=49)), "turbo": {"E": [49] * 8}})
+        self.assertTrue(any(s["kind"] == "write_msr" and s["table"] == "e" for s in plan["steps"]), plan["steps"])
+        self.assertFalse(any(w["code"] == "TURBO_BELOW_OC" for w in plan["warnings"]), plan["warnings"])
+        res = self.apply_ok(h, plan)
+        self.assertEqual(self.sim.plain_msr(0, 0x650), 0x3131313131313131)
+        self.assertTrue(next(rb for rb in res["readback"] if rb["point"] == "turbo")["match"])
         self.assertEqual(res["msr_writes"], 1)  # G-119: one plain wrmsr, inside ops_used with the mailbox requests
+
+    def test_an_explicit_table_below_the_ratio_still_warns(self) -> None:
+        h = self.boot()
+        self.read(h)
+        plan = self.plan(h, {**rows(row("EC0", ratio=50)), "turbo": {"E": [49] * 8}})
+        self.assertTrue(any(w["code"] == "TURBO_BELOW_OC" and "(49x, 49x" in w["text"] for w in plan["warnings"]), plan["warnings"])
 
     def test_ratio_without_a_table_read_warns_and_writes_no_table(self) -> None:
         self.policy.write_text(ADVANCED.read_text().split("# --- plain-MSR access")[0])

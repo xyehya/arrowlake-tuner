@@ -685,9 +685,7 @@ class V3Ops:
             ops += 3 * len(idx) + 1
             for i in idx:
                 steps.append({"kind": "write_vf" if i == 0 else "write_vf_point", "unit": u, "cpu": UNIT_CPUS[u][0], "point": i})
-        top = {"P": self.tables["p"][0], "E": self.tables["e"][0]}
-        raised = {k for u in changed_units for k in [kind_of(u)] if (new[u]["oc"]["ratio"] or 0) > top[k]}
-        tables_written = sorted(raised | set(turbo_new))
+        tables_written = sorted(turbo_new)  # D-050: an OC ratio never derives a table; only an explicit `turbo` is written
         steps = ([{"kind": "write_percore_enable", "conditional": True}] if changed_units else []) + steps + [{"kind": "write_msr", "table": k.lower()} for k in tables_written]
         ops += len(turbo_new) if not changed_units else 3 * len(turbo_new)   # a table-only plan: one plain WRMSR per table (T-023), no mailbox word
         warnings.extend(self._cpu_fact_warnings(new, written, before_state=self.tuning))
@@ -696,6 +694,14 @@ class V3Ops:
             up = [i for i, (a, b) in enumerate(zip(ratios, self.tables[k.lower()])) if a > b]
             if up:
                 warnings.append(W("TURBO_RAISE", f"the {k} turbo table is RAISED in bucket(s) {', '.join(str(i) for i in up)} (package-wide)"))
+        for u in changed_units:
+            k = kind_of(u)
+            table = turbo_new.get(k) or self.tables[k.lower()]
+            r = new[u]["oc"]["ratio"] or 0
+            if r > max(table):
+                msr = "0x650" if k == "E" else "0x1AD"
+                warnings.append(W("TURBO_BELOW_OC", f"{u} OC ratio {r}x is above the {k} turbo table ({', '.join(f'{b}x' for b in table)}): the core runs at most the table's bucket "
+                                  f"for the active-core count until you raise it on the Turbo ratios tab (MSR {msr})"))
         if self._baseline() is None:
             warnings.append(W("NO_BASELINE", "measure a stock baseline for predictions (no curve is flagged baseline)"))
         if any(new[u]["oc"]["ratio"] != self.tuning[u]["oc"]["ratio"] for u in changed_units):
@@ -704,7 +710,7 @@ class V3Ops:
         plan_id = hashlib.sha256(json.dumps([after, rid], sort_keys=True).encode()).hexdigest()
         nonce = "".join(secrets.choice(ALPHABET) for _ in range(6))
         self.plans_v3[plan_id] = {"nonce": nonce, "used": False, "new": new, "changed": changed_units, "written": written, "created": time.monotonic(),
-                                  "version": self.tuning_version, "bad": 0, "raised": sorted(raised), "turbo": turbo_new}
+                                  "version": self.tuning_version, "bad": 0, "turbo": turbo_new}
         result = {"plan_id": plan_id, "nonce": nonce, "name": "tune-" + plan_id[:6], "steps": steps, "writes": len(steps) - (1 if changed_units else 0), "reads": len(changed_units),
                   "ops_needed": ops, "ops_left": self.ops_budget - self.ops_used_v3, "expires_s": 600, "units": changed_units, "before": before,
                   "after": after, "warnings": warning_objects(warnings), "words_assumed": not self.tuning_read}
@@ -889,12 +895,6 @@ class V3Ops:
             self.tables[k.lower()] = list(ratios)
             readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + "".join(format(x, "02x") for x in reversed(ratios)),
                              "actual": "0x" + "".join(format(x, "02x") for x in reversed(ratios)), "match": True})
-        for k in p["raised"]:
-            if k in p["turbo"]:
-                continue
-            top = max(p["new"][u]["oc"]["ratio"] or 0 for u in p["changed"] if kind_of(u) == k)
-            self.tables[k.lower()] = [top] + self.tables[k.lower()][1:]
-            readback.append({"unit": k, "point": "turbo", "cpu": 0 if k == "P" else 8, "expected": "0x" + format(top, "016x"), "actual": "0x" + format(top, "016x"), "match": True})
         sent += len(p["turbo"])
         self.tuning_version += 1
         if self.last_read_at is not None and sent:

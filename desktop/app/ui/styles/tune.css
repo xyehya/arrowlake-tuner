@@ -394,6 +394,31 @@
   color: var(--warn);
 }
 
+.oc-turbo-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 2px 0 var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.oc-turbo-note[hidden] {
+  display: none;
+}
+
+.oc-turbo-note .info-i {
+  flex: none;
+  width: 1.2em;
+  height: 1.2em;
+  line-height: 1.2em;
+  text-align: center;
+  font-style: italic;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+
 .base-note {
   font-size: var(--fs-xs);
   margin: 0 0 4px;

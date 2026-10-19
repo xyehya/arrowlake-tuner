@@ -213,7 +213,7 @@ export function resultHeadline(s) {
 const WARN_CODES = {
   CLAMPED: ["warn", "clamped"], E40_OFFSET: ["bad", "E 40× offset"], E_TARGET_WHEA: ["warn", "WHEA risk"], POSITIVE_OFFSET: ["warn", "positive offset"], NO_BASELINE: ["warn", "no baseline"],
   TURBO_RAISE: ["warn", "turbo raise"], RING_NOT_RESTORED: ["warn", "ring not written"], LARGE_CHANGE: ["warn", "large change"], TURBO_NOT_MONOTONIC: ["warn", "turbo not monotonic"],
-  TURBO_BELOW_BASE: ["warn", "turbo below base"], PL2_BELOW_PL1: ["warn", "PL2 below PL1"], DEEP_WHOLE_CURVE: ["warn", "deep whole curve"], NOTE: ["", ""],
+  TURBO_BELOW_BASE: ["warn", "turbo below base"], TURBO_BELOW_OC: ["warn", "OC above turbo table"], PL2_BELOW_PL1: ["warn", "PL2 below PL1"], DEEP_WHOLE_CURVE: ["warn", "deep whole curve"], NOTE: ["", ""],
 };
 const CODED = /^([A-Z][A-Z0-9_]+): ([\s\S]+)$/;
 /** Warnings are never blocking: the Review shows them (amber) and Apply stays available. power.plan / runtime.plan send them as "CODE: text" strings, tune.plan as {code, text}. */

@@ -277,6 +277,14 @@ class TurboOrderTests(FactsCase):
         r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
         self.assertTrue(r["ok"], r)
 
+    def test_a_profile_with_an_explicit_table_still_writes_it(self) -> None:
+        """D-050: the accepted profile's [turbo] table is a table the operator chose: planned and written; nothing is derived from any ratio around it."""
+        h = self.boot_with(baseline=False, accepted_dir=self.accepted([58, 57, 56, 55, 55, 55, 55, 55]))
+        r = h.call("t", "tune.plan", {"intent": {"restore": "accepted"}})
+        self.assertTrue(r["ok"], r)
+        self.assertIn({"n": r["result"]["steps"][-1]["n"], "kind": "write_msr", "table": "p"}, r["result"]["steps"])
+        self.assertFalse(any(w["code"] == "TURBO_BELOW_OC" for w in r["result"]["warnings"]))
+
     def table(self, cpu: int = 0, msr: int = 0x1AD) -> list[int]:
         return [(self.sim.rdmsr(cpu, msr) >> (8 * k)) & 0xFF for k in range(8)]
 

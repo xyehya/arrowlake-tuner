@@ -1552,7 +1552,6 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
     points: dict[tuple[str, int, int], PointSetting] = {}
     refs: dict[tuple[int, int], int] = {}
     units: list[str] = []
-    asked_ratio: dict[str, int] = {}
     groups = groups_of(topology)
     for row in intent.get("rows", ()):
         targets = groups[row["target"]] if row["target"] in groups else (row["target"],)
@@ -1572,8 +1571,6 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
             if any(v is not None for v in vals.values()):
                 cores[(core.kind, core.index)] = vals
                 touched = True
-                if row["ratio"] is not None:
-                    asked_ratio[core.kind] = max(asked_ratio.get(core.kind, 0), row["ratio"])
                 for c, ws in known.items():
                     refs[(c, 0)] = ws[0]
             if offset is not None and offset["kind"] == "points":
@@ -1603,9 +1600,7 @@ def _rows_to_profile(helper: Helper, intent: Mapping[str, Any], policy: Policy, 
                     warnings.append(text + "; skipped")
             if touched and unit not in units:
                 units.append(unit)
-    turbo = _turbo_tables(helper, asked_ratio, warnings)
-    if "turbo" in intent:
-        turbo = _explicit_turbo(helper, intent["turbo"], turbo, policy, warnings)
+    turbo = _explicit_turbo(helper, intent["turbo"], policy, warnings) if "turbo" in intent else None  # D-050: a table is written only when the intent names it
     ring = _ring_setting(helper, intent["ring"], policy, topology) if "ring" in intent else None  # G-212
     ring_refs: dict[int, int] = {}
     if ring is not None:
@@ -1659,34 +1654,13 @@ def _ring_setting(helper: Helper, asked: Mapping[str, Any], policy: Policy, topo
         raise OpError(BAD_REQUEST, f"intent is not a valid profile: {exc}") from None
 
 
-def _turbo_tables(helper: Helper, asked: Mapping[str, int], warnings: list[str]) -> TurboTables | None:
-    """A ratio above a table's top bucket needs the table raised (T-023, D-017): bucket b becomes max(b, ratio). Never lowers a bucket, never invents a
-    table: without a table read there is no table write and the planner's capped-raise warning explains the consequence."""
-    if not asked:
-        return None
-    st = _state(helper)
-    with st.lock:
-        tables, note = st.tables, st.tables_note
-    new: dict[str, tuple[int, ...]] = {}
-    for kind, ratio in asked.items():
-        key = kind.lower()
-        if tables is None or key not in tables:
-            warnings.append(f"{kind} turbo table (MSR {'0x650' if kind == 'E' else '0x1AD'}) was not read this boot ({note or 'no tune.read yet'}): no table write is planned, a raise above the table maximum will be capped")
-            continue
-        table = tables[key]
-        if ratio > max(table):
-            new[key] = tuple(max(b, ratio) for b in table)
-            warnings.append(Warn("TURBO_RAISE", f"the {kind} turbo table is raised to {ratio} in every bucket below it (package-wide, MSR {'0x650' if kind == 'E' else '0x1AD'})"))
-    return TurboTables(e=new.get("e"), p=new.get("p")) if new else None
-
-
-def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], derived: TurboTables | None, policy: Policy, warnings: list[str]) -> TurboTables:
-    """The tables the intent names (``turbo: {P, E}``), replacing what a row's OC ratio would have derived for that kind. Range-checked against the policy
+def _explicit_turbo(helper: Helper, asked: Mapping[str, Sequence[int]], policy: Policy, warnings: list[str]) -> TurboTables:
+    """The tables the intent names (``turbo: {P, E}``) and only those (D-050: an OC ratio never derives a table). Range-checked against the policy
     (``REFUSED POLICY_RANGE``); the order rule F5 is a plan warning (:func:`_turbo_shape_warnings`) on the finished profile, no longer a refusal (D-049)."""
     st = _state(helper)
     with st.lock:
         tables = st.tables
-    out = {"e": None if derived is None else derived.e, "p": None if derived is None else derived.p}
+    out: dict[str, tuple[int, ...] | None] = {"e": None, "p": None}
     for kind, ratios in asked.items():
         cap, text = _ratio_cap(helper, policy, kind)
         if cap is not None and max(ratios) > cap:
@@ -1787,7 +1761,7 @@ def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topol
         return _profile_resolved(helper, prof, topology, [f"saved profile {name} (complete: only the words that differ from what the CPU holds are written)"])
     saved = canonical_intent(record["intent"], rows_only=True)
     resolved = _rows_to_profile(helper, saved, policy, topology, name)
-    resolved.warnings.insert(0, f"saved profile {name} (partial, saved before G-148: its rows are applied over what the CPU holds)")
+    resolved.warnings.insert(0, f"saved profile {name} (partial, saved before G-148: its rows are applied over what the CPU holds; since D-050 an OC ratio in it no longer raises the turbo tables)")
     return resolved
 
 
@@ -1977,9 +1951,9 @@ def _unit_models(
     return models
 
 
-def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None, plan: bool) -> tuple[int, int] | None:
+def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None) -> tuple[int, int] | None:
     """(1-2 active cores, all cores): the highest ratio the unit is allowed at, from the live turbo tables (``0x1AD`` / ``0x650``) and the favored word (``0x1C``);
-    with ``plan`` the plan's OC ratio raises both (a ratio above the table raises the table, ``_turbo_tables``). ``None`` when the tables were not read this boot
+    D-050: an OC ratio never raises a table, so the table (the plan's own ``[turbo]`` one when it names one) is the ceiling. ``None`` when the tables were not read this boot
     (nothing is assumed)."""
     ratios = ((turbo or {}).get(m.kind) or {}).get("ratios")
     if not ratios:
@@ -1989,8 +1963,6 @@ def _allowed_ratios(m: _UnitModel, turbo: Mapping[str, Any] | None, plan: bool) 
         fav = ((turbo or {}).get("favored") or {}).get(m.cpus[0])
         if fav:
             light = min(light, fav)
-    if plan and m.oc_ratio is not None:
-        light, full = max(light, m.oc_ratio), max(full, m.oc_ratio)
     return light, full
 
 
@@ -2086,7 +2058,12 @@ def _predict(
                 if hi is not None and hi > vfmodel.E_WHEA_V:
                     warnings.append(Warn("E_TARGET_WHEA", f"{unit}: the predicted E-core voltage {hi:.3f} V is above ~1.2 V. Community report: WHEA errors have been seen above it"))
     # ---- F6: VccIA ----
-    vccia = _predict_vccia(models, curves_new, curves_cur, turbo)
+    turbo_new = dict(turbo or {})  # D-050: the plan's own [turbo] tables (an explicit edit), never a table derived from an OC ratio
+    for key, kind in (("p", "P"), ("e", "E")):
+        ratios = None if profile.turbo is None else getattr(profile.turbo, key)
+        if ratios is not None:
+            turbo_new[kind] = {**(turbo_new.get(kind) or {}), "ratios": list(ratios)}
+    vccia = _predict_vccia(models, curves_new, curves_cur, turbo, turbo_new)
     if vccia is not None:
         warnings.append(
             "VccIA is a prediction: the highest requested VID among the units. Lowering a unit that does not set the maximum does not lower Vcore"
@@ -2098,7 +2075,7 @@ def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[
     rows: list[tuple[str, int, float | None]] = []
     for unit, m in models.items():
         curve = curves.get(unit)
-        allowed = _allowed_ratios(m, turbo, plan)
+        allowed = _allowed_ratios(m, turbo)
         if curve is None or allowed is None:
             continue
         ratio = allowed[which]
@@ -2115,13 +2092,16 @@ def _vccia_scenario(models: Mapping[str, _UnitModel], curves: Mapping[str, list[
     return out
 
 
-def _predict_vccia(models: Mapping[str, _UnitModel], new: Mapping[str, list[CurvePoint]], cur: Mapping[str, list[CurvePoint]], turbo: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _predict_vccia(
+    models: Mapping[str, _UnitModel], new: Mapping[str, list[CurvePoint]], cur: Mapping[str, list[CurvePoint]], turbo: Mapping[str, Any] | None, turbo_new: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
     """F6 for the all-core bucket (the one that matters for sustained load: the top points of the favored cores only count for 1-2 active cores), plus the
     1-2 core case as ``light_load`` and the current state as ``before_v``. The value is the highest requested VID among the units (no ring, no margin)."""
-    full = _vccia_scenario(models, new, turbo, 1, True)
+    turbo_new = turbo if turbo_new is None else turbo_new
+    full = _vccia_scenario(models, new, turbo_new, 1, True)
     if full is None:
         return None
-    light = _vccia_scenario(models, new, turbo, 0, True)
+    light = _vccia_scenario(models, new, turbo_new, 0, True)
     was = _vccia_scenario(models, cur, turbo, 1, False)
     return {
         "predicted_v": full["predicted_v"], "set_by": full["set_by"], "label": "highest requested VID among units", "active_cores": "all", "margin_v": None,
@@ -2345,6 +2325,41 @@ def _turbo_shape_warnings(helper: Helper, profile: Profile, topology: Topology |
     return out
 
 
+def _oc_below_table_warnings(helper: Helper, profile: Profile, topology: Topology) -> list[str]:
+    """D-050: an OC ratio above the top bucket of its kind's turbo table (the profile's own ``[turbo]`` table, else the one this boot's read returned) is planned as asked
+    and **no table is derived or written**; the core runs at most the table's bucket for the active-core count. One ``TURBO_BELOW_OC`` per unit; without a table to compare
+    against, one note per kind."""
+    if not profile.entries:
+        return []
+    st = _state(helper)
+    with st.lock:
+        read, note = st.tables, st.tables_note
+    out: list[str] = []
+    unread: set[str] = set()
+    seen: set[str] = set()
+    for t in resolve_targets(profile, topology):
+        if t.ratio is None:
+            continue
+        unit = unit_of_cpu(topology, t.cpu)
+        if unit in seen:
+            continue
+        seen.add(unit)
+        key = t.kind.lower()
+        table = getattr(profile.turbo, key, None) if profile.turbo is not None else None
+        if table is None and read is not None:
+            table = read.get(key)
+        msr = "0x650" if t.kind == "E" else "0x1AD"
+        if table is None:
+            if t.kind not in unread:
+                unread.add(t.kind)
+                out.append(f"{t.kind} turbo table (MSR {msr}) was not read this boot ({note or 'no tune.read yet'}): cannot tell whether an OC ratio is above it; the turbo tables are not changed by an OC ratio")
+            continue
+        if t.ratio > max(table):
+            out.append(Warn("TURBO_BELOW_OC", f"{unit} OC ratio {t.ratio}x is above the {t.kind} turbo table ({', '.join(f'{b}x' for b in table)}): the core runs at most the table's bucket "
+                            f"for the active-core count until you raise it on the Turbo ratios tab (MSR {msr})"))
+    return out
+
+
 # G-125: the GUI plan's own caveats, worded from what the hardware showed (docs/knowledge/tuning-results.md); the planner's constants stay as the CLI prints them.
 _RAISE_NOTE = (
     "this plan RAISES a ratio, V target or offset; the CPU's own limits were checked; run a stability check before relying on it"
@@ -2447,6 +2462,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 if code != POSITIVE_OFFSET:
                     warnings.append(Warn(code, text))
     warnings.extend(_turbo_shape_warnings(helper, profile, topology))
+    warnings.extend(_oc_below_table_warnings(helper, profile, topology))
     prediction = _predict(helper, profile, topology, last, before, after, warnings)
     warnings.append(REVERT_NOTE)
     nonce = "".join(secrets.choice(_NONCE_ALPHABET) for _ in range(6))
@@ -2471,7 +2487,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "after": after,  # per written point also effective_v / clamped_by (contract 9 addendum, SPEC-v3 F4)
         "predicted": prediction["predicted"],  # G-114 (additive): {unit: {point: {ratio, base_v, offset_mv, effective_v, clamped_by}}} for every point of the touched units
         "vccia": prediction["vccia"],  # contract 9 addendum (F6): {predicted_v, set_by: {unit, ratio}} + label / contributors / before_v / light_load, null without a baseline
-        "warnings": warning_objects(warnings),  # [{code, text}]: CLAMPED E40_OFFSET E_TARGET_WHEA POSITIVE_OFFSET NO_BASELINE TURBO_RAISE, everything else NOTE
+        "warnings": warning_objects(warnings),  # [{code, text}]: CLAMPED E40_OFFSET E_TARGET_WHEA POSITIVE_OFFSET NO_BASELINE TURBO_RAISE TURBO_BELOW_OC, everything else NOTE
         "words_assumed": _words_assumed(last, topology, targets, points),  # G-125: true only when a written unit has no word from this boot's read (tune.last)
         "complete": profile.complete,  # G-148 (additive): a complete profile: only the words that differ are written
         "rounds": rounds,  # G-148 (additive): guarded rounds the step limits need (1 = one write per word)

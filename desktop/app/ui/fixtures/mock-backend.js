@@ -113,6 +113,24 @@ function mockRefusal(intent) {
   return null;
 }
 
+const isNum = (x) => typeof x === "number" && Number.isFinite(x);
+const TABLE_MSR = { P: "0x1AD", E: "0x650" };
+
+/** D-050, as the helper plans it (ops_tune._oc_below_table_warnings): an OC ratio above the top bucket of its kind's table (the intent's own table, else the one read) is planned
+ *  as asked, no table is derived, and a TURBO_BELOW_OC warning says so. */
+function turboBelowOc(intent) {
+  const out = [];
+  for (const row of intent.rows || []) {
+    if (!isNum(row.ratio)) continue;
+    const kind = row.target.startsWith("E") ? "E" : "P";
+    const table = (intent.turbo && intent.turbo[kind]) || tuneRead.result.tables[kind.toLowerCase()];
+    if (table && row.ratio > Math.max(...table)) {
+      out.push({ code: "TURBO_BELOW_OC", text: `${row.target} OC ratio ${row.ratio}x is above the ${kind} turbo table (${table.map((b) => b + "x").join(", ")}): the core runs at most the table's bucket for the active-core count until you raise it on the Turbo ratios tab (MSR ${TABLE_MSR[kind]})` });
+    }
+  }
+  return out;
+}
+
 /** intent -> {steps, before, after, units, writes}; `writes` 0 = nothing to synthesize from (the caller answers the recorded plan). */
 function synthPlan(intent) {
   const steps = [{ conditional: true, kind: "write_percore_enable", n: 1 }];
@@ -127,8 +145,17 @@ function synthPlan(intent) {
   };
   for (const row of intent.rows || []) {
     const u = readUnit(row.target);
-    if (!u || !row.offset) continue;
+    if (!u) continue;
     const cpu = u.cpus[0];
+    if (isNum(row.ratio)) {
+      // the OC word (point 0): the ratio as asked. D-050: it never adds a turbo-table write; only an explicit `turbo` in the intent does
+      const was = cpu.oc || {};
+      (before[row.target] ||= {})["0"] = { clamped_by: null, effective_v: null, offset_mv: was.offset_mv ?? 0, ratio: was.ratio ?? null, v_target_v: was.v_target_v ?? null };
+      (after[row.target] ||= {})["0"] = { clamped_by: null, effective_v: null, offset_mv: was.offset_mv ?? 0, ratio: row.ratio, v_target_v: row.v_target_v ?? was.v_target_v ?? null };
+      if (!units.includes(row.target)) units.push(row.target);
+      steps.push({ cpu: cpu.cpu, kind: "write_vf", n: steps.length + 1, point: 0, unit: row.target });
+    }
+    if (!row.offset) continue;
     if (row.offset.kind === "curve") {
       for (const p of cpu.points) add(row.target, p.point, p.ratio, p.offset_mv, row.offset.mv, cpu.cpu);
     } else {
@@ -389,6 +416,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
       // INVENTED prediction (the recorded plan has none): P0 sets the maximum
       plan.vccia = { predicted_v: 1.28, label: "prediction, not a measurement", set_by: { unit: "P0", ratio: 57 }, active_cores: "all", margin_v: 0.05, before_v: 1.29 };
       const mvs = synth.steps.map((s) => s.offset_mv).filter((x) => typeof x === "number");
+      plan.warnings.unshift(...turboBelowOc(intent));
       if (mvs.some((x) => x > 0)) plan.warnings.unshift({ code: "POSITIVE_OFFSET", text: "a positive offset raises the voltage of the point: more heat, not more stability headroom" });
       if ((intent.rows || []).some((r) => r.target.startsWith("EC") && r.offset && r.offset.kind === "points" && "40" in r.offset.mv)) plan.warnings.unshift({ code: "E40_OFFSET", text: "an offset on the E-cluster 40x point has been reported to destabilise the cluster [COMMUNITY]" });
     } else if (whole) {

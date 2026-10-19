@@ -396,6 +396,28 @@ class TestTune(unittest.TestCase):
             self.assertEqual(self.draft(page), {"units": {}, "turbo": {}})
             self.assert_clean(page)
 
+    @browser
+    def test_d050_an_oc_ratio_above_the_turbo_table_shows_the_note_and_the_turbo_tab_banner_and_edits_no_table(self):
+        with self.page() as page:
+            page.click(".tile[data-unit='EC0']")
+            note = page.locator(".insp-section[data-kind='E'] .oc-turbo-note")
+            self.assertTrue(note.is_hidden())
+            ratio = page.locator(".insp-section[data-kind='E'] .oc-section input[aria-label$='OC ratio']")
+            ratio.click()
+            page.keyboard.type("49")
+            page.keyboard.press("Enter")
+            self.assertTrue(note.is_visible())
+            self.assertIn("Turbo ratios cap this core at 48× (1 active core). Raise the table on the Turbo ratios tab to run 49×.", note.inner_text())
+            self.assertEqual(self.draft(page)["turbo"], {})
+            note.locator("button").click()  # opens the tab, edits nothing
+            page.wait_for_selector(".turbo-view .turbo-card")
+            banner = page.locator(".turbo-card[data-kind='E'] .turbo-oc-note")
+            self.assertTrue(banner.is_visible())
+            self.assertIn("EC0 49×", banner.inner_text())
+            self.assertTrue(page.locator(".turbo-card[data-kind='P'] .turbo-oc-note").is_hidden())
+            self.assertEqual(self.draft(page)["turbo"], {})
+            self.assert_clean(page)
+
     # ---- keyboard only ----
     @browser
     def test_keyboard_only_path_from_the_tile_grid_to_an_edited_point(self):
