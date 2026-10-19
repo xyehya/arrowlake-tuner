@@ -86,7 +86,8 @@ from arltuner.guard import (
 from arltuner.controls import cpufreq as cpufreq_rules
 from arltuner.controls import residual
 from arltuner.controls import ring as ringmod
-from arltuner.controls.planner import POINT_CAVEAT, POSITIVE_OFFSET, Warn, build_plan, _same_state, _goal_word, change_notes, current_word, kept_word, needs_vmax, oc_cap_reads_of, turbo_change_notes
+from arltuner.controls.planner import POINT_CAVEAT, POSITIVE_OFFSET, TURBO_MSR, Warn, build_plan, _same_state, _goal_word, change_notes, current_word, kept_word, needs_vmax, oc_cap_reads_of, turbo_change_notes
+from arltuner.controls.planner import _turbo_tables as _profile_turbo_tables  # G-231: the planner's own (msr, ratios) of a profile's [turbo] tables
 from arltuner.guard.policy import CPU_LIMIT_UNREAD, ENCODING_OFFSET_CEILING_MV, ENCODING_OFFSET_FLOOR_MV, fused_top_ratio, hw_ratio_max, hw_v_max_mv, hw_v_max_raw, ratio_limit, turbo_bytes, v_target_limit
 from arltuner.mailbox import Cmd, VfWord, rc_name
 from arltuner.mailbox.encoding import RATIO_RANGE, RATIO_SOURCE, TURBO_RATIO_RANGE, V_TARGET_RANGE_MV, V_TARGET_SOURCE
@@ -2197,17 +2198,37 @@ def _apply_order(
     return place, (plan.ring_refused if known[2] is not None else ())
 
 
+_TURBO_TABLE_KEY = {msr: key for key, msr in TURBO_MSR.items()}  # {0x1AD: "p", 0x650: "e"}: the helper's table key of a planner (msr, ratios) table
+
+
+def _turbo_steps(profile: Profile, tables: Mapping[str, Sequence[int]] | None) -> list[dict[str, Any]]:
+    """The ``write_msr`` steps of the profile's ``[turbo]`` tables the CPU does not already hold, in the planner's order (E, P). The comparison is the planner's
+    own -- ``build_plan`` skips a table whose ``pack_turbo(ratios)`` equals the word it read (``planner.py``, the ``if new == old: continue`` of the turbo loop) --
+    applied to ``tables`` (``TuneState.tables``: the eight ratio bytes of the word this boot's last read returned), so the listed steps and the executor cannot
+    disagree. A table the helper has no word for is listed: the apply decides from its own read."""
+    out: list[dict[str, Any]] = []
+    for msr, ratios in _profile_turbo_tables(profile):
+        key = _TURBO_TABLE_KEY[msr]
+        old = None if tables is None else tables.get(key)
+        if old is not None and pack_turbo(ratios) == pack_turbo(old):
+            continue  # the table the CPU holds: no write, no count (G-231)
+        out.append({"kind": StepKind.WRITE_MSR.value, "table": key})
+    return out
+
+
 def _predicted_steps(
     profile: Profile,
     topology: Topology,
     known: _Known | None = None,
     order: Mapping[tuple[str, int, int], int] | None = None,
     ring_refused: bool = False,
+    tables: Mapping[str, Sequence[int]] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """The write steps the plan will contain, in the planner's order (conditional 0x15, point offsets, per-core triples, turbo tables), without data
     words (those need the hardware baselines and are built at apply time). Returns ``(listed steps, total writes, read-only requests)``. G-148: for a complete
     profile with ``known`` (the last read, ``_last_baseline``) a word the CPU already holds is not listed (the apply writes only what differs). G-153: ``order``
-    (``_apply_order``) puts the point and per-core steps in the apply's own order."""
+    (``_apply_order``) puts the point and per-core steps in the apply's own order. G-231: a ``[turbo]`` table equal to the one ``tables`` (this boot's read) holds
+    is not listed either -- the planner and the executor skip it (``_turbo_steps``)."""
     targets = resolve_targets(profile, topology) if profile.entries else ()
     pts = resolve_point_targets(profile, topology)
     rings = resolve_ring_targets(profile, topology)
@@ -2256,9 +2277,7 @@ def _predicted_steps(
         first = 1 if steps and steps[0]["kind"] == StepKind.WRITE_PERCORE_ENABLE.value else 0
         steps[first:] = sorted(steps[first:], key=lambda s: order.get((s["kind"], s["cpu"], s.get("point", 0)), len(order)))
     if profile.turbo is not None:
-        for key in ("e", "p"):
-            if getattr(profile.turbo, key) is not None:
-                steps.append({"kind": StepKind.WRITE_MSR.value, "table": key})
+        steps.extend(_turbo_steps(profile, tables))  # G-231: only a table that differs from what the CPU holds
     total = len(steps)
     listed = [{"n": i, **s} for i, s in enumerate(steps[:_MAX_STEPS_LISTED], start=1)]
     return listed, total, reads
@@ -2402,8 +2421,11 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     last = _last_words(helper)
     before, after = _before_after(profile, topology, last, helper.fused_words, _state(helper).turbo, _last_ring(helper))
     known = _last_baseline(helper, profile, topology)
+    st = _state(helper)
+    with st.lock:  # G-231: the tables this boot's read returned, for the step list's own comparison (the executor's is made from its reads)
+        held_tables = None if st.tables is None else {k: tuple(v) for k, v in st.tables.items()}
     order, ring_refused = _apply_order(profile, topology, policy, known)  # G-153: the Review dialog lists the order the apply sends (G-151)
-    steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order, bool(ring_refused))
+    steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order, bool(ring_refused), held_tables)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
     warnings.extend(Warn("RING_NOT_RESTORED", f"the ring (cache) will NOT be written by this plan: {why}") for why in ring_refused)  # G-154 (D-045): the ring unit alone is refused, the rest stands

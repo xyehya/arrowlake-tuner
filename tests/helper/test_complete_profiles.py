@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from arltuner.controls import pack_turbo
 from arltuner.guard.policy import fused_top_ratio
 from arltuner.helper.ops import _parse_expected
 from arltuner.mailbox import VfWord
@@ -232,3 +233,39 @@ class AnotherCpu(CompleteCase):
         r = h.call("p", "tune.plan", {"intent": {"restore": "accepted"}})
         self.assertEqual((error_code(r), r["error"]["detail"]["check"]), ("REFUSED", "PROFILE_TOPOLOGY"))
         self.assertIn("EC3", r["error"]["message"])
+
+
+class SavedProfileTurboTables(TuneCase):
+    """G-231: the plan's step list (and so its ``writes``) lists a ``[turbo]`` table write only for a table that differs from the one the CPU holds -- the same
+    comparison the planner makes when the apply builds its steps (``planner.py``: ``pack_turbo(ratios) == the word read`` -> no write). A saved complete profile
+    carries both tables of the read, so restoring it must not announce table writes it will not send."""
+
+    def save_as_is(self, h: Any) -> dict[str, Any]:
+        r = h.call("s", "profiles.save", {"name": "as-is", "from": "read"})
+        self.assertTrue(r["ok"], r)
+        return r["result"]
+
+    def test_tables_the_cpu_holds_are_not_listed_or_counted(self) -> None:
+        h = self.boot(COLD)
+        self.read(h)
+        saved = self.save_as_is(h)
+        self.assertTrue(saved["turbo"])  # the profile carries both tables of the read
+        prof = load_profile(ProfileStore(self.audit.parent / "profiles", euid=__import__("os").geteuid()).load("as-is")["profile"])
+        self.assertIsNotNone(prof.turbo)
+        assert prof.turbo is not None
+        self.assertEqual((list(prof.turbo.e), list(prof.turbo.p)), ([48] * 8, [57, 57, 55, 55, 55, 55, 55, 55]))  # the CPU's own tables (simulator defaults, 0x3737373737373939)
+        plan = self.plan(h, {"profile": "as-is"})
+        self.assertEqual(plan["steps"], [])  # no word differs, the tables included: nothing to list
+        self.assertEqual(plan["writes"], 0)
+        res = self.apply_ok(h, plan)
+        self.assertEqual((res["writes_sent"], res["msr_writes"]), (0, 0))  # the executor agrees: no table write either
+
+    def test_only_the_table_that_differs_is_listed(self) -> None:
+        h = self.boot(COLD)
+        self.read(h)
+        self.save_as_is(h)
+        self.sim.wrmsr(0, 0x1AD, pack_turbo([56] * 8))  # the CPU's P table moves under the saved profile (an external wrmsr): E stays [48] * 8
+        self.read(h)
+        plan = self.plan(h, {"profile": "as-is"})
+        self.assertEqual([(s["kind"], s.get("table")) for s in plan["steps"]], [("write_msr", "p")])  # the differing table alone
+        self.assertEqual(plan["writes"], 1)
