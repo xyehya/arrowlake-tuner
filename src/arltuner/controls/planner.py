@@ -684,7 +684,9 @@ def _goal_word(target: Target, current: VfWord, top: int | None) -> VfWord:
         raise PlanError(f"{target.label}: requested value does not fit the V/F word: {exc}") from exc
 
 
-def _vf_words(current: VfWord, goal: VfWord, top: int | None = None, label: str = "", sends_1d: bool = True) -> tuple[tuple[VfWord, str], ...]:
+def _vf_words(
+    current: VfWord, goal: VfWord, top: int | None = None, label: str = "", sends_1d: bool = True, max_ratio_now: int | None = None
+) -> tuple[tuple[VfWord, str], ...]:
     """The 0x11 words to send, in order, with their stage label. Ratio and V target moving the same way take two words (registers.md
     "Ordering"): rising -> V target first (the old ratio stays), falling -> ratio first (the old V target stays); the offset moves in the
     second word. Otherwise one word. A goal without an OC point (V target 0, ``kept_word``) is always one word: there is no target to order.
@@ -699,7 +701,7 @@ def _vf_words(current: VfWord, goal: VfWord, top: int | None = None, label: str 
     d_v = goal.v_target_raw - current.v_target_raw
     if d_ratio > 0 and d_v > 0:
         if not has_oc_point(top, current.ratio):
-            if sends_1d:
+            if sends_1d and top is not None and max_ratio_now is not None and max_ratio_now <= top:
                 return ((goal, "creates the OC point (ratio + voltage in one word; the ratio is usable only after 0x1D)"),)
             raise PlanError(
                 f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
@@ -1071,7 +1073,7 @@ def build_plan(
                 whole_curve=True,
             )
         )
-        words = _vf_words(current, goal, top, t.label, sends_1d=t.ratio is not None and t.cpu not in residual_cpus)
+        words = _vf_words(current, goal, top, t.label, sends_1d=t.ratio is not None and t.cpu not in residual_cpus, max_ratio_now=readings.favored & 0xFF)
         sent: int | None = None
         for word, stage in words:
             ctx = build_context(policy, t.cpu, vf_word_sent=sent, **facts)

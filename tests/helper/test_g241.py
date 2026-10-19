@@ -17,7 +17,10 @@ E_CPUS = (8, 9, 10, 11)
 def no_oc_point() -> SimConfig:
     """E cluster 0 at the fused top 46x with no OC point (the 2026-10-19 BIOS-defaults state): 0x0000002E."""
     cfg = SimConfig.measured(per_point=True, late_target_reads=2)
-    return dataclasses.replace(cfg, initial_vf={**cfg.initial_vf, **{c: VfWord(46, 0, False, 0) for c in E_CPUS}})
+    # 0x1C as read live after the BIOS reset (0x2E2E: max 46 = the fused top; audit 2026-10-19 13:25Z): the one-word creation needs 0x1C[7:0] <= the fused top (G-241 review f1)
+    return dataclasses.replace(
+        cfg, initial_vf={**cfg.initial_vf, **{c: VfWord(46, 0, False, 0) for c in E_CPUS}}, favored_word={**cfg.favored_word, **{c: 0x2E2E for c in E_CPUS}}
+    )
 
 
 class OneWordCreation(TuneCase):

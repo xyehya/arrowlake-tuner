@@ -288,6 +288,11 @@ class Ordering(BoundsCase):
         self.accept(guard, E8, word(50, E_V + 30))
         self.refuse(guard, E8, word(51, E_V + 40), "raise the V target first")  # the OC point now exists: the ordering rule is back
 
+    def test_g241_no_one_word_creation_when_the_bios_max_is_above_the_fused_top(self) -> None:
+        # review f1: 0x1C[7:0] = 48 over a fused 46 -> ratios up to 48 would be usable at once while the target can land late: the ordering rule stays
+        guard = self.open(dict(E8, vf=0x2E, favored=0x2E30), **RAISE)
+        self.refuse(guard, E8, word(50, E_V + 30), "raise the V target first")
+
     def test_g241_an_existing_oc_point_still_needs_the_voltage_first(self) -> None:
         guard = self.open(dict(E8, vf=word(48, E_V), favored=0x2E30), **RAISE)
         self.refuse(guard, E8, word(50, E_V + 30), "raise the V target first")
