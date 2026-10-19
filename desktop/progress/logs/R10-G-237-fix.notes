@@ -1,0 +1,10 @@
+FIX ROUND on your branch (orchestrator decisions):
+1. Note must fire: you may now edit src/arltuner/controls/report.py (step result type: carry `polls` and `settle_ms` from guard Result) and the apply-row
+   builder in src/arltuner/helper/ops_tune.py (~2736) ONLY in that function (G-236 is editing ops_tune.py ~1600-1690 in parallel: do not touch that region).
+   Test: a helper tune.apply in the simulator with late_target_reads=2 returns a row with polls=2 and the UI note renders (node test on the row shape).
+2. Production constructors (ops_tune.py:572, cli.py:708, ops.py:690): in simulator mode pass the simulator/virtual clock sleep (or a no-op) as settle_wait;
+   on the device the real sleep. One-line each.
+3. Budget: accepted as is (re-reads are counted operations, not attempts; the per-boot/session caps are 100000 indicators, D-049). Add one sentence to the
+   docstring and to docs/knowledge/registers.md's "OC-point V target lands late" entry: "the guard re-reads up to 4 times (2/5/10/20 ms), G-237".
+4. sim.py edit and the single guard sleep: accepted.
+Run the FULL `python3 tools/run_tests.py` and report the counts. Commit `G-237: settle polls reach the apply rows; sim settle_wait`. Do NOT run build-appimage.sh.
