@@ -215,6 +215,12 @@ test("G-237: a late OC-point V target is noted on its read-back row, nothing oth
   assert.equal(settledNote({ unit: "P0", point: 0, match: true, polls: 2, settle_ms: 7.4 }), "settled after 2 re-reads (7 ms)");
   assert.equal(settledNote({ polls: 1 }), "settled after 1 re-read");
   for (const x of [{ polls: 0 }, { match: true }, null, "x", { polls: "2" }]) assert.equal(settledNote(x), "");
+  // the row shape tune.apply returns (ops_tune._report_rows, simulator late_target_reads=2): the summary keeps the row whole and the note renders from it
+  const late = { unit: "EC1", point: 0, cpu: 12, expected: "0x00048c30", actual: "0x00048c30", match: true, polls: 2, settle_ms: 7.0 };
+  const first = { unit: "EC1", point: 7, cpu: 12, expected: "0x00000030", actual: "0x00000030", match: true };
+  const s = summarizeResult({ complete: true, readback: [late, first] });
+  assert.equal(s.allMatch, true);
+  assert.deepEqual(s.readback.map(settledNote), ["settled after 2 re-reads (7 ms)", ""]);
 });
 
 test("G-232: read-back rows of the runtime / power helpers are shown by file and key, V/F rows as before", () => {

@@ -37,7 +37,7 @@ G-237 (``[MEASURED lnx 2026-10-19]``, registers.md "OC-point V target lands late
 non-zero one, and ratio, mode and offset are equal, is read again (``0x10``, same cpu/P1/P2, same lock) up to ``len(OC_TARGET_SETTLE_S)`` = 4 times, after 2, 5, 10, 20 ms. A match
 verifies; any other difference, or a target still 0 after the last re-read, trips as always. A write is never repeated. Every read is a ``readback`` record (the unmatched ones
 ``pending``, no ``verified``); the last one carries ``polls`` and ``settle_ms``. Each re-read is a WRMSR and counts in :attr:`WriteGuard.operations`, but it is not an ``attempt``
-(no dwell, no per-boot count): the wait is injectable (``WriteGuard(settle_wait=...)``), ``time.sleep`` by default.
+(no dwell, no per-boot count; the budget caps are 100000 indicators, D-049): the guard re-reads up to 4 times (2/5/10/20 ms), G-237; the wait is injectable (``WriteGuard(settle_wait=...)``), ``time.sleep`` by default.
 
 Plain MSRs (T-023, D-017): a plain ``rdmsr`` / ``wrmsr`` of a turbo ratio table is an :class:`MsrRequest` and goes through the **same**
 chain (:meth:`WriteGuard._execute_msr`): TRIPPED, NO_ENV_FLAG, BAD_CONFIRMATION, [no MSR port], CPU_NOT_ALLOWED, NOT_ALLOWLISTED

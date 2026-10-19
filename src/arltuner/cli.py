@@ -717,6 +717,7 @@ def _build_guard(
         wall_clock=wall_clock,
         boot_id_fn=ctx.boot_id_fn,
         msr_port=port,  # T-023: plain rdmsr/wrmsr of the turbo tables go through the same guard, on the same port
+        settle_wait=sleep,  # G-237: the virtual sleep in the simulator, the real one on the device
     )
     return guard, clock, sleep
 

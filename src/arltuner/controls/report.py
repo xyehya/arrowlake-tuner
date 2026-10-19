@@ -96,6 +96,8 @@ class StepResult:
     verified: bool | None = None
     detail: str = ""
     verify_readback_data: int | None = None  # T-023 WRITE_MSR: the read-back on the verify CPU (``readback_data`` is the one on the written CPU)
+    polls: int = 0  # G-237: the 0x10 re-reads a late OC-point V target took (``Result.polls``); 0 = the first read-back decided
+    settle_ms: float | None = None  # G-237: first read-back to last re-read, set whenever ``polls`` > 0
 
 
 @dataclass(frozen=True)

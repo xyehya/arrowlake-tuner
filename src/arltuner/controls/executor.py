@@ -154,6 +154,8 @@ def _run_step(
         applied_v_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) else v_mv(after),
         applied_offset_mv=None if after is None or step.kind not in (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT) else after.offset_mv,
         verified=res.verified,
+        polls=res.polls,
+        settle_ms=res.settle_ms,
     )
     if step.kind is StepKind.READ_RING_POINT and resp.rc == RC_NO_SUCH_POINT:
         # G-154: a ring point that does not exist (rc 0x11) is an answer, not an error: the plan refuses the ring unit by name and the P/E restore goes on

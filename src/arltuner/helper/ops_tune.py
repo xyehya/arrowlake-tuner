@@ -582,6 +582,7 @@ def _guarded_session(helper: Helper, ctx: OpContext, policy: Policy, needed: int
             boot_id_fn=cfg.boot_id_fn,
             msr_port=port,
             session_favored_words=_state(helper).favored_words,
+            settle_wait=transport_sleep,  # G-237: the virtual sleep in the simulator, the real one on the device
         )
         yield _Session(guard, Confirmation(token, cfg.operator), policy, clock, sleep, used)
     finally:
@@ -2567,6 +2568,9 @@ def _report_rows(report: Any, topology: Topology) -> tuple[list[dict[str, Any]],
                     "expected": None if expected is None else f"{expected:#010x}", "actual": None if actual is None else f"{actual:#010x}", "match": match,
                 }
             )
+            if r is not None and r.polls > 0:  # G-237 (additive): the V target landed late; the page notes "settled after N re-reads"
+                readback[-1]["polls"] = r.polls
+                readback[-1]["settle_ms"] = r.settle_ms
         elif s.kind is StepKind.WRITE_MSR:
             entry["table"] = "e" if s.msr == 0x650 else "p"
             actual = None if r is None else r.readback_data
