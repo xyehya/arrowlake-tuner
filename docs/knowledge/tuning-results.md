@@ -72,3 +72,17 @@ Hardware monotonic rule confirmed: with 56x at -15 mV the 57x point (-75 mV requ
 P0 57x VID 1.371 V (= 56x), P3 57x 1.344 V (= 56x); effective 57x undervolt ~-55 / ~-51 mV. stress-ng P0+P3 together, 120 s each, cpufreq cap 56x then
 57x: both pass, MCE 0, 47-49 W, max 59 C, only turbo-table bit (0x1000) seen. Before the apply the BIOS-booted P3 held 56x -28.3 / 57x -31.3 mV
 (BIOS per-core V/F setting, re-applied each boot). `captures/lnx/fav-cap-runs-*.txt`, `stress-fav-cap5[67]-*.txt`.
+
+## 2026-10-19 23:xx — E-cluster search (3 all-core compile builds per step, auto-stop at first ICE; P = p53p55-fav5675, PL2 295 W) [MEASURED lnx]
+| step | E state under load | result |
+|---|---|---|
+| 46x pt6 -40..-140 mV | 46x, EC0 1.118..1.018 / EC1-3 1.098..0.998 V | all 3/3 |
+| 46x pt6 -150 / -160 mV | EC1-3 0.988 / 0.978 V | ICE cpu 21 (EC3), builds 3 / 1 |
+| 49x OC 1.210 / 1.240 / 1.255 V (pt6 -120) | 49x at target | ICE cpu 23 / 23 / 21 (EC3) |
+| 49x OC 1.270 V | 49x 1.270 V | 3/3 |
+| 50x OC 1.300 V | **not 50x**: all-core load -> E 49x ~1.23 V (interpolated), P 48x | 3/3 but not a 50x result |
+Every E failure was on EC3 (cpus 20-23): the weakest cluster sets the requirement. 46x edge -140 mV (working -120); 49x edge 1.270 V.
+**All-core current limit:** with E at 50x (OC 1.285-1.300 V) a 24-core load sets 0x64F bit 8 ("Other (electrical)", Current/EDP group) + bit 12 at
+~215 W (< PL2 295): E falls to 49x, P to 48x. E-only load runs 50x at 1.287 V with no limit bit. At E 49x 1.270 V, stress-ng 24 threads keeps E at 49x
+but P drops to 46-54x (0x1100) — higher E voltage spends the shared current budget P would use. 50x all-core needs a higher IA current limit (IccMax,
+BIOS or mailbox 0x16/0x17, not allowlisted) [inference: bit 8 = IccMax/EDP is UNVERIFIED on ARL].

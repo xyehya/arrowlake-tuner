@@ -1,0 +1,10 @@
+CASE A1-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1394
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A2-all pin='all' -j 24 wall=110s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1394
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A3-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1394
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+ALLDONE /home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-es-e46-80-20261019T225743-summary.txt

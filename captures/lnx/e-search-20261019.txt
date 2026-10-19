@@ -15,3 +15,15 @@ applied e46-160 (non-verified writes: 0) load sample: EC0:46x/0.9976V EC1:46x/0.
 RESULT e46-160 builds=/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:46x/0.9976V EC1:46x/0.9775V EC2:46x/0.9775V EC3:46x/0.9775V] stop=pkill: killing pid 133218 failed: Operation not permitted
 applied e46-150 (non-verified writes: 0) load sample: EC0:46x/1.0074V EC1:46x/0.9875V EC2:46x/0.9875V EC3:46x/0.9875V
 RESULT e46-150 builds=2/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:46x/1.0074V EC1:46x/0.9875V EC2:46x/0.9875V EC3:46x/0.9875V] stop=pkill: killing pid 133831 failed: Operation not permitted
+applied e49-1210 (non-verified writes: 0) load sample: EC0:49x/1.2100V EC1:49x/1.2100V EC2:49x/1.2100V EC3:49x/1.2100V
+RESULT e49-1210 builds=/3 ice=0 segv_cpus=[023 ] mce=0 sample=[EC0:49x/1.2100V EC1:49x/1.2100V EC2:49x/1.2100V EC3:49x/1.2100V] stop=pkill: killing pid 148502 failed: Operation not permitted
+applied e49-1240 (non-verified writes: 0) load sample: EC0:49x/1.2426V EC1:49x/1.2426V EC2:49x/1.2426V EC3:49x/1.2426V
+RESULT e49-1240 builds=1/3 ice=0 segv_cpus=[023 ] mce=0 sample=[EC0:49x/1.2426V EC1:49x/1.2426V EC2:49x/1.2426V EC3:49x/1.2426V] stop=pkill: killing pid 153392 failed: Operation not permitted
+applied e49-1270 (non-verified writes: 0) load sample: EC0:49x/1.2700V EC1:49x/1.2700V EC2:49x/1.2700V EC3:49x/1.2700V
+RESULT e49-1270 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:49x/1.2700V EC1:49x/1.2700V EC2:49x/1.2700V EC3:49x/1.2700V] stop=ENDED 2026-10-19T23:39:05+03:00 without an ICE
+applied e49-1255 (non-verified writes: 0) load sample: EC0:49x/1.2550V EC1:49x/1.2550V EC2:49x/1.2550V EC3:49x/1.2550V
+RESULT e49-1255 builds=1/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:49x/1.2550V EC1:49x/1.2550V EC2:49x/1.2550V EC3:49x/1.2550V] stop=pkill: killing pid 177170 failed: Operation not permitted
+applied e50-1300 (non-verified writes: 0) load sample: EC0:50x/1.3000V EC1:50x/1.3000V EC2:50x/1.3000V EC3:50x/1.3000V
+RESULT e50-1300 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:50x/1.3000V EC1:50x/1.3000V EC2:50x/1.3000V EC3:50x/1.3000V] stop=ENDED 2026-10-19T23:47:47+03:00 without an ICE
+applied e50-1285 (non-verified writes: 0) load sample: EC0:50x/1.2875V EC1:50x/1.2875V EC2:50x/1.2875V EC3:50x/1.2875V
+RESULT e50-1285 builds=/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:50x/1.2875V EC1:50x/1.2875V EC2:50x/1.2875V EC3:50x/1.2875V] stop=ENDED 2026-10-19T23:49:44+03:00 without an ICE
