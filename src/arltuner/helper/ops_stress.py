@@ -678,7 +678,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     audit = CpufreqAudit(helper, "stress.start")  # G-235: proven writable before anything is changed (the result file is stored, and a ratio cap writes cpufreq: both are audited)
     if cap is not None:
         mw = replace(mw, cpufreq=audit.cpufreq(mw.cpufreq))
-        recover_journal(mw, helper.cfg.log)  # a stale journal (a run that died) is applied first; if it cannot be, nothing new is started
+        recover_journal(mw, helper.cfg.log, audit, during="stress.start")  # a stale journal (a run that died) is applied first; if it cannot be, nothing new is started
         if Path(mw.journal_path).exists():
             raise OpError(REFUSED, "a stale cpufreq journal could not be restored; fix cpufreq by hand (see the helper log) before a capped run", {"check": "STALE_JOURNAL"})
     unit_max: dict[str, int] = {}
@@ -715,11 +715,12 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
             pinned = epp_pinned_cpus(mw, cap_cpus)  # G-132: governor performance => the kernel holds EPP at performance (a write is EBUSY): leave it, do not journal it
             entries = _write_journal(mw, cap_cpus, boot.strip() if isinstance(boot, str) and boot.strip() else None, pinned)  # before the first change
             journaled = True
+            cap_khz = {cpu: _cap_khz(cap, unit_max.get(topo.unit_of_cpu(cpu)) if max_known else None, cpuinfo_khz.get(topo.unit_of_cpu(cpu))) for cpu in cap_cpus}
+            audit.begin(entries, screen=kind, units=units, ratio_cap=cap, cap_khz={str(c): k for c, k in cap_khz.items()}, epp=STRESS_EPP)  # G-235: the one start record, before the first cpufreq write
             epp_failed: dict[str, list[int]] = {}
             for cpu in cap_cpus:
-                unit = topo.unit_of_cpu(cpu)
                 try:
-                    mw.cpufreq.write(cpu, CAP_ATTR, str(_cap_khz(cap, unit_max.get(unit) if max_known else None, cpuinfo_khz.get(unit))))
+                    mw.cpufreq.write(cpu, CAP_ATTR, str(cap_khz[cpu]))
                 except OSError as exc:
                     raise OpError(REFUSED, f"cannot cap cpu {cpu} (scaling_max_freq): {exc.strerror or exc}", {"check": "CAP_WRITE"}) from None
                 if any(e["cpu"] == cpu and e["attr"] == EPP_ATTR for e in entries):

@@ -483,6 +483,25 @@ test("audit: auditRow flags mismatches and non-pass results, and survives an unp
   assert.equal(auditRow({}).cpu, "");
 });
 
+test("audit: G-235 summary records show under Writes & refusals, the detail column prefers o.detail, a run summary names its files", () => {
+  const keep = (o) => auditKeep(o, "writes");
+  const start = { event: "runtime_attempt", op: "vf.measure", kind: "cpufreq", file_count: 48, detail: "vf.measure: 48 cpufreq file(s) journaled; the caps and the restore follow", seq: 7 };
+  const end = { event: "result", op: "vf.measure", kind: "cpufreq", file_count: 48, restored: true, outcome: "complete", detail: "vf.measure: 48 files, restored ok", seq: 8 };
+  const bad = { event: "result", op: "stress.start", file_count: 4, restored: false, outcome: "error" };
+  const err = { event: "error", op: "vf.measure", path: "cpu3/cpufreq/scaling_max_freq", reason: "Device busy", detail: "cpufreq write cpu3 scaling_max_freq -> 3000000 FAILED: Device busy" };
+  for (const o of [start, end, bad, err, { event: "result", op: "profiles.save" }, { event: "powercap_attempt" }]) assert.equal(keep(o), true, o.event + " " + (o.op ?? ""));
+  assert.equal(keep({ event: "result", cmd: "0x10" }), false, "a mailbox read result still drops out");
+  const row = auditRow(end);
+  assert.deepEqual([row.event, row.request, row.result, row.resultKind, row.eventKind, row.detail], ["result", "vf.measure", "complete", "ok", "", "vf.measure: 48 files, restored ok"]);
+  assert.equal(auditRow(start).detail, start.detail);
+  const failed = auditRow(bad);
+  assert.deepEqual([failed.detail, failed.resultKind, failed.eventKind], ["stress.start: 4 files, NOT restored", "error", "error"]);
+  assert.equal(auditRow(err).detail, err.detail, "o.detail wins over o.reason");
+  assert.equal(auditRow({ event: "refused", reason: "why" }).detail, "why", "reason is the fallback");
+  assert.equal(auditRow({ event: "result", op: "curves.delete", curve_id: "x" }).request, "curves.delete");
+  assert.equal(auditRows([start, end, { event: "result", cmd: "0x10", rc: 0 }], { filter: "writes" }).length, 2);
+});
+
 test("audit: auditRows on the fixture tail: newest first, filters, text search", () => {
   const recs = FIXTURES.auditTail.result.records;
   const all = auditRows(recs);

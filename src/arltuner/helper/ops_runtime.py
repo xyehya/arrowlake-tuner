@@ -802,7 +802,15 @@ def recover_journal(helper: Helper) -> bool:
             raise OpError(REFUSED, "the boot id is unknown")
         if steps:
             audit = _open_audit(helper)
+            files = [{"path": str(w.files.path(st.file)), "value": st.value, "now": st.before} for st in steps]  # G-235: the one start record -- every file, the journaled original it goes back to, and the value it is at now
+            lost = [_audit_quiet(helper, audit, "runtime_attempt", op="journal.recover", domain="runtime", key="run", revert=True, files=files, file_count=len(files),
+                                 detail=f"journal.recover: {len(files)} runtime file(s) go back to the journaled values")]
             run = _run_steps(helper, w, audit, steps, None, True, None)
+            outcome = "restored" if run.stop is None else str(run.stop["kind"])
+            lost.append(_audit_quiet(helper, audit, "result", op="journal.recover", domain="runtime", file_count=len(files), writes=run.sent, restored=run.stop is None, outcome=outcome,
+                                     detail=f"journal.recover: {len(files)} files, " + ("restored ok" if run.stop is None else f"NOT restored ({str(run.stop['reason'])[:200]})")))
+            for p in filter(None, lost):
+                log(f"runtime journal: {p}")
             for p in run.warnings:
                 log(f"runtime journal: {p}")
             if run.stop is not None:

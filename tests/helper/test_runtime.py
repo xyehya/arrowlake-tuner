@@ -758,6 +758,12 @@ class Recovery(RuntimeCase):
         self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
         recs = [r for r in self.runtime_records() if r["event"] == "runtime_attempt" and r["revert"]]
         self.assertTrue(recs)  # audited like any write
+        (start,) = [r for r in recs if r.get("op") == "journal.recover"]  # G-235: one start record (every file and its value) before the restore, one result after it
+        (end,) = [r for r in self.runtime_records() if r["event"] == "result" and r.get("op") == "journal.recover"]
+        self.assertEqual(len(start["files"]), start["file_count"])
+        self.assertTrue(any(f["path"].endswith("cpu3/cpufreq/scaling_max_freq") and (f["value"], f["now"]) == (P_MAX, 4_500_000) for f in start["files"]), start["files"])
+        self.assertEqual((end["restored"], end["outcome"], end["file_count"], end["detail"]), (True, "restored", start["file_count"], f"journal.recover: {start['file_count']} files, restored ok"))
+        self.assertLess(self.runtime_records().index(start), self.runtime_records().index(end))
         self.assertFalse(self.lock.exists())
         self.ok(h, "runtime.plan", {"caps": {"5": 45}})  # planning works again
 

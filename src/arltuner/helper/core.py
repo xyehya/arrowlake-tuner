@@ -20,7 +20,7 @@ import signal
 import threading
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, BinaryIO
 
 from .config import HelperConfig
@@ -325,10 +325,18 @@ class Helper:
         wiring = self.measure_wiring
         if wiring is None:
             return
-        from .ops_measure import recover_journal  # lazy: ops_measure imports ops
+        from .ops_measure import CpufreqAudit, recover_journal  # lazy: ops_measure imports ops
 
         try:
-            recover_journal(wiring, self.cfg.log)
+            audit = None
+            if os.path.lexists(wiring.journal_path):  # G-235: the restore of a stale journal is audited (one start record, one result); a log that cannot be written never stops it
+                try:
+                    audit = CpufreqAudit(self, "journal.recover")
+                except OpError as exc:
+                    self.cfg.log(f"measure journal recovery is not audited: {exc.message}")
+            if audit is not None:
+                wiring = replace(wiring, cpufreq=audit.cpufreq(wiring.cpufreq))
+            recover_journal(wiring, self.cfg.log, audit)
         except Exception as exc:  # never keep the helper from starting; the failure is loud in the log and the journal stays for the next start
             self.cfg.log(f"measure journal recovery FAILED: {type(exc).__name__}: {exc}")
 
