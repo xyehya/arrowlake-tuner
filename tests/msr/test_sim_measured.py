@@ -162,6 +162,39 @@ class LinuxWriteSittings(Rig):
         self.assertEqual(self.tx(12, WR_VF, 0, 0, 0x00047830).data, 0x00047830)
 
 
+class LateOcTarget(Rig):
+    """G-237 [MEASURED lnx 2026-10-19]: the V target of a new OC point reads 0 for a while after the write (``late_target_reads``)."""
+
+    WORD = 0x0005B43A  # 58x > top fused 57: an OC point
+
+    def test_target_shows_after_k_reads(self) -> None:
+        self.use(per_point=True, late_target_reads=2)
+        self.assertEqual(self.tx(0, WR_VF, 0, 0, self.WORD).rc, Rc.Pass)
+        self.assertEqual([self.tx(0, RD_VF).data for _ in range(4)], [0x3A, 0x3A, self.WORD, self.WORD])
+
+    def test_never_lands(self) -> None:
+        self.use(per_point=True, late_target_reads=-1)
+        self.assertEqual(self.tx(0, WR_VF, 0, 0, self.WORD).rc, Rc.Pass)
+        self.assertEqual({self.tx(0, RD_VF).data for _ in range(8)}, {0x3A})
+        self.assertEqual(self.port.vf(0).to_u32(), self.WORD)  # the stored word is whole; only the read lags
+
+    def test_off_by_default_and_a_word_without_target_is_unaffected(self) -> None:
+        self.use(per_point=True)
+        self.tx(0, WR_VF, 0, 0, self.WORD)
+        self.assertEqual(self.tx(0, RD_VF).data, self.WORD)
+        self.use(per_point=True, late_target_reads=2)
+        self.tx(0, WR_VF, 0, 0, 0x00000039)  # no OC point: target 0 anyway
+        self.assertEqual(self.tx(0, RD_VF).data, 0x39)
+
+    def test_a_new_write_restarts_it(self) -> None:
+        self.use(per_point=True, late_target_reads=1)
+        self.tx(0, WR_VF, 0, 0, self.WORD)
+        self.assertEqual(self.tx(0, RD_VF).data, 0x3A)
+        self.assertEqual(self.tx(0, RD_VF).data, self.WORD)
+        self.tx(0, WR_VF, 0, 0, self.WORD)
+        self.assertEqual(self.tx(0, RD_VF).data, 0x3A)
+
+
 class ZeroFieldKnob(Rig):
     def test_default_is_off_and_a_zero_field_word_is_accepted(self) -> None:
         self.assertFalse(SimConfig().reject_zero_fields)

@@ -699,6 +699,7 @@ def op_vf_dump(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[str
             wall_clock=wall,
             boot_id_fn=cfg.boot_id_fn,
             msr_port=port,
+            settle_wait=transport_sleep,  # G-237: the virtual sleep in the simulator, the real one on the device
         )
         confirm = Confirmation(token, cfg.operator)
 

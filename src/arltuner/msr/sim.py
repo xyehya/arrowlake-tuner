@@ -148,6 +148,7 @@ class SimConfig:
     cpu_point_ratios: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> ratio field; wins over ``point_ratios`` (per-core tables)
     drop_target_without_oc_point: bool = True  # G-120: a domain-0 P2 = 0 word whose ratio is <= the top fused ratio has no OC point: the V target is dropped whatever the offset (G-124; needs point_counts) [MEASURED lnx 2026-10-11/12]
     sticky_oc_ratio: bool = False  # G-147: an OC ratio cannot be written back to 0 at runtime (the word stays as it was, rc InvalidParam); only a cold boot (a new port) clears it [MEASURED lnx 2026-10-11/13]
+    late_target_reads: int = 0  # G-237: after a domain-0 P2 = 0 write that kept a non-zero V target, that many 0x10 reads of the word answer V target 0 before the stored word shows (-1 = never) [MEASURED lnx 2026-10-19: 0x0005B43A read 0x0000003A ~1 ms later]
     oc_adds_point: bool = False  # T-026: an OC ratio (P2 = 0 word) above the top fused ratio of the core creates ONE extra point (``[COMMUNITY]``, SkatterBencher)
     point_offsets: dict[tuple[str, int], int] = field(default_factory=dict)  # T-026: (kind, point) -> the offset field (raw) the point starts with (default 0)
     cpu_point_offsets: dict[tuple[int, int], int] = field(default_factory=dict)  # T-026: (cpu, point) -> offset raw; wins over ``point_offsets`` (a BIOS that differs per core)
@@ -325,6 +326,7 @@ class SimMsrPort(MsrPort):
                     self._pkg_msrs[msr] = value
         self._misc = self.config.misc_global_config & 0xFFFFFFFF
         self._vf: dict[tuple[int, int, int], VfWord] = {}
+        self._late: dict[tuple[int, int, int], int] = {}  # G-237: key -> 0x10 reads still answering V target 0 (-1 = for good)
         self._fused: dict[int, int] = {}  # cpu -> 0x09 P1=0x11 P2=0 word (read-only)
         self._favored: dict[int, int] = {}  # cpu -> 0x1C word (0x1D replaces [7:0])
         #: G-126: called as ``(cpu, cpuinfo_max_khz)`` after a 0x1D took effect, the way the kernel's ``cpuinfo_max_freq`` follows HWP highest (a test or the
@@ -791,7 +793,14 @@ class SimMsrPort(MsrPort):
         bad = self._vf_address_rc(cpu, p1, p2)
         if bad is not None:
             return bad, 0
-        return int(Rc.Pass), self.vf(cpu, p1, p2).to_u32()
+        word = self.vf(cpu, p1, p2)
+        key = self._vf_key(p1, cpu, p2)
+        pending = self._late.get(key, 0)
+        if pending:  # G-237: the V target of the freshly written OC point has not landed yet
+            if pending > 0:
+                self._late[key] = pending - 1
+            word = VfWord(word.ratio, 0, word.static, word.offset_raw)
+        return int(Rc.Pass), word.to_u32()
 
     def _cmd_vf_write(self, cpu: int, p1: int, p2: int, data: int) -> tuple[int, int]:
         """0x11 rules, checked in this order: address, oc_locked, per-core enable (domain 0), zero fields (domain 0, only with
@@ -826,8 +835,13 @@ class SimMsrPort(MsrPort):
             if top is not None and word.ratio <= top:  # no OC point: the hardware keeps ratio + offset only ([MEASURED lnx 2026-10-11]: 0xFEC5B439 read back 0xFEC00039)
                 word = VfWord(word.ratio, 0, word.static, word.offset_raw)
         if Cmd.VOLTAGE_FREQ_WRITE not in self._silent:
+            late = cfg.late_target_reads if p1 == Domain.CORE and p2 == 0 and word.v_target_raw else 0
             for target in self._scope(cpu, p1):
                 self._vf[self._vf_key(p1, target, p2)] = word
+                if late:
+                    self._late[self._vf_key(p1, target, p2)] = late
+                else:
+                    self._late.pop(self._vf_key(p1, target, p2), None)
         return int(Rc.Pass), word.to_u32()
 
     def _scope(self, cpu: int, domain: int) -> tuple[int, ...]:

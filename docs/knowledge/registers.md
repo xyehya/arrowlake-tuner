@@ -207,4 +207,4 @@ Runtime mailbox writes need OC Lock off and UVP off (`platform-arl-s.md` §1); r
 
 - **OC-point V target lands late** `[MEASURED lnx 2026-10-19 06:33Z, captures/lnx/p0-oc58-trip-20261019.txt]`: the first P-core OC point above the fused top
   (cpu 0, SET 0x11 `0x0005b43a` = 58x, adaptive 1.4258 V) read back `0x0000003a` (ratio only, V target 0) within ~1 ms, so the guard tripped; a read ~1 h
-  later returned `0x0005b43a`. The ratio is immediate, the V target of a newly created OC point is applied asynchronously. Settle time `[UNVERIFIED]`.
+  later returned `0x0005b43a`. The ratio is immediate, the V target of a newly created OC point is applied asynchronously. Settle time `[UNVERIFIED]`. The guard re-reads up to 4 times (2/5/10/20 ms), G-237.

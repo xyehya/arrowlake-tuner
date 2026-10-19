@@ -865,6 +865,125 @@ class Readback(GuardCase):
         self.assertEqual([r.data for r in guard.revert_plan()], [STOCK.with_(offset_raw=-40).to_u32(), STOCK_REVERT])
 
 
+class LateTarget(GuardCase):
+    """G-237: the V target of a new OC point lands after the ratio (registers.md "OC-point V target lands late")."""
+
+    WORD = 0x0005B43A  # 58x, adaptive 1.4258 V: the word of the live trip
+    BASE = 0x00000039  # what the core held before: 57x = the top fused ratio, no OC point
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.policy = dataclasses.replace(self.policy, hw_v_target_max_mv={"P": 1600, "E": 1600})  # the CPU's voltage limit (cmd 0x28) as read: the 58x word raises the voltage
+        self.waits: list[float] = []
+        self.hidden = 0  # 0x10 reads (after the write) that still answer V target 0; -1 = for good
+
+    def seed_facts(self, cpu: int = 0, favored: int = 57 | 57 << 8, fused: int = 57 | 0x5B4 << 8) -> None:
+        super().seed_facts(cpu, favored, fused)  # the live core: top fused ratio 57 at 0x5B4, favored 57
+
+    def late_guard(self, hidden: int, **overrides: object) -> WriteGuard:
+        self.hidden = hidden
+        real = self.transport.transact
+
+        def transact(cpu: int, cmd: int, p1: int, p2: int, data: int = 0) -> Response:
+            res = real(cpu, cmd, p1, p2, data)
+            if cmd == 0x10 and self.hidden != 0 and len(self.transport.calls) > 3 + 1:  # past the three baseline reads and the write
+                if self.hidden > 0:
+                    self.hidden -= 1
+                return Response(res.rc, res.data & ~0x000FFF00)
+            return res
+
+        transport = type("T", (), {"transact": staticmethod(transact)})()
+        return self.guard_with_baseline(word=self.BASE, transport=transport, settle_wait=self.waits.append, **overrides)
+
+    def test_lands_at_poll_2_verifies_and_notes_polls(self) -> None:
+        guard = self.late_guard(2)  # the read-back and the first re-read hide the target, the second re-read shows it
+        result = guard.execute(self.write_req(self.WORD), self.confirm)
+        self.assertIs(result.verified, True)
+        self.assertEqual(result.polls, 2)
+        self.assertEqual(result.readback, Response(0, self.WORD))
+        self.assertFalse(guard.tripped)
+        self.assertEqual(self.waits, [0.002, 0.005])
+        self.assertEqual(self.transport.calls[3], (0, 0x11, 0, 0, self.WORD))
+        self.assertEqual([c[1] for c in self.transport.calls[3:]], [0x11, 0x10, 0x10, 0x10])  # one write, three reads, same cpu/P1/P2
+        self.assertEqual({c[:1] + c[2:4] for c in self.transport.calls[4:]}, {(0, 0, 0)})
+        rb = [r for r in self.records() if r["event"] == "readback"]
+        self.assertEqual(len(rb), 3)
+        self.assertNotIn("verified", rb[0])
+        self.assertIs(rb[0]["pending"], True)
+        self.assertIs(rb[-1]["verified"], True)
+        self.assertEqual(rb[-1]["polls"], 2)
+        self.assertIn("settle_ms", rb[-1])
+        self.assertEqual([r["event"] for r in self.records()].count("attempt"), 3 + 1)  # the re-reads are not attempts
+        self.assertEqual(guard.operations, 3 + 1)  # re-reads are audited but, like the first read-back, not counted (G-237 review f1)
+        self.assertFalse(self.lock_path.exists())
+
+    def test_never_lands_trips_after_four_rereads(self) -> None:
+        guard = self.late_guard(-1)
+        result = guard.execute(self.write_req(self.WORD), self.confirm)
+        self.assertIs(result.verified, False)
+        self.assertEqual(result.polls, 4)
+        self.assertTrue(guard.tripped)
+        self.assertEqual(self.waits, [0.002, 0.005, 0.010, 0.020])
+        self.assertEqual([c[1] for c in self.transport.calls[3:]], [0x11] + [0x10] * 5)
+        self.assertEqual([r["event"] for r in self.records()][-2:], ["readback", "trip"])
+        self.assertIn("after 4 re-read", guard.trip_reason)
+        self.assert_refused(guard, self.read_req(), Refusal.TRIPPED)
+
+    def test_immediate_match_polls_nothing(self) -> None:
+        guard = self.late_guard(0)
+        result = guard.execute(self.write_req(self.WORD), self.confirm)
+        self.assertEqual((result.verified, result.polls, result.settle_ms), (True, 0, None))
+        self.assertEqual(self.waits, [])
+        self.assertNotIn("polls", self.records()[-1])
+
+    def test_other_differences_trip_at_once(self) -> None:
+        for name, bad in (
+            ("ratio", self.WORD ^ 0x01),
+            ("offset", self.WORD ^ 0x00200000),
+            ("mode", self.WORD ^ 0x00100000),
+            ("other target", self.WORD ^ 0x00000100),
+            ("ratio and target gone", 0x00000038),
+            ("target 0 with a different offset", (self.WORD & 0xFFF000FF) ^ 0x00200000),
+        ):
+            with self.subTest(name):
+                self.setUp()
+                self.transport.apply_write = lambda data, bad=bad: bad
+                guard = self.guard_with_baseline(word=self.BASE, settle_wait=self.waits.append)
+                result = guard.execute(self.write_req(self.WORD), self.confirm)
+                self.assertIs(result.verified, False)
+                self.assertEqual(result.polls, 0)
+                self.assertTrue(guard.tripped)
+                self.assertEqual(self.waits, [])
+                self.assertEqual(self.transport.calls[-1][1], 0x10)
+                self.assertEqual([c[1] for c in self.transport.calls[3:]], [0x11, 0x10])
+
+    def test_target_wrong_after_a_poll_trips_then(self) -> None:
+        guard = self.late_guard(1)
+        self.transport.apply_write = lambda data: data
+        real = self.transport.state
+        calls = self.transport.calls
+
+        def flip(call: tuple[int, int, int, int, int]) -> None:
+            if len(calls) == 6:  # the first re-read: the target lands, but wrong
+                real[(0, 0x10, 0, 0)] = self.WORD ^ 0x00000100
+
+        self.transport.before_return = flip
+        result = guard.execute(self.write_req(self.WORD), self.confirm)
+        self.assertEqual((result.verified, result.polls), (False, 1))
+        self.assertTrue(guard.tripped)
+
+    def test_exception_in_a_reread_is_audited_and_trips(self) -> None:
+        guard = self.late_guard(-1)
+        self.transport.raise_on_call[6] = FakeMailboxTimeout("busy stuck")  # call 6 = the first re-read
+        with self.assertRaises(FakeMailboxTimeout):
+            guard.execute(self.write_req(self.WORD), self.confirm)
+        self.assertTrue(guard.tripped)
+        error = [r for r in self.records() if r["event"] == "error"][-1]
+        self.assertEqual(error["stage"], "readback")
+        self.assertFalse(self.lock_path.exists())
+        self.assertEqual(len(guard.revert_plan()), 1)
+
+
 class RevertPlan(GuardCase):
     def test_inverse_words_newest_cpu_first_and_not_executed(self) -> None:
         other = STOCK.with_(ratio=54, v_target_raw=0x490, offset_raw=-2).to_u32()
@@ -1022,14 +1141,20 @@ class Hygiene(unittest.TestCase):
                         self.assertFalse(module == bad or module.startswith(bad + "."), f"{name} imports {module}")
 
     def test_never_sleeps_and_never_evals(self) -> None:
+        sleeps = []
         for name, tree in self.parsed():
             for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute) and node.attr in {"sleep", "system", "popen"}:
+                if isinstance(node, ast.Attribute) and node.attr == "sleep":
+                    sleeps.append(f"{name}:{node.lineno}")  # G-237: exactly one, the injectable default of the bounded OC-point re-read (WriteGuard(settle_wait=))
+                    continue
+                if isinstance(node, ast.Attribute) and node.attr in {"system", "popen"}:
                     self.fail(f"{name}:{node.lineno} uses .{node.attr}")
                 if isinstance(node, ast.Name) and node.id in {"sleep", "eval", "exec", "compile", "__import__"}:
                     self.fail(f"{name}:{node.lineno} uses {node.id}")
                 if isinstance(node, ast.ImportFrom) and any(a.name == "sleep" for a in node.names):
                     self.fail(f"{name}:{node.lineno} imports sleep")
+        self.assertEqual(len(sleeps), 1, sleeps)
+        self.assertTrue(sleeps[0].startswith("guard.py:"), sleeps)
 
 
 if __name__ == "__main__":

@@ -30,8 +30,14 @@ in-process session limit and dwell cannot stop back-to-back invocations -- the s
 * ``AUDIT_UNAVAILABLE`` if the log cannot be read or interpreted: limits that cannot be evaluated are not waived.
 
 Both audit-based checks are repeated once the lock file is held, so two processes that start together cannot both pass them.
-The read-back after a write is part of the same operation: it is logged as ``readback``, never ``attempt``, so it is exempt.
-The guard still never sleeps; it refuses.
+The read-back after a write is part of the same operation: it is logged as ``readback``, never ``attempt``, so it is exempt (G-237: the re-reads of a late OC-point V target, below, are the one exception to "not counted": they count in ``operations``, still not as ``attempt``).
+The guard never sleeps to satisfy a limit; it refuses. Its one wait is G-237's bounded re-read (below).
+
+G-237 (``[MEASURED lnx 2026-10-19]``, registers.md "OC-point V target lands late"): the read-back of a ``0x11`` word whose V target ``[19:8]`` reads 0 while the word written has a
+non-zero one, and ratio, mode and offset are equal, is read again (``0x10``, same cpu/P1/P2, same lock) up to ``len(OC_TARGET_SETTLE_S)`` = 4 times, after 2, 5, 10, 20 ms. A match
+verifies; any other difference, or a target still 0 after the last re-read, trips as always. A write is never repeated. Every read is a ``readback`` record (the unmatched ones
+``pending``, no ``verified``); the last one carries ``polls`` and ``settle_ms``. Each re-read is a WRMSR and counts in :attr:`WriteGuard.operations`, but it is not an ``attempt``
+(no dwell, no per-boot count; the budget caps are 100000 indicators, D-049): the guard re-reads up to 4 times (2/5/10/20 ms), G-237; the wait is injectable (``WriteGuard(settle_wait=...)``), ``time.sleep`` by default.
 
 Plain MSRs (T-023, D-017): a plain ``rdmsr`` / ``wrmsr`` of a turbo ratio table is an :class:`MsrRequest` and goes through the **same**
 chain (:meth:`WriteGuard._execute_msr`): TRIPPED, NO_ENV_FLAG, BAD_CONFIRMATION, [no MSR port], CPU_NOT_ALLOWED, NOT_ALLOWLISTED
@@ -49,7 +55,7 @@ checks also see what this session has read for the request's CPU (``0x1C`` favor
 for the CPU's core kind (D-049: ratio ``0x01 [7:0]``, voltage ``0x28 - 1 LSB``, read live; an unread limit refuses a raise: ``CPU_LIMIT_UNREAD``). Read twins:
 ``0x11->0x10``, ``0x15->0x14``, ``0x1D->0x1C``, ``0x27->0x26``; the read-back of ``0x1D`` compares only ``[7:0]`` (``0x1C`` also carries
 the fused ratio in ``[15:8]``), every other write compares the whole word. The read-backs are extra WRMSRs: they are exempt from this
-guard's session / per-boot counters (``audit.py`` logs them as ``readback``, never ``attempt``) and counted by the planner's pre-flight
+guard's session / per-boot counters (except G-237's re-reads, which add to the session counter) (``audit.py`` logs them as ``readback``, never ``attempt``) and counted by the planner's pre-flight
 budget instead (T-022, ``controls.planner.count_operations``). ``revert_plan`` is XTU-shaped: see :meth:`WriteGuard.revert_plan`.
 
 T-025 (per-V/F-point offsets): ``0x11`` with ``P1=0`` and ``P2`` 1..15 is judged by its own check ``vf_point_offset_bounded`` against the ``0x10`` read of the
@@ -140,6 +146,18 @@ _READBACK_MATCH: Mapping[int, Callable[[int, int], bool]] = MappingProxyType(
         int(Cmd.GRANULAR_RATIO_WRITE): _same_word,
     }
 )
+
+
+#: G-237, registers.md "OC-point V target lands late" ``[MEASURED lnx 2026-10-19]``: the first read-back of a newly created OC point has its ratio but V target 0 (``0x0005B43A`` read
+#: ``0x0000003A`` ~1 ms later); the target shows up asynchronously. The bounded re-read of ``0x10`` waits these seconds before re-read 1, 2, 3, 4 -- 37 ms in all, never a loop without end.
+#: The settle time itself is ``[UNVERIFIED]``; a target that has not landed after the last one trips like any other mismatch. A write is never repeated.
+OC_TARGET_SETTLE_S: tuple[float, ...] = (0.002, 0.005, 0.010, 0.020)
+_V_TARGET_MASK = 0x000FFF00  # VfWord ``[19:8]``
+
+
+def _late_v_target(written: int, read: int) -> bool:
+    """True iff ``read`` is ``written`` with the V target field zero where ``written`` has a non-zero one -- ratio, mode and offset all equal. Anything else is a real mismatch."""
+    return bool(written & _V_TARGET_MASK) and not (read & _V_TARGET_MASK) and (read | (written & _V_TARGET_MASK)) == written
 
 
 def _revert_vf_word(baseline: int, favored: int | None, fused: int | None, cap_ratio: bool = True) -> int:
@@ -264,6 +282,8 @@ class Result:
     response: Response
     readback: Response | None
     verified: bool | None
+    polls: int = 0  # G-237: the 0x10 re-reads it took for a late OC-point V target to show up (0 = the first read-back already decided)
+    settle_ms: float | None = None  # G-237: the time from the first read-back's return to the last re-read's, set whenever ``polls`` > 0
 
 
 class Refusal(str, Enum):
@@ -358,6 +378,7 @@ class WriteGuard:
         boot_id_fn: Callable[[], str | None] = read_boot_id,
         msr_port: MsrPortLike | None = None,
         session_favored_words: Mapping[int, int] | None = None,
+        settle_wait: Callable[[float], None] | None = None,
     ) -> None:
         if not callable(getattr(transport, "transact", None)):
             raise TypeError("transport must have a transact(cpu, cmd, p1, p2, data) method")
@@ -370,6 +391,7 @@ class WriteGuard:
         if msr_port is not None and not (callable(getattr(msr_port, "rdmsr", None)) and callable(getattr(msr_port, "wrmsr", None))):
             raise TypeError("msr_port must have rdmsr(cpu, msr) and wrmsr(cpu, msr, value) methods")
         self._msr_port = msr_port  # None: every MsrRequest is refused (plain MSR access is off)
+        self._settle_wait = time.sleep if settle_wait is None else settle_wait  # G-237: the only wait the guard has (OC_TARGET_SETTLE_S); tests inject one
         self._transport = transport
         self._policy = policy
         self._audit = audit
@@ -407,7 +429,7 @@ class WriteGuard:
 
     @property
     def operations(self) -> int:
-        """The operations this session executed and the per-boot counter counted: every mailbox request (a read is a WRMSR) and every plain write; read-backs and plain
+        """The operations this session executed and the per-boot counter counted: every mailbox request (a read is a WRMSR) and every plain write, plus the 0x10 re-reads of a late OC-point V target (G-237); the first read-back and plain
         ``rdmsr`` reads are not operations (G-141: what a helper op reports as the operations it used)."""
         return self._ops
 
@@ -1029,6 +1051,7 @@ class WriteGuard:
     def _send_and_verify(self, req: Request, confirm: Confirmation, baseline: int | None, twin: int | None) -> Result:
         cpu, cmd, p1, p2 = int(req.cpu), int(req.cmd), int(req.p1), int(req.p2)
         write = twin is not None
+        polls, settle_ms = 0, None
         try:
             response = _require_response(self._transport.transact(cpu, cmd, p1, p2, req.data))
         except BaseException as exc:
@@ -1057,21 +1080,40 @@ class WriteGuard:
             except BaseException as exc:
                 self._record_quietly("error", twin_req, confirm, detail=f"{type(exc).__name__}: {exc}", stage="readback")
                 raise
-            verified = readback.rc == 0 and _READBACK_MATCH.get(cmd, _same_word)(req.data, readback.data)
+            match = _READBACK_MATCH.get(cmd, _same_word)
+            verified = readback.rc == 0 and match(req.data, readback.data)
+            extra: dict[str, object] = {}
+            if cmd == int(Cmd.VOLTAGE_FREQ_WRITE) and p1 == 0 and p2 == 0:  # G-237: only the V target of a new OC point (the core-domain OC word, P1=0 P2=0 -- the measured case) lands late; the ratio, mode and offset must already be what was written
+                settle_from = self._clock()
+                while not verified and polls < len(OC_TARGET_SETTLE_S) and readback.rc == 0 and _late_v_target(req.data, readback.data):
+                    self._record("readback", twin_req, confirm, response=readback, pending=True, poll=polls, expected=f"0x{req.data:08X}")
+                    self._settle_wait(OC_TARGET_SETTLE_S[polls])
+                    try:
+                        readback = _require_response(self._transport.transact(cpu, twin, p1, p2, 0))
+                    except BaseException as exc:
+                        self._record_quietly("error", twin_req, confirm, detail=f"{type(exc).__name__}: {exc}", stage="readback", poll=polls + 1)
+                        raise
+                    polls += 1
+                    # a re-read is a WRMSR like the read-back and, like the first read-back, not counted in ``_ops``: the plan reserves one read-back per write, and a
+                    # counted re-read could push a planned apply over its exact session cap mid-way (G-237 review finding 1). Each re-read is still audited.
+                    verified = readback.rc == 0 and match(req.data, readback.data)
+                if polls:
+                    settle_ms = round(max(0.0, self._clock() - settle_from) * 1000.0, 3)
+                    extra = {"polls": polls, "settle_ms": settle_ms}
             self._record(
-                "readback", twin_req, confirm, response=readback, verified=verified, expected=f"0x{req.data:08X}"
+                "readback", twin_req, confirm, response=readback, verified=verified, expected=f"0x{req.data:08X}", **extra
             )
             if not verified:
                 self._trip(
                     f"read-back of cmd {twin:#04x} cpu {cpu} gave rc {readback.rc} data {readback.data:#010x}, "
-                    f"expected {req.data:#010x}",
+                    f"expected {req.data:#010x}" + (f" after {polls} re-read(s)" if polls else ""),
                     req,
                     confirm,
                 )
         gate_after = self._run_health("after")
         if gate_after is not None and not gate_after[0]:
             self._trip(f"health gate (after) says no: {gate_after[1]}", req, confirm)
-        return Result(req, response, readback, verified)
+        return Result(req, response, readback, verified, polls, settle_ms)
 
     # ---------------------------------------------------------------- audit / trip
     def _record(self, event: str, req: Request, confirm: object, **fields: object) -> None:
