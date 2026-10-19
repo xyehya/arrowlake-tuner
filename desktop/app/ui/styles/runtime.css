@@ -49,6 +49,15 @@
   border-radius: var(--radius);
 }
 
+.rt-why {
+  order: 1; /* its own line under the buttons: they stay on one row */
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
+  font-size: var(--fs-sm);
+  color: var(--warn);
+}
+
 .rt-pending.on {
   color: var(--pending);
   font-weight: 600;

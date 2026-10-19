@@ -4,7 +4,7 @@ import { h } from "../../components/dom.js";
 import { plural } from "../../lib/format.js";
 import { fmtClock } from "../../components/fmt.js";
 import { pendingCounts, discardRt } from "../../lib/rtstate.js";
-import { requestReview, revertRequest } from "./runtime-kinds.js";
+import { requestReview, revertRequest, loadRead } from "./runtime-kinds.js";
 
 export const LOST_ON_REBOOT = "Runtime setting: lost on reboot (the firmware / kernel restores its own value at the next boot).";
 
@@ -25,6 +25,12 @@ export function ensureStyle() {
 /** Heading + one line + the lost-on-reboot chip. */
 export function head(title, sub) {
   return h("div", { class: "rt-head" }, h("h2", { class: "rt-title", text: title }), h("span", { class: "rt-chip", title: LOST_ON_REBOOT, text: "lost on reboot" }), h("p", { class: "rt-sub muted", text: sub }));
+}
+
+/** G-234: read `key` when a tab opens (the journal / boot values for Revert come from this read; a read the tab did not do leaves Revert off). Skipped while a read is under way or the helper is away. */
+export function readOnMount(store, bridge, key) {
+  const s = store.get();
+  if (s.link.state === "connected" && s.rt[key].state !== "reading") void loadRead(store, bridge, key);
 }
 
 /** "Re-read" + the state of the last read of one helper op ("power" | "runtime"). */
@@ -53,7 +59,8 @@ export function createActionBar(store, { revertKind = null, canRevert = () => ""
   const revert = revertKind
     ? h("button", { type: "button", class: "btn", id: "rt-revert", text: "Revert to boot values", on: { click: () => requestReview(store, [revertRequest(revertKind)]) } })
     : null;
-  const el = h("div", { class: "rt-actions" }, count, h("span", { class: "spacer" }), discard, review, revert);
+  const why = revertKind ? h("span", { class: "rt-why muted", id: "rt-revert-why", role: "status", hidden: true }) : null; // the reason Revert is off, in view (a tooltip alone is not feedback)
+  const el = h("div", { class: "rt-actions" }, count, h("span", { class: "spacer" }), why, discard, review, revert);
   function update() {
     const s = store.get();
     const n = pendingCounts(s.rt).total;
@@ -66,9 +73,11 @@ export function createActionBar(store, { revertKind = null, canRevert = () => ""
     discard.disabled = Object.keys(e.power).length + Object.keys(e.caps).length + Object.keys(e.uncore).length === 0; // also an edit the plan would refuse (min above max) can be dropped
     discard.title = "Drop the pending edits of the runtime controls (V/F edits: Discard in the pending bar)";
     if (revert) {
-      const why = canRevert(s.rt);
-      revert.disabled = !!why || s.link.state !== "connected";
-      revert.title = why || "Puts back the values the helper journaled before the first runtime write of this boot (reviewed first)";
+      const reason = canRevert(s.rt) || (s.link.state !== "connected" ? "The helper is not connected." : "");
+      revert.disabled = !!reason;
+      revert.title = reason || "Puts back the values the helper journaled before the first runtime write of this boot (reviewed first)";
+      why.textContent = reason;
+      why.hidden = !reason;
     }
   }
   return { el, update };

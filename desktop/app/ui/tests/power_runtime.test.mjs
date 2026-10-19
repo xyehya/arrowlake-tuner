@@ -14,7 +14,7 @@ import { encodeTau } from "../fixtures/mock-backend-g217.js";
 import { createAppStore } from "../store.js";
 import { powerIntent, runtimeIntent, POWER_REVERT, RUNTIME_REVERT } from "../lib/intent.js";
 import { normCpuLimits, capWindow, uncoreWindow, capsLine, uncoreLine, powerLine, explainRefusal, powerRead, cpuOffsetCell, modelCpuLine, READ_FIRST } from "../lib/cpulimits.js";
-import { initialRt, powerCurrent, powerDisagrees, powerDisabledReason, powerRequest, capRows, uncoreState, runtimeRequest, pendingCounts, ensureRt, editRt } from "../lib/rtstate.js";
+import { initialRt, revertReason, powerCurrent, powerDisagrees, powerDisabledReason, powerRequest, capRows, uncoreState, runtimeRequest, pendingCounts, ensureRt, editRt } from "../lib/rtstate.js";
 import { ensureTune, requestReview as pendingBarReview, syncPending, setPendingAll, discardDraft } from "../views/tune.js";
 import { powerView, runtimeView, POWER_KIND, RUNTIME_KIND, registerRuntimeKinds, requestReview, revertRequest, PL_NAME } from "../views/tune/runtime-kinds.js";
 import { KINDS, createApplyController, planWarnings, readbackCells, partialWording, summarizeResult } from "../views/tune/apply.js";
@@ -524,4 +524,34 @@ test("G-233: no E label shows 49 for a stock 4900000 E-core (plan view, revert, 
   assert.equal(m.tiles[0].maxRatio, 48);
   assert.equal(m.tiles[0].maxKhz, 4900000);
   assert.equal(clockCeiling([{ max_ratio: 48 }]), 4800);
+
+// ---- G-234 ----
+test("G-234: revertReason: only a read that says 'nothing journaled' turns Revert off; unread / unreadable stays usable", () => {
+  const rt = initialRt();
+  assert.match(revertReason(rt, "runtime"), /Not read yet/);
+  assert.match(revertReason({ ...rt, power: { ...rt.power, state: "reading" } }, "power"), /Reading/);
+  assert.equal(revertReason({ ...rt, runtime: { ...rt.runtime, state: "error", error: "x" } }, "runtime"), "", "the plan answers");
+  const rd = (key, result) => ({ ...rt, [key]: { ...rt[key], state: "ready", result } });
+  assert.match(revertReason(rd("runtime", { journal: null }), "runtime"), /Nothing to revert/);
+  assert.match(revertReason(rd("runtime", { journal: { caps: {}, uncore: {}, in_flight: false } }), "runtime"), /Nothing to revert/);
+  assert.equal(revertReason(rd("runtime", { journal: { caps: {}, uncore: { max_ratio: 40 } } }), "runtime"), "");
+  assert.equal(revertReason(rd("runtime", { journal: { caps: { 0: 5700000 }, uncore: {} } }), "runtime"), "");
+  assert.equal(revertReason(rd("runtime", { journal: null, note: "the runtime journal is unusable" }), "runtime"), "", "unreadable journal: the plan decides");
+  assert.match(revertReason(rd("power", { boot: null }), "power"), /Nothing to revert/);
+  assert.equal(revertReason(rd("power", { boot: { pl1_w: 250 } }), "power"), "");
+});
+
+test("G-234: a finished revert drops the pending edits of its kind even when the read-back table does not match; a forward apply keeps them then", async () => {
+  const b = await mockBridge();
+  const store = createAppStore();
+  ensureRt(store);
+  const summary = (o) => ({ complete: true, allMatch: false, ...o });
+  editRt(store, (e) => ({ ...e, caps: { P0: 50 }, uncore: { max_ratio: 38 } }));
+  await RUNTIME_KIND.afterApply({ store, bridge: b, section: { intent: { caps: { 0: 50 } } }, summary: summary({}) });
+  assert.deepEqual(store.get().rt.edits.caps, { P0: 50 }, "a forward apply that did not match keeps the edit");
+  await RUNTIME_KIND.afterApply({ store, bridge: b, section: { intent: { revert: true } }, summary: summary({ complete: false }) });
+  assert.deepEqual(store.get().rt.edits.caps, { P0: 50 }, "an incomplete revert keeps it");
+  await RUNTIME_KIND.afterApply({ store, bridge: b, section: { intent: { revert: true } }, summary: summary({}) });
+  assert.deepEqual([store.get().rt.edits.caps, store.get().rt.edits.uncore], [{}, {}]);
+  assert.equal(store.get().rt.runtime.state, "ready", "and the fields are re-read");
 });

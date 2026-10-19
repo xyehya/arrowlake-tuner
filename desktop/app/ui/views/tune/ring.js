@@ -7,11 +7,11 @@ import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum, TIMES } from "../../lib/format.js";
 import { sections, RING_ID } from "../../lib/units.js";
-import { ensureRt, editRt, uncoreState } from "../../lib/rtstate.js";
+import { ensureRt, editRt, revertReason, uncoreState } from "../../lib/rtstate.js";
 import { normCpuLimits, uncoreWindow, uncoreLine, READ_FIRST } from "../../lib/cpulimits.js";
 import { createCurveEditor } from "./curve-editor.js";
 import { loadRead, registerRuntimeKinds } from "./runtime-kinds.js";
-import { ensureStyle, head, createReadBar, createActionBar, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
+import { ensureStyle, head, createReadBar, createActionBar, readOnMount, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
 
 const UNCORE = [
   { key: "min_ratio", label: "Uncore minimum ratio", file: "min_freq_khz" },
@@ -42,7 +42,7 @@ export function mount(el, ctx) {
   const readBar = createReadBar(store, "runtime", "the uncore state", () => loadRead(store, bridge, "runtime"));
   const actions = createActionBar(store, {
     revertKind: "runtime",
-    canRevert: (rt) => (rt.runtime.result && rt.runtime.result.journal ? "" : "Nothing to revert: no runtime value was written in this boot."),
+    canRevert: (rt) => revertReason(rt, "runtime"),
   });
   const err = h("p", { class: "rt-error", role: "alert", hidden: true });
   const ringHost = h("div", { class: "rt-ring" });
@@ -125,6 +125,7 @@ export function mount(el, ctx) {
     const lo = edit.min_ratio ?? (cur ? cur.min : null);
     const hi = edit.max_ratio ?? (cur ? cur.max : null);
     if (Object.keys(edit).length && isNum(lo) && isNum(hi) && lo > hi) warns.append(h("li", { dataset: { code: "UNCORE_MIN_ABOVE_MAX" }, text: "Uncore minimum " + lo + TIMES + " is above the maximum " + hi + TIMES + ": this is not sent." }));
+    if (result && result.note) warns.append(h("li", { text: result.note })); // e.g. the journal could not be read: Revert stays usable, the plan answers
     if (cur && cur.min === cur.initialMin && cur.max === cur.initialMax && !Object.keys(edit).length) info.append(limitNote("The uncore range is at the driver's initial values."));
     readBar.update();
     actions.update();
@@ -139,6 +140,7 @@ export function mount(el, ctx) {
       if (state === "connected" && store.get().rt.runtime.state === "idle") void loadRead(store, bridge, "runtime");
     }),
   );
+  readOnMount(store, bridge, "runtime"); // refresh: the journal of this boot may have changed since the last visit (or never been read)
 }
 
 export function unmount() {

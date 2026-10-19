@@ -1,4 +1,4 @@
-// components/nav-rail.js: left rail, PLAN §4.1: Dashboard · Tune · Curves · Stress · Profiles · System · Audit, icons + labels, keys 1..7.
+// components/nav-rail.js: left rail, PLAN §4.1: Dashboard · Tune · Curves · Stress · Profiles · System · Audit, icons + labels, keys Alt+1..7 (G-234).
 import { h, icon, clear } from "./dom.js";
 
 export const SCREENS = [
@@ -11,9 +11,9 @@ export const SCREENS = [
   { id: "audit", label: "Audit", key: "7", task: "G-206", blurb: "The helper's audit log tail, filterable." },
 ];
 
-/** Screen id for a pressed key ("1".."7"), or null. Ignores modified keys and keys typed into fields (checked by the caller via `typing`). */
-export function screenForKey(key, { typing = false, ctrl = false, alt = false, meta = false } = {}) {
-  if (typing || ctrl || alt || meta) return null;
+/** Screen id for a pressed Alt+digit ("1".."7"), or null. G-234: a bare digit never switches (focus can sit on a non-field after a click, so typing a value would change screens); Alt works from a field too. */
+export function screenForKey(key, { ctrl = false, alt = false, meta = false } = {}) {
+  if (!alt || ctrl || meta) return null;
   const s = SCREENS.find((x) => x.key === key);
   return s ? s.id : null;
 }
@@ -26,10 +26,10 @@ export function createNavRail(root, store, { onSelect }) {
   for (const s of SCREENS) {
     const a = h(
       "a",
-      { class: "nav-item", href: `#/${s.id}`, dataset: { screen: s.id }, id: `nav-${s.id}`, title: `${s.label} (${s.key})`, on: { click: (e) => { e.preventDefault(); onSelect(s.id); } } },
+      { class: "nav-item", href: `#/${s.id}`, dataset: { screen: s.id }, id: `nav-${s.id}`, title: `${s.label} (Alt+${s.key})`, on: { click: (e) => { e.preventDefault(); onSelect(s.id); } } },
       icon(s.id),
       h("span", { class: "nav-label", text: s.label }),
-      h("kbd", { class: "nav-key", text: s.key }),
+      h("kbd", { class: "nav-key", text: `Alt+${s.key}` }),
     );
     items.set(s.id, a);
     root.append(a);

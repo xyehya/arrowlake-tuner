@@ -227,13 +227,16 @@ test("fmt: n/a, units, clock, sparkline segments", () => {
   assert.ok(sparkSegments([5, 5, 5], 100, 20)[0].every((p) => !p.includes("NaN"))); // flat series must not divide by zero
 });
 
-test("nav: keys 1..7 map to the seven screens; modifiers and typing are ignored", () => {
-  assert.deepEqual("1234567".split("").map((k) => screenForKey(k)), SCREEN_IDS);
-  assert.equal(screenForKey("8"), null);
-  assert.equal(screenForKey("2", { typing: true }), null);
+test("nav: Alt+1..7 map to the seven screens; a bare digit, Ctrl / Meta combinations and other keys do nothing (G-234)", () => {
+  assert.deepEqual("1234567".split("").map((k) => screenForKey(k, { alt: true })), SCREEN_IDS);
+  assert.equal(screenForKey("8", { alt: true }), null);
+  for (const k of "1234567") assert.equal(screenForKey(k), null, "a bare digit never switches screens");
+  assert.equal(screenForKey("2", { alt: true, ctrl: true }), null);
+  assert.equal(screenForKey("2", { alt: true, meta: true }), null);
   assert.equal(screenForKey("2", { ctrl: true }), null);
-  assert.equal(screenForKey("a"), null);
+  assert.equal(screenForKey("a", { alt: true }), null);
 });
+
 
 // ---------------------------------------------------------------- bridge: link
 test("bridge: normalizeLink maps helper-link kinds to named states and fixes", () => {

@@ -382,6 +382,74 @@ class TestTabs(unittest.TestCase):
             self.assertIn("The CPU's own offset range", page.get_attribute(".vf-table th.c-lim", "title"))
             self.assert_clean(page)
 
+    # ---- G-234: Revert follows the journal of the read, not an apply of this window ----
+    APPLY_JS = """
+    async ([op, args]) => {
+      const b = window.__arltuner.bridge;
+      const p = await b.call(op + '.plan', args);
+      const a = await b.call(op + '.apply', { plan_id: p.result.plan_id, typed: 'CONFIRM ' + p.result.nonce });
+      if (a.ok && a.pending) await b.wait(a.id);
+      return p.ok && a.ok;
+    }
+    """
+
+    @browser
+    def test_revert_is_offered_from_the_journal_the_tab_reads_even_when_this_window_applied_nothing(self):
+        with self.page("ring") as page:
+            self.assertTrue(page.locator("#rt-revert").is_disabled())
+            why = page.locator("#rt-revert-why")
+            self.assertTrue(why.is_visible(), "the reason is shown inline, not only as a tooltip")
+            self.assertIn("Nothing to revert", why.inner_text())
+            tops = page.evaluate("['rt-review', 'rt-revert', 'rt-discard'].map((id) => Math.round(document.getElementById(id).getBoundingClientRect().top))")
+            self.assertEqual(len(set(tops)), 1, f"the buttons stay on one row with the reason shown: {tops}")
+            self.assertTrue(page.evaluate(self.APPLY_JS, ["runtime", {"uncore": {"max_ratio": 38}}]), "an apply the app did not do through the drawer (another window / the CLI)")
+            self.assertTrue(page.locator("#rt-revert").is_disabled(), "not re-read yet")
+            page.click("#subtab-cores")
+            page.click("#subtab-ring")  # the tab reads when it opens
+            page.wait_for_selector("tr[data-key='max_ratio'] .rt-now:has-text('38×')")
+            self.assertFalse(page.locator("#rt-revert").is_disabled())
+            self.assertTrue(page.locator("#rt-revert-why").is_hidden())
+            page.click("#subtab-ratios")  # the same journal serves the Ratio caps tab
+            page.wait_for_selector(".rt-table tr[data-unit='P0']")
+            self.assertFalse(page.locator("#rt-revert").is_disabled())
+            page.click("#rt-revert")
+            page.wait_for_selector("#apply-go")
+            self.assertIn("Uncore max ratio", page.inner_text(".apply-section[data-kind='runtime']"))
+        with self.page("power") as page:
+            self.assertTrue(page.locator("#rt-revert").is_disabled())
+            self.assertIn("Nothing to revert", page.inner_text("#rt-revert-why"))
+            self.assertTrue(page.evaluate(self.APPLY_JS, ["power", {"power": {"pl1_w": 230}}]))
+            page.click("#subtab-cores")
+            page.click("#subtab-power")
+            page.wait_for_selector("tr[data-key='pl1_w'] .rt-now:has-text('230 W')")
+            self.assertFalse(page.locator("#rt-revert").is_disabled())
+            self.assertTrue(page.locator("#rt-revert-why").is_hidden())
+
+    @browser
+    def test_after_a_revert_the_new_value_fields_show_the_values_in_force(self):
+        for query in ("", "&rtapply=mismatch"):
+            with self.page("ring", query) as page:
+                page.wait_for_selector("tr[data-key='max_ratio']")
+                self.edit(page, "Uncore maximum ratio", "38")
+                page.click("#rt-review")
+                page.wait_for_selector("#apply-go")
+                page.click("#apply-go")
+                page.wait_for_selector(".apply-result", timeout=8000)
+                page.click("#apply-close")
+                page.wait_for_selector("tr[data-key='max_ratio'] .rt-now:has-text('38×')")
+                self.edit(page, "Uncore minimum ratio", "20")  # a new edit, not applied
+                self.assertEqual(page.inner_text(".rt-pending"), "1 pending runtime change")
+                page.click("#rt-revert")
+                page.wait_for_selector("#apply-go")
+                page.click("#apply-go")
+                page.wait_for_selector(".apply-result", timeout=8000)
+                page.click("#apply-close")
+                page.wait_for_selector("tr[data-key='max_ratio'] .rt-now:has-text('40×')")
+                self.assertEqual(page.get_by_label("Uncore maximum ratio", exact=True).input_value(), "40", query)
+                self.assertEqual(page.get_by_label("Uncore minimum ratio", exact=True).input_value(), page.inner_text("tr[data-key='min_ratio'] .rt-now").replace("×", ""), query)
+                self.assertEqual(page.inner_text(".rt-pending"), "No pending changes", query)
+                self.assertEqual(page.locator("tr.pending").count(), 0, query)
+
     # ---- the pending bar covers everything; the limits are the CPU's ----
     @browser
     def test_pending_bar_counts_the_runtime_edits_and_one_review_covers_vf_power_and_caps(self):

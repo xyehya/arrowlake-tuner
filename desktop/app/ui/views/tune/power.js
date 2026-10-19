@@ -7,10 +7,10 @@
 import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum } from "../../lib/format.js";
-import { ensureRt, editRt, powerCurrent, powerDisagrees, powerDisabledReason } from "../../lib/rtstate.js";
+import { ensureRt, editRt, revertReason, powerCurrent, powerDisagrees, powerDisabledReason } from "../../lib/rtstate.js";
 import { normCpuLimits, powerLine, powerRead, READ_FIRST } from "../../lib/cpulimits.js";
 import { loadRead, registerRuntimeKinds, PL_NAME } from "./runtime-kinds.js";
-import { ensureStyle, head, createReadBar, createActionBar, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
+import { ensureStyle, head, createReadBar, createActionBar, readOnMount, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
 
 const FIELDS = [
   { key: "pl1_w", label: PL_NAME.pl1_w, unit: "W", step: 1, big: 10, decimals: 0, reg: "powercap constraint_0 (long_term) · MSR 0x610 bits 14:0" },
@@ -44,7 +44,7 @@ export function mount(el, ctx) {
   const readBar = createReadBar(store, "power", "the power limits", () => loadRead(store, bridge, "power"));
   const actions = createActionBar(store, {
     revertKind: "power",
-    canRevert: (rt) => (rt.power.result && rt.power.result.boot ? "" : "Nothing to revert: no power limit was written in this boot (the helper journals the values before the first write)."),
+    canRevert: (rt) => revertReason(rt, "power"),
   });
   const info = h("div", { class: "rt-info" });
   const warns = h("ul", { class: "rt-warns", "aria-label": "Warnings" });
@@ -122,6 +122,7 @@ export function mount(el, ctx) {
       if (state === "connected" && store.get().rt.power.state === "idle") void loadRead(store, bridge, "power");
     }),
   );
+  readOnMount(store, bridge, "power"); // refresh: the journal of this boot may have changed since the last visit (or never been read)
 }
 
 export function unmount() {
