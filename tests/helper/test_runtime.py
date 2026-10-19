@@ -33,8 +33,31 @@ def e_max() -> int:
     return int(SimCpufreq().read(8, "cpuinfo_max_freq"))
 
 
+class FakeClock:
+    """The read-back's clock (G-232): ``sleep`` advances ``now``, so a 500 ms deadline costs no time."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, s: float) -> None:
+        self.sleeps.append(s)
+        self.now += s
+
+
 class RuntimeCase(HelperCase):
     n = 0
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.clock = FakeClock()
+        for name, fn in (("_monotonic", self.clock.monotonic), ("_sleep", self.clock.sleep)):
+            p = mock.patch.object(ops_runtime, name, fn)
+            p.start()
+            self.addCleanup(p.stop)
 
     def boot(self, policy: str = BASE + RUNTIME, files: SimRuntimeFiles | None = None, **cfg: Any) -> Any:
         self.policy.write_text(policy, encoding="utf-8", newline="\n")
@@ -269,6 +292,64 @@ class Caps(RuntimeCase):
         self.assertIn("reads", res["readback"][0]["problem"])
         self.assertEqual([r["event"] for r in self.runtime_records()], ["runtime_attempt", "readback", "trip"])
         self.assertFalse(self.journal_doc()["in_flight"])  # the apply ended
+
+
+class ReadbackRace(RuntimeCase):
+    """G-232: cpufreq applies ``scaling_max_freq`` asynchronously, so the first reads after the write may still show the old value [MEASURED lnx 2026-10-19]."""
+
+    def readback_record(self) -> dict[str, Any]:
+        return next(r for r in self.runtime_records() if r["event"] == "readback")
+
+    def test_a_cap_that_lands_a_few_reads_late_is_ok_and_audited_with_the_poll_count(self) -> None:
+        sim = SimRuntimeFiles(SimCpufreq(), range(24), delay_reads=3)
+        h = self.boot(files=sim)
+        res = self.go(h, caps={"3": 45})
+        self.assertEqual(res["readback"][0]["match"], True)
+        self.assertEqual(self.cap(3), 4_500_000)
+        rec = self.readback_record()
+        self.assertEqual((rec["matches"], rec["polls"], rec["elapsed_ms"]), (True, 4, 30))
+        self.assertEqual(self.clock.sleeps, [0.01] * 3)
+        self.assertEqual([r["event"] for r in self.runtime_records() if r["event"] == "readback"], ["readback"])  # one read-back record per step
+
+    def test_a_cap_that_lands_at_the_end_of_the_window_is_still_ok_and_one_later_is_not(self) -> None:
+        reads = int(ops_runtime.READBACK_DEADLINE_S / ops_runtime.READBACK_POLL_S)  # the deadline read is the 51st
+        sim = SimRuntimeFiles(SimCpufreq(), range(24), delay_reads=reads)
+        h = self.boot(files=sim)
+        res = self.go(h, caps={"3": 45})
+        self.assertEqual(self.readback_record()["polls"], reads + 1)
+        self.assertTrue(res["readback"][0]["match"])
+        sim2 = SimRuntimeFiles(SimCpufreq(), range(24), delay_reads=reads + 1)
+        self.wire(h, sim2)
+        res = self.apply(h, self.plan(h, caps={"3": 44}))
+        self.assertFalse(res["complete"])
+        self.assertEqual(res["stop"]["kind"], "unverified")
+
+    def test_a_write_that_never_applies_is_a_mismatch_at_the_deadline(self) -> None:
+        sim = SimRuntimeFiles(SimCpufreq(), range(24), drop_writes=True)
+        h = self.boot(files=sim)
+        res = self.apply(h, self.plan(h, caps={"8": 40}))
+        self.assertEqual((res["stop"]["kind"], res["stop"]["tripped"], res["writes_sent"]), ("unverified", True, 1))
+        rec = self.readback_record()
+        self.assertEqual((rec["matches"], rec["polls"], rec["elapsed_ms"]), (False, 51, 500))
+        self.assertEqual([r["event"] for r in self.runtime_records()], ["runtime_attempt", "readback", "trip"])
+        self.assertFalse(self.journal_doc()["in_flight"])
+
+    def test_the_journal_keeps_the_values_replaced_and_ends_settled_with_a_delayed_apply(self) -> None:
+        h = self.boot(files=SimRuntimeFiles(SimCpufreq(), range(24), delay_reads=5))
+        before = self.cap(3)
+        self.go(h, caps={"3": 45})
+        doc = self.journal_doc()
+        self.assertEqual((doc["caps"], doc["in_flight"]), ({"3": before}, False))
+
+    def test_a_delayed_revert_and_a_delayed_uncore_limit_read_back_ok(self) -> None:
+        sim = SimRuntimeFiles(SimCpufreq(), range(24), delay_reads=4)
+        h = self.boot(files=sim)
+        before = self.cap(3)
+        self.go(h, caps={"3": 45})
+        self.go(h, uncore={"max_ratio": 30})
+        res = self.go(h, revert=True)
+        self.assertTrue(all(x["match"] for x in res["readback"]))
+        self.assertEqual(self.cap(3), before)
 
 
 class Parking(RuntimeCase):

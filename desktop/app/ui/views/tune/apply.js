@@ -182,6 +182,27 @@ export function summarizeResult(result) {
   };
 }
 
+/**
+ * G-232: the cells of one read-back row. V/F rows say {unit, point, cpu, expected, actual}; the power / runtime helpers say {domain?, key, expected: [lo, hi], file: value read}, which are shown by
+ * file and key ("cpu7" / "scaling_max_freq"), never as a V/F "pt".
+ */
+export function readbackCells(x) {
+  if (typeof x.unit === "string") return { unit: x.point === "turbo" ? "turbo table " + x.unit : x.unit, point: x.point === 0 ? "OC point" : x.point === "turbo" ? "ratios" : "pt " + x.point, cpu: isNum(x.cpu) ? x.cpu : "", expected: x.expected ?? DASH, actual: x.actual ?? "not read back" };
+  const key = String(x.key ?? "?");
+  const m = /^cpu(\d+)$/.exec(key);
+  const [lo, hi] = Array.isArray(x.expected) ? x.expected : [];
+  const [unit, point] = x.domain === "caps" ? [key, "scaling_max_freq"] : x.domain === "uncore" ? ["uncore", key.replace("_ratio", "_freq_khz")] : ["power", key];
+  return { unit, point, cpu: m ? Number(m[1]) : "", expected: isNum(lo) ? (lo === hi ? String(lo) : lo + "–" + hi) : DASH, actual: isNum(x.file) ? String(x.file) : "not read back" };
+}
+
+/** G-232: the red box of a partial apply: V/F words speak of the CPU's words; the runtime kinds (power / caps / uncore) of runtime settings, which a reboot restores. */
+export function partialWording(runtimeKind, tripped = false) {
+  const guard = tripped ? " The guard tripped." : "";
+  return runtimeKind
+    ? { title: "Some runtime settings were written, some not.", text: "The table shows which. Use Revert to boot values, or reboot (runtime values do not survive a reboot)." + guard }
+    : { title: "The CPU holds a mix of old and new words.", text: "Do not rely on it: restore the accepted state, or cold boot. The table says which words did land." + guard };
+}
+
 export function resultHeadline(s) {
   if (!s.complete) return "Partial apply: it stopped after " + (s.writesSent !== null ? plural(s.writesSent, "write") : "some writes") + (s.stop && s.stop.reason ? ". " + s.stop.reason : "");
   if (!s.total) return "Applied; the helper returned no read-back words";
@@ -676,7 +697,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     const prog = h("progress", { class: "apply-bar", max: 1, value: 0, hidden: sec.status !== "applying", "aria-label": "Apply progress" });
     const progText = h("p", { class: "apply-progress muted", role: "status", hidden: sec.status !== "applying" });
     const top = h("div", { class: "apply-top" }, prog, progText);
-    if (sec.status === "done" && sec.summary) top.append(resultNode(sec.summary));
+    if (sec.status === "done" && sec.summary) top.append(resultNode(sec.summary, custom !== null));
     if (sec.error && sec.status !== "applying") top.append(errorNode(sec));
     const vc = isObj(plan.vccia) && isNum(plan.vccia.predicted_v) ? plan.vccia : null;
     if (vc) {
@@ -738,16 +759,18 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     const e = sec.error;
     const text = e.code === "PLAN_STALE" ? "A word changed since this plan was made, or the plan is gone (plans do not survive a helper restart). Nothing was written. " + (e.message || "")
       : e.code === "CONFIRM_MISMATCH" ? "The helper did not accept the confirmation (used already, or wrong). Nothing was written. " + (e.message || "")
-      : e.code === "CANCELLED" ? "Cancelled between transactions. The requests already sent are in the audit log; the CPU may hold a mix of old and new words. " + (e.message || "")
+      : e.code === "CANCELLED" ? "Cancelled between transactions. The requests already sent are in the audit log; " + (kinds[sec.kind] && kinds[sec.kind].view ? "some runtime settings may be written, some not. " : "the CPU may hold a mix of old and new words. ") + (e.message || "")
       : (e.message || e.code || "The helper refused.");
     return h("div", { class: "apply-error-box", role: "alert", dataset: { code: e.code || "" } }, h("strong", { text: sec.status === "cancelled" ? "Cancelled" : sec.status === "stale" ? "Plan is stale" : "Not applied" }), h("p", { text }));
   }
 
-  function resultNode(s) {
+  function resultNode(s, runtimeKind = false) {
     const box = h("div", { class: "apply-result", dataset: { ok: String(s.allMatch) } });
     box.append(h("p", { class: "apply-headline" }, pill(resultHeadline(s), s.allMatch ? "ok" : "mismatch")));
-    if (!s.complete) box.append(h("div", { class: "apply-error-box", role: "alert" }, h("strong", { text: "The CPU holds a mix of old and new words." }), h("p", { text: "Do not rely on it: restore the accepted state, or cold boot. The table says which words did land." + (s.stop && s.stop.tripped === true ? " The guard tripped." : "") })));
-    else if (s.mismatches.length) box.append(h("p", { class: "apply-warn-line", text: "Do not trust this state: re-apply the accepted profile or cold boot." }));
+    if (!s.complete) {
+      const wd = partialWording(runtimeKind, s.stop && s.stop.tripped === true);
+      box.append(h("div", { class: "apply-error-box", role: "alert" }, h("strong", { text: wd.title }), h("p", { text: wd.text })));
+    } else if (s.mismatches.length) box.append(h("p", { class: "apply-warn-line", text: runtimeKind ? "Do not trust this state: use Revert to boot values, or reboot." : "Do not trust this state: re-apply the accepted profile or cold boot." }));
     if (s.opsUsed !== null) box.append(h("p", { class: "muted", text: s.opsUsed + " mailbox operations used." }));
     for (const u of s.residual) box.append(h("p", { class: "muted", text: "Residual OC point rewritten on " + u + "." }));
     for (const why of s.ringRefused) box.append(h("p", { class: "apply-warn-line", text: "Ring not written: " + why }));
@@ -758,9 +781,12 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     }
     if (s.readback.length) {
       const t = h("table", { class: "apply-table", "aria-label": "Read-back" }, h("thead", {}, h("tr", {}, ["Unit", "Point", "CPU", "Expected", "Actual", "Result"].map((x) => h("th", { scope: "col", text: x })))));
-      t.append(h("tbody", {}, s.readback.map((x) => h("tr", { class: x.match === true ? "" : "is-bad", dataset: { match: String(x.match === true) } },
-        h("td", { text: x.point === "turbo" ? "turbo table " + x.unit : x.unit }), h("td", { text: x.point === 0 ? "OC point" : x.point === "turbo" ? "ratios" : "pt " + x.point }), h("td", { class: "num", text: isNum(x.cpu) ? x.cpu : "" }),
-        h("td", { class: "mono", text: x.expected ?? DASH }), h("td", { class: "mono", text: x.actual ?? "not read back" }), h("td", {}, pill(x.match === true ? "match" : "mismatch", x.match === true ? "ok" : "mismatch"))))));
+      t.append(h("tbody", {}, s.readback.map((x) => {
+        const c = readbackCells(x);
+        return h("tr", { class: x.match === true ? "" : "is-bad", dataset: { match: String(x.match === true) } },
+          h("td", { text: c.unit }), h("td", { text: c.point }), h("td", { class: "num", text: c.cpu }),
+          h("td", { class: "mono", text: c.expected }), h("td", { class: "mono", text: c.actual }), h("td", {}, pill(x.match === true ? "match" : "mismatch", x.match === true ? "ok" : "mismatch")));
+      })));
       box.append(h("details", { class: "apply-readback", open: !s.allMatch }, h("summary", { text: "Read-back table (" + s.total + " words)" }), h("div", { class: "scroll apply-scroll" }, t)));
     }
     return box;
