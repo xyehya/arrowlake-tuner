@@ -143,6 +143,24 @@ class MeasureAudit(MeasureCase):
         self.assertEqual(dele["curve_id"], curve)
         self.assertEqual(attempts(self), 0)
 
+    def test_curves_update_and_delete_are_refused_before_the_change_when_the_log_cannot_be_written(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root ignores file modes")
+        h = self.start_measure()
+        curve = h.call("m", "vf.measure", {"mode": "quick", "units": ["P1"]}, timeout=60)["result"]["curve_id"]
+        name = h.call("g", "curves.get", {"id": curve})["result"]["name"]
+        for mode in (0o400, 0o666):  # not writable / not trusted (group- and world-writable)
+            self.audit.chmod(mode)
+            self.addCleanup(self.audit.chmod, 0o600)
+            for op, args in (("curves.update", {"id": curve, "name": "renamed", "baseline": True}), ("curves.delete", {"id": curve})):
+                reply = h.call("x", op, args)
+                self.assertEqual((error_code(reply), reply["error"]["detail"]["check"]), ("REFUSED", "AUDIT_UNAVAILABLE"), (mode, op, reply))
+                self.assertIn("nothing was changed", reply["error"]["message"])
+            row = h.call("g2", "curves.get", {"id": curve})["result"]
+            self.assertEqual((row["name"], row.get("baseline")), (name, False), "the curve is untouched")
+        self.audit.chmod(0o600)
+        self.assertTrue(h.call("u", "curves.update", {"id": curve, "name": "renamed"})["ok"], "writable again: it goes through")
+
 
 CAP = "scaling_max_freq"
 MIN = "scaling_min_freq"
@@ -181,6 +199,24 @@ class RecoveryAudit(MeasureCase):
         (end,) = results(self, "journal.recover")
         self.assertEqual((end["restored"], end["outcome"], len(end["failures"])), (False, "kept", 1))
         self.assertIn("NOT restored", end["detail"])
+
+    def test_a_restore_that_fails_while_reading_has_an_error_record_and_says_not_restored(self) -> None:
+        self.stale()
+        real = self.cpufreq.read
+
+        def read(cpu: int, attr: str) -> str | None:
+            if (cpu, attr) == (3, CAP):
+                raise OSError(5, "injected read failure")
+            return real(cpu, attr)
+
+        self.cpufreq.read = read  # type: ignore[method-assign]
+        self.start_measure().call("p", "preflight")
+        self.assertTrue(self.journal.exists())
+        (err,) = events(self, "error")
+        self.assertEqual((err["path"], err["op"]), ("cpu3/cpufreq/scaling_max_freq", "journal.recover"))
+        self.assertIn("injected read failure", err["reason"])
+        (end,) = results(self, "journal.recover")
+        self.assertEqual((end["restored"], end["outcome"], [f["path"] for f in end["failures"]]), (False, "kept", ["cpu3/cpufreq/scaling_max_freq"]))
 
     def test_no_journal_means_no_record(self) -> None:
         self.start_measure().call("p", "preflight")
@@ -234,6 +270,7 @@ class StressAudit(StressCase):
         self.assertEqual(events(self, "runtime_attempt"), [])
         (end,) = results(self, "stress.start")
         self.assertEqual((end["writes"], end["result_id"], end["ratio_cap"]), (0, reply["result"]["id"], None))
+        self.assertEqual(end["detail"], f"stress.start: no caps written; result stored as {reply['result']['id']}")
 
     def test_a_cap_write_that_fails_has_its_own_record_and_the_error_result(self) -> None:
         tool = self.fake("stress-ng", "stress-ng-ok")

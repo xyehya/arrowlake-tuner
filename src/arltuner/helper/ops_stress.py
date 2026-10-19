@@ -800,11 +800,11 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
                 notes.append(f"helper: {problem}")
         elapsed = max(elapsed, w.monotonic() - t0) if proc is not None else elapsed
         if journaled:
-            restore_problems = _restore(mw, entries)
+            restore_problems = _restore(mw, entries, audit)
             if not restore_problems:
                 _remove_journal(mw)
     if error is not None:
-        lost = audit.result(outcome="error", screen=kind, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems, error=f"{type(error).__name__}: {error}"[:200])
+        lost = audit.result(outcome="error", detail=None if cap is not None else "stress.start: no caps written; the run ended with an error", screen=kind, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems, error=f"{type(error).__name__}: {error}"[:200])
         if lost:
             helper.cfg.log(lost)
         if isinstance(error, OpError) and not restore_problems:
@@ -873,7 +873,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except StoreError as exc:
         rid, path = None, None
         result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: the result could not be stored: {exc.message}")])[:MAX_ERROR_LINES]
-    lost = audit.result(outcome=stopped_by, screen=kind, result_id=rid, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems)  # G-235
+    lost = audit.result(outcome=stopped_by, detail=None if cap is not None else f"stress.start: no caps written; result stored as {rid}", screen=kind, result_id=rid, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems)  # G-235
     if lost:
         result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: {lost}")])[:MAX_ERROR_LINES]
     if restore_problems:  # the run's cpufreq changes are still in force: not a success, whatever the screen found

@@ -806,6 +806,19 @@ class Recovery(RuntimeCase):
         self.assertTrue(ops_runtime.recover_journal(h.helper))  # the next start tries again
         self.assertFalse(self.journal_doc()["in_flight"])
 
+    def test_an_in_flight_journal_is_restored_at_start_even_when_the_audit_log_cannot_be_opened(self) -> None:
+        h = self.boot()
+        cap4 = self.cap(4)
+        self.crash_midway(h)
+        self.audit.unlink()
+        self.audit.mkdir()  # not a file: AuditLog cannot open it (G-235: the caps back beat the record)
+        self.logs.clear()
+        self.assertTrue(ops_runtime.recover_journal(h.helper))
+        self.assertEqual((self.cap(3), self.cap(4)), (P_MAX, cap4))
+        self.assertFalse(self.journal_doc()["in_flight"])
+        self.assertTrue(any("NOT audited" in line for line in self.logs), self.logs)
+        self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
+
     def test_a_revert_also_clears_an_in_flight_journal_for_the_operator(self) -> None:
         h = self.boot()
         self.crash_midway(h)

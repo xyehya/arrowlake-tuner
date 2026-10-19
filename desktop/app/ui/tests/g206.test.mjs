@@ -496,6 +496,7 @@ test("audit: G-235 summary records show under Writes & refusals, the detail colu
   assert.equal(auditRow(start).detail, start.detail);
   const failed = auditRow(bad);
   assert.deepEqual([failed.detail, failed.resultKind, failed.eventKind], ["stress.start: 4 files, NOT restored", "error", "error"]);
+  for (const outcome of ["cancel", "cancelled"]) assert.equal(auditRow({ event: "result", op: "stress.start", restored: true, outcome }).resultKind, "warn", outcome);
   assert.equal(auditRow(err).detail, err.detail, "o.detail wins over o.reason");
   assert.equal(auditRow({ event: "refused", reason: "why" }).detail, "why", "reason is the fallback");
   assert.equal(auditRow({ event: "result", op: "curves.delete", curve_id: "x" }).request, "curves.delete");

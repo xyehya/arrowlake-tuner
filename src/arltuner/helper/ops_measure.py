@@ -342,11 +342,11 @@ class CpufreqAudit:
         self.failures.append({"path": path, "written": str(value), "reason": reason[:120]})
         self._append("error", domain="cpufreq", key=attr, path=path, written=str(value), reason=reason[:200], detail=f"cpufreq write cpu{cpu} {attr} -> {value} FAILED: {reason}")
 
-    def result(self, *, restored: bool, op: str | None = None, **fields: Any) -> str | None:
+    def result(self, *, restored: bool, op: str | None = None, detail: str | None = None, **fields: Any) -> str | None:
         """The closing record (op, outcome, ids, counts); returns the note to report when this or an earlier record could not be written. Resets the counters for the next stage."""
         name, n = op or self.op, self.file_count
         text = f"{name}: {n} files, " + ("restored ok" if restored else f"NOT restored ({len(self.failures)} failed write(s))")
-        self._append("result", op, writes=self.writes, file_count=n, restored=restored, failures=self.failures[:20], detail=text, **fields)
+        self._append("result", op, writes=self.writes, file_count=n, restored=restored, failures=self.failures[:20], detail=detail or text, **fields)
         self._reset()
         lost, self._lost = self._lost, 0
         return f"{lost} audit record(s) of this run could not be written ({self._why})" if lost else None
@@ -400,15 +400,25 @@ class _AuditedIO:
         self._write(self._io.write_min, cpu, MIN_ATTR, khz)
 
 
-def audit_file_change(helper: Any, op: str, **fields: Any) -> None:
-    """G-235: the ``result`` record of an op that changes a file under the helper's state directory (a curve renamed / deleted). ``OSError`` / ``OpError`` when the log cannot be written."""
+def open_file_change_audit(helper: Any, op: str) -> Callable[..., None]:
+    """G-235: the ``result`` record of an op that changes a file under the helper's state directory (a curve renamed / deleted). The log is opened and trust-checked HERE, before the
+    change: a refusal means nothing was changed. The returned callable writes the record after the change (``OpError`` INTERNAL when that fails)."""
     cfg = helper.cfg
-    _trust(helper, cfg.audit_path, want="file", must_exist=False)
     try:
+        _trust(helper, cfg.audit_path, want="file", must_exist=False)
         os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=cfg.euid_fn(), what="audit log"))
-        AuditLog(cfg.audit_path).append("result", ts=cfg.wall_clock(), operator=cfg.operator, op=op, **fields)
-    except (TrustError, OSError, ValueError) as exc:
-        raise OpError(INTERNAL, f"{op} was done but could not be recorded in the audit log: {exc}", {"check": "AUDIT_UNAVAILABLE"}) from None
+        log = AuditLog(cfg.audit_path)
+    except (OpError, TrustError, OSError) as exc:
+        why = exc.message if isinstance(exc, OpError) else str(exc)
+        raise OpError(REFUSED, f"the audit log {cfg.audit_path} cannot be written ({why}); nothing was changed", {"check": "AUDIT_UNAVAILABLE"}) from None
+
+    def record(**fields: Any) -> None:
+        try:
+            log.append("result", ts=cfg.wall_clock(), operator=cfg.operator, op=op, **fields)
+        except (OSError, ValueError) as exc:
+            raise OpError(INTERNAL, f"{op} was done but could not be recorded in the audit log: {exc}", {"check": "AUDIT_UNAVAILABLE"}) from None
+
+    return record
 
 
 # =============================================================================================================================================
@@ -486,10 +496,11 @@ def _write_journal(
     return entries
 
 
-def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
+def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]], audit: CpufreqAudit | None = None) -> list[str]:
     """Write every journaled value back (only where the current value differs). A CPU's max and min go back as a **pair in the order the kernel accepts** (G-132: it refuses
     ``min > max``: the new max at or above the current min -> max first, else min first), then EPP. Returns the failures, never raises. A failure that hits several CPUs the
-    same way is **one** line (G-131: never a flood of identical errors); a single failure keeps the per-CPU wording."""
+    same way is **one** line (G-131: never a flood of identical errors); a single failure keeps the per-CPU wording. G-235: with an ``audit``, a failure while READING (nothing
+    was written, so the counting wrapper saw nothing) gets its own ``error`` record too."""
     failed: dict[tuple[str, str], list[tuple[int, str]]] = {}
     by_cpu: dict[int, dict[str, dict[str, Any]]] = {}
     for e in entries:
@@ -513,6 +524,7 @@ def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
             if e is None:
                 continue
             value = e["value"]
+            writing = False
             try:
                 if attr == CAP_ATTR and e.get("at_max") is True:  # G-126: the journaled cap was the cpuinfo max: follow it if it moved meanwhile
                     now_max = w.cpufreq.read(cpu, MAX_ATTR)
@@ -520,9 +532,12 @@ def _restore(w: MeasureWiring, entries: Sequence[dict[str, Any]]) -> list[str]:
                         value = now_max
                 if w.cpufreq.read(cpu, attr) == value:
                     continue
+                writing = True
                 w.cpufreq.write(cpu, attr, value)
             except Exception as exc:
                 reason = (exc.strerror if isinstance(exc, OSError) and exc.strerror else None) or str(exc)
+                if audit is not None and not writing:  # a failed WRITE is already recorded by the counting wrapper
+                    audit.failed(cpu, attr, value, exc)
                 failed.setdefault((attr, f"{type(exc).__name__}: {reason}"), []).append((cpu, value))
     problems: list[str] = []
     for (attr, why), items in failed.items():
@@ -577,7 +592,7 @@ def recover_journal(w: MeasureWiring, log: Callable[[str], None], audit: Cpufreq
         return True
     if audit is not None:
         audit.begin(entries, op="journal.recover", strict=False, during=during, journal=str(w.journal_path))
-    problems = _restore(w, entries)
+    problems = _restore(w, entries, audit)
     if audit is not None:
         note = audit.result(op="journal.recover", restored=not problems, during=during, outcome="restored" if not problems else "kept")
         if note:
@@ -1108,7 +1123,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
         error = exc
     finally:
         if journaled:
-            problems += _restore(w, entries)
+            problems += _restore(w, entries, audit)
             if not any("could NOT restore" in p for p in problems):
                 _remove_journal(w)
         try:
@@ -1240,20 +1255,22 @@ def op_curves_get(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
 
 
 def op_curves_update(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    record_change = open_file_change_audit(helper, "curves.update")  # G-235: before the change -- an unwritable log refuses it
     try:
         record = _wiring(helper).store.update(args["id"], name=args.get("name"), baseline=args.get("baseline"))
     except StoreError as exc:
         raise _store_error(exc) from None
-    audit_file_change(helper, "curves.update", curve_id=args["id"], name=record.get("name"), is_baseline=record.get("baseline"))  # G-235
+    record_change(curve_id=args["id"], name=record.get("name"), is_baseline=record.get("baseline"))
     return summary(record)
 
 
 def op_curves_delete(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str, Any]:
+    record_change = open_file_change_audit(helper, "curves.delete")  # G-235: before the change
     try:
         _wiring(helper).store.delete(args["id"])
     except StoreError as exc:
         raise _store_error(exc) from None
-    audit_file_change(helper, "curves.delete", curve_id=args["id"])  # G-235
+    record_change(curve_id=args["id"])
     return {"deleted": args["id"]}
 
 

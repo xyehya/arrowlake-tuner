@@ -93,7 +93,7 @@ export function auditRow(r) {
   const detail = o.detail !== undefined && o.detail !== null ? String(o.detail) : summary || (o.reason !== undefined ? String(o.reason) : o.purpose !== undefined ? String(o.purpose) : o.unparsable !== undefined ? o.unparsable : "");
   if (rc === "" && o.value === undefined && typeof o.outcome === "string") {
     result = o.outcome;
-    kind = o.restored === false || o.outcome === "error" ? "error" : o.outcome === "cancelled" ? "warn" : "ok";
+    kind = o.restored === false || o.outcome === "error" ? "error" : o.outcome === "cancelled" || o.outcome === "cancel" ? "warn" : "ok";
   }
   const eventKind = ["refused", "error", "trip"].includes(event) || (event === "result" && o.restored === false) ? "error" : event === "readback" ? (o.verified === false ? "error" : "ok") : "";
   return {
