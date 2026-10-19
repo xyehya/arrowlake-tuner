@@ -27,6 +27,10 @@ if "--browser" in sys.argv:
     sys.argv.remove("--browser")
     os.environ["ARLTUNER_BROWSER_TESTS"] = "1"
 
+for _arg in [a for a in sys.argv if a.startswith("--shots=")]:  # --shots=<dir>: also write PNGs for a visual check (G-238)
+    sys.argv.remove(_arg)
+    os.environ["G238_SHOTS"] = _arg.split("=", 1)[1]
+
 UI = Path(__file__).resolve().parents[1]
 CSP = json.loads((UI.parent / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))["app"]["security"]["csp"]
 CHROME = os.environ.get("ARLTUNER_CHROME") or shutil.which("google-chrome") or shutil.which("chromium") or ""
@@ -388,6 +392,21 @@ class TestTune(unittest.TestCase):
             self.assertTrue(d["vtAuto"] and d["vt"] > 0.9)  # an OC point needs a target: the draft takes the fused top voltage
             self.assertFalse(target.is_disabled())
             self.assertIn("OC point 7", page.inner_text(".insp-section[data-kind='E'] .oc-info"))
+            # G-238: the drafted OC point is the table's last row and the chart's last marker, pending, with a link back to the OC section
+            oc_row = page.locator(".insp-section[data-kind='E'] tr[data-key='oc']")
+            self.assertEqual(oc_row.count(), 1)
+            self.assertEqual(page.locator(".insp-section[data-kind='E'] .vf-table tbody tr").count(), 7)
+            self.assertIn("Point 7 · 49×", oc_row.inner_text())
+            self.assertIn("OC", oc_row.locator(".pt-tag").inner_text())
+            self.assertIn("pending", oc_row.get_attribute("class"))
+            self.assertEqual(oc_row.locator("input").count(), 0)  # read-only here: the OC section edits it
+            self.assertIn("49× OC", page.locator(".insp-section[data-kind='E'] .chart-xtick").last.text_content())
+            self.assertEqual(page.locator(".insp-section[data-kind='E'] .chart-oc-marker").count(), 1)
+            shots = os.environ.get("G238_SHOTS")
+            if shots:
+                page.locator(".insp-section[data-kind='E']").screenshot(path=str(Path(shots) / "g238-tune-oc-row.png"))
+            oc_row.locator("button:has-text('edit in OC')").click()
+            self.assertEqual(page.evaluate("document.activeElement.getAttribute('aria-label')"), "E OC ratio")
             self.assertEqual(page.inner_text("#pending-text"), "2 changes on 1 unit")
             target.focus()
             page.keyboard.press("ArrowUp")
