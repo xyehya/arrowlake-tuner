@@ -88,7 +88,7 @@ export function stepRows(plan) {
   const steps = Array.isArray(plan && plan.steps) ? plan.steps.filter(isObj) : [];
   return steps.map((s, i) => {
     const kind = typeof s.kind === "string" ? s.kind : "step";
-    const unit = typeof s.unit === "string" ? s.unit : s.table ? "turbo " + s.table : null;
+    const unit = typeof s.unit === "string" ? s.unit : s.table ? "turbo " + String(s.table).toUpperCase() : null; // the helper's plan says table "e" | "p"; the read-back rows say "E" | "P"
     let label;
     if (kind === "write_percore_enable") label = "Enable per-core voltage offsets" + (s.conditional ? " (only if not already on)" : "");
     else if (kind === "write_vf_point") label = (unit || "unit") + " point " + s.point + (isNum(s.offset_mv) ? " offset " + fmtMv(s.offset_mv) : "") + (isNum(s.cpu) ? " (cpu " + s.cpu + ")" : "");
@@ -107,12 +107,14 @@ export function unitOrder(plan) {
 }
 
 export const STATUS_TEXT = {
-  queued: "queued", writing: "writing", written: "written", ok: "read back OK", mismatch: "mismatch", unverified: "not read back", interrupted: "interrupted", not_started: "not written",
+  queued: "queued", writing: "writing", written: "written", ok: "read back OK", mismatch: "mismatch", unverified: "not read back", no_change: "no change", interrupted: "interrupted", not_started: "not written",
 };
 const rbKey = (x) => (x.point === "turbo" ? "turbo " + x.unit : x.unit);
 
 /**
- * Per-unit status. `progress` = {step, of} | null; `outcome` = null (running / not started) | {ok:true, readback:[...]} | {ok:false}.
+ * Per-unit status. `progress` = {step, of} | null; `outcome` = null (running / not started) | {ok:true, readback:[...], complete?} | {ok:false}.
+ * G-230: "no change" (grey) = nothing was written for the unit (it has no write step, or a complete apply wrote no turbo table the plan listed because it equals the CPU's);
+ * "not read back" (amber) is only for a written word that has no read-back.
  * Running: positional (see the header). Finished: only the read-back decides; after a failure or cancel the units already past the current step are "not read back", the current
  * one "interrupted" (it may or may not have been written), the later ones "not written".
  */
@@ -127,7 +129,7 @@ export function unitStatuses(plan, progress, outcome) {
     for (const x of (outcome.readback || []).filter(isObj)) by.set(rbKey(x), (by.get(rbKey(x)) || []).concat(x));
     for (const u of order) {
       const rb = by.get(u);
-      out[u] = !rb ? "unverified" : rb.every((x) => x.match === true) ? "ok" : "mismatch";
+      out[u] = rb ? (rb.every((x) => x.match === true) ? "ok" : "mismatch") : !writes.includes(u) || (outcome.complete !== false && u.startsWith("turbo")) ? "no_change" : "unverified";
     }
     return out;
   }
@@ -135,6 +137,7 @@ export function unitStatuses(plan, progress, outcome) {
   const idx = step > 0 && writes.length ? Math.min(writes.length - 1, Math.floor(((step - 1) / Math.max(1, progress.of || 1)) * writes.length)) : -1;
   for (const u of order) {
     const at = writes.map((w, i) => (w === u ? i : -1)).filter((i) => i >= 0);
+    if (!at.length && outcome) out[u] = "no_change";
     if (!at.length || idx < 0) continue;
     const current = at.includes(idx);
     const past = at.every((i) => i < idx);
@@ -694,7 +697,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       const rb = sec.summary ? sec.summary.readback.filter((x) => u.keys.includes(x.key)) : [];
       return [u.unit, st || (sec.status === "done" ? (rb.length && rb.every((x) => x.match === true) ? "ok" : rb.length ? "mismatch" : "unverified") : sec.status === "applying" ? "writing" : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? "unverified" : "queued")];
     }));
-    const status = custom ? customStatus() : unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [] } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
+    const status = custom ? customStatus() : unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [], complete: sec.summary ? sec.summary.complete : true } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
     const table = h("table", { class: "apply-units", "aria-label": "Units: before and after" }, h("thead", {}, h("tr", {}, h("th", { scope: "col", text: "Unit" }), h("th", { scope: "col", text: "Before → after" }), h("th", { scope: "col", text: "Status" }))));
     const body = h("tbody");
     const statusCells = new Map();

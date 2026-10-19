@@ -12,7 +12,7 @@ import { tileFace } from "../views/tune/grid.js";
 import { buildIntent } from "../lib/intent.js";
 import { ensureTune, patchTune } from "../views/tune.js";
 import {
-  planRows, describeRow, stepRows, unitOrder, unitStatuses, eta, progressText, summarizeResult, resultHeadline, planWarnings, planWrites, locateError, confirmText,
+  planRows, describeRow, stepRows, unitOrder, unitStatuses, STATUS_TEXT, eta, progressText, summarizeResult, resultHeadline, planWarnings, planWrites, locateError, confirmText,
   createApplyController, KINDS, registerKind,
 } from "../views/tune/apply.js";
 
@@ -81,6 +81,20 @@ test("unitStatuses at the end comes from the read-back only; after a stop the cu
   assert.deepEqual(unitStatuses(plan3, { step: 5, of: 8 }, { ok: false }), { P0: "unverified", EC0: "interrupted", EC1: "not_started" });
   const turbo = { steps: [{ kind: "write_msr", table: "E" }] };
   assert.deepEqual(unitStatuses(turbo, null, { ok: true, readback: [{ unit: "E", point: "turbo", match: true }] }), { "turbo E": "ok" });
+});
+
+test("G-230: units with nothing written show no change, not 'not read back'", () => {
+  // P1 / P2 are in plan.units but have no write step; a turbo table equal to the CPU's is listed by the helper (table "e") but never written, so it has no read-back row
+  const plan = { units: ["P0", "P1", "P2"], steps: [{ kind: "write_vf_point", unit: "P0", point: 5 }, { kind: "write_msr", table: "e" }, { kind: "write_msr", table: "p" }] };
+  const rb = [{ unit: "P0", point: 5, match: true }, { unit: "P", point: "turbo", match: true }];
+  assert.deepEqual(unitStatuses(plan, { step: 3, of: 3 }, { ok: true, readback: rb, complete: true }), { P0: "ok", P1: "no_change", P2: "no_change", "turbo E": "no_change", "turbo P": "ok" });
+  assert.equal(STATUS_TEXT.no_change, "no change");
+  // a written V/F word with no read-back is still amber
+  assert.equal(unitStatuses(plan, null, { ok: true, readback: [], complete: true }).P0, "unverified");
+  // a partial result does not claim "no change" for a listed turbo table
+  assert.equal(unitStatuses(plan, null, { ok: true, readback: rb, complete: false })["turbo E"], "unverified");
+  // after a stop the unwritten units are no change too
+  assert.equal(unitStatuses(plan, { step: 1, of: 3 }, { ok: false }).P1, "no_change");
 });
 
 test("eta uses the measured per-op time; nothing before the first step", () => {

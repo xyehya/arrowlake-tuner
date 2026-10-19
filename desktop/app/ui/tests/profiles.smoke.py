@@ -269,6 +269,12 @@ class TestProfiles(unittest.TestCase):
             self.assertEqual(self.item(page, "sim-p0-undervolt", "accepted").locator(".pr-accept").count(), 0, "already accepted")
             self.assertEqual(self.item(page, "sim-p0-undervolt").locator(".pr-accept").count(), 1, "the saved file of the same name stays a saved profile")
             self.assertEqual(page.inner_text("#chip-accepted"), "accepted: matches")
+            # G-230: the accepted entry and its saved twin are grouped by their labels
+            self.assertIn("also saved", self.item(page, "sim-p0-undervolt", "accepted").locator(".pr-pill").first.inner_text())
+            self.assertEqual(self.item(page, "sim-p0-undervolt").locator(".pr-sub").inner_text(), "saved copy of the accepted state")
+            self.assertEqual(self.item(page, "sim-p0-undervolt", "accepted").locator(".pr-sub").count(), 0)
+            self.assertEqual(page.inner_text("#btn-pr-save"), "Save Tune edits as…")
+            self.assertEqual(page.inner_text("#btn-pr-save-state"), "Save the CPU's current state as…")
             # Restore accepted: the plan of {restore: "accepted"}; the CPU already holds it, so nothing changes
             page.click("#btn-pr-restore")
             page.wait_for_selector("#drawer.open .apply-lead", timeout=5000)

@@ -363,7 +363,7 @@ export function profilesView() {
       // Save
       const nameInput = h("input", { type: "text", id: "pr-name", class: "pr-name-input", maxlength: "64", autocomplete: "off", spellcheck: "false", "aria-describedby": "pr-name-note", placeholder: "profile-name" });
       const nameNote = h("p", { class: "muted pr-note", id: "pr-name-note" });
-      const saveBtn = h("button", { type: "button", class: "btn primary", id: "btn-pr-save", text: "Save current Tune settings", on: { click: () => saveProfile() } });
+      const saveBtn = h("button", { type: "button", class: "btn primary", id: "btn-pr-save", text: "Save Tune edits as…", on: { click: () => saveProfile() } });
       const saveCard = h("section", { class: "card pr-card", "aria-labelledby": "pr-save-h" },
         h("h2", { id: "pr-save-h", text: "Save" }),
         h("p", { class: "muted", text: "A profile is the complete state of the last read with the edits from Tune laid over it. Saving writes a file of the helper; nothing is written to the CPU, and a name is never reused." }),
@@ -449,7 +449,7 @@ export function profilesView() {
             h("span", { class: "muted pr-sum", id: "pr-accepted-sum", text: info ? summaryText(info.summary) : S.info[p.name] ? "contents unavailable" : "reading…" })),
           h("p", { class: "muted", id: "pr-accepted-note", text: "Restore accepted applies this profile in one run, writing only what differs from the CPU." }));
         }
-        const saveState = h("button", { type: "button", class: "btn", id: "btn-pr-save-state", text: "Save current state as…", disabled: !can, "aria-expanded": String(S.saveOpen),
+        const saveState = h("button", { type: "button", class: "btn", id: "btn-pr-save-state", text: "Save the CPU's current state as…", disabled: !can, "aria-expanded": String(S.saveOpen),
           title: "profiles.save {from: 'read'}: saves the complete state of this boot's last read as a profile. It is not made the accepted state, and nothing is written to the CPU.",
           on: { click: () => { S.saveOpen = !S.saveOpen; renderAccepted(); if (S.saveOpen) stateName.focus(); } } });
         acceptedCard.append(head, body, h("div", { class: "pr-row" }, restore, fromRead, saveState, finger));
@@ -504,6 +504,9 @@ export function profilesView() {
         return box;
       }
 
+      /** G-230: an accepted state and the saved profile it was accepted from share one name; `acc` = the entry is the accepted one, so look for its saved twin (else the reverse). */
+      const twinned = (p, acc) => S.list.some((q) => q.name === p.name && (q.source === "accepted") !== acc);
+
       function renderList() {
         empty.hidden = S.loaded && S.list.length > 0;
         if (!S.loaded) empty.textContent = connected() ? "Loading profiles…" : "The helper is not connected.";
@@ -516,7 +519,9 @@ export function profilesView() {
           const k = kindOf(p, info);
           const isAcc = p.source === "accepted";
           const open = S.open.has(p.name);
-          const main = h("div", { class: "pr-main" }, h("span", { class: "pr-name", text: p.name }), pill(isAcc ? "accepted" : "saved", isAcc ? "ok" : "neutral"), !isAcc && isPreviousAccepted(p.name) ? h("span", { class: "pr-sub", title: "The accepted state this replaced, kept by Set as accepted.", text: "previous accepted" + (previousStamp(p.name) ? " · replaced " + previousStamp(p.name) : "") }) : null, k ? kindPill(k) : null,
+          const main = h("div", { class: "pr-main" }, h("span", { class: "pr-name", text: p.name }), pill(isAcc ? "accepted" + (twinned(p, true) ? " · also saved" : "") : "saved", isAcc ? "ok" : "neutral", isAcc && twinned(p, true) ? "A saved copy with this name is listed below." : null),
+            !isAcc && twinned(p, false) ? h("span", { class: "pr-sub", title: "Set as accepted copied this saved profile to the accepted state; both keep the name.", text: "saved copy of the accepted state" }) : null,
+            !isAcc && isPreviousAccepted(p.name) ? h("span", { class: "pr-sub", title: "The accepted state this replaced, kept by Set as accepted.", text: "previous accepted" + (previousStamp(p.name) ? " · replaced " + previousStamp(p.name) : "") }) : null, k ? kindPill(k) : null,
             isAcc ? null : h("span", { class: "muted", text: fmtCreated(p.created) }),
             h("span", { class: "pr-sum muted", text: info ? summaryText(info.summary) : S.info[p.name] ? "contents unavailable" : "reading…" }));
           const actions = h("div", { class: "pr-actions" },
