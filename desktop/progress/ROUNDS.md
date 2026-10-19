@@ -82,3 +82,4 @@
 - Live session 4: E labels 48x (kernel 4900 MHz) OK; Alt+3 nav OK, bare digits ignored, Ctrl+A no page select; measure P0 quick OK (8 pts, caps restored 5700000/800000); profiles.save from read 'baseline-20261019' OK; accept confirm 'No differences' (cancelled, CURRENT unchanged). FINDING: vf.measure cpufreq writes + profiles.save not audited -> G-235 (R).
 - G-235 merged (audit summaries, recovery audited/restores anyway, curves.* fail-closed, audit screen). Suite 3409, node 340.
 - Installed + rebuilt with G-235; live: vf.measure P0 audited (runtime_attempt with 2 journaled files + result 'restored ok'), shown on the Audit screen. No open live bugs. Handing over to the operator; fused-V/F research (4 flash agents) running.
+- G-236 merged (Opus: APPROVE WITH FIXES; f1 fixed by orchestrator, f2 checked: stored profiles P stock / E 48 explicit; f3 CLI P TURBO_BELOW_OC -> backlog; f4 cosmetic accepted).
