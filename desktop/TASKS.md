@@ -179,3 +179,7 @@ confirm step shows the per-unit diff; tests at helper + UI; Opus review.
 **G-230 · UI polish from the first live GUI session (2026-10-19)** · S · deps G-210, G-213, G-228
 Owns `desktop/app/ui/views/tune/apply.js` (result rows), `views/profiles.js` (list labels), `views/audit.js` (rc names), tests. Screenshots:
 `~/Pictures/Screenshots/arltuner-2026-10-19/` (operator machine; not in the repo). Accept: node + Playwright per item.
+
+**G-231 · Helper: plan step list skips turbo tables equal to the CPU** · S · deps G-230
+Owns `src/arltuner/helper/ops_tune.py` (step-list builder ~:2259), tests. The executor already skips equal tables (planner.py ~:951; audit 2026-10-19 restore: no
+0x1AD/0x650 write), but the plan lists them and counts them in "N writes" (the restore said 4 writes for 2). Accept: an equal table gives no step; a different one does.
