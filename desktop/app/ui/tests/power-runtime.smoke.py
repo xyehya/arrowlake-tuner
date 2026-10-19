@@ -400,6 +400,8 @@ class TestTabs(unittest.TestCase):
             why = page.locator("#rt-revert-why")
             self.assertTrue(why.is_visible(), "the reason is shown inline, not only as a tooltip")
             self.assertIn("Nothing to revert", why.inner_text())
+            tops = page.evaluate("['rt-review', 'rt-revert', 'rt-discard'].map((id) => Math.round(document.getElementById(id).getBoundingClientRect().top))")
+            self.assertEqual(len(set(tops)), 1, f"the buttons stay on one row with the reason shown: {tops}")
             self.assertTrue(page.evaluate(self.APPLY_JS, ["runtime", {"uncore": {"max_ratio": 38}}]), "an apply the app did not do through the drawer (another window / the CLI)")
             self.assertTrue(page.locator("#rt-revert").is_disabled(), "not re-read yet")
             page.click("#subtab-cores")

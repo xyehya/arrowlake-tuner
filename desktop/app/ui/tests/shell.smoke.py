@@ -154,6 +154,8 @@ class TestShell(unittest.TestCase):
             page.keyboard.press("Alt+6")
             page.wait_for_selector("#screen[data-screen='system']", state="attached")
             self.assertEqual(page.locator("#nav-system .nav-key").inner_text(), "Alt+6")
+            heights = page.evaluate("[...document.querySelectorAll('#nav-rail .nav-item')].map((e) => Math.round(e.getBoundingClientRect().height))")
+            self.assertEqual(len(set(heights)), 1, f"no rail label wraps next to the Alt+n badge: {heights}")
             self.assertEqual(page.locator("#nav-system").get_attribute("title"), "System (Alt+6)")
             self.assert_clean(page, logs)
 

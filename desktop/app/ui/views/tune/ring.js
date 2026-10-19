@@ -125,6 +125,7 @@ export function mount(el, ctx) {
     const lo = edit.min_ratio ?? (cur ? cur.min : null);
     const hi = edit.max_ratio ?? (cur ? cur.max : null);
     if (Object.keys(edit).length && isNum(lo) && isNum(hi) && lo > hi) warns.append(h("li", { dataset: { code: "UNCORE_MIN_ABOVE_MAX" }, text: "Uncore minimum " + lo + TIMES + " is above the maximum " + hi + TIMES + ": this is not sent." }));
+    if (result && result.note) warns.append(h("li", { text: result.note })); // e.g. the journal could not be read: Revert stays usable, the plan answers
     if (cur && cur.min === cur.initialMin && cur.max === cur.initialMax && !Object.keys(edit).length) info.append(limitNote("The uncore range is at the driver's initial values."));
     readBar.update();
     actions.update();

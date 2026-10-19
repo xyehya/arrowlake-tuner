@@ -34,7 +34,12 @@ samp,
 .fix,
 [role="log"],
 .apply-error,
-.apply-warnings {
+.apply-error-box,
+.apply-warnings,
+.rt-error,
+.rt-warns,
+.rt-why,
+.toasts {
   -webkit-user-select: text;
   user-select: text;
 }
