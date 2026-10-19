@@ -193,3 +193,6 @@ Owns caps.py (expose), ops_runtime.py (read rows), the topology max_ratio source
 
 **G-234 · Live session 3 UI bugs** · S · deps G-217, G-232
 Owns `desktop/app/ui/views/tune/{ring,runtime,power}.js`, `rt-common.js`, `lib/rtstate.js`, `app.js` (keyboard handler only), styles, tests.
+
+**G-235 · Audit gaps: vf.measure cap writes and profiles.save leave no audit record** · S · R · deps G-132, G-228
+Owns `src/arltuner/helper/ops_measure.py`, `ops_stress.py` (same check), `ops_tune.py` profiles.save path, tests, `desktop/app/ui/views/profiles.js` (one-field rule). Notes R10-G-235.

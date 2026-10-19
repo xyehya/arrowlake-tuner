@@ -1,0 +1,10 @@
+(Also check ops_stress.py: stress caps E clusters too — same rule: every sysfs write is audited.)
+Found live 2026-10-19 07:27 (orchestrator):
+1. Audit screen does not show vf.measure / profiles.save events: the 07:27 measure (P0 quick, 8 points, stored curves/20261019T042746Z-2ef4.json) and the
+   07:29 profiles.save from:"read" (baseline-20261019) wrote NO audit record at all (sudo tail of /var/lib/arltuner/audit.jsonl shows nothing after 04:2x UTC).
+   Check whether that is by design for each op (measure is a read-only cap+load op; profiles.save writes a root file) and add a one-line "result" audit record
+   for both (op, name/id, units, duration) — the audit trail must show every op that changes a file under /var/lib/arltuner or the CPU's cpufreq caps.
+   vf.measure DOES write scaling_max/min_freq temporarily (it caps each unit) — confirm it audits those writes; if not, that is the main finding.
+2. Profiles "Save the CPU's current state as…" opens the name field ABOVE the list but leaves the bottom "Save Tune edits as…" card's empty field visible — two
+   name fields; collapse/hide the other while one is open.
+Simulator/mock only. Do NOT run build-appimage.sh.
