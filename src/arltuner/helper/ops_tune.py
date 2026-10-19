@@ -1761,7 +1761,7 @@ def resolve_intent(helper: Helper, intent: dict[str, Any], policy: Policy, topol
         return _profile_resolved(helper, prof, topology, [f"saved profile {name} (complete: only the words that differ from what the CPU holds are written)"])
     saved = canonical_intent(record["intent"], rows_only=True)
     resolved = _rows_to_profile(helper, saved, policy, topology, name)
-    resolved.warnings.insert(0, f"saved profile {name} (partial, saved before G-148: its rows are applied over what the CPU holds)")
+    resolved.warnings.insert(0, f"saved profile {name} (partial, saved before G-148: its rows are applied over what the CPU holds; since D-050 an OC ratio in it no longer raises the turbo tables)")
     return resolved
 
 
