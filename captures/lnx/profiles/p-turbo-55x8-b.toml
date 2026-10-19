@@ -1,0 +1,7 @@
+# step B of p53-1200-p55-1270-t55: P turbo 55x for 1..8 active cores (raise buckets 3-8 54 -> 55 only). Table only.
+[meta]
+name = "p-turbo-55x8-b"
+platform = "arl-s"
+
+[turbo]
+p = [55, 55, 55, 55, 55, 55, 55, 55]

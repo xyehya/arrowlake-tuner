@@ -1,0 +1,803 @@
+2026-10-19T20:41:46+03:00 MCE before: 0 taint 12288
+Plan for profile 'p53-1200-p55-1270-t55': 8 CPU(s); baseline words are read through the guard after confirmation
+  P-Core 0 (cpu 0): point 1 offset +0 mV (expects ratio 8)
+  P-Core 0 (cpu 0): point 2 offset +0 mV (expects ratio 20)
+  P-Core 0 (cpu 0): point 3 offset +0 mV (expects ratio 30)
+  P-Core 0 (cpu 0): point 4 offset +0 mV (expects ratio 48)
+  P-Core 0 (cpu 0): point 5 offset -50 mV (expects ratio 53)
+  P-Core 0 (cpu 0): point 6 offset -28 mV (expects ratio 55)
+  P-Core 0 (cpu 0): point 7 offset -26 mV (expects ratio 56)
+  P-Core 0 (cpu 0): point 8 offset -43 mV (expects ratio 57)
+  P-Core 1 (cpu 1): point 1 offset +0 mV (expects ratio 8)
+  P-Core 1 (cpu 1): point 2 offset +0 mV (expects ratio 20)
+  P-Core 1 (cpu 1): point 3 offset +0 mV (expects ratio 30)
+  P-Core 1 (cpu 1): point 4 offset +0 mV (expects ratio 48)
+  P-Core 1 (cpu 1): point 5 offset -50 mV (expects ratio 53)
+  P-Core 1 (cpu 1): point 6 offset -36 mV (expects ratio 55)
+  P-Core 1 (cpu 1): point 7 offset +0 mV (expects ratio 56)
+  P-Core 1 (cpu 1): point 8 offset +0 mV (expects ratio 57)
+  P-Core 2 (cpu 2): point 1 offset +0 mV (expects ratio 8)
+  P-Core 2 (cpu 2): point 2 offset +0 mV (expects ratio 20)
+  P-Core 2 (cpu 2): point 3 offset +0 mV (expects ratio 30)
+  P-Core 2 (cpu 2): point 4 offset +0 mV (expects ratio 48)
+  P-Core 2 (cpu 2): point 5 offset -71 mV (expects ratio 53)
+  P-Core 2 (cpu 2): point 6 offset -96 mV (expects ratio 55)
+  P-Core 2 (cpu 2): point 7 offset +0 mV (expects ratio 56)
+  P-Core 2 (cpu 2): point 8 offset +0 mV (expects ratio 57)
+  P-Core 3 (cpu 3): point 1 offset +0 mV (expects ratio 8)
+  P-Core 3 (cpu 3): point 2 offset +0 mV (expects ratio 20)
+  P-Core 3 (cpu 3): point 3 offset +0 mV (expects ratio 30)
+  P-Core 3 (cpu 3): point 4 offset +0 mV (expects ratio 48)
+  P-Core 3 (cpu 3): point 5 offset -50 mV (expects ratio 53)
+  P-Core 3 (cpu 3): point 6 offset -28 mV (expects ratio 55)
+  P-Core 3 (cpu 3): point 7 offset -28 mV (expects ratio 56)
+  P-Core 3 (cpu 3): point 8 offset -31 mV (expects ratio 57)
+  P-Core 4 (cpu 4): point 1 offset +0 mV (expects ratio 8)
+  P-Core 4 (cpu 4): point 2 offset +0 mV (expects ratio 20)
+  P-Core 4 (cpu 4): point 3 offset +0 mV (expects ratio 30)
+  P-Core 4 (cpu 4): point 4 offset +0 mV (expects ratio 48)
+  P-Core 4 (cpu 4): point 5 offset -50 mV (expects ratio 53)
+  P-Core 4 (cpu 4): point 6 offset -49 mV (expects ratio 55)
+  P-Core 4 (cpu 4): point 7 offset +0 mV (expects ratio 56)
+  P-Core 4 (cpu 4): point 8 offset +0 mV (expects ratio 57)
+  P-Core 5 (cpu 5): point 1 offset +0 mV (expects ratio 8)
+  P-Core 5 (cpu 5): point 2 offset +0 mV (expects ratio 20)
+  P-Core 5 (cpu 5): point 3 offset +0 mV (expects ratio 30)
+  P-Core 5 (cpu 5): point 4 offset +0 mV (expects ratio 48)
+  P-Core 5 (cpu 5): point 5 offset -61 mV (expects ratio 53)
+  P-Core 5 (cpu 5): point 6 offset -88 mV (expects ratio 55)
+  P-Core 5 (cpu 5): point 7 offset +0 mV (expects ratio 56)
+  P-Core 5 (cpu 5): point 8 offset +0 mV (expects ratio 57)
+  P-Core 6 (cpu 6): point 1 offset +0 mV (expects ratio 8)
+  P-Core 6 (cpu 6): point 2 offset +0 mV (expects ratio 20)
+  P-Core 6 (cpu 6): point 3 offset +0 mV (expects ratio 30)
+  P-Core 6 (cpu 6): point 4 offset +0 mV (expects ratio 48)
+  P-Core 6 (cpu 6): point 5 offset -50 mV (expects ratio 53)
+  P-Core 6 (cpu 6): point 6 offset -76 mV (expects ratio 55)
+  P-Core 6 (cpu 6): point 7 offset +0 mV (expects ratio 56)
+  P-Core 6 (cpu 6): point 8 offset +0 mV (expects ratio 57)
+  P-Core 7 (cpu 7): point 1 offset +0 mV (expects ratio 8)
+  P-Core 7 (cpu 7): point 2 offset +0 mV (expects ratio 20)
+  P-Core 7 (cpu 7): point 3 offset +0 mV (expects ratio 30)
+  P-Core 7 (cpu 7): point 4 offset +0 mV (expects ratio 48)
+  P-Core 7 (cpu 7): point 5 offset -71 mV (expects ratio 53)
+  P-Core 7 (cpu 7): point 6 offset -106 mV (expects ratio 55)
+  P-Core 7 (cpu 7): point 7 offset +0 mV (expects ratio 56)
+  P-Core 7 (cpu 7): point 8 offset +0 mV (expects ratio 57)
+  V/F points: per CPU and point read 0x10 P2=<point>, then write 0x11 P2=<point> (the word read with only the offset replaced; no 0x1D / 0x27); point writes come before the per-core words; the hardware's V(n) >= V(n-1) rule is not checked here;
+  plain MSR 0x1AD (P turbo table): rdmsr 0xCE and the table first, then wrmsr 55/55/55/55/55/55/55/55 (raising a bucket: after all per-core words; only lowering: before them), read back on two CPUs of different core kinds;
+  read 0x14 on cpu 0; write 0x15 (old|0x8) only if bit 3 is clear;
+  offsets: the 11-bit offset field is the only bound (-1000..+999 mV); a positive offset is also checked against the CPU's cmd 0x28 limit
+Operations required: at most 197 mailbox WRMSRs (every read, every write and the guard's read-back of each write); policy allows 100000; dwell 0 s after each operation
+About to apply the plan above through the write guard.
+To proceed type exactly:  CONFIRM e1cd7938
+> 
+step 1: cpu 0 msr 0xce apply: read PLATFORM_INFO (0xCE) (plain rdmsr) before any write
+step 2: cpu 0 msr 0x1ad apply: read P turbo table (0x1AD) (plain rdmsr) before any write
+step 3: cpu 0 cmd 0x14 apply: read PerCore Voltage Enable state (0x14) before any write
+Apply report for profile 'p53-1200-p55-1270-t55'
+Result: STOPPED (tripped); 1 mailbox operation(s) reached the transport
+Stopped: step 3: the guard tripped after this step (e.g. health gate 'after'); stopping
+Steps:
+    1. cpu  0 msr 0x0ce read PLATFORM_INFO (0xCE) (plain rdmsr, not a mailbox request) -> word 0x08040838f1812500: base ratio 37
+    2. cpu  0 msr 0x1ad read P turbo table (0x1AD) (plain rdmsr, not a mailbox request) -> word 0x3636363636363939: buckets (1..8 active cores) 57/57/54/54/54/54/54/54
+    3. cpu  0 cmd 0x14 read PerCore Voltage Enable state (package-wide) -> rc 0 (Pass), word 0x00000008, PerCore Voltage Enable set
+The guard is tripped: no further request will be sent in this session.
+WARNING: per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state
+MCE after: 0
+=== retry 2026-10-19T20:42:21+03:00 taint 12292 (bit 2 = first MSR write of the boot, the helper's allow_taint_bits)
+Plan for profile 'p53-1200-p55-1270-t55': 8 CPU(s); baseline words are read through the guard after confirmation
+  P-Core 0 (cpu 0): point 1 offset +0 mV (expects ratio 8)
+  P-Core 0 (cpu 0): point 2 offset +0 mV (expects ratio 20)
+  P-Core 0 (cpu 0): point 3 offset +0 mV (expects ratio 30)
+  P-Core 0 (cpu 0): point 4 offset +0 mV (expects ratio 48)
+  P-Core 0 (cpu 0): point 5 offset -50 mV (expects ratio 53)
+  P-Core 0 (cpu 0): point 6 offset -28 mV (expects ratio 55)
+  P-Core 0 (cpu 0): point 7 offset -26 mV (expects ratio 56)
+  P-Core 0 (cpu 0): point 8 offset -43 mV (expects ratio 57)
+  P-Core 1 (cpu 1): point 1 offset +0 mV (expects ratio 8)
+  P-Core 1 (cpu 1): point 2 offset +0 mV (expects ratio 20)
+  P-Core 1 (cpu 1): point 3 offset +0 mV (expects ratio 30)
+  P-Core 1 (cpu 1): point 4 offset +0 mV (expects ratio 48)
+  P-Core 1 (cpu 1): point 5 offset -50 mV (expects ratio 53)
+  P-Core 1 (cpu 1): point 6 offset -36 mV (expects ratio 55)
+  P-Core 1 (cpu 1): point 7 offset +0 mV (expects ratio 56)
+  P-Core 1 (cpu 1): point 8 offset +0 mV (expects ratio 57)
+  P-Core 2 (cpu 2): point 1 offset +0 mV (expects ratio 8)
+  P-Core 2 (cpu 2): point 2 offset +0 mV (expects ratio 20)
+  P-Core 2 (cpu 2): point 3 offset +0 mV (expects ratio 30)
+  P-Core 2 (cpu 2): point 4 offset +0 mV (expects ratio 48)
+  P-Core 2 (cpu 2): point 5 offset -71 mV (expects ratio 53)
+  P-Core 2 (cpu 2): point 6 offset -96 mV (expects ratio 55)
+  P-Core 2 (cpu 2): point 7 offset +0 mV (expects ratio 56)
+  P-Core 2 (cpu 2): point 8 offset +0 mV (expects ratio 57)
+  P-Core 3 (cpu 3): point 1 offset +0 mV (expects ratio 8)
+  P-Core 3 (cpu 3): point 2 offset +0 mV (expects ratio 20)
+  P-Core 3 (cpu 3): point 3 offset +0 mV (expects ratio 30)
+  P-Core 3 (cpu 3): point 4 offset +0 mV (expects ratio 48)
+  P-Core 3 (cpu 3): point 5 offset -50 mV (expects ratio 53)
+  P-Core 3 (cpu 3): point 6 offset -28 mV (expects ratio 55)
+  P-Core 3 (cpu 3): point 7 offset -28 mV (expects ratio 56)
+  P-Core 3 (cpu 3): point 8 offset -31 mV (expects ratio 57)
+  P-Core 4 (cpu 4): point 1 offset +0 mV (expects ratio 8)
+  P-Core 4 (cpu 4): point 2 offset +0 mV (expects ratio 20)
+  P-Core 4 (cpu 4): point 3 offset +0 mV (expects ratio 30)
+  P-Core 4 (cpu 4): point 4 offset +0 mV (expects ratio 48)
+  P-Core 4 (cpu 4): point 5 offset -50 mV (expects ratio 53)
+  P-Core 4 (cpu 4): point 6 offset -49 mV (expects ratio 55)
+  P-Core 4 (cpu 4): point 7 offset +0 mV (expects ratio 56)
+  P-Core 4 (cpu 4): point 8 offset +0 mV (expects ratio 57)
+  P-Core 5 (cpu 5): point 1 offset +0 mV (expects ratio 8)
+  P-Core 5 (cpu 5): point 2 offset +0 mV (expects ratio 20)
+  P-Core 5 (cpu 5): point 3 offset +0 mV (expects ratio 30)
+  P-Core 5 (cpu 5): point 4 offset +0 mV (expects ratio 48)
+  P-Core 5 (cpu 5): point 5 offset -61 mV (expects ratio 53)
+  P-Core 5 (cpu 5): point 6 offset -88 mV (expects ratio 55)
+  P-Core 5 (cpu 5): point 7 offset +0 mV (expects ratio 56)
+  P-Core 5 (cpu 5): point 8 offset +0 mV (expects ratio 57)
+  P-Core 6 (cpu 6): point 1 offset +0 mV (expects ratio 8)
+  P-Core 6 (cpu 6): point 2 offset +0 mV (expects ratio 20)
+  P-Core 6 (cpu 6): point 3 offset +0 mV (expects ratio 30)
+  P-Core 6 (cpu 6): point 4 offset +0 mV (expects ratio 48)
+  P-Core 6 (cpu 6): point 5 offset -50 mV (expects ratio 53)
+  P-Core 6 (cpu 6): point 6 offset -76 mV (expects ratio 55)
+  P-Core 6 (cpu 6): point 7 offset +0 mV (expects ratio 56)
+  P-Core 6 (cpu 6): point 8 offset +0 mV (expects ratio 57)
+  P-Core 7 (cpu 7): point 1 offset +0 mV (expects ratio 8)
+  P-Core 7 (cpu 7): point 2 offset +0 mV (expects ratio 20)
+  P-Core 7 (cpu 7): point 3 offset +0 mV (expects ratio 30)
+  P-Core 7 (cpu 7): point 4 offset +0 mV (expects ratio 48)
+  P-Core 7 (cpu 7): point 5 offset -71 mV (expects ratio 53)
+  P-Core 7 (cpu 7): point 6 offset -106 mV (expects ratio 55)
+  P-Core 7 (cpu 7): point 7 offset +0 mV (expects ratio 56)
+  P-Core 7 (cpu 7): point 8 offset +0 mV (expects ratio 57)
+  V/F points: per CPU and point read 0x10 P2=<point>, then write 0x11 P2=<point> (the word read with only the offset replaced; no 0x1D / 0x27); point writes come before the per-core words; the hardware's V(n) >= V(n-1) rule is not checked here;
+  plain MSR 0x1AD (P turbo table): rdmsr 0xCE and the table first, then wrmsr 55/55/55/55/55/55/55/55 (raising a bucket: after all per-core words; only lowering: before them), read back on two CPUs of different core kinds;
+  read 0x14 on cpu 0; write 0x15 (old|0x8) only if bit 3 is clear;
+  offsets: the 11-bit offset field is the only bound (-1000..+999 mV); a positive offset is also checked against the CPU's cmd 0x28 limit
+Operations required: at most 197 mailbox WRMSRs (every read, every write and the guard's read-back of each write); policy allows 100000; dwell 0 s after each operation
+About to apply the plan above through the write guard.
+To proceed type exactly:  CONFIRM 9c059333
+> refused: plan would be refused by the guard: step 133 (cpu 0, cmd 0x00): CHECK_FAILED: turbo_ratio_bounded (planner): the table both raises and lowers buckets; the order of the writes differs (raise: after the per-core words, lower: before them), so split it into two profiles
+
+step 1: cpu 0 msr 0xce apply: read PLATFORM_INFO (0xCE) (plain rdmsr) before any write
+step 2: cpu 0 msr 0x1ad apply: read P turbo table (0x1AD) (plain rdmsr) before any write
+step 3: cpu 0 cmd 0x14 apply: read PerCore Voltage Enable state (0x14) before any write
+step 4: cpu 0 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 0
+step 5: cpu 0 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 0
+step 6: cpu 0 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 0
+step 7: cpu 0 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 0
+step 8: cpu 0 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 0
+step 9: cpu 0 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 0
+step 10: cpu 0 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 0
+step 11: cpu 0 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 0
+step 12: cpu 1 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 1
+step 13: cpu 1 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 1
+step 14: cpu 1 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 1
+step 15: cpu 1 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 1
+step 16: cpu 1 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 1
+step 17: cpu 1 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 1
+step 18: cpu 1 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 1
+step 19: cpu 1 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 1
+step 20: cpu 2 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 2
+step 21: cpu 2 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 2
+step 22: cpu 2 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 2
+step 23: cpu 2 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 2
+step 24: cpu 2 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 2
+step 25: cpu 2 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 2
+step 26: cpu 2 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 2
+step 27: cpu 2 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 2
+step 28: cpu 3 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 3
+step 29: cpu 3 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 3
+step 30: cpu 3 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 3
+step 31: cpu 3 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 3
+step 32: cpu 3 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 3
+step 33: cpu 3 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 3
+step 34: cpu 3 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 3
+step 35: cpu 3 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 3
+step 36: cpu 4 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 4
+step 37: cpu 4 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 4
+step 38: cpu 4 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 4
+step 39: cpu 4 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 4
+step 40: cpu 4 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 4
+step 41: cpu 4 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 4
+step 42: cpu 4 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 4
+step 43: cpu 4 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 4
+step 44: cpu 5 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 5
+step 45: cpu 5 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 5
+step 46: cpu 5 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 5
+step 47: cpu 5 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 5
+step 48: cpu 5 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 5
+step 49: cpu 5 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 5
+step 50: cpu 5 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 5
+step 51: cpu 5 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 5
+step 52: cpu 6 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 6
+step 53: cpu 6 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 6
+step 54: cpu 6 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 6
+step 55: cpu 6 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 6
+step 56: cpu 6 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 6
+step 57: cpu 6 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 6
+step 58: cpu 6 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 6
+step 59: cpu 6 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 6
+step 60: cpu 7 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 7
+step 61: cpu 7 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 7
+step 62: cpu 7 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 7
+step 63: cpu 7 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 7
+step 64: cpu 7 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 7
+step 65: cpu 7 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 7
+step 66: cpu 7 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 7
+step 67: cpu 7 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 7
+step 68: cpu 0 cmd 0x01 apply: read the CPU's own ratio limit (0x01) of a P CPU
+Apply report for profile 'p53-1200-p55-1270-t55'
+Result: OK; 66 mailbox operation(s) reached the transport
+Steps:
+    1. cpu  0 msr 0x0ce read PLATFORM_INFO (0xCE) (plain rdmsr, not a mailbox request) -> word 0x08040838f1812500: base ratio 37
+    2. cpu  0 msr 0x1ad read P turbo table (0x1AD) (plain rdmsr, not a mailbox request) -> word 0x3636363636363939: buckets (1..8 active cores) 57/57/54/54/54/54/54/54
+    3. cpu  0 cmd 0x14 read PerCore Voltage Enable state (package-wide) -> rc 0 (Pass), word 0x00000008, PerCore Voltage Enable set
+    4. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    5. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    6. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    7. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    8. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    9. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   10. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   11. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   12. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   13. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   14. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   15. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   16. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   17. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   18. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   19. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   20. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   21. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   22. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   23. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   24. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   25. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   26. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   27. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   28. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   29. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   30. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   31. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   32. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   33. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   34. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   35. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   36. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   37. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   38. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   39. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   40. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   41. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   42. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   43. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   44. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   45. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   46. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   47. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   48. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   49. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   50. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   51. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   52. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   53. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   54. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   55. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   56. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   57. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   58. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   59. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   60. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   61. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   62. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   63. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   64. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   65. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   66. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   67. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   68. cpu  0 cmd 0x01 read the CPU's own ratio limit (0x01) of P CPUs -> rc 0 (Pass), word 0x778: CPU limit (fused max OC ratio) 120x, ratio overclocking ok
+WARNING: per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state
+MCE after: 0
+=== step A 2026-10-19T20:42:57+03:00 (guard: split raise/lower)
+Plan for profile 'p53-1200-p55-1270-a': 8 CPU(s); baseline words are read through the guard after confirmation
+  P-Core 0 (cpu 0): point 1 offset +0 mV (expects ratio 8)
+  P-Core 0 (cpu 0): point 2 offset +0 mV (expects ratio 20)
+  P-Core 0 (cpu 0): point 3 offset +0 mV (expects ratio 30)
+  P-Core 0 (cpu 0): point 4 offset +0 mV (expects ratio 48)
+  P-Core 0 (cpu 0): point 5 offset -50 mV (expects ratio 53)
+  P-Core 0 (cpu 0): point 6 offset -28 mV (expects ratio 55)
+  P-Core 0 (cpu 0): point 7 offset -26 mV (expects ratio 56)
+  P-Core 0 (cpu 0): point 8 offset -43 mV (expects ratio 57)
+  P-Core 1 (cpu 1): point 1 offset +0 mV (expects ratio 8)
+  P-Core 1 (cpu 1): point 2 offset +0 mV (expects ratio 20)
+  P-Core 1 (cpu 1): point 3 offset +0 mV (expects ratio 30)
+  P-Core 1 (cpu 1): point 4 offset +0 mV (expects ratio 48)
+  P-Core 1 (cpu 1): point 5 offset -50 mV (expects ratio 53)
+  P-Core 1 (cpu 1): point 6 offset -36 mV (expects ratio 55)
+  P-Core 1 (cpu 1): point 7 offset +0 mV (expects ratio 56)
+  P-Core 1 (cpu 1): point 8 offset +0 mV (expects ratio 57)
+  P-Core 2 (cpu 2): point 1 offset +0 mV (expects ratio 8)
+  P-Core 2 (cpu 2): point 2 offset +0 mV (expects ratio 20)
+  P-Core 2 (cpu 2): point 3 offset +0 mV (expects ratio 30)
+  P-Core 2 (cpu 2): point 4 offset +0 mV (expects ratio 48)
+  P-Core 2 (cpu 2): point 5 offset -71 mV (expects ratio 53)
+  P-Core 2 (cpu 2): point 6 offset -96 mV (expects ratio 55)
+  P-Core 2 (cpu 2): point 7 offset +0 mV (expects ratio 56)
+  P-Core 2 (cpu 2): point 8 offset +0 mV (expects ratio 57)
+  P-Core 3 (cpu 3): point 1 offset +0 mV (expects ratio 8)
+  P-Core 3 (cpu 3): point 2 offset +0 mV (expects ratio 20)
+  P-Core 3 (cpu 3): point 3 offset +0 mV (expects ratio 30)
+  P-Core 3 (cpu 3): point 4 offset +0 mV (expects ratio 48)
+  P-Core 3 (cpu 3): point 5 offset -50 mV (expects ratio 53)
+  P-Core 3 (cpu 3): point 6 offset -28 mV (expects ratio 55)
+  P-Core 3 (cpu 3): point 7 offset -28 mV (expects ratio 56)
+  P-Core 3 (cpu 3): point 8 offset -31 mV (expects ratio 57)
+  P-Core 4 (cpu 4): point 1 offset +0 mV (expects ratio 8)
+  P-Core 4 (cpu 4): point 2 offset +0 mV (expects ratio 20)
+  P-Core 4 (cpu 4): point 3 offset +0 mV (expects ratio 30)
+  P-Core 4 (cpu 4): point 4 offset +0 mV (expects ratio 48)
+  P-Core 4 (cpu 4): point 5 offset -50 mV (expects ratio 53)
+  P-Core 4 (cpu 4): point 6 offset -49 mV (expects ratio 55)
+  P-Core 4 (cpu 4): point 7 offset +0 mV (expects ratio 56)
+  P-Core 4 (cpu 4): point 8 offset +0 mV (expects ratio 57)
+  P-Core 5 (cpu 5): point 1 offset +0 mV (expects ratio 8)
+  P-Core 5 (cpu 5): point 2 offset +0 mV (expects ratio 20)
+  P-Core 5 (cpu 5): point 3 offset +0 mV (expects ratio 30)
+  P-Core 5 (cpu 5): point 4 offset +0 mV (expects ratio 48)
+  P-Core 5 (cpu 5): point 5 offset -61 mV (expects ratio 53)
+  P-Core 5 (cpu 5): point 6 offset -88 mV (expects ratio 55)
+  P-Core 5 (cpu 5): point 7 offset +0 mV (expects ratio 56)
+  P-Core 5 (cpu 5): point 8 offset +0 mV (expects ratio 57)
+  P-Core 6 (cpu 6): point 1 offset +0 mV (expects ratio 8)
+  P-Core 6 (cpu 6): point 2 offset +0 mV (expects ratio 20)
+  P-Core 6 (cpu 6): point 3 offset +0 mV (expects ratio 30)
+  P-Core 6 (cpu 6): point 4 offset +0 mV (expects ratio 48)
+  P-Core 6 (cpu 6): point 5 offset -50 mV (expects ratio 53)
+  P-Core 6 (cpu 6): point 6 offset -76 mV (expects ratio 55)
+  P-Core 6 (cpu 6): point 7 offset +0 mV (expects ratio 56)
+  P-Core 6 (cpu 6): point 8 offset +0 mV (expects ratio 57)
+  P-Core 7 (cpu 7): point 1 offset +0 mV (expects ratio 8)
+  P-Core 7 (cpu 7): point 2 offset +0 mV (expects ratio 20)
+  P-Core 7 (cpu 7): point 3 offset +0 mV (expects ratio 30)
+  P-Core 7 (cpu 7): point 4 offset +0 mV (expects ratio 48)
+  P-Core 7 (cpu 7): point 5 offset -71 mV (expects ratio 53)
+  P-Core 7 (cpu 7): point 6 offset -106 mV (expects ratio 55)
+  P-Core 7 (cpu 7): point 7 offset +0 mV (expects ratio 56)
+  P-Core 7 (cpu 7): point 8 offset +0 mV (expects ratio 57)
+  V/F points: per CPU and point read 0x10 P2=<point>, then write 0x11 P2=<point> (the word read with only the offset replaced; no 0x1D / 0x27); point writes come before the per-core words; the hardware's V(n) >= V(n-1) rule is not checked here;
+  plain MSR 0x1AD (P turbo table): rdmsr 0xCE and the table first, then wrmsr 55/55/54/54/54/54/54/54 (raising a bucket: after all per-core words; only lowering: before them), read back on two CPUs of different core kinds;
+  read 0x14 on cpu 0; write 0x15 (old|0x8) only if bit 3 is clear;
+  offsets: the 11-bit offset field is the only bound (-1000..+999 mV); a positive offset is also checked against the CPU's cmd 0x28 limit
+Operations required: at most 197 mailbox WRMSRs (every read, every write and the guard's read-back of each write); policy allows 100000; dwell 0 s after each operation
+About to apply the plan above through the write guard.
+To proceed type exactly:  CONFIRM d53136e4
+> 
+step 1: cpu 0 msr 0xce apply: read PLATFORM_INFO (0xCE) (plain rdmsr) before any write
+step 2: cpu 0 msr 0x1ad apply: read P turbo table (0x1AD) (plain rdmsr) before any write
+step 3: cpu 0 cmd 0x14 apply: read PerCore Voltage Enable state (0x14) before any write
+step 4: cpu 0 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 0
+step 5: cpu 0 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 0
+step 6: cpu 0 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 0
+step 7: cpu 0 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 0
+step 8: cpu 0 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 0
+step 9: cpu 0 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 0
+step 10: cpu 0 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 0
+step 11: cpu 0 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 0
+step 12: cpu 1 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 1
+step 13: cpu 1 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 1
+step 14: cpu 1 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 1
+step 15: cpu 1 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 1
+step 16: cpu 1 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 1
+step 17: cpu 1 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 1
+step 18: cpu 1 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 1
+step 19: cpu 1 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 1
+step 20: cpu 2 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 2
+step 21: cpu 2 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 2
+step 22: cpu 2 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 2
+step 23: cpu 2 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 2
+step 24: cpu 2 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 2
+step 25: cpu 2 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 2
+step 26: cpu 2 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 2
+step 27: cpu 2 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 2
+step 28: cpu 3 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 3
+step 29: cpu 3 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 3
+step 30: cpu 3 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 3
+step 31: cpu 3 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 3
+step 32: cpu 3 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 3
+step 33: cpu 3 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 3
+step 34: cpu 3 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 3
+step 35: cpu 3 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 3
+step 36: cpu 4 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 4
+step 37: cpu 4 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 4
+step 38: cpu 4 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 4
+step 39: cpu 4 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 4
+step 40: cpu 4 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 4
+step 41: cpu 4 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 4
+step 42: cpu 4 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 4
+step 43: cpu 4 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 4
+step 44: cpu 5 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 5
+step 45: cpu 5 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 5
+step 46: cpu 5 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 5
+step 47: cpu 5 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 5
+step 48: cpu 5 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 5
+step 49: cpu 5 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 5
+step 50: cpu 5 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 5
+step 51: cpu 5 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 5
+step 52: cpu 6 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 6
+step 53: cpu 6 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 6
+step 54: cpu 6 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 6
+step 55: cpu 6 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 6
+step 56: cpu 6 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 6
+step 57: cpu 6 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 6
+step 58: cpu 6 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 6
+step 59: cpu 6 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 6
+step 60: cpu 7 cmd 0x10 apply: read V/F point 1 baseline (0x10 P2=1) of P-Core 7
+step 61: cpu 7 cmd 0x10 apply: read V/F point 2 baseline (0x10 P2=2) of P-Core 7
+step 62: cpu 7 cmd 0x10 apply: read V/F point 3 baseline (0x10 P2=3) of P-Core 7
+step 63: cpu 7 cmd 0x10 apply: read V/F point 4 baseline (0x10 P2=4) of P-Core 7
+step 64: cpu 7 cmd 0x10 apply: read V/F point 5 baseline (0x10 P2=5) of P-Core 7
+step 65: cpu 7 cmd 0x10 apply: read V/F point 6 baseline (0x10 P2=6) of P-Core 7
+step 66: cpu 7 cmd 0x10 apply: read V/F point 7 baseline (0x10 P2=7) of P-Core 7
+step 67: cpu 7 cmd 0x10 apply: read V/F point 8 baseline (0x10 P2=8) of P-Core 7
+step 68: cpu 0 cmd 0x01 apply: read the CPU's own ratio limit (0x01) of a P CPU
+step 69: cpu 0 msr 0x1ad apply: write P turbo table (0x1AD) (plain wrmsr, cpu 0): 57/57/54/54/54/54/54/54 -> 55/55/54/54/54/54/54/54
+step 70: cpu 0 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 0: point 1 offset +0 mV (expects ratio 8)
+step 71: cpu 0 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 0: point 2 offset +0 mV (expects ratio 20)
+step 72: cpu 0 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 0: point 3 offset +0 mV (expects ratio 30)
+step 73: cpu 0 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 0: point 4 offset +0 mV (expects ratio 48)
+step 74: cpu 0 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 0: point 5 offset -50 mV (expects ratio 53)
+step 75: cpu 0 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 0: point 6 offset -28 mV (expects ratio 55)
+step 76: cpu 0 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 0: point 7 offset -26 mV (expects ratio 56)
+step 77: cpu 0 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 0: point 8 offset -43 mV (expects ratio 57)
+step 78: cpu 1 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 1: point 1 offset +0 mV (expects ratio 8)
+step 79: cpu 1 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 1: point 2 offset +0 mV (expects ratio 20)
+step 80: cpu 1 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 1: point 3 offset +0 mV (expects ratio 30)
+step 81: cpu 1 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 1: point 4 offset +0 mV (expects ratio 48)
+step 82: cpu 1 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 1: point 7 offset +0 mV (expects ratio 56)
+step 83: cpu 1 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 1: point 8 offset +0 mV (expects ratio 57)
+step 84: cpu 1 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 1: point 5 offset -50 mV (expects ratio 53)
+step 85: cpu 1 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 1: point 6 offset -36 mV (expects ratio 55)
+step 86: cpu 2 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 2: point 1 offset +0 mV (expects ratio 8)
+step 87: cpu 2 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 2: point 2 offset +0 mV (expects ratio 20)
+step 88: cpu 2 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 2: point 3 offset +0 mV (expects ratio 30)
+step 89: cpu 2 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 2: point 4 offset +0 mV (expects ratio 48)
+step 90: cpu 2 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 2: point 7 offset +0 mV (expects ratio 56)
+step 91: cpu 2 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 2: point 8 offset +0 mV (expects ratio 57)
+step 92: cpu 2 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 2: point 5 offset -71 mV (expects ratio 53)
+step 93: cpu 2 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 2: point 6 offset -96 mV (expects ratio 55)
+step 94: cpu 3 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 3: point 1 offset +0 mV (expects ratio 8)
+step 95: cpu 3 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 3: point 2 offset +0 mV (expects ratio 20)
+step 96: cpu 3 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 3: point 3 offset +0 mV (expects ratio 30)
+step 97: cpu 3 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 3: point 4 offset +0 mV (expects ratio 48)
+step 98: cpu 3 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 3: point 5 offset -50 mV (expects ratio 53)
+step 99: cpu 3 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 3: point 6 offset -28 mV (expects ratio 55)
+step 100: cpu 3 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 3: point 7 offset -28 mV (expects ratio 56)
+step 101: cpu 3 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 3: point 8 offset -31 mV (expects ratio 57)
+step 102: cpu 4 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 4: point 1 offset +0 mV (expects ratio 8)
+step 103: cpu 4 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 4: point 2 offset +0 mV (expects ratio 20)
+step 104: cpu 4 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 4: point 3 offset +0 mV (expects ratio 30)
+step 105: cpu 4 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 4: point 4 offset +0 mV (expects ratio 48)
+step 106: cpu 4 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 4: point 7 offset +0 mV (expects ratio 56)
+step 107: cpu 4 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 4: point 8 offset +0 mV (expects ratio 57)
+step 108: cpu 4 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 4: point 5 offset -50 mV (expects ratio 53)
+step 109: cpu 4 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 4: point 6 offset -49 mV (expects ratio 55)
+step 110: cpu 5 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 5: point 1 offset +0 mV (expects ratio 8)
+step 111: cpu 5 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 5: point 2 offset +0 mV (expects ratio 20)
+step 112: cpu 5 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 5: point 3 offset +0 mV (expects ratio 30)
+step 113: cpu 5 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 5: point 4 offset +0 mV (expects ratio 48)
+step 114: cpu 5 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 5: point 7 offset +0 mV (expects ratio 56)
+step 115: cpu 5 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 5: point 8 offset +0 mV (expects ratio 57)
+step 116: cpu 5 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 5: point 5 offset -61 mV (expects ratio 53)
+step 117: cpu 5 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 5: point 6 offset -88 mV (expects ratio 55)
+step 118: cpu 6 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 6: point 1 offset +0 mV (expects ratio 8)
+step 119: cpu 6 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 6: point 2 offset +0 mV (expects ratio 20)
+step 120: cpu 6 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 6: point 3 offset +0 mV (expects ratio 30)
+step 121: cpu 6 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 6: point 4 offset +0 mV (expects ratio 48)
+step 122: cpu 6 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 6: point 7 offset +0 mV (expects ratio 56)
+step 123: cpu 6 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 6: point 8 offset +0 mV (expects ratio 57)
+step 124: cpu 6 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 6: point 5 offset -50 mV (expects ratio 53)
+step 125: cpu 6 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 6: point 6 offset -76 mV (expects ratio 55)
+step 126: cpu 7 cmd 0x11 apply: write V/F point 1 offset (0x11 P2=1) of P-Core 7: point 1 offset +0 mV (expects ratio 8)
+step 127: cpu 7 cmd 0x11 apply: write V/F point 2 offset (0x11 P2=2) of P-Core 7: point 2 offset +0 mV (expects ratio 20)
+step 128: cpu 7 cmd 0x11 apply: write V/F point 3 offset (0x11 P2=3) of P-Core 7: point 3 offset +0 mV (expects ratio 30)
+step 129: cpu 7 cmd 0x11 apply: write V/F point 4 offset (0x11 P2=4) of P-Core 7: point 4 offset +0 mV (expects ratio 48)
+step 130: cpu 7 cmd 0x11 apply: write V/F point 7 offset (0x11 P2=7) of P-Core 7: point 7 offset +0 mV (expects ratio 56)
+step 131: cpu 7 cmd 0x11 apply: write V/F point 8 offset (0x11 P2=8) of P-Core 7: point 8 offset +0 mV (expects ratio 57)
+step 132: cpu 7 cmd 0x11 apply: write V/F point 5 offset (0x11 P2=5) of P-Core 7: point 5 offset -71 mV (expects ratio 53)
+step 133: cpu 7 cmd 0x11 apply: write V/F point 6 offset (0x11 P2=6) of P-Core 7: point 6 offset -106 mV (expects ratio 55)
+Apply report for profile 'p53-1200-p55-1270-a'
+Result: OK; 130 mailbox operation(s) reached the transport
+Steps:
+    1. cpu  0 msr 0x0ce read PLATFORM_INFO (0xCE) (plain rdmsr, not a mailbox request) -> word 0x08040838f1812500: base ratio 37
+    2. cpu  0 msr 0x1ad read P turbo table (0x1AD) (plain rdmsr, not a mailbox request) -> word 0x3636363636363939: buckets (1..8 active cores) 57/57/54/54/54/54/54/54
+    3. cpu  0 cmd 0x14 read PerCore Voltage Enable state (package-wide) -> rc 0 (Pass), word 0x00000008, PerCore Voltage Enable set
+    4. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    5. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    6. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    7. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    8. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+    9. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   10. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   11. cpu  0 cmd 0x10 read V/F point baseline of P-Core 0 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   12. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   13. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   14. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   15. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   16. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   17. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   18. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   19. cpu  1 cmd 0x10 read V/F point baseline of P-Core 1 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   20. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   21. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   22. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   23. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   24. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   25. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   26. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   27. cpu  2 cmd 0x10 read V/F point baseline of P-Core 2 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   28. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   29. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   30. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   31. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   32. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   33. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   34. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   35. cpu  3 cmd 0x10 read V/F point baseline of P-Core 3 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   36. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   37. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   38. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   39. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   40. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   41. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   42. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   43. cpu  4 cmd 0x10 read V/F point baseline of P-Core 4 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   44. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   45. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   46. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   47. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   48. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   49. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   50. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   51. cpu  5 cmd 0x10 read V/F point baseline of P-Core 5 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   52. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   53. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   54. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   55. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   56. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   57. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   58. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   59. cpu  6 cmd 0x10 read V/F point baseline of P-Core 6 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   60. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 1 -> rc 0 (Pass), word 0x00000008: point ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   61. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 2 -> rc 0 (Pass), word 0x00000014: point ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   62. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 3 -> rc 0 (Pass), word 0x0000001e: point ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   63. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 4 -> rc 0 (Pass), word 0x00000030: point ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   64. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 5 -> rc 0 (Pass), word 0x00000035: point ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   65. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 6 -> rc 0 (Pass), word 0x00000037: point ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   66. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 7 -> rc 0 (Pass), word 0x00000038: point ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   67. cpu  7 cmd 0x10 read V/F point baseline of P-Core 7 point 8 -> rc 0 (Pass), word 0x00000039: point ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+   68. cpu  0 cmd 0x01 read the CPU's own ratio limit (0x01) of P CPUs -> rc 0 (Pass), word 0x778: CPU limit (fused max OC ratio) 120x, ratio overclocking ok
+   69. cpu  0 msr 0x1ad write P turbo table (0x1AD) (plain wrmsr, read back on cpu 0 and cpu 8) -> read-back equal on both CPUs, read-back cpu 0 0x3636363636363737, read-back cpu 8 0x3636363636363737
+   70. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+   71. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+   72. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+   73. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+   74. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf9a00035
+   75. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xfc600037
+   76. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 7 -> rc 0 (Pass), read-back equal, read-back word 0xfca00038
+   77. cpu  0 cmd 0x11 write V/F point offset of P-Core 0 point 8 -> rc 0 (Pass), read-back equal, read-back word 0xfa800039
+   78. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+   79. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+   80. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+   81. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+   82. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+   83. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+   84. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf9a00035
+   85. cpu  1 cmd 0x11 write V/F point offset of P-Core 1 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xfb600037
+   86. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+   87. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+   88. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+   89. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+   90. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+   91. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+   92. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf6e00035
+   93. cpu  2 cmd 0x11 write V/F point offset of P-Core 2 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xf3c00037
+   94. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+   95. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+   96. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+   97. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+   98. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf9a00035
+   99. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xfc600037
+  100. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 7 -> rc 0 (Pass), read-back equal, read-back word 0xfc600038
+  101. cpu  3 cmd 0x11 write V/F point offset of P-Core 3 point 8 -> rc 0 (Pass), read-back equal, read-back word 0xfc000039
+  102. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+  103. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+  104. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+  105. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+  106. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+  107. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+  108. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf9a00035
+  109. cpu  4 cmd 0x11 write V/F point offset of P-Core 4 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xf9c00037
+  110. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+  111. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+  112. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+  113. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+  114. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+  115. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+  116. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf8400035
+  117. cpu  5 cmd 0x11 write V/F point offset of P-Core 5 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xf4c00037
+  118. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+  119. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+  120. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+  121. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+  122. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+  123. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+  124. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf9a00035
+  125. cpu  6 cmd 0x11 write V/F point offset of P-Core 6 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xf6400037
+  126. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 1 -> rc 0 (Pass), read-back equal, read-back word 0x00000008
+  127. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 2 -> rc 0 (Pass), read-back equal, read-back word 0x00000014
+  128. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 3 -> rc 0 (Pass), read-back equal, read-back word 0x0000001e
+  129. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 4 -> rc 0 (Pass), read-back equal, read-back word 0x00000030
+  130. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 7 -> rc 0 (Pass), read-back equal, read-back word 0x00000038
+  131. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 8 -> rc 0 (Pass), read-back equal, read-back word 0x00000039
+  132. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 5 -> rc 0 (Pass), read-back equal, read-back word 0xf6e00035
+  133. cpu  7 cmd 0x11 write V/F point offset of P-Core 7 point 6 -> rc 0 (Pass), read-back equal, read-back word 0xf2600037
+Values as read back (integer mV snaps to 1/1024 V):
+  P-Core 0 point 1 (cpu 0): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 2 (cpu 0): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 3 (cpu 0): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 4 (cpu 0): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 5 (cpu 0): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -49.80 mV (raw -51); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -49.80 mV, effective -49.80 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 6 (cpu 0): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -28.32 mV (raw -29); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -28.32 mV, effective -28.32 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 7 (cpu 0): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset -26.37 mV (raw -27); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -26.37 mV, effective -26.37 mV (assumed BIOS offset +0 mV)
+  P-Core 0 point 8 (cpu 0): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset -42.97 mV (raw -44); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -42.97 mV, effective -42.97 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 1 (cpu 1): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 2 (cpu 1): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 3 (cpu 1): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 4 (cpu 1): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 7 (cpu 1): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 8 (cpu 1): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 5 (cpu 1): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -49.80 mV (raw -51); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -49.80 mV, effective -49.80 mV (assumed BIOS offset +0 mV)
+  P-Core 1 point 6 (cpu 1): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -36.13 mV (raw -37); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -36.13 mV, effective -36.13 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 1 (cpu 2): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 2 (cpu 2): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 3 (cpu 2): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 4 (cpu 2): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 7 (cpu 2): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 8 (cpu 2): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 5 (cpu 2): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -71.29 mV (raw -73); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -71.29 mV, effective -71.29 mV (assumed BIOS offset +0 mV)
+  P-Core 2 point 6 (cpu 2): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -95.70 mV (raw -98); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -95.70 mV, effective -95.70 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 1 (cpu 3): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 2 (cpu 3): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 3 (cpu 3): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 4 (cpu 3): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 5 (cpu 3): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -49.80 mV (raw -51); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -49.80 mV, effective -49.80 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 6 (cpu 3): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -28.32 mV (raw -29); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -28.32 mV, effective -28.32 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 7 (cpu 3): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset -28.32 mV (raw -29); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -28.32 mV, effective -28.32 mV (assumed BIOS offset +0 mV)
+  P-Core 3 point 8 (cpu 3): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset -31.25 mV (raw -32); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -31.25 mV, effective -31.25 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 1 (cpu 4): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 2 (cpu 4): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 3 (cpu 4): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 4 (cpu 4): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 7 (cpu 4): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 8 (cpu 4): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 5 (cpu 4): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -49.80 mV (raw -51); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -49.80 mV, effective -49.80 mV (assumed BIOS offset +0 mV)
+  P-Core 4 point 6 (cpu 4): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -48.83 mV (raw -50); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -48.83 mV, effective -48.83 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 1 (cpu 5): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 2 (cpu 5): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 3 (cpu 5): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 4 (cpu 5): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 7 (cpu 5): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 8 (cpu 5): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 5 (cpu 5): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -60.55 mV (raw -62); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -60.55 mV, effective -60.55 mV (assumed BIOS offset +0 mV)
+  P-Core 5 point 6 (cpu 5): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -87.89 mV (raw -90); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -87.89 mV, effective -87.89 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 1 (cpu 6): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 2 (cpu 6): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 3 (cpu 6): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 4 (cpu 6): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 7 (cpu 6): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 8 (cpu 6): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 5 (cpu 6): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -49.80 mV (raw -51); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -49.80 mV, effective -49.80 mV (assumed BIOS offset +0 mV)
+  P-Core 6 point 6 (cpu 6): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -76.17 mV (raw -78); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -76.17 mV, effective -76.17 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 1 (cpu 7): ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 2 (cpu 7): ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 20, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 3 (cpu 7): ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 30, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 4 (cpu 7): ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 48, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 7 (cpu 7): ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 56, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 8 (cpu 7): ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); was: ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset +0.00 mV, effective +0.00 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 5 (cpu 7): ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset -71.29 mV (raw -73); was: ratio 53, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -71.29 mV, effective -71.29 mV (assumed BIOS offset +0 mV)
+  P-Core 7 point 6 (cpu 7): ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset -106.45 mV (raw -109); was: ratio 55, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0); verified; runtime offset -106.45 mV, effective -106.45 mV (assumed BIOS offset +0 mV)
+Revert plan (NOT executed; each is a new guarded request after the dwell, or reboot/power-cycle):
+  1. cpu 7 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  2. cpu 7 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  3. cpu 7 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  4. cpu 7 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  5. cpu 7 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  6. cpu 7 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  7. cpu 7 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  8. cpu 7 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  9. cpu 6 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  10. cpu 6 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  11. cpu 6 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  12. cpu 6 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  13. cpu 6 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  14. cpu 6 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  15. cpu 6 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  16. cpu 6 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  17. cpu 5 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  18. cpu 5 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  19. cpu 5 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  20. cpu 5 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  21. cpu 5 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  22. cpu 5 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  23. cpu 5 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  24. cpu 5 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  25. cpu 4 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  26. cpu 4 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  27. cpu 4 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  28. cpu 4 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  29. cpu 4 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  30. cpu 4 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  31. cpu 4 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  32. cpu 4 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  33. cpu 3 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  34. cpu 3 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  35. cpu 3 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  36. cpu 3 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  37. cpu 3 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  38. cpu 3 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  39. cpu 3 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  40. cpu 3 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  41. cpu 2 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  42. cpu 2 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  43. cpu 2 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  44. cpu 2 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  45. cpu 2 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  46. cpu 2 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  47. cpu 2 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  48. cpu 2 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  49. cpu 1 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  50. cpu 1 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  51. cpu 1 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  52. cpu 1 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  53. cpu 1 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  54. cpu 1 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  55. cpu 1 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  56. cpu 1 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  57. cpu 0 cmd 0x11 p1 0 p2 8 data 0x00000039 (restores the V/F point 8 word as read (ratio and V target kept exactly; nothing filled in))
+  58. cpu 0 cmd 0x11 p1 0 p2 7 data 0x00000038 (restores the V/F point 7 word as read (ratio and V target kept exactly; nothing filled in))
+  59. cpu 0 cmd 0x11 p1 0 p2 6 data 0x00000037 (restores the V/F point 6 word as read (ratio and V target kept exactly; nothing filled in))
+  60. cpu 0 cmd 0x11 p1 0 p2 5 data 0x00000035 (restores the V/F point 5 word as read (ratio and V target kept exactly; nothing filled in))
+  61. cpu 0 cmd 0x11 p1 0 p2 4 data 0x00000030 (restores the V/F point 4 word as read (ratio and V target kept exactly; nothing filled in))
+  62. cpu 0 cmd 0x11 p1 0 p2 3 data 0x0000001e (restores the V/F point 3 word as read (ratio and V target kept exactly; nothing filled in))
+  63. cpu 0 cmd 0x11 p1 0 p2 2 data 0x00000014 (restores the V/F point 2 word as read (ratio and V target kept exactly; nothing filled in))
+  64. cpu 0 cmd 0x11 p1 0 p2 1 data 0x00000008 (restores the V/F point 1 word as read (ratio and V target kept exactly; nothing filled in))
+  65. cpu 0 plain wrmsr 0x1ad value 0x3636363636363939 (buckets 57/57/54/54/54/54/54/54; the table as read before; read back on cpu 8 too)
+  Note: a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio (a zero word cannot be written; only a reboot clears it), while a word without one reverts exactly (G-124; the revert requests put back the previous XTU-shaped word, never one with a zero field, in the reverse of the order they were applied: after a raise the ratio first, then the voltage; a V/F point word is restored exactly as read).
+  Volatility of these settings is unproven (SAFETY.md): if in doubt, reboot; a write taints the kernel (CPU_OUT_OF_SPEC).
+WARNING: per-point offsets change one V/F point only (0x11 with P2 = the point; the OC point is the P2 = 0 word): the hardware enforces V(n) >= V(n-1) across the points of a cluster, arltuner does not check it (the voltages of the fused points are not readable) [COMMUNITY skatterbencher.com]; whether the hardware accepts a point write at all on Linux is UNVERIFIED (OCCT is reported to write such words); a reboot restores the BIOS-programmed state
+=== step B 2026-10-19T20:43:10+03:00
+Plan for profile 'p-turbo-55x8-b': 0 CPU(s); baseline words are read through the guard after confirmation
+  plain MSR 0x1AD (P turbo table): rdmsr 0xCE and the table first, then wrmsr 55/55/55/55/55/55/55/55 (raising a bucket: after all per-core words; only lowering: before them), read back on two CPUs of different core kinds;
+  offsets: the 11-bit offset field is the only bound (-1000..+999 mV); a positive offset is also checked against the CPU's cmd 0x28 limit
+Operations required: at most 2 mailbox WRMSRs (every read, every write and the guard's read-back of each write); policy allows 100000; dwell 0 s after each operation
+About to apply the plan above through the write guard.
+To proceed type exactly:  CONFIRM 7a8e12cf
+> 
+step 1: cpu 0 msr 0xce apply: read PLATFORM_INFO (0xCE) (plain rdmsr) before any write
+step 2: cpu 0 msr 0x1ad apply: read P turbo table (0x1AD) (plain rdmsr) before any write
+step 3: cpu 0 cmd 0x01 apply: read the CPU's own ratio limit (0x01) of a P CPU
+step 4: cpu 0 msr 0x1ad apply: write P turbo table (0x1AD) (plain wrmsr, cpu 0): 55/55/54/54/54/54/54/54 -> 55/55/55/55/55/55/55/55
+Apply report for profile 'p-turbo-55x8-b'
+Result: OK; 1 mailbox operation(s) reached the transport
+Steps:
+    1. cpu  0 msr 0x0ce read PLATFORM_INFO (0xCE) (plain rdmsr, not a mailbox request) -> word 0x08040838f1812500: base ratio 37
+    2. cpu  0 msr 0x1ad read P turbo table (0x1AD) (plain rdmsr, not a mailbox request) -> word 0x3636363636363737: buckets (1..8 active cores) 55/55/54/54/54/54/54/54
+    3. cpu  0 cmd 0x01 read the CPU's own ratio limit (0x01) of P CPUs -> rc 0 (Pass), word 0x778: CPU limit (fused max OC ratio) 120x, ratio overclocking ok
+    4. cpu  0 msr 0x1ad write P turbo table (0x1AD) (plain wrmsr, read back on cpu 0 and cpu 8) -> read-back equal on both CPUs, read-back cpu 0 0x3737373737373737, read-back cpu 8 0x3737373737373737
+Revert plan (NOT executed; each is a new guarded request after the dwell, or reboot/power-cycle):
+  1. cpu 0 plain wrmsr 0x1ad value 0x3636363636363737 (buckets 55/55/54/54/54/54/54/54; the table as read before; read back on cpu 8 too)
+  Note: a reboot restores the BIOS-programmed state; a write cannot clear an OC ratio above the top fused ratio (a zero word cannot be written; only a reboot clears it), while a word without one reverts exactly (G-124; the revert requests put back the previous XTU-shaped word, never one with a zero field, in the reverse of the order they were applied: after a raise the ratio first, then the voltage; a V/F point word is restored exactly as read).
+  Volatility of these settings is unproven (SAFETY.md): if in doubt, reboot; a write taints the kernel (CPU_OUT_OF_SPEC).
