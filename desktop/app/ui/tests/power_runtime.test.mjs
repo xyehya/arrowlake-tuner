@@ -17,7 +17,7 @@ import { normCpuLimits, capWindow, uncoreWindow, capsLine, uncoreLine, powerLine
 import { initialRt, revertReason, powerCurrent, powerDisagrees, powerDisabledReason, powerRequest, capRows, uncoreState, runtimeRequest, pendingCounts, ensureRt, editRt } from "../lib/rtstate.js";
 import { ensureTune, requestReview as pendingBarReview, syncPending, setPendingAll, discardDraft } from "../views/tune.js";
 import { powerView, runtimeView, POWER_KIND, RUNTIME_KIND, registerRuntimeKinds, requestReview, revertRequest, PL_NAME } from "../views/tune/runtime-kinds.js";
-import { KINDS, createApplyController, planWarnings, readbackCells, partialWording, summarizeResult } from "../views/tune/apply.js";
+import { KINDS, createApplyController, planWarnings, readbackCells, partialWording, summarizeResult, settledNote } from "../views/tune/apply.js";
 import { powerWarnings } from "../views/tune/power.js";
 import { unitWindow, capsDisabledReason } from "../views/tune/runtime.js";
 import { uncoreDisabledReason } from "../views/tune/ring.js";
@@ -209,6 +209,12 @@ test("G-232: a revert cap step has no ratio field: the row is derived from the k
   assert.ok(!JSON.stringify(rv).includes("undefined"));
   const e = runtimeView({ steps: [{ n: 1, domain: "caps", key: "cpu8", file: "f", before: 4800000, value: 4600000, ratio: 46, note: "capped at 46×" }] });
   assert.equal(e.units[0].lines[0], "max 48× → 46× (4600 MHz) · capped at 46×", "the plan's own ratio and note win");
+});
+
+test("G-237: a late OC-point V target is noted on its read-back row, nothing otherwise", () => {
+  assert.equal(settledNote({ unit: "P0", point: 0, match: true, polls: 2, settle_ms: 7.4 }), "settled after 2 re-reads (7 ms)");
+  assert.equal(settledNote({ polls: 1 }), "settled after 1 re-read");
+  for (const x of [{ polls: 0 }, { match: true }, null, "x", { polls: "2" }]) assert.equal(settledNote(x), "");
 });
 
 test("G-232: read-back rows of the runtime / power helpers are shown by file and key, V/F rows as before", () => {

@@ -195,6 +195,12 @@ export function readbackCells(x) {
   return { unit, point, cpu: m ? Number(m[1]) : "", expected: isNum(lo) ? (lo === hi ? String(lo) : lo + "–" + hi) : DASH, actual: isNum(x.file) ? String(x.file) : "not read back" };
 }
 
+/** G-237: a V/F word whose V target landed late says so ("settled after 2 re-reads", `polls` / `settle_ms` of the guard's read-back record); "" when it matched on the first read or the helper sent no count. */
+export function settledNote(x) {
+  if (!isObj(x) || !isNum(x.polls) || x.polls < 1) return "";
+  return "settled after " + plural(x.polls, "re-read") + (isNum(x.settle_ms) ? " (" + Math.round(x.settle_ms) + " ms)" : "");
+}
+
 /** G-232: the red box of a partial apply: V/F words speak of the CPU's words; the runtime kinds (power / caps / uncore) of runtime settings, which a reboot restores. */
 export function partialWording(runtimeKind, tripped = false) {
   const guard = tripped ? " The guard tripped." : "";
@@ -785,7 +791,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
         const c = readbackCells(x);
         return h("tr", { class: x.match === true ? "" : "is-bad", dataset: { match: String(x.match === true) } },
           h("td", { text: c.unit }), h("td", { text: c.point }), h("td", { class: "num", text: c.cpu }),
-          h("td", { class: "mono", text: c.expected }), h("td", { class: "mono", text: c.actual }), h("td", {}, pill(x.match === true ? "match" : "mismatch", x.match === true ? "ok" : "mismatch")));
+          h("td", { class: "mono", text: c.expected }), h("td", { class: "mono", text: c.actual }), h("td", {}, pill(x.match === true ? "match" : "mismatch", x.match === true ? "ok" : "mismatch"), settledNote(x) ? h("span", { class: "muted", text: " " + settledNote(x) }) : null));
       })));
       box.append(h("details", { class: "apply-readback", open: !s.allMatch }, h("summary", { text: "Read-back table (" + s.total + " words)" }), h("div", { class: "scroll apply-scroll" }, t)));
     }
