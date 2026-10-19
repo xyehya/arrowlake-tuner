@@ -35,6 +35,11 @@ numbers do not. Ratios marked "285K" are that SKU's values (other SKUs have othe
   [MEASURED lnx 2026-10-11, 2026-10-12].
 - **Target without an OC point:** with OC ratio <= top fused ratio a written V target is not reliably retained (dropped on one write, kept on another);
   write such words with target 0 (D-035, G-124) [MEASURED lnx 2026-10-11/12].
+- **An OC point is created by ONE word with ratio + target** (G-241): with no OC point there is no voltage-first word (the target would be dropped), and the CPU cannot
+  run the new ratio before the `0x1D` (and turbo table) that follows, so ratio + target in the `0x11` word is the safe creation. P0 58x: `0x0005B43A` in one word, the
+  target read back 3 ms later (G-237 re-read) [MEASURED lnx 2026-10-19, `captures/lnx/p0-oc58-trip-20261019.txt`]; E 50x was created the same way on the previous boot.
+  Guard limit: the `vf_bounded` ordering test measures the target against the fused voltage when the word has no target, so a creating word whose target is ABOVE the fused
+  voltage is still predicted `CHECK_FAILED` ("raises the ratio and the V target together") [MEASURED sim/guard test, G-241]; target = fused voltage passes.
 - **OC target below the top fused point** is clamped up to it [MEASURED lnx 2026-10-11].
 - **Ring OC point (BIOS ring 40x, OC word `0x28`, V target 0 = auto) holds its own voltage:** stock V(40x) = V(39x) = 1.2162 V; ring point 8
   (39x) -25 mV moved 39x to 1.1912 V and left 40x at 1.2162 V (requested ring VID = MSR `0x621` [31:16] / 8192) [MEASURED lnx 2026-10-15,

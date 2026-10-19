@@ -12,7 +12,7 @@ import { tileFace } from "../views/tune/grid.js";
 import { buildIntent } from "../lib/intent.js";
 import { ensureTune, patchTune } from "../views/tune.js";
 import {
-  planRows, describeRow, stepRows, unitOrder, unitStatuses, STATUS_TEXT, eta, progressText, summarizeResult, resultHeadline, planWarnings, planWrites, locateError, confirmText,
+  planRows, describeRow, stepRows, unitOrder, unitStatuses, noWrites, STATUS_TEXT, eta, progressText, summarizeResult, resultHeadline, planWarnings, planWrites, locateError, confirmText,
   createApplyController, KINDS, registerKind,
 } from "../views/tune/apply.js";
 
@@ -86,6 +86,17 @@ test("unitStatuses at the end comes from the read-back only; after a stop the cu
   assert.deepEqual(unitStatuses(plan3, { step: 5, of: 8 }, { ok: false }), { P0: "unverified", EC0: "interrupted", EC1: "not_started" });
   const turbo = { steps: [{ kind: "write_msr", table: "E" }] };
   assert.deepEqual(unitStatuses(turbo, null, { ok: true, readback: [{ unit: "E", point: "turbo", match: true }] }), { "turbo E": "ok" });
+});
+
+test("G-241: an apply refused before any write leaves every unit 'not written', never 'not read back' / 'interrupted'", () => {
+  const none = { P0: "not_started", EC0: "not_started", EC1: "not_started" };
+  for (const p of [null, { step: 1, of: 8 }, { step: 5, of: 8 }, { step: 8, of: 8 }]) assert.deepEqual(unitStatuses(plan3, p, { ok: false, noWrites: true }), none);
+  assert.equal(STATUS_TEXT.not_started, "not written");
+  const err = (detail, status = "failed") => ({ status, error: { code: "REFUSED", message: "PlanError: x. Nothing was written.", detail } });
+  assert.equal(noWrites(err({ writes_sent: 0, check: "PLAN_ERROR" })), true);
+  assert.equal(noWrites(err({ ops_done: 3 })), false); // no statement about writes: the old positional statuses stay
+  assert.equal(noWrites(err({ writes_sent: 2 })), false);
+  assert.equal(noWrites({ status: "applying", error: null }), false);
 });
 
 test("G-230: units with nothing written show no change, not 'not read back'", () => {

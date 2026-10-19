@@ -87,15 +87,63 @@ class KeptWord(unittest.TestCase):
 
 
 class RaiseFromNoOcPoint(unittest.TestCase):
-    """G-124: at or below the top fused ratio the hardware keeps no V target, so a voltage-first word there cannot be verified: ratio + voltage together is a plan
-    error; the ratio alone first (the OC point appears at the current target), then the voltage, passes the guard."""
+    """G-124 / G-241: at or below the top fused ratio the hardware keeps no V target, so there is no voltage-first word; ratio + voltage together create the OC point in
+    ONE word (the ratio is usable only after the 0x1D the plan sends next). The two-word order stays for a core that already has an OC point."""
 
     RAISE = policy_with()  # D-049: the CPU's ratio limit (120x) is the only ceiling bound
     P57 = {4: readings_of(P4_BASELINE.with_(ratio=57))}
+    CREATES = "creates the OC point (ratio + voltage in one word; the ratio is usable only after 0x1D)"
 
-    def test_ratio_and_voltage_together_is_refused_at_plan_time(self) -> None:
+    @staticmethod
+    def no_oc(vf: VfWord, top: int, fused_v: int, favored: int) -> CoreReadings:
+        """A core with no OC point: ``vf`` has V target 0, the fused point (``top`` x at ``fused_v``) and 0x28 are read."""
+        return dataclasses.replace(readings_of(vf, top=top, fused=top | fused_v << 8, favored=favored), vmax=0x800)
+
+    def test_ratio_and_voltage_together_create_the_oc_point_in_one_word(self) -> None:
+        plan = plan_for(profile(p4(ratio=58, oc_voltage_mv=1400)), self.P57, policy=self.RAISE)
+        writes = [s for s in plan.steps if s.kind.is_write and s.kind is not StepKind.WRITE_PERCORE_ENABLE]
+        self.assertEqual([s.kind for s in writes], [StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR])  # one 0x11, then 0x1D / 0x27
+        vf = writes[0]
+        self.assertEqual(vf.stage, self.CREATES)
+        self.assertEqual((vf.after.ratio, vf.after.v_target_raw), (58, VfWord.v_to_raw(1.4)))
+        self.assertIn("[creates the OC point", vf.purpose)
+        self.assertEqual(writes[1].data, 58)
+
+    def test_the_guard_accepts_the_creating_word_when_the_target_is_the_fused_voltage(self) -> None:
+        """P0 58x on 2026-10-19: ``0x0005B43A`` = 58x at the fused top voltage 0x5B4 was accepted [MEASURED lnx 2026-10-19]."""
+        r = self.no_oc(VfWord(57, 0, False, 0), 57, 0x5B4, 0x3939)
+        plan = plan_for(profile(p4(ratio=58, oc_voltage_mv=1426)), {4: r}, policy=self.RAISE)
+        vf = next(s for s in plan.steps if s.kind is StepKind.WRITE_VF)
+        self.assertEqual(vf.data, 0x0005B43A)
+        self.assertTrue(vf.verdict.allowed, vf.verdict.detail)
+        self.assertTrue(plan.allowed, plan.refusals)
+
+    def test_e_cluster_oc_point_is_one_word_per_cpu_then_1d_27_and_no_table_unless_drafted(self) -> None:
+        r = self.no_oc(VfWord(46, 0, False, 0), 46, 0x4A0, 46 << 8 | 46)
+        base = {c: r for c in range(8, 12)}
+        plan = plan_for(profile(e_core(0, ratio=50, oc_voltage_mv=1176)), base, policy=self.RAISE)  # 0x4A0 / 1024 V = 1.1719 V; 1176 mV -> 0x4B2
+        seq = [(s.cpu, s.kind) for s in plan.steps if s.kind.is_write and s.kind is not StepKind.WRITE_PERCORE_ENABLE]
+        for cpu in range(8, 12):
+            self.assertEqual([k for c, k in seq if c == cpu], [StepKind.WRITE_VF, StepKind.WRITE_FAVORED, StepKind.WRITE_GRANULAR], cpu)
+        self.assertFalse(any(s.kind is StepKind.WRITE_MSR for s in plan.steps))  # no 0x650 write: the operator drafted no table
+        self.assertEqual({s.stage for s in plan.steps if s.kind is StepKind.WRITE_VF}, {self.CREATES})
+
+    def test_the_voltage_first_order_stays_when_an_oc_point_exists(self) -> None:
+        oc = {4: readings_of(P4_BASELINE.with_(ratio=58), top=57)}
+        plan = plan_for(profile(p4(ratio=59, oc_voltage_mv=1400)), oc, policy=self.RAISE)
+        self.assertEqual([s.stage for s in plan.steps if s.kind is StepKind.WRITE_VF], ["1/2 voltage first", "2/2 full word"])
+
+    def test_falling_ratio_and_voltage_stay_frequency_first(self) -> None:
+        from arltuner.controls.planner import _vf_words
+
+        words = _vf_words(VfWord(60, 0x600, False, 0), VfWord(58, 0x5B4, False, 0), 57, "x")
+        self.assertEqual([stage for _, stage in words], ["1/2 frequency first", "2/2 full word"])
+
+    def test_without_a_0x1d_after_it_the_old_refusal_stays(self) -> None:
+        from arltuner.controls.planner import _vf_words
+
         with self.assertRaises(PlanError) as ctx:
-            plan_for(profile(p4(ratio=58, oc_voltage_mv=1400)), self.P57, policy=self.RAISE)
+            _vf_words(VfWord(57, 0, False, 0), VfWord(58, 0x5B4, False, 0), 57, "P-Core 4", sends_1d=False)
         self.assertIn("raise the ratio alone first", str(ctx.exception))
 
     def test_ratio_alone_then_voltage_alone_are_allowed(self) -> None:

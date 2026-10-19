@@ -106,6 +106,9 @@ export function unitOrder(plan) {
   return ids;
 }
 
+/** G-241: the helper ended this section's apply with an error that says no write was sent (`error.detail.writes_sent === 0`). */
+export const noWrites = (sec) => isObj(sec && sec.error) && isObj(sec.error.detail) && sec.error.detail.writes_sent === 0 && ["failed", "cancelled"].includes(sec.status);
+
 export const STATUS_TEXT = {
   queued: "queued", writing: "writing", written: "written", ok: "read back OK", mismatch: "mismatch", unverified: "not read back", no_change: "no change", interrupted: "interrupted", not_started: "not written",
 };
@@ -117,9 +120,11 @@ const rbKey = (x) => (x.point === "turbo" ? "turbo " + x.unit : x.unit);
  * "not read back" (amber) is only for a written word that has no read-back.
  * Running: positional (see the header). Finished: only the read-back decides; after a failure or cancel the units already past the current step are "not read back", the current
  * one "interrupted" (it may or may not have been written), the later ones "not written".
+ * G-241: `{ok:false, noWrites:true}` (the helper ended with an error that says no write was sent: error.detail.writes_sent === 0) -> every unit "not written", whatever step the reads reached.
  */
 export function unitStatuses(plan, progress, outcome) {
   const order = unitOrder(plan);
+  if (outcome && outcome.ok === false && outcome.noWrites === true) return Object.fromEntries(order.map((u) => [u, "not_started"]));
   let writes = stepRows(plan).filter((s) => s.unit && !s.conditional).map((s) => s.unit);
   if (!writes.length) writes = order.slice();
   const out = {};
@@ -724,7 +729,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       const rb = sec.summary ? sec.summary.readback.filter((x) => u.keys.includes(x.key)) : [];
       return [u.unit, st || (sec.status === "done" ? (rb.length && rb.every((x) => x.match === true) ? "ok" : rb.length ? "mismatch" : "unverified") : sec.status === "applying" ? "writing" : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? "unverified" : "queued")];
     }));
-    const status = custom ? customStatus() : unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [], complete: sec.summary ? sec.summary.complete : true } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
+    const status = custom ? customStatus() : unitStatuses(plan, sec.progress, sec.status === "done" ? { ok: true, readback: sec.summary ? sec.summary.readback : [], complete: sec.summary ? sec.summary.complete : true } : noWrites(sec) ? { ok: false, noWrites: true } : ["failed", "cancelled", "stale"].includes(sec.status) && sec.opId ? { ok: false } : null);
     const table = h("table", { class: "apply-units", "aria-label": "Units: before and after" }, h("thead", {}, h("tr", {}, h("th", { scope: "col", text: "Unit" }), h("th", { scope: "col", text: "Before → after" }), h("th", { scope: "col", text: "Status" }))));
     const body = h("tbody");
     const statusCells = new Map();
@@ -767,7 +772,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
       : e.code === "CONFIRM_MISMATCH" ? "The helper did not accept the confirmation (used already, or wrong). Nothing was written. " + (e.message || "")
       : e.code === "CANCELLED" ? "Cancelled between transactions. The requests already sent are in the audit log; " + (kinds[sec.kind] && kinds[sec.kind].view ? "some runtime settings may be written, some not. " : "the CPU may hold a mix of old and new words. ") + (e.message || "")
       : (e.message || e.code || "The helper refused.");
-    return h("div", { class: "apply-error-box", role: "alert", dataset: { code: e.code || "" } }, h("strong", { text: sec.status === "cancelled" ? "Cancelled" : sec.status === "stale" ? "Plan is stale" : "Not applied" }), h("p", { text }));
+    return h("div", { class: "apply-error-box", role: "alert", dataset: { code: e.code || "" } }, h("strong", { text: noWrites(sec) ? "Nothing was written" : sec.status === "cancelled" ? "Cancelled" : sec.status === "stale" ? "Plan is stale" : "Not applied" }), h("p", { text }));
   }
 
   function resultNode(s, runtimeKind = false) {
