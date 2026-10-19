@@ -6,7 +6,7 @@ import { h } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum, fmtV, fmtMv, fmtAgg, fmtRatio, TIMES, DASH } from "../../lib/format.js";
 import { aggregate, sameMv, ocClass, aboveTop, fusedTopOf, ocRatioWindow } from "../../lib/units.js";
-import { curRatio, effRatio, effVt, ocRatioValue, vtValue, ocOffsetOf, setOcRatio, setVt, setOcOffset, clearOcEdits, turboEff } from "../../lib/draft.js";
+import { curRatio, effRatio, effVt, ocRatioValue, vtValue, ocOffsetOf, setOcRatio, setVt, setOcOffset, clearOcEdits, turboEff, ocIncomplete, completeOcRatio } from "../../lib/draft.js";
 import { limitsFor, vtWindow, GRID } from "../../lib/limits.js";
 import { modelCpuLine } from "../../lib/cpulimits.js";
 
@@ -61,6 +61,26 @@ export function ocAboveTable(model, draft, kind) {
 /** "1 active core" when the highest bucket is the first one (the usual case), else the bucket number. */
 const bucketLabelText = (table, top) => (table[0] === top ? "1 active core" : "bucket " + (table.indexOf(top) + 1));
 
+/**
+ * G-239: the units of `ids` whose OC word says a ratio their own maximum ratio (0x1C[7:0]) does not reach, and which of them the draft already carries a ratio for (`restate`, or an edited ratio: either way Apply sends 0x1D / 0x27).
+ * -> {units: [{id, ratio (OC word), max (0x1C)}], queued: bool (all of them are in the draft)} or null.
+ */
+export function ocIncompleteInfo(model, draft, ids) {
+  const us = units(model, ids).filter(ocIncomplete);
+  if (!us.length) return null;
+  return { units: us.map((u) => ({ id: u.id, ratio: curRatio(u), max: u.favored })), queued: us.every((u) => draft.units[u.id] && draft.units[u.id].ratio !== undefined) }; // any drafted ratio makes the intent carry one (0x1D / 0x27 follow)
+}
+
+/** The wording of the note (the single-core one is the operator's). */
+export function ocIncompleteText(info) {
+  const one = info.units.length === 1;
+  if (one) {
+    const u = info.units[0];
+    return "The OC word says " + u.ratio + TIMES + " but this core's maximum ratio (0x1C) is " + u.max + TIMES + ": the apply that set it stopped early.";
+  }
+  return "The OC word is higher than the maximum ratio (0x1C) of " + info.units.map((u) => u.id + " (" + u.ratio + TIMES + " vs " + u.max + TIMES + ")").join(", ") + ": the apply that set it stopped early.";
+}
+
 const eqAgg = (a, b, eq) => a.state === b.state && (a.state === "none" || (a.state === "same" ? eq(a.value, b.value) : eq(a.min, b.min) && eq(a.max, b.max)));
 const sameN = (a, b) => a === b;
 
@@ -92,12 +112,15 @@ export function createOcSection(tc, section) {
   const tableNoteText = h("span", { class: "turbo-cap-text" });
   const tableNoteGo = h("button", { type: "button", class: "btn small", text: "Open Turbo ratios", title: "Go to the Turbo ratios tab (nothing is edited for you)", on: { click: () => tc.setSubtab("turbo") } });
   const tableNote = h("p", { class: "oc-turbo-note", role: "note", props: { hidden: true } }, h("span", { class: "info-i", "aria-hidden": "true", text: "i" }), tableNoteText, tableNoteGo);
+  const incText = h("span", { class: "oc-incomplete-text" });
+  const incGo = h("button", { type: "button", class: "btn small", text: "Complete the OC ratio", on: { click: () => edit((m, d) => completeOcRatio(m, d, ids)) } });
+  const incNote = h("p", { class: "limit-line warn oc-incomplete-note", role: "note", props: { hidden: true } }, incText, " ", incGo);
   const vtHint = h("p", { class: "limit-line muted" });
   const rules = h("p", { class: "muted oc-rules", text: "The OC point can only be cleared by a cold boot. Static/override voltage is never offered (D-016)." });
 
   const row = (label, ...cells) => h("div", { class: "oc-row" }, h("span", { class: "field-label", text: label }), h("span", { class: "oc-cells" }, ...cells));
   const offLabel = h("span", { class: "field-label", text: "OC offset" });
-  const el = h("div", { class: "oc-section", dataset: { kind } }, h("h4", { text: "OC" }), info, row("OC ratio", ratioField.el, ratioBack), ratioHint, tableNote,
+  const el = h("div", { class: "oc-section", dataset: { kind } }, h("h4", { text: "OC" }), info, row("OC ratio", ratioField.el, ratioBack), ratioHint, incNote, tableNote,
     row("Target voltage", vtField.el), vtHint, h("div", { class: "oc-row" }, offLabel, h("span", { class: "oc-cells" }, offField.el, offTop)), rules);
 
   function update() {
@@ -125,6 +148,16 @@ export function createOcSection(tc, section) {
     });
     ratioBack.disabled = !ids.some((id) => draft.units[id] && (draft.units[id].ratio !== undefined || draft.units[id].vt !== undefined));
     ratioHint.textContent = noWin && w.reason ? w.reason + "." : modelCpuLine(model, kind, "ratio") + (w.min !== null ? " Choosable: " + w.min + TIMES + "…" + w.max + TIMES + "." : "");
+    const inc = ocIncompleteInfo(model, draft, ids);
+    incNote.hidden = !inc;
+    if (inc) {
+      incText.textContent = ocIncompleteText(inc);
+      incGo.disabled = inc.queued;
+      incGo.textContent = inc.queued ? "Queued for Apply" : "Complete the OC ratio";
+      incGo.title = inc.queued
+        ? "A ratio for this unit is in the pending changes: Apply sends the maximum ratio (0x1D) and the granular word (0x27) for it."
+        : "Adds the OC ratio that is already in force to the pending changes: Apply re-sends that word, then the maximum ratio (0x1D) and the granular word (0x27). No turbo table is changed.";
+    }
     const over = ocAboveTable(model, draft, kind);
     const mine = over ? over.units.filter((x) => ids.includes(x.id)) : [];
     tableNote.hidden = !mine.length;

@@ -2,7 +2,7 @@
 // web/app.js:2655-2690 (effective values, aggregates), 2847-2944 (turbo, editing, 48x offset), 3086-3112 (ratio options).
 //
 // A draft is plain data and every edit returns a NEW draft (store-friendly, no mutation):
-//   { units: { <id>: { curveMv?, pts: { <ratio | ring point no>: mV }, ratio?, vt?, vtAuto? } }, turbo: { P?: [8 ratios], E?: [8 ratios] } }
+//   { units: { <id>: { curveMv?, pts: { <ratio | ring point no>: mV }, ratio?, vt?, vtAuto?, restate? } }, turbo: { P?: [8 ratios], E?: [8 ratios] } }
 // An edit equal to what was read is dropped (offsets compare as the 1/1024 V raw word), so "pending" always means "differs from the CPU". Multi-unit edits (PLAN §4.2): an edit on
 // point ratio R applies to every selected unit that HAS a point at R and to no other; P and E selected together are two sections. Nothing here talks to the helper.
 import { isNum, fmtMvNum } from "./format.js";
@@ -164,6 +164,7 @@ export function setOcRatio(model, draft, ids, ratio) {
       if (!Number.isInteger(ratio) || (ratio !== curRatio(unit) && (w.min === null || ratio < w.min || ratio > w.max))) continue;
     }
     const d = ensure(next, id);
+    delete d.restate; // G-239: any ratio edit replaces the explicit "restate what is in force"
     if (ratio === null || curRatio(unit) === ratio) delete d.ratio;
     else d.ratio = ratio;
     const cls = ocClass(unit, effRatio(next, unit));
@@ -189,9 +190,35 @@ export function clearOcEdits(model, draft, ids) {
     const d = next.units[id];
     if (!d) continue;
     delete d.ratio;
+    delete d.restate;
     delete d.vt;
     delete d.vtAuto;
     tidy(next, id);
+  }
+  return next;
+}
+
+/**
+ * G-239: an OC ratio that was not completed. The OC word (0x11) of a P-core says R, but its own maximum ratio (0x1C[7:0], read with the unit as `unit.favored`) is lower: the apply that set the
+ * word stopped before 0x1D / 0x27 [MEASURED lnx 2026-10-19: word 0x0005b43a = 58x, 0x1C[7:0] = 57]. P-cores only: an E cluster's 0x1C[7:0] is not in the model (E follows 0x650).
+ */
+export function ocIncomplete(unit) {
+  const r = curRatio(unit);
+  return !!unit && unit.kind === "P" && isNum(r) && isNum(unit.favored) && r > unit.favored;
+}
+
+/**
+ * G-239: "Complete the OC ratio" for the incomplete units of `ids`: the draft carries the ratio that is already in force (`ratio` = the read OC ratio, `restate: true`), which setOcRatio
+ * would drop as "equal to what was read". The intent then names the ratio, so the planner restates it with 0x1D and 0x27; one change per unit in the pending bar. Nothing else is edited.
+ */
+export function completeOcRatio(model, draft, ids) {
+  const next = clone(draft);
+  for (const id of liveIds(model, ids)) {
+    const unit = model.units[id];
+    if (!ocIncomplete(unit)) continue;
+    const d = ensure(next, id);
+    d.ratio = curRatio(unit);
+    d.restate = true;
   }
   return next;
 }
@@ -284,7 +311,7 @@ export function diff(model, draft) {
       const p = unit.kind === "R" ? ringPoint(unit, Number(key)) : pointAt(unit, Number(key));
       items.push({ unit: id, field: unit.kind === "R" ? "ring-point" : "point", key: Number(key), from: p ? p.offset_mv : null, to: d.pts[key] });
     }
-    if (d.ratio !== undefined) items.push({ unit: id, field: "ratio", key: null, from: curRatio(unit), to: d.ratio });
+    if (d.ratio !== undefined) items.push({ unit: id, field: "ratio", key: null, from: curRatio(unit), to: d.ratio, ...(d.restate ? { restate: true } : {}) });
     if (d.vt !== undefined) items.push({ unit: id, field: "vt", key: null, from: curVt(unit), to: d.vt });
     perUnit[id] = items.filter((x) => x.unit === id).length;
   }

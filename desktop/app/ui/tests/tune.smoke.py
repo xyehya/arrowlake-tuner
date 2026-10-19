@@ -525,6 +525,37 @@ class TestTune(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
+    def test_g239_an_interrupted_oc_ratio_shows_the_amber_note_and_the_button_queues_one_change(self):
+        with self.page() as page:
+            # cpu 0 as the tripped apply of 2026-10-19 left it: OC word 58x (adaptive 1.4258 V), 0x1C[7:0] still 57 (the fixture's P0 favored ratio)
+            page.evaluate(
+                """() => { const st = window.__arltuner.store; const model = structuredClone(st.get().tune.model);
+                  Object.assign(model.units.P0.oc, { ratio: 58, v_target_v: 1.4258 });
+                  st.update((s) => ({ tune: { ...s.tune, model } })); }"""
+            )
+            page.click(".tile[data-unit='P0']")
+            note = page.locator(".insp-section[data-kind='P'] .oc-incomplete-note")
+            expect(note).to_be_visible(timeout=5000)
+            self.assertIn("The OC word says 58× but this core's maximum ratio (0x1C) is 57×: the apply that set it stopped early.", note.inner_text())
+            button = note.locator("button")
+            self.assertEqual(button.inner_text(), "Complete the OC ratio")
+            self.assertTrue(page.locator("#pending-bar").is_hidden())
+            shots = os.environ.get("G238_SHOTS")
+            if shots:
+                page.locator(".insp-section[data-kind='P'] .oc-section").screenshot(path=str(Path(shots) / "g239-tune-oc-incomplete.png"))
+            button.click()
+            self.assertEqual(self.draft(page)["units"]["P0"], {"pts": {}, "ratio": 58, "restate": True})
+            self.assertEqual(page.inner_text("#pending-text"), "1 change on 1 unit")
+            self.assertTrue(button.is_disabled())
+            self.assertEqual(button.inner_text(), "Queued for Apply")
+            page.click(".insp-section[data-kind='P'] .oc-section button:has-text('Back to read')")
+            self.assertEqual(self.draft(page), {"units": {}, "turbo": {}})
+            expect(button).to_have_text("Complete the OC ratio")
+            page.click(".tile[data-unit='P3']")
+            self.assertTrue(page.locator(".insp-section[data-kind='P'] .oc-incomplete-note").is_hidden())
+            self.assert_clean(page)
+
+    @browser
     def test_layout_has_no_horizontal_overflow_from_the_minimum_window_up(self):
         for width, height in ((960, 600), (1100, 800), (1280, 800)):
             with self.page(width=width, height=height) as page:
