@@ -1,0 +1,2 @@
+CASE A1-pin pin='0,3' -j 2 wall=804s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+ALLDONE /home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-uv-fav5675-p03-20261019T222914-summary.txt

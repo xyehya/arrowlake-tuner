@@ -1,0 +1,32 @@
+# E search phase 2 (2026-10-19): E OC point 49x adaptive 1165 mV on all clusters + E turbo 49x8. Point 6 = the phase 1 result (set separately).
+[meta]
+name = "e49-1165"
+platform = "arl-s"
+
+[turbo]
+e = [49, 49, 49, 49, 49, 49, 49, 49]
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 49
+oc_voltage_mv = 1165
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 49
+oc_voltage_mv = 1165
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 49
+oc_voltage_mv = 1165
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 49
+oc_voltage_mv = 1165
+

@@ -1,0 +1,33 @@
+# E search phase 1 (2026-10-19): E point 6 (46x) offset -100 mV on all clusters; E turbo stays at the BIOS 46x. P untouched (p53p55-fav5675).
+[meta]
+name = "e46-100"
+platform = "arl-s"
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = -100
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = -100
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = -100
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = -100
+expect_ratio = 46
+

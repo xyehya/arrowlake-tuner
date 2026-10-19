@@ -1,0 +1,32 @@
+# E search phase 3 (2026-10-19): E OC point 50x adaptive 1250 mV on all clusters + E turbo 50x8. Point 6 = the phase 1 result (set separately).
+[meta]
+name = "e50-1250"
+platform = "arl-s"
+
+[turbo]
+e = [50, 50, 50, 50, 50, 50, 50, 50]
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 50
+oc_voltage_mv = 1250
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 50
+oc_voltage_mv = 1250
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 50
+oc_voltage_mv = 1250
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 50
+oc_voltage_mv = 1250
+
