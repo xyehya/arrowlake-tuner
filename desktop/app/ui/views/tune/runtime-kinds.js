@@ -88,8 +88,10 @@ function requestOf(build) {
 }
 
 function afterOf(key, clear) {
-  return async ({ store, bridge, summary }) => {
-    if (summary.allMatch) editRt(store, (e) => ({ ...e, ...clear }));
+  return async ({ store, bridge, section, summary }) => {
+    // G-234: a finished revert drops the pending edits of its kind whether or not the read-back table matched: the fields go back to the values in force (the re-read below)
+    const reverted = !!(section && section.intent && section.intent.revert) && summary.complete;
+    if (summary.allMatch || reverted) editRt(store, (e) => ({ ...e, ...clear }));
     await loadRead(store, bridge, key);
   };
 }

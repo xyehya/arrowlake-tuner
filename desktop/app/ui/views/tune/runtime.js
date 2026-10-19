@@ -8,10 +8,10 @@
 import { h, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum, TIMES } from "../../lib/format.js";
-import { ensureRt, editRt, capRows } from "../../lib/rtstate.js";
+import { ensureRt, editRt, revertReason, capRows } from "../../lib/rtstate.js";
 import { normCpuLimits, capWindow, capsLine, READ_FIRST } from "../../lib/cpulimits.js";
 import { loadRead, registerRuntimeKinds } from "./runtime-kinds.js";
-import { ensureStyle, head, createReadBar, createActionBar, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
+import { ensureStyle, head, createReadBar, createActionBar, readOnMount, limitNote, LOST_ON_REBOOT } from "./rt-common.js";
 
 /** The cap window of a unit in ratios: the strictest over its CPUs. null when the CPU limits are not read. */
 export function unitWindow(cl, cpus) {
@@ -43,7 +43,7 @@ export function mount(el, ctx) {
   const readBar = createReadBar(store, "runtime", "the ratio caps", () => loadRead(store, bridge, "runtime"));
   const actions = createActionBar(store, {
     revertKind: "runtime",
-    canRevert: (rt) => (rt.runtime.result && rt.runtime.result.journal ? "" : "Nothing to revert: no runtime value was written in this boot (the helper journals the values before the first write)."),
+    canRevert: (rt) => revertReason(rt, "runtime"),
   });
   const err = h("p", { class: "rt-error", role: "alert", hidden: true });
   const notice = h("div", { class: "rt-info" });
@@ -135,6 +135,7 @@ export function mount(el, ctx) {
       if (state === "connected" && store.get().rt.runtime.state === "idle") void loadRead(store, bridge, "runtime");
     }),
   );
+  readOnMount(store, bridge, "runtime"); // refresh: the journal of this boot may have changed since the last visit (or never been read)
 }
 
 export function unmount() {

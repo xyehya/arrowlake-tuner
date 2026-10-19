@@ -49,6 +49,11 @@
   border-radius: var(--radius);
 }
 
+.rt-why {
+  font-size: var(--fs-sm);
+  color: var(--warn);
+}
+
 .rt-pending.on {
   color: var(--pending);
   font-weight: 600;

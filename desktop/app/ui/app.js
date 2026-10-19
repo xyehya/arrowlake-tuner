@@ -35,10 +35,6 @@ function screenFromHash(hash) {
   return SCREEN_IDS.includes(id) ? id : null;
 }
 
-function isTyping(target) {
-  return !!target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
-}
-
 /** After a connect: the read-only start-up reads (preflight, tune.last) and the telemetry stream. No mailbox traffic (tune.read is never automatic). */
 async function startUp({ store, bridge, toast }) {
   const pre = await bridge.call("preflight");
@@ -111,7 +107,8 @@ export async function boot(doc = document) {
     if (id) setScreen(store, id);
   });
   doc.addEventListener("keydown", (e) => {
-    const id = screenForKey(e.key, { typing: isTyping(e.target), ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey });
+    const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code || ""); // Alt can change e.key on some layouts; the physical key is the digit
+    const id = screenForKey(digit ? digit[1] : e.key, { ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey });
     if (id) {
       e.preventDefault();
       goto(id);

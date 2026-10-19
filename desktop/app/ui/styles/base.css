@@ -17,6 +17,26 @@ body {
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none; /* G-234: Ctrl+A outside a field must not tint the whole page; text is selectable only where it is data (below) */
+}
+
+/* Selectable: fields (set explicitly, WebKitGTK lets an ancestor's none reach inputs), tables of values, code / log text, the copyable fix commands. */
+input,
+textarea,
+[contenteditable="true"],
+table,
+pre,
+code,
+samp,
+.mono,
+.selectable,
+.fix,
+[role="log"],
+.apply-error,
+.apply-warnings {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 h1,

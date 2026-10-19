@@ -1,5 +1,5 @@
 """G-205 Playwright smoke for the desktop UI shell: loads ui/index.html?bridge=mock over a loopback HTTP server that sends the SAME Content-Security-Policy
-as src-tauri/tauri.conf.json, goes through all seven screens (rail clicks and keys 1..7), exercises the frame (status bar, monitoring strip, pending bar,
+as src-tauri/tauri.conf.json, goes through all seven screens (rail clicks and keys Alt+1..7), exercises the frame (status bar, monitoring strip, pending bar,
 drawer, toasts) and requires zero console errors and zero CSP violations. No hardware, no helper: the mock bridge replays fixtures.
 
 Run:  ARLTUNER_BROWSER_TESTS=1 python3 desktop/app/ui/tests/shell.smoke.py   (or add --browser instead of the variable; needs playwright for Python + google-chrome / ARLTUNER_CHROME)
@@ -120,10 +120,10 @@ class TestShell(unittest.TestCase):
                 self.assertTrue(page.url.endswith(f"#/{s}"), page.url)
                 self.assertEqual(page.title(), f"arltuner · {label}")
             for i, (s, label) in enumerate(zip(reversed(SCREENS), reversed(LABELS))):
-                page.keyboard.press(str(7 - i))
+                page.keyboard.press(f"Alt+{7 - i}")
                 page.wait_for_selector(f"#screen[data-screen='{s}']", state="attached")
                 self.assertEqual(page.locator("#screen h1").inner_text(), label)
-            page.keyboard.press("8")  # no such screen: stays
+            page.keyboard.press("Alt+8")  # no such screen: stays
             self.assertEqual(page.locator("#screen").get_attribute("data-screen"), "dashboard")
             # icons really render (mask images are same-origin and allowed by img-src)
             self.assertGreater(page.locator("#nav-tune .icon").evaluate("e => e.getBoundingClientRect().width"), 10)
@@ -133,13 +133,45 @@ class TestShell(unittest.TestCase):
             self.assert_clean(page, logs)
 
     @browser
-    def test_number_keys_are_ignored_while_typing_in_a_field(self):
+    def test_a_bare_digit_never_switches_screens_but_alt_digit_does_even_from_a_field(self):
         logs: list = []
         with self.page("?bridge=mock", logs) as page:
             page.evaluate("const i = document.createElement('input'); i.id = 't'; document.getElementById('screen').append(i); i.focus();")
             page.keyboard.type("3")
             self.assertEqual(page.locator("#screen").get_attribute("data-screen"), "dashboard")
             self.assertEqual(page.input_value("#t"), "3")
+            # G-234: focus on a non-field (after a click on a label, the page itself): digits are inert
+            page.evaluate("document.activeElement.blur()")
+            page.click("#screen h1")
+            for key in ("2", "3", "7"):
+                page.keyboard.press(key)
+            self.assertEqual(page.locator("#screen").get_attribute("data-screen"), "dashboard")
+            page.keyboard.press("Alt+2")
+            page.wait_for_selector("#screen[data-screen='tune']", state="attached")
+            page.keyboard.press("Control+Alt+3")  # AltGr-like combination: not a shortcut
+            self.assertEqual(page.locator("#screen").get_attribute("data-screen"), "tune")
+            page.evaluate("const i = document.createElement('input'); i.id = 't2'; document.getElementById('screen').append(i); i.focus();")
+            page.keyboard.press("Alt+6")
+            page.wait_for_selector("#screen[data-screen='system']", state="attached")
+            self.assertEqual(page.locator("#nav-system .nav-key").inner_text(), "Alt+6")
+            self.assertEqual(page.locator("#nav-system").get_attribute("title"), "System (Alt+6)")
+            self.assert_clean(page, logs)
+
+    @browser
+    def test_ctrl_a_outside_a_field_selects_nothing_and_inside_a_field_selects_its_text(self):
+        logs: list = []
+        with self.page("?bridge=mock", logs) as page:
+            page.click("#screen h1")
+            page.keyboard.press("Control+A")
+            self.assertEqual(page.evaluate("window.getSelection().toString().trim()"), "", "the page chrome is not selectable")
+            self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('#nav-rail .nav-label')).userSelect"), "none")
+            page.evaluate("const i = document.createElement('input'); i.id = 't'; i.value = 'abc 123'; document.getElementById('screen').append(i); i.focus();")
+            self.assertEqual(page.evaluate("getComputedStyle(document.getElementById('t')).userSelect"), "text")
+            page.keyboard.press("Control+A")
+            self.assertEqual(page.evaluate("(() => { const i = document.getElementById('t'); return i.value.slice(i.selectionStart, i.selectionEnd); })()"), "abc 123")
+            page.evaluate("location.hash = '#/audit'")
+            page.wait_for_selector("#screen[data-screen='audit']", state="attached")
+            self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('#screen table')).userSelect"), "text", "the tables of values stay copyable")
             self.assert_clean(page, logs)
 
     @browser

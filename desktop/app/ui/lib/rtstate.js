@@ -55,6 +55,21 @@ export function powerDisabledReason(result) {
   return "";
 }
 
+/**
+ * G-234: why "Revert to boot values" is not offered ("" = offered). `key` = "power" (power.read `boot`) | "runtime" (runtime.read `journal`, caps or uncore). Only a read that answered "nothing journaled" disables
+ * it; before the first read and when the journal could not be read the button stays usable (the helper's plan answers NO_JOURNAL / the refusal, and nothing is written by opening the drawer).
+ */
+export function revertReason(rt, key) {
+  const r = rt[key];
+  const res = r.result;
+  if (!res) return r.state === "reading" ? "Reading what the helper journaled in this boot…" : r.state === "error" ? "" : "Not read yet: use Re-read to see what the helper journaled in this boot.";
+  if (key === "power") return res.boot ? "" : "Nothing to revert: no power limit was written in this boot (the helper journals the values before the first write).";
+  const j = res.journal;
+  if (j && (Object.keys(j.caps || {}).length || Object.keys(j.uncore || {}).length)) return "";
+  if (!j && res.note) return ""; // the journal could not be read (the note says why): the plan decides
+  return "Nothing to revert: no runtime value was written in this boot (the helper journals the values before the first write).";
+}
+
 /** -> {intent: {power}} | {intent: null} | {error} for the pending power edits against what power.read said. */
 export function powerRequest(rt) {
   return powerIntent(rt.edits.power, powerCurrent(rt.power.result));
