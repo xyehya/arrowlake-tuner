@@ -208,3 +208,6 @@ Owns `desktop/app/ui/views/tune/curve-editor.js`, `lib/units.js` (only if the OC
 
 **G-239 · Finish an interrupted OC ratio (0x11 ratio above 0x1C max, 0x1D/0x27 never sent)** · S · R · deps G-236, G-237
 Owns the tune intent path for an explicit "restate ratio" (src/arltuner/helper/ops_tune.py intent parsing only, controls/planner.py only if needed), UI `desktop/app/ui/views/tune/oc.js` + draft flag in `lib/draft.js`, tests. Notes R10-G-239.
+
+**G-240 · Undervolt Protection (rc 0x13): clear message, remembered per boot, planned around** · S · R · deps G-237
+Owns src/arltuner/helper/ops_tune.py (apply refusal mapping + per-boot UVP flag + plan check), tests, desktop/app/ui/views/tune/apply.js + status chip (components/status*.js) + mock. Notes R10-G-240.

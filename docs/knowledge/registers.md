@@ -208,3 +208,10 @@ Runtime mailbox writes need OC Lock off and UVP off (`platform-arl-s.md` §1); r
 - **OC-point V target lands late** `[MEASURED lnx 2026-10-19 06:33Z, captures/lnx/p0-oc58-trip-20261019.txt]`: the first P-core OC point above the fused top
   (cpu 0, SET 0x11 `0x0005b43a` = 58x, adaptive 1.4258 V) read back `0x0000003a` (ratio only, V target 0) within ~1 ms, so the guard tripped; a read ~1 h
   later returned `0x0005b43a`. The ratio is immediate, the V target of a newly created OC point is applied asynchronously. Settle time `[UNVERIFIED]`. The guard re-reads up to 4 times (2/5/10/20 ms), G-237.
+
+- **Undervolt Protection (UVP) refuses negative offsets with rc 0x13** `[MEASURED lnx 2026-10-19 13:12Z]`: after a BIOS reset to defaults (+XMP only),
+  0x14 read `0x00000000` (PerCore Voltage Enable off — the earlier boots read `0x8`), the helper's 0x15 `old|8` write succeeded (read back `0x8`), then the
+  first per-point write `SET 0x11 P2=5 0xFEC00035` (P0 point 5 / 53x, offset −10 mV) answered **rc 0x13 UndervoltProtection**; nothing was written.
+  UVP is Intel's default (FSP `UnderVoltProtection` default 1, §BIOS knobs); the operator's earlier BIOS profile had it disabled. No read-only
+  detection of UVP is known: the 0x09 floor word read the same (`0x0005B439`, offset floor 0) with UVP off and on `[MEASURED]`. A refused offset leaves
+  0x14 = 8 (PerCore Voltage Enable stays on; harmless, it is what the next apply needs).

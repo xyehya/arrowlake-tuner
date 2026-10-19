@@ -1,0 +1,16 @@
+Host lnx; simulator/mock/fixtures only. Read docs/knowledge/registers.md last entry ("Undervolt Protection (UVP) refuses negative offsets with rc 0x13").
+Live: a tune.apply of P-core point offsets (-10 mV etc.) after a BIOS-defaults boot failed at its first 0x11 write with rc 0x13; the UI showed only the raw
+mailbox code. Build:
+1. Helper: an rc 0x13 (Rc.UndervoltProtection) on a 0x11 write whose offset field is negative (or whose V target is below the point's fused V) -> OpError
+   code "UNDERVOLT_PROTECTION" (keep REFUSED class semantics: guard NOT tripped, nothing written by that step) with the message: "The CPU refused a negative
+   voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). Disable 'Undervolt Protection' in the BIOS and reboot to undervolt;
+   positive offsets, OC ratios and turbo ratios still work." Record a per-boot flag (helper state keyed by boot_id; persisted like last-read so a helper
+   restart keeps it): uvp = "on" (seen rc 0x13) / "off" (a negative offset was written and verified this boot) / unknown.
+2. tune.plan with uvp == "on": any planned negative offset (point or whole-curve) or V target below the fused/curve value is a plan ERROR (refused before
+   any write, located at the unit/point, message as above) — so no half-applied runs; positive/zero offsets and ratios plan normally. uvp unknown -> a plan
+   NOTE "Undervolt Protection state unknown this boot; if the BIOS default is on, negative offsets will be refused at the first write".
+3. tune.read / status: expose `uvp` in the read result (and the status op if one exists); UI status bar chip "Undervolt protection: on" (amber) when on,
+   nothing when off/unknown; apply drawer renders the new error code with the message (no raw rc only). Mock backend + fixtures.
+4. Simulator: SimConfig option undervolt_protection=True already exists? (sim.py:830 returns Rc.UndervoltProtection) — use it for tests: apply refused
+   with UNDERVOLT_PROTECTION, flag set, next plan refuses negative offsets, positive offsets still plan/apply.
+`python3 tools/run_tests.py` green; commit `G-240: Undervolt Protection refusal mapped, remembered per boot, planned around`. Do NOT run build-appimage.sh.
