@@ -1,0 +1,13 @@
+You are a READ-ONLY adversarial reviewer (Opus) for arltuner, host lnx. Do not edit files. No hardware, no sudo, never connect to /run/arltuner.
+Read AGENTS.md, docs/SAFETY.md, desktop/progress/logs/R10-G-235.notes and R10-G-235-fix.notes. You are in the task worktree: review `git diff main...HEAD`
+(branch task/G-235-audit-gaps). Answer with file:line:
+1. Is EVERY sysfs/EPP write by vf.measure, stress.start and every journal recovery (helper start + in-op) now preceded by an fsync'd audit record that lists
+   the file and original value? Any path (cancel, exception between start record and first write, restore after error, stale-journal restore) that writes
+   without one? Does a failed restore always produce an `error` record?
+2. Fail-closed: if the start record cannot be written, is the run refused with NOTHING written? At helper start, recovery still restores when the log is
+   unwritable — is that the right trade-off (restoring caps beats auditing)? Is that case logged to the journal/stderr?
+3. Does the per-boot attempt counter / op cap (guard read_state) count these new records? (it must not change mailbox accounting)
+4. profiles.save / curves.update / curves.delete: record before or after the change; INTERNAL-after-success messages accurate?
+5. audit.js: any record with data rendered via innerHTML (CSP rule: textContent only)?
+6. Run `python3 tools/run_tests.py` once (count).
+Verdict ≤ 350 words: APPROVE / APPROVE WITH FIXES / REJECT; numbered findings (severity, file:line, fix).

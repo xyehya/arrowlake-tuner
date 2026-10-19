@@ -1,0 +1,9 @@
+FIX ROUND 2 on your branch (Opus review: desktop/progress/logs/G-235-review.out in the main checkout — read it). Fix all five:
+1. (MED) curves.update / curves.delete: open + trust-check the audit log BEFORE store.update/store.delete (as profiles.save does); `_trust` inside the INTERNAL
+   wrapper; a refusal before the change = nothing changed. Tests: untrusted/unwritable log -> refused, curve unchanged.
+2. (LOW) Runtime journal recovery at helper start with an unwritable log: orchestrator decision = restore anyway (same trade-off as the measure journal: getting
+   caps back beats auditing), log the missing audit to stderr/journal, keep the in_flight semantics. Test it.
+3. (LOW) _restore read error (OSError other than not-found) -> audit.failed record with the file and reason; restored=false + failures non-empty. Test.
+4. (COSMETIC) audit.js: treat outcome "cancel" and "cancelled" as warn (node test).
+5. (COSMETIC) stress.start without a ratio cap: result detail "stress.start: no caps written; result stored as <id>" instead of "0 files, restored ok".
+`python3 tools/run_tests.py` green; commit `G-235: review fixes`. Do NOT run build-appimage.sh.
