@@ -2298,6 +2298,12 @@ def _preflight_error(exc: PreflightError) -> OpError:
     return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PREFLIGHT"})
 
 
+def _no_write(err: OpError) -> OpError:
+    """G-241: an apply-side refusal raised before the first write says so (``detail.writes_sent == 0``), so the page shows every unit "not written"."""
+    err.detail = {**(err.detail or {}), "writes_sent": 0}
+    return err
+
+
 def _base_ratio(helper: Helper, topology: Topology, kind: str) -> int | None:
     """The base ratio of a core kind from the cpufreq ``base_frequency`` of its first CPU (kHz / 100000), for the ``TURBO_BELOW_BASE`` warning of ``tune.plan``; ``None`` without the
     measurement wiring or when the file is unreadable (no warning then -- it is a warning, never a limit)."""
@@ -2699,7 +2705,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     try:
         targets = preflight(profile, topology, policy, extra_ops=scan_ops)  # nothing sent: the numbers against the policy as it is NOW
     except PreflightError as exc:
-        raise _preflight_error(exc) from None
+        raise _no_write(_preflight_error(exc)) from None
     except (PlanError, ProfileError) as exc:
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
@@ -2738,8 +2744,8 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
                 boot_ops_used=session.used or 0,
                 auto_ramp=plan.restore,
             )
-        except PreflightError as exc:
-            raise _preflight_error(exc) from None
+        except PreflightError as exc:  # round 1 only (a later round's refusal becomes a report): nothing was written
+            raise _no_write(_preflight_error(exc)) from None
         except PlanError as exc:
             if write_started:
                 helper.tuned_this_boot = True  # type: ignore[attr-defined]

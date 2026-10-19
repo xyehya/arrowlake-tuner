@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from unittest import mock
 
-from arltuner.controls import PlanError
+from arltuner.controls import PlanError, PreflightError
 from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig
 
@@ -61,5 +61,15 @@ class ApplyRefusedBeforeAnyWrite(TuneCase):
             r = self.apply(h, plan)
         self.assertFalse(r["ok"], r)
         self.assertIn("Nothing was written", r["error"]["message"])
+        self.assertEqual(r["error"]["detail"]["writes_sent"], 0)
+        self.assertEqual([x for x in self.sim.requests if x.cmd in (0x11, 0x15, 0x1D, 0x27)], [])
+
+    def test_a_preflight_refusal_of_the_plan_at_apply_names_zero_writes(self) -> None:
+        h = self.boot(no_oc_point())
+        self.read(h)
+        plan = self.plan(h, rows(row("EC0", ratio=50, v=1.1367)))
+        with mock.patch("arltuner.controls.model.ApplyPlan.require_allowed", side_effect=PreflightError("the plan would be refused")):
+            r = self.apply(h, plan)
+        self.assertFalse(r["ok"], r)
         self.assertEqual(r["error"]["detail"]["writes_sent"], 0)
         self.assertEqual([x for x in self.sim.requests if x.cmd in (0x11, 0x15, 0x1D, 0x27)], [])
