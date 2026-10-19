@@ -240,6 +240,8 @@ class TuneState:
     turbo: dict[str, Any] | None = None  # G-114 F5: {"P": {ratios, counts}, "E": {...}, "favored": {cpu: ratio}} of the last tune.read
     hw_limits: dict[str, dict[str, Any]] | None = None  # G-137 (D-039): the CPU's own limits per kind from the last tune.read (0x01 ratio, 0x28 V target); see _hw_limits_doc
     audit_mark: int | None = None  # G-141: byte size of the audit log when the words held were read (or last verified by an apply); a write after it makes them stale; None = unknown
+    uvp: str = "unknown"  # G-240: Undervolt Protection this boot: "on" (a 0x11 write answered rc 0x13), "off" (a negative offset was written and verified), else "unknown"
+    uvp_loaded: bool = False  # the stored value of this boot's record has been looked at (lazily, by _uvp)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -289,6 +291,106 @@ def _accepted_ring(helper: Helper) -> list[int] | None:
         return parse_expected(_read_accepted_text(helper, "EXPECTED-words.txt"))[1]
     except (OpError, ValueError):
         return None
+
+
+UVP_MESSAGE = (
+    "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). "
+    "Disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Only negative offsets are refused; OC ratios and turbo ratios are not affected."
+)
+UVP_UNKNOWN_NOTE = "Undervolt Protection state unknown this boot; if the BIOS default is on, negative offsets will be refused at the first write"
+UVP_CHECK = "UNDERVOLT_PROTECTION"
+_UVP_RC = 0x13  # Rc.UndervoltProtection: registers.md "Undervolt Protection (UVP) refuses negative offsets with rc 0x13" [MEASURED lnx 2026-10-19 13:12Z]
+_VF_WRITE_KINDS = (StepKind.WRITE_VF, StepKind.WRITE_VF_POINT, StepKind.WRITE_RING_POINT)
+
+
+def _uvp(helper: Helper) -> str:
+    """G-240: ``"on"`` / ``"off"`` / ``"unknown"`` for this boot. The first call of a process picks up the value stored with this boot's last-read record (a helper restart keeps it)."""
+    st = _state(helper)
+    with st.lock:
+        if st.uvp_loaded:
+            return st.uvp
+    record = _boot_record(helper)
+    stored = record.get("uvp") if record is not None else None
+    with st.lock:
+        if not st.uvp_loaded:
+            st.uvp_loaded = True
+            if st.uvp == "unknown" and stored in ("on", "off"):
+                st.uvp = stored
+        return st.uvp
+
+
+def _set_uvp(helper: Helper, value: str) -> None:
+    """Remember what this boot showed (in memory, and in this boot's stored record when there is one: best effort like the record itself)."""
+    _uvp(helper)  # the stored value is read first, so a later load cannot override this one
+    st = _state(helper)
+    with st.lock:
+        if st.uvp == value:
+            return
+        st.uvp = value
+    try:
+        record = _boot_record(helper)
+        if record is not None:
+            record["uvp"] = value
+            _last_store(helper).save(record)
+    except (LastReadError, OSError, ValueError, TypeError) as exc:
+        _log(helper, f"undervolt-protection state not stored: {exc}")
+
+
+def _uvp_refusal(report: Any) -> bool:
+    """True when the apply stopped on a 0x11 write (core word, point or ring point) that the CPU answered with rc 0x13."""
+    if report.stop_kind is not StopKind.RC or not report.steps:
+        return False
+    last = report.steps[-1]
+    # G-240 review f4: only a word with a negative offset is Undervolt Protection's business (the measured case); any other 0x13 stays a plain mailbox refusal
+    return last.step.kind in _VF_WRITE_KINDS and last.rc == _UVP_RC and last.step.data is not None and VfWord.from_u32(last.step.data).offset_raw < 0
+
+
+def _uvp_negative_landed(report: Any) -> bool:
+    """True when this apply wrote a word with a negative offset and it read back as written (Undervolt Protection is therefore off)."""
+    for r in report.steps:
+        if r.step.kind in _VF_WRITE_KINDS and r.status is StepStatus.OK and r.verified is True and r.step.data is not None and VfWord.from_u32(r.step.data).offset_raw < 0:
+            return True
+    return False
+
+
+def _uvp_plan_check(helper: Helper, profile: Profile, topology: Topology, warnings: list[str]) -> None:
+    """G-240: with Undervolt Protection known on, a plan with a negative offset (point, whole curve, ring point) is refused before
+    any write, located at the unit / point like ``_check_range``; with the state unknown the plan carries a note when it holds a negative offset."""
+    state = _uvp(helper)
+    if state == "off":
+        return
+
+    def refuse(text: str) -> OpError:
+        return OpError(REFUSED, f"{text}: {UVP_MESSAGE} Nothing was sent.", {"check": UVP_CHECK})
+
+    negative = False
+    # G-240 review f1: a complete profile (accepted restore, saved state) lists words the CPU already holds; only a word it would actually WRITE can be refused
+    known = _last_baseline(helper, profile, topology) if profile.complete else None
+    base_words, point_words, ring_words = known if known is not None else ({}, {}, None)
+
+    def held_offset(word: int | None, mv: float) -> bool:
+        return word is not None and VfWord.from_u32(word).offset_raw == VfWord.mv_to_offset_raw(mv)
+
+    for setting in profile.expand(topology):
+        unit = unit_of_cpu(topology, setting.cpu)
+        rd = base_words.get(setting.cpu)
+        if setting.offset_mv is not None and setting.offset_mv < 0 and not (rd is not None and held_offset(rd.vf.to_u32(), setting.offset_mv)):
+            negative = True
+            if state == "on":
+                raise refuse(f"{unit}: offset {setting.offset_mv:+g} mV")
+    for point in profile.expand_points(topology):
+        if point.offset_mv < 0 and not held_offset(point_words.get((point.cpu, point.point)), point.offset_mv):
+            negative = True
+            if state == "on":
+                raise refuse(f"{unit_of_cpu(topology, point.cpu)}: offset {point.offset_mv:+g} mV")
+    if profile.ring is not None:
+        for rp in profile.ring.points:
+            if rp.offset_mv < 0 and not held_offset(None if ring_words is None else ring_words.get(rp.point), rp.offset_mv):
+                negative = True
+                if state == "on":
+                    raise refuse(f"ring point {rp.point}: offset {rp.offset_mv:+g} mV")
+    if negative and state == "unknown":
+        warnings.append(UVP_UNKNOWN_NOTE)
 
 
 def _hexw(word: int | None) -> str | None:
@@ -1009,6 +1111,7 @@ def op_tune_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     result["read_at"] = _read_at(helper.cfg.wall_clock())
     _add_limits(helper, result, topology, extras.get("favored_words"))
     _add_cpu_limits(helper, result)  # D-049
+    result["uvp"] = _uvp(helper)  # G-240 (additive): "on" | "off" | "unknown", Undervolt Protection as this boot has shown it
     result = _fit(result)
     _save_last_read(helper, result, topology)
     return result
@@ -1065,6 +1168,9 @@ def _save_last_read(helper: Helper, result: dict[str, Any], topology: Topology) 
             record["favored_words"] = {str(cpu): f"{w:#010x}" for cpu, w in favored.items()}  # G-133: the "auto" ratio ceiling after a helper restart
         with st.lock:
             record["audit_mark"] = st.audit_mark  # G-141: where in the audit log these words are valid from (profiles.accept refuses a stale read)
+        state = _uvp(helper)
+        if state != "unknown":
+            record["uvp"] = state  # G-240: this boot's Undervolt Protection state survives a new read and a helper restart
         _last_store(helper).save(record)
     except (LastReadError, OSError, ValueError, TypeError) as exc:
         _log(helper, f"last-read not stored: {exc}")
@@ -1231,6 +1337,7 @@ def op_tune_last(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     if not isinstance(result.get("read_at"), str) and isinstance(record.get("at"), (int, float)):
         result["read_at"] = _read_at(float(record["at"]))  # a record stored before read_at existed: the time it was stored
     _add_cpu_limits(helper, result)  # D-049: from this boot's kept limits (they survive a helper restart with the stored read)
+    result["uvp"] = _uvp(helper)  # G-240: as it is now (an apply since the read may have shown it)
     return {"available": True, "boot_id": record["boot_id"], "at": record.get("at"), "applied_at": applied_at, "result": _fit(result)}
 
 
@@ -2424,6 +2531,8 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         raise _preflight_error(exc) from None
     except (PlanError, ProfileError) as exc:
         raise OpError(BAD_REQUEST, str(exc)) from None
+    uvp_notes: list[str] = []
+    _uvp_plan_check(helper, profile, topology, uvp_notes)  # G-240: refused before any write when Undervolt Protection is on
     points = resolve_point_targets(profile, topology)
     rings = resolve_ring_targets(profile, topology)
     tables = sum(1 for key in ("e", "p") if profile.turbo is not None and getattr(profile.turbo, key) is not None)
@@ -2444,6 +2553,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
     steps, writes, reads = _predicted_steps(profile, topology, known if profile.complete else None, order, bool(ring_refused), held_tables)
     warnings = [_POINT_NOTE if w == POINT_CAVEAT else w for w in plan_warnings(targets, policy, points)]
     warnings.extend(resolved.warnings)
+    warnings.extend(uvp_notes)
     warnings.extend(Warn("RING_NOT_RESTORED", f"the ring (cache) will NOT be written by this plan: {why}") for why in ring_refused)  # G-154 (D-045): the ring unit alone is refused, the rest stands
     if order is None and (targets or points or rings):
         warnings.append(_ORDER_NOTE)
@@ -2492,6 +2602,7 @@ def op_tune_plan(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[s
         "words_assumed": _words_assumed(last, topology, targets, points),  # G-125: true only when a written unit has no word from this boot's read (tune.last)
         "complete": profile.complete,  # G-148 (additive): a complete profile: only the words that differ are written
         "rounds": rounds,  # G-148 (additive): guarded rounds the step limits need (1 = one write per word)
+        "uvp": _uvp(helper),  # G-240 (additive)
     }
     while len(json.dumps(result, separators=(",", ":"))) > MAX_LINE - _RESPONSE_SLACK and result["steps"]:
         del result["steps"][len(result["steps"]) // 2 :]
@@ -2750,6 +2861,11 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     if sent_writes:
         helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120 fix 4: any tune.apply that wrote ends "stock" for this boot (ops_measure._tuning_state)
         _persist_applied_words(helper)  # G-123: the stored last read follows the verified read-backs
+    uvp_refused = _uvp_refusal(report)
+    if uvp_refused:
+        _set_uvp(helper, "on")  # G-240: rc 0x13 on a 0x11 write; this boot's planner now refuses negative offsets
+    elif _uvp_negative_landed(report):
+        _set_uvp(helper, "off")  # a negative offset was written and read back
     result: dict[str, Any] = {
         "plan_id": plan.plan_id,
         "steps": steps,
@@ -2763,10 +2879,16 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         "revert_plan": len(report.revert_plan),
         "residual": list(report.residual),  # G-147: the units whose residual OC point this restore rewrote (additive)
         "ring_refused": list(report.ring_refused),  # G-154 (additive): why the ring unit alone was not written (the P/E units were); [] = written or no ring
+        "uvp": _uvp(helper),  # G-240 (additive)
     }
     if report.ok:
         return result
     stop = {"kind": report.stop_kind.value, "reason": report.stopped_reason, "tripped": report.tripped}
+    if uvp_refused:
+        stop["reason"], stop["check"] = UVP_MESSAGE, UVP_CHECK  # the CPU's own refusal in words, not the raw completion code
+        landed = any(r.step.kind.is_write and r.step.kind is not StepKind.WRITE_PERCORE_ENABLE and r.status is StepStatus.OK for r in report.steps)
+        if not landed:  # only the per-core enable (0x15) went out: harmless, and the next apply needs it; no word, no table changed
+            raise OpError(REFUSED, UVP_MESSAGE, {"check": UVP_CHECK, "ops_done": result["ops_used"]})
     if sent_writes:
         # the hardware is partly changed: the read-back table must reach the page, so this is a result (complete: false), not an error
         result["stop"] = stop

@@ -12,7 +12,7 @@
 // PROGRESS: the helper's `progress {step, of}` counts operations (writes AND their reads) while `plan.steps` lists the writes, so the per-unit status while running is positional
 // (proportional to step/of over the ordered writes) and approximate; a unit is only "read back OK" / "mismatch" once the final result's `readback` says so.
 import { h, clear } from "../../components/dom.js";
-import { openDrawer, closeDrawer, setScreen, setLastRead } from "../../store.js";
+import { openDrawer, closeDrawer, setScreen, setLastRead, setUvp } from "../../store.js";
 import { plural, fmtMv, fmtV, isNum, DASH, TIMES } from "../../lib/format.js";
 import { buildIntent } from "../../lib/intent.js";
 import { modelFromRead } from "../../lib/units.js";
@@ -23,6 +23,9 @@ const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const MV_TOL = 0.05;
 const V_TOL = 0.0005;
 export const confirmText = (nonce) => "CONFIRM " + nonce;
+/** G-240: the helper's `detail.check` / `stop.check` for a refused negative offset (Undervolt Protection, rc 0x13); the message is the helper's own, in words. */
+export const UVP_CHECK = "UNDERVOLT_PROTECTION";
+const isUvp = (error) => isObj(error) && isObj(error.detail) && error.detail.check === UVP_CHECK;
 
 // ---- pure helpers: plan -> rows -------------------------------------------------------------------------------------------------------------------
 /** before/after of a plan -> Map unit -> Map point -> entry. Accepts {unit: {point: entry}}, {unit: [entries]} and [{unit, point, ...}] (web/app.js normState). */
@@ -173,6 +176,7 @@ export function summarizeResult(result) {
     mismatches,
     complete,
     stop: !complete ? (isObj(r.stop) ? r.stop : {}) : null,
+    uvp: typeof r.uvp === "string" ? r.uvp : null,
     opsUsed: isNum(r.ops_used) ? r.ops_used : null,
     writesSent: isNum(r.writes_sent) ? r.writes_sent : null,
     cpufreq: (Array.isArray(r.cpufreq) ? r.cpufreq : []).filter((x) => isObj(x) && isNum(x.cpu) && isNum(x.before_khz) && isNum(x.after_khz)),
@@ -210,7 +214,7 @@ export function partialWording(runtimeKind, tripped = false) {
 }
 
 export function resultHeadline(s) {
-  if (!s.complete) return "Partial apply: it stopped after " + (s.writesSent !== null ? plural(s.writesSent, "write") : "some writes") + (s.stop && s.stop.reason ? ". " + s.stop.reason : "");
+  if (!s.complete) return "Partial apply: it stopped after " + (s.writesSent !== null ? plural(s.writesSent, "write") : "some writes") + (s.stop && s.stop.reason && s.stop.check !== UVP_CHECK ? ". " + s.stop.reason : "");  // the Undervolt Protection message has its own box
   if (!s.total) return "Applied; the helper returned no read-back words";
   return s.mismatches.length ? s.mismatches.length + " of " + s.total + " words differ on read-back" : s.matched + "/" + s.total + " words read back as written";
 }
@@ -334,7 +338,7 @@ export const KINDS = {
       if (model) {
         const at = isNum(rec.at) ? new Date(rec.at * 1000).toISOString() : new Date().toISOString();
         Object.assign(patch, { model, read: { ...store.get().tune.read, state: "ready", fromLast: true, at, durationMs: null, ops: rec.result.ops_done ?? null, error: null } });
-        setLastRead(store, at, rec.result.accepted_match ?? null, rec.result.accepted_note || "");
+        setLastRead(store, at, rec.result.accepted_match ?? null, rec.result.accepted_note || "", rec.result.uvp);
       } else if ((model = modelAfterApply(store.get().tune.model, section, summary))) {
         patch.model = model;
         if (toast) toast("warn", "The helper has no stored read to show the applied words from: the tiles follow the plan and the read-back. Re-read the CPU state to confirm.");
@@ -390,6 +394,7 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
     }
     let error = res.ok ? { code: "BAD_REPLY", message: "the helper's plan had no plan_id" } : res.error;
     if (spec.explain) error = { ...error, message: spec.explain(error) };
+    if (isUvp(error)) setUvp(store, "on"); // a plan refused for Undervolt Protection: the helper knows it is on
     setSection(i, { status: "failed", error: { ...error, located: spec.locate ? spec.locate(error, sec.intent) : null } });
     return false;
   }
@@ -503,6 +508,7 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
         const res = await runSection(i);
         if (res.ok) {
           const summary = summarizeResult(res.result);
+          setUvp(store, summary.uvp);
           setSection(i, { status: "done", result: res.result, summary, opId: get().sections[i].opId });
           try {
             if (kinds[secs[i].kind].afterApply) await kinds[secs[i].kind].afterApply({ store, bridge, section: get().sections[i], summary, toast });
@@ -515,6 +521,7 @@ export function createApplyController({ store, bridge, toast = () => {}, kinds =
           }
         } else {
           const code = res.error && res.error.code;
+          if (isUvp(res.error)) setUvp(store, "on");
           setSection(i, { status: code === "CANCELLED" ? "cancelled" : code === "PLAN_STALE" ? "stale" : "failed", error: { ...res.error, located: null } });
           failedAt = i;
           break;
@@ -766,8 +773,10 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     const text = e.code === "PLAN_STALE" ? "A word changed since this plan was made, or the plan is gone (plans do not survive a helper restart). Nothing was written. " + (e.message || "")
       : e.code === "CONFIRM_MISMATCH" ? "The helper did not accept the confirmation (used already, or wrong). Nothing was written. " + (e.message || "")
       : e.code === "CANCELLED" ? "Cancelled between transactions. The requests already sent are in the audit log; " + (kinds[sec.kind] && kinds[sec.kind].view ? "some runtime settings may be written, some not. " : "the CPU may hold a mix of old and new words. ") + (e.message || "")
+      : isUvp(e) ? (e.message || "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS.")
       : (e.message || e.code || "The helper refused.");
-    return h("div", { class: "apply-error-box", role: "alert", dataset: { code: e.code || "" } }, h("strong", { text: sec.status === "cancelled" ? "Cancelled" : sec.status === "stale" ? "Plan is stale" : "Not applied" }), h("p", { text }));
+    const title = isUvp(e) ? "Undervolt Protection is on" : sec.status === "cancelled" ? "Cancelled" : sec.status === "stale" ? "Plan is stale" : "Not applied";
+    return h("div", { class: "apply-error-box", role: "alert", dataset: { code: e.code || "", check: isUvp(e) ? UVP_CHECK : "" } }, h("strong", { text: title }), h("p", { text }));
   }
 
   function resultNode(s, runtimeKind = false) {
@@ -776,6 +785,7 @@ export function createApplyDrawer({ store, bridge, toast, drawer, kinds = KINDS,
     if (!s.complete) {
       const wd = partialWording(runtimeKind, s.stop && s.stop.tripped === true);
       box.append(h("div", { class: "apply-error-box", role: "alert" }, h("strong", { text: wd.title }), h("p", { text: wd.text })));
+      if (s.stop && s.stop.check === UVP_CHECK && s.stop.reason) box.append(h("div", { class: "apply-error-box", role: "alert", dataset: { check: UVP_CHECK } }, h("strong", { text: "Undervolt Protection is on" }), h("p", { text: s.stop.reason })));
     } else if (s.mismatches.length) box.append(h("p", { class: "apply-warn-line", text: runtimeKind ? "Do not trust this state: use Revert to boot values, or reboot." : "Do not trust this state: re-apply the accepted profile or cold boot." }));
     if (s.opsUsed !== null) box.append(h("p", { class: "muted", text: s.opsUsed + " mailbox operations used." }));
     for (const u of s.residual) box.append(h("p", { class: "muted", text: "Residual OC point rewritten on " + u + "." }));

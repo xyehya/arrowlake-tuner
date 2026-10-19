@@ -221,6 +221,7 @@ export function initialState() {
     mode: deriveMode(null),
     accepted: deriveAccepted(null),
     lastReadAt: null, // ISO string of the last tune.read / tune.last, or null (no read this boot)
+    uvp: "unknown", // G-240: Undervolt Protection this boot as the helper reports it: "on" | "off" | "unknown"
     helperOp: { state: "idle", opId: null, opsUsed: 0, opsBudget: 0 },
     telemetry: { values: null, t: null, samples: null, history: {}, throttle: deriveThrottle(null) },
     throttleSession: freshThrottleSession(),
@@ -254,10 +255,18 @@ export function setPreflight(store, result) {
   store.set({ preflight: result, mode: deriveMode(result) });
 }
 
-export function setLastRead(store, iso, acceptedMatch, note) {
+export function setLastRead(store, iso, acceptedMatch, note, uvp) {
   const patch = { lastReadAt: iso || null };
   if (acceptedMatch !== undefined) patch.accepted = deriveAccepted(acceptedMatch, note);
+  if (UVP_STATES.includes(uvp)) patch.uvp = uvp;
   store.set(patch);
+}
+
+export const UVP_STATES = ["on", "off", "unknown"];
+
+/** G-240: Undervolt Protection as the helper last reported it (read, last, plan, apply result, or an apply refused with check UNDERVOLT_PROTECTION). Anything else is ignored. */
+export function setUvp(store, uvp) {
+  if (UVP_STATES.includes(uvp) && store.get().uvp !== uvp) store.set({ uvp });
 }
 
 export function setPending(store, changes, units) {

@@ -43,7 +43,7 @@ async function startUp({ store, bridge, toast }) {
   const last = await bridge.call("tune.last");
   if (last.ok && last.result && last.result.available) {
     const r = last.result;
-    setLastRead(store, new Date(r.at * 1000).toISOString(), r.result ? r.result.accepted_match ?? null : null, r.result ? r.result.accepted_note : "");
+    setLastRead(store, new Date(r.at * 1000).toISOString(), r.result ? r.result.accepted_match ?? null : null, r.result ? r.result.accepted_note : "", r.result ? r.result.uvp : undefined);
   }
   const tel = await bridge.call("telemetry.start", { interval_s: TELEMETRY_INTERVAL_S });
   if (!tel.ok) toast("warn", `telemetry did not start: ${tel.error.message}`);
