@@ -1,0 +1,57 @@
+# 2026-10-19 operator: E clusters to the accepted-20261015 values: OC 48x adaptive (EC0 1.123 V, EC1-3 1.112 V) + point 6 (46x) EC0 -50 / EC1-3 -40 mV.
+# Live before: no OC point (0x10 P2=0 = 0x0 on cpu 8/12/16/20), 0x1C E = 48 (BIOS), so E ran 48x at the 46x voltage (EC0 1.157 V). P cores / ring untouched.
+[meta]
+name = "e-accepted-48-46"
+platform = "arl-s"
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 48
+oc_voltage_mv = 1123
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 48
+oc_voltage_mv = 1112
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 48
+oc_voltage_mv = 1112
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 48
+oc_voltage_mv = 1112
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = -50
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = -40
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = -40
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = -40
+expect_ratio = 46
