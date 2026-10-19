@@ -123,6 +123,8 @@ Raw tables: baseline words `src/arltuner/msr/measured_baseline.py`, write sequen
 
 **First real per-core write sequence (XTU, S-04/S-05, `measured win`):** `GET 0x14`→`GET 0x10`→`SET 0x11` (full word incl. V target = fused voltage)→`SET 0x1D` (= ratio)→`GET 0x26`→`SET 0x27` (= value read), all RC 0; read-back identical to the written word; XTU's revert word keeps the V target (`0x0005B439`, not the original `0x00000039`).
 
+- **Ring (P1=2) limits, first live read** `[MEASURED lnx 2026-10-19 05:56, tune.read via the desktop app; System > Tuning limits]`: cmd 0x28 P1=2 → **1.512 V** (XTU raw-1 rule applied), cmd 0x01 P1=2 → OC ratio limit **85×**. Same session: P 1.625 V / 120×, E 1.355 V / 120× (matches the Windows reads). The ring V/F walk ends at P2=10 with rc 0x11 (past the table), as expected.
+
 ### Telemetry read allowlist (G-104, D-026) — `rdmsr` only, code `telemetry/msrio.py` `TELEMETRY_MSRS`; bits/decoding in `telemetry-sources.md`
 0xE7 MPERF, 0xE8 APERF `[DOC SDM]` · 0xCE PLATFORM_INFO [15:8] `measured` · 0x198 PERF_STATUS [47:32] V, [15:8] ratio `measured` ·
 0x19C / 0x1B1 THERM_STATUS [31] valid, [22:16] readout `[DOC SDM]`, ARL `[UNVERIFIED]` · 0x1A2 [23:16] Tjmax `measured` · 0x606 [12:8] energy unit
