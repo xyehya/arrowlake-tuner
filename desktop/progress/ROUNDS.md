@@ -83,3 +83,4 @@
 - G-235 merged (audit summaries, recovery audited/restores anyway, curves.* fail-closed, audit screen). Suite 3409, node 340.
 - Installed + rebuilt with G-235; live: vf.measure P0 audited (runtime_attempt with 2 journaled files + result 'restored ok'), shown on the Audit screen. No open live bugs. Handing over to the operator; fused-V/F research (4 flash agents) running.
 - G-236 merged (Opus: APPROVE WITH FIXES; f1 fixed by orchestrator, f2 checked: stored profiles P stock / E 48 explicit; f3 CLI P TURBO_BELOW_OC -> backlog; f4 cosmetic accepted).
+- G-237 merged (Opus APPROVE WITH FIXES; f1-f3 fixed by orchestrator). G-238 merged. Suite 3427 / node 351.
