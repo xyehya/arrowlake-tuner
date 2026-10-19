@@ -230,7 +230,7 @@ export function createController({ store, bridge, toast }) {
         say("error", "Read CPU state: the helper's answer held no units.");
         return;
       }
-      setLastRead(store, at, res.result.accepted_match ?? null, res.result.accepted_note || "");
+      setLastRead(store, at, res.result.accepted_match ?? null, res.result.accepted_note || "", res.result.uvp);
       say("ok", "Read CPU state in " + fmtSeconds(durationMs) + (hadDraft ? "; the pending edits were dropped (they were made against the previous read)." : "."));
     },
 

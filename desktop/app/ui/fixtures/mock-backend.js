@@ -86,6 +86,19 @@ const stepParam = () => {
   const n = Number(searchParam("step"));
   return Number.isFinite(n) && n >= 1 ? n : null;
 };
+// G-240: `?uvp=on` makes the mock BIOS have Undervolt Protection on: the first tune.apply with a negative offset is refused (REFUSED, check UNDERVOLT_PROTECTION, the helper's message), the mock
+// then reports uvp "on" in tune.read / tune.last / tune.plan, and a later negative-offset plan is refused at the plan like the helper's. `?uvp=off` reports "off" from the start; default "unknown".
+export const UVP_MESSAGE = "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). Disable 'Undervolt Protection' in the BIOS and reboot to undervolt; positive offsets, OC ratios and turbo ratios still work.";
+const negativeOffsets = (intent) => {
+  const out = [];
+  for (const r of Array.isArray(intent && intent.rows) ? intent.rows : []) {
+    const o = r && r.offset;
+    if (!o) continue;
+    if (o.kind === "curve" && o.mv < 0) out.push([r.target, o.mv]);
+    if (o.kind === "points") for (const mv of Object.values(o.mv || {})) if (mv < 0) out.push([r.target, mv]);
+  }
+  return out;
+};
 const MOCK_FLOOR_MV = -150; // a mock CPU limit tighter than the editor's own clamp (the CPU's offset field, -1000..+999), so a refusal is reachable from the UI
 const MOCK_CEIL_MV = 150;
 const rawOf = (mv) => Math.round(mv * 1.024);
@@ -310,7 +323,7 @@ const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, "Z");
 
 /** options: intervalMs (telemetry period, default 1000), stepMs (gap between replayed progress events, default 12; `?step=<ms>`), motion (see invent), helper ('ok' | key of LINK_FAILURES), now,
  *  baseline (curves.* answer the invented baseline; default on, `?baseline=none` turns it off), applyMode ('mismatch' | 'stale' | null; `?apply=`; see synthPlan above). */
-function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint"), read = searchParam("read"), diff = searchParam("diff") } = {}) {
+function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12, motion = false, helper = "ok", now = () => Date.now(), baseline = !noBaselineParam(), applyMode = searchParam("apply"), profiles = searchParam("profiles"), accept = searchParam("accept"), fingerprint = searchParam("fingerprint"), read = searchParam("read"), diff = searchParam("diff"), uvp = searchParam("uvp") } = {}) {
   const listeners = new Map(); // event -> Set(cb)
   const timers = new Set();
   let link = { state: "connecting", kind: null, message: "" };
@@ -327,6 +340,8 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
   let unreadable = accept === "unreadable"; // `?accept=unreadable`: the accepted state cannot be read: profiles.accept refuses ACCEPTED_UNREADABLE until set_aside_unreadable is given (G-228)
   const diffExtras = diff === "extras"; // `?diff=extras`: the state of the last read differs from the accepted one ONLY in a unit's OC-word offset and a ring point (profiles.diff rows, no point change)
   let held = initialHeld(); // the words the mock CPU holds
+  const uvpBios = uvp === "on"; // the mock BIOS has Undervolt Protection on (G-240)
+  let uvpSeen = uvp === "off" ? "off" : "unknown"; // what the mock helper reports for this boot
   let appliedHere = false; // a tune.apply finished in this mock session: tune.last then answers the held words, as the helper's does after an apply (G-227)
   const saved = new Map(); // name -> {created, contents}
   if (profilesMode !== "none") for (const g of profilesGet) saved.set(g.result.name, { created: g.result.created, contents: clone(g.result.contents) });
@@ -505,6 +520,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           return ok(id, { ...clone(telemetryStop.result) });
         case "tune.last": {
           const r = clone(tuneLast.result);
+          if (r.available) r.result.uvp = uvpSeen;
           if (r.available) r.at = now() / 1000 - 60; // pretend the recorded read happened a minute ago
           if (r.available && appliedHere && searchParam("last") === "gone") return ok(id, { available: false }); // `?last=gone`: the helper kept no record of the apply (the page must still show the applied words)
           if (r.available && appliedHere) overlayHeld(r.result, held);
@@ -648,7 +664,9 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           }
           const refused = mockRefusal(args.intent);
           if (refused) return fail(id, "REFUSED", refused, { check: "POLICY_RANGE" });
-          return ok(id, clone(issuePlan(args.intent))); // an empty intent answers the recorded one-point plan; anything else is synthesized (synthPlan)
+          const negative = negativeOffsets(args.intent);
+          if (uvpSeen === "on" && negative.length) return fail(id, "REFUSED", `${negative[0][0]}: offset ${negative[0][1]} mV: ${UVP_MESSAGE} Nothing was sent.`, { check: "UNDERVOLT_PROTECTION" });
+          return ok(id, { ...clone(issuePlan(args.intent)), uvp: uvpSeen }); // an empty intent answers the recorded one-point plan; anything else is synthesized (synthPlan)
         }
         case "cancel": {
           if (args.op_id !== undefined && args.op_id !== null && args.op_id !== busyOp) return fail(id, "BAD_REQUEST", `${JSON.stringify(args.op_id)} is not the running operation`, { state: busyOp ? "applying" : "idle", op_id: busyOp });
@@ -660,6 +678,7 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           if (busyOp) return fail(id, "BUSY", "another long op is running", { state: "applying", op_id: busyOp });
           const result = clone(tuneRead.result);
           result.read_at = new Date(now()).toISOString().replace(/\.\d+Z$/, "Z");
+          result.uvp = uvpSeen;
           readFresh = true;
           replayLong(id, tuneReadEvents, ok(id, result));
           return { id };
@@ -676,10 +695,16 @@ function createBaseMockTransport({ intervalMs = 1000, stepMs = stepParam() ?? 12
           }
           if (args.typed !== `CONFIRM ${plan.nonce}`) return fail(id, "CONFIRM_MISMATCH", "the typed confirmation does not match the plan's nonce");
           plans.delete(plan.plan_id); // single use
+          if (uvpBios && negativeOffsets(planIntents.get(plan.plan_id)).length) {
+            uvpSeen = "on";
+            return fail(id, "REFUSED", UVP_MESSAGE, { check: "UNDERVOLT_PROTECTION", ops_done: 8 });
+          }
           held = heldAfter(held, planIntents.get(plan.plan_id)); // G-213: what the mock CPU holds now (profiles.accept compares with it)
           appliedHere = true;
           if (plan.plan_id === tunePlan.response.result.plan_id) recordedGone = true;
+          if (!uvpBios && uvpSeen === "unknown" && negativeOffsets(planIntents.get(plan.plan_id)).length) uvpSeen = "off"; // a negative offset went in: Undervolt Protection is off
           const outcome = applyOutcome(id, plan);
+          if (outcome.response && outcome.response.result) outcome.response.result.uvp = uvpSeen;
           replayLong(id, outcome.events, outcome.response);
           return { id };
         }

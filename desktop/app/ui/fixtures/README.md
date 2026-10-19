@@ -39,4 +39,7 @@ it got, then deletes the temp dir. Re-run it to refresh; ids, timestamps and the
 `profiles-saved-list.json` (`profiles.list` with both saved), `profiles-save-exists.json` (the `EXISTS` refusal), `profiles-accept-unavailable.json` / `profiles-fingerprint-unavailable.json` (the unprivileged simulator keeps no
 accepted-state directory: `NO_ACCEPTED_DIR`). The accepted state itself cannot be recorded, so the mock **invents** it (`profiles.accept`, `profiles.fingerprint`, the accepted entry of `profiles.list` / `get`,
 plans of `{profile}` / `{restore: "accepted"}`; marked INVENTED in `mock-backend.js`). Query knobs: `profiles=none`, `profiles=accepted`, `accept=unavailable`, `fingerprint=incomplete`.
+G-240 (Undervolt Protection, INVENTED in `mock-backend.js`): the recorded read / last / plan fixtures predate the `uvp` key, so the mock adds `uvp` (`"unknown"`) to `tune.read`, `tune.last`, `tune.plan` and
+`tune.apply` results. Query knob `uvp=on` (the mock BIOS has Undervolt Protection on): the first `tune.apply` with a negative offset is refused (`REFUSED`, `detail.check = UNDERVOLT_PROTECTION`, the helper's message), `uvp`
+then reads `"on"` and a later negative-offset `tune.plan` is refused at the plan. `uvp=off` reports `"off"` from the start (a negative offset applied without the knob also moves `unknown` to `off`).
 Note the recorded `tune-last.json` was read after the recorded apply (P0 53x at -20 mV), while the saved profiles were taken from the read before it.

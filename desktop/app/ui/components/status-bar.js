@@ -13,6 +13,13 @@ const LINK_LABEL = {
 
 const ACCEPTED_LABEL = { unknown: "accepted: unknown", matches: "accepted: matches", equivalent: "accepted: equivalent", stock: "accepted: stock" };
 
+const UVP_TITLE = "The CPU refused a negative voltage offset: disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Positive offsets, OC ratios and turbo ratios still work.";
+
+/** G-240: the Undervolt Protection chip: amber text only while the helper reports "on"; hidden for "off" / "unknown". */
+export function uvpChip(uvp) {
+  return { hidden: uvp !== "on", text: "Undervolt protection: on", state: "warn", title: UVP_TITLE };
+}
+
 export function linkLabel(link) {
   return LINK_LABEL[link.state] || link.state;
 }
@@ -33,9 +40,11 @@ export function createStatusBar(root, store) {
   const fix = h("code", { class: "fix", id: "helper-fix", hidden: true });
   const mode = chip("chip-mode");
   const accepted = chip("chip-accepted");
+  const uvp = chip("chip-uvp"); // G-240: shown only while Undervolt Protection is known to be on
+  uvp.hidden = true;
   const lastRead = h("span", { class: "meta num", id: "last-read" });
   const ops = h("span", { class: "meta num", id: "ops-used" });
-  root.append(brand, helper, fix, mode, accepted, h("span", { class: "spacer" }), lastRead, ops);
+  root.append(brand, helper, fix, mode, accepted, uvp, h("span", { class: "spacer" }), lastRead, ops);
 
   const unsubs = [
     store.watch(
@@ -63,6 +72,16 @@ export function createStatusBar(root, store) {
         accepted.textContent = acceptedLabel(a);
         accepted.dataset.state = a.kind === "differs" ? "warn" : a.kind === "unknown" ? "unknown" : "ok";
         accepted.title = a.note || "";
+      },
+    ),
+    store.watch(
+      (s) => s.uvp,
+      (v) => {
+        const c = uvpChip(v);
+        uvp.hidden = c.hidden;
+        uvp.textContent = c.text;
+        uvp.dataset.state = c.state;
+        uvp.title = c.title;
       },
     ),
     store.watch(
