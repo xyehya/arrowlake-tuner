@@ -66,3 +66,9 @@ P turbo 55x8 (`captures/lnx/profiles/p53-1200-p55-1270-*.toml`). Only the E stat
 | uv-p53p55-e46 | E turbo 46x8, point 6 offset 0 (stock 46x: EC0 1.1575 / EC1-3 1.1375 V) | **15/15, 0 ICE**, 111-114 s, MCE 0, btrfs clean, 0 SIGSEGV |
 Reading: the P undervolt above passes this test; E at 48x failed at both voltages tried (two events, both GCC 15 at version.h:1). E 48x needs more voltage
 than the accepted 1.11-1.12 V, or 48x is not worth it. Under load P ran 55x ~37% / 54x ~56%, rail 1.271 V, package ~245 W.
+
+## 2026-10-19 22:2x — favored cores 56x -15 / 57x -75 mV (profile p53p55-fav5675, P turbo 57/57/55x6) [MEASURED lnx]
+Hardware monotonic rule confirmed: with 56x at -15 mV the 57x point (-75 mV requested, word verified 0xF6600039) runs at the 56x voltage —
+P0 57x VID 1.371 V (= 56x), P3 57x 1.344 V (= 56x); effective 57x undervolt ~-55 / ~-51 mV. stress-ng P0+P3 together, 120 s each, cpufreq cap 56x then
+57x: both pass, MCE 0, 47-49 W, max 59 C, only turbo-table bit (0x1000) seen. Before the apply the BIOS-booted P3 held 56x -28.3 / 57x -31.3 mV
+(BIOS per-core V/F setting, re-applied each boot). `captures/lnx/fav-cap-runs-*.txt`, `stress-fav-cap5[67]-*.txt`.
