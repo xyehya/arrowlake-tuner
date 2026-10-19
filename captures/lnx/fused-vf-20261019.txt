@@ -1,0 +1,57 @@
+# fused V/F read experiment, lnx 2026-10-19, orchestrator, installed CLI; policy diff: voltage_floor_read p2 +0x10,0x20,0x80,0x12; +fused_p0_read cmd 0x07
+2026-10-19T09:02:34+03:00
+== baseline 0x09 P1=0x11 P2=0 cpu0
+read: exactly ONE guard-mediated mailbox request on the /dev/cpu device: cpu 0 (P-Core 0), cmd 0x09 P1=0x11 P2=0x0 (allow entry 'voltage_floor_read').
+A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md).
+To proceed type exactly:  CONFIRM 043e679f
+> refused by the guard: BOOT_LIMIT: 1306 mailbox operation(s) already recorded for boot 45f0a705-45a2-4c10-b1e4-8eee50602171 in /var/lib/arltuner/audit.jsonl; per-boot limit is 12 (SAFETY.md 'Mailbox-session discipline'; a reboot starts a new count, or the human raises max_operations_per_boot in a reviewed policy)
+BOOT_LIMIT: no further mailbox operation is allowed until the next reboot, or until the human raises max_operations_per_boot in a reviewed policy.
+Nothing was sent.
+
+== baseline 0x09 P1=0x11 P2=0 cpu0 (with --policy /etc/arltuner/policy.toml)
+read: exactly ONE guard-mediated mailbox request on the /dev/cpu device: cpu 0 (P-Core 0), cmd 0x09 P1=0x11 P2=0x0 (allow entry 'voltage_floor_read').
+A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md).
+To proceed type exactly:  CONFIRM 735a62ac
+> 
+read cpu 0 (P-Core 0) cmd 0x09 P1=0x11 P2=0x0
+  ratio    : 57x
+  V target : 1.426 V (raw 0x5b4)
+  mode     : adaptive
+  offset   : +0.00 mV (raw 0)
+  word     : ratio 57, V target 1425.78 mV (raw 0x5b4), adaptive, offset +0.00 mV (raw 0)
+  raw word : 0x0005b439
+== 0x09 P1=0x11 P2=0x10 (point 1) cpu0
+> 
+read cpu 0 (P-Core 0) cmd 0x09 P1=0x11 P2=0x10
+  ratio    : 8x
+  V target : 0.000 V (raw 0x000)
+  mode     : adaptive
+  offset   : +0.00 mV (raw 0)
+  word     : ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+  raw word : 0x00000008
+== 0x09 P1=0x11 P2=0x80 (point 8) cpu0
+> 
+read cpu 0 (P-Core 0) cmd 0x09 P1=0x11 P2=0x80
+  ratio    : 57x
+  V target : 0.000 V (raw 0x000)
+  mode     : adaptive
+  offset   : +0.00 mV (raw 0)
+  word     : ratio 57, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+  raw word : 0x00000039
+== 0x09 P1=0x11 P2=0x12 (ring point 1) cpu0
+> 
+read cpu 0 (P-Core 0) cmd 0x09 P1=0x11 P2=0x12
+  ratio    : 8x
+  V target : 0.000 V (raw 0x000)
+  mode     : adaptive
+  offset   : +0.00 mV (raw 0)
+  word     : ratio 8, V target 0.00 mV (raw 0x000), adaptive, offset +0.00 mV (raw 0)
+  raw word : 0x00000008
+== 0x07 P1=0 P2=0 (FusedRatioAndVoltageRead) cpu0
+> mailbox completion code 31 (UnrecognizedCommand)
+
+== health
+2026-10-19T09:03:20+03:00
+mce: 0
+taint: 12292
+policy restored from /etc/arltuner/policy.toml.bak-fused-20261019T090226 (the added entries returned no new data)

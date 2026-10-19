@@ -23,7 +23,7 @@ pinned ratios (vf.measure)? Four research passes (deepseek-flash, 2026-10-19) + 
 - No open-source / Linux tool prints fused per-point voltages (HWiNFO, ThrottleStop, UnderVolter, intel-undervolt, CoreFreq: offsets or live VID only)
   `[CODE github wesmar/UnderVolter src/VfCurve.c; cyring/CoreFreq]`.
 
-## Untested candidate reads (the only software lead)
+## Candidate reads (tested 2026-10-19, see "Result of the reads")
 `[DECOMPILED linuxmon win-xtu-decompile-mailbox.md:100,101,173]`:
 | request | meaning per XTU code | status |
 |---|---|---|
@@ -34,6 +34,19 @@ Caveat: a "floor" is the UVP minimum for a V target, which on ARL-S appears to e
 point voltage is exactly what a read would show (compare with vf.measure: P0 8x 0.689 / 48x 1.041 / 55x 1.271 / 57x 1.386 V `[MEASURED lnx 2026-10-19]`).
 Each is a WRMSR 0x150 (read class): one transaction at a time, operator go-ahead, and the first two need an allowlist entry (policy widening = the
 operator's yes). Expected benign failure: an RC (0x10 invalid param / 0x11 no such point), state untouched.
+
+## Result of the reads `[MEASURED lnx 2026-10-19]` (captures/lnx/fused-vf-20261019.txt; installed CLI, one transaction each, cpu 0)
+| request | raw word | decoded |
+|---|---|---|
+| 0x09 P1=0x11 P2=0 | 0x0005b439 | 57x, 1.4258 V (fused top; unchanged from 2026-10-01) |
+| 0x09 P1=0x11 P2=0x10 (P point 1) | 0x00000008 | 8x, V 0 |
+| 0x09 P1=0x11 P2=0x80 (P point 8) | 0x00000039 | 57x, V 0 |
+| 0x09 P1=0x11 P2=0x12 (ring point 1) | 0x00000008 | 8x, V 0 |
+| 0x07 P1=0 P2=0 | — | completion code 31 UnrecognizedCommand |
+The per-point floor form exists and is addressed exactly as the XTU code says (each point answers its own ratio), but it carries **no voltage**;
+cmd 0x07 is not implemented on ARL-S. Conclusion: no OS-visible per-point fused-voltage read via the OC mailbox on this CPU; the voltage is only in the
+P2=0 (top point) word. vf.measure stays the method. MCE 0, taint 12292 (same as earlier sittings). The temporary allowlist entries were removed again
+(policy restored from policy.toml.bak-fused-20261019T090226).
 
 ## Why VID under a pinned ratio != the fused point
 Requested VID = base VID(ratio) + offset + AC_LL*I + AVX guardband - TVB voltage optimisation, read back after DC_LL; 0x198[47:32] scale 1/8192 V is a
