@@ -398,6 +398,23 @@ class TestProfiles(unittest.TestCase):
             self.assert_clean(page)
 
     @browser
+    def test_only_one_name_field_is_visible_at_a_time(self):
+        """G-235: the state panel and the bottom "Save Tune edits as…" card never show two empty name fields together; the card's text survives."""
+        with self.page() as page:
+            self.wait_list(page)
+            self.assertTrue(page.locator("#pr-name").is_visible())
+            page.fill("#pr-name", "kept-text")
+            page.click("#btn-pr-save-state")
+            page.wait_for_selector("#pr-state-name", state="visible")
+            self.assertTrue(page.locator("#pr-name").is_hidden(), "the second name field steps aside")
+            self.assertEqual(page.locator("input.pr-name-input:visible").count(), 1)
+            page.click("#btn-pr-state-cancel")
+            page.wait_for_selector("#pr-name", state="visible")
+            self.assertEqual(page.input_value("#pr-name"), "kept-text")
+            self.assertEqual(page.locator("input.pr-name-input:visible").count(), 1)
+            self.assert_clean(page)
+
+    @browser
     def test_save_current_state_needs_a_fresh_read_and_offers_tune(self):
         with self.page("?bridge=mock&read=stale") as page:
             self.wait_list(page)

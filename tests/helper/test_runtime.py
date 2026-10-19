@@ -758,6 +758,12 @@ class Recovery(RuntimeCase):
         self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
         recs = [r for r in self.runtime_records() if r["event"] == "runtime_attempt" and r["revert"]]
         self.assertTrue(recs)  # audited like any write
+        (start,) = [r for r in recs if r.get("op") == "journal.recover"]  # G-235: one start record (every file and its value) before the restore, one result after it
+        (end,) = [r for r in self.runtime_records() if r["event"] == "result" and r.get("op") == "journal.recover"]
+        self.assertEqual(len(start["files"]), start["file_count"])
+        self.assertTrue(any(f["path"].endswith("cpu3/cpufreq/scaling_max_freq") and (f["value"], f["now"]) == (P_MAX, 4_500_000) for f in start["files"]), start["files"])
+        self.assertEqual((end["restored"], end["outcome"], end["file_count"], end["detail"]), (True, "restored", start["file_count"], f"journal.recover: {start['file_count']} files, restored ok"))
+        self.assertLess(self.runtime_records().index(start), self.runtime_records().index(end))
         self.assertFalse(self.lock.exists())
         self.ok(h, "runtime.plan", {"caps": {"5": 45}})  # planning works again
 
@@ -799,6 +805,19 @@ class Recovery(RuntimeCase):
         self.lock.unlink()
         self.assertTrue(ops_runtime.recover_journal(h.helper))  # the next start tries again
         self.assertFalse(self.journal_doc()["in_flight"])
+
+    def test_an_in_flight_journal_is_restored_at_start_even_when_the_audit_log_cannot_be_opened(self) -> None:
+        h = self.boot()
+        cap4 = self.cap(4)
+        self.crash_midway(h)
+        self.audit.unlink()
+        self.audit.mkdir()  # not a file: AuditLog cannot open it (G-235: the caps back beat the record)
+        self.logs.clear()
+        self.assertTrue(ops_runtime.recover_journal(h.helper))
+        self.assertEqual((self.cap(3), self.cap(4)), (P_MAX, cap4))
+        self.assertFalse(self.journal_doc()["in_flight"])
+        self.assertTrue(any("NOT audited" in line for line in self.logs), self.logs)
+        self.assertTrue(any("restored" in line and "cleared" in line for line in self.logs), self.logs)
 
     def test_a_revert_also_clears_an_in_flight_journal_for_the_operator(self) -> None:
         h = self.boot()

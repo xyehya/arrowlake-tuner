@@ -609,17 +609,31 @@ class _Sent:
     elapsed_ms: int = 0
     write_error: cp.SysfsError | None = None
     lock_problem: str | None = None
+    audit_problem: str | None = None
 
 
-def _send_step(helper: Helper, w: RuntimeWiring, log: AuditLog, step: cp.RuntimeStep, record: dict[str, Any]) -> _Sent:
-    """Under the lock: the ``runtime_attempt`` record (written and fsync'd first), the one file write, the file read-back. :class:`_NotSent` before the write is sent."""
+class _UnwritableLog:
+    """G-235: stands in for the audit log at helper start when it cannot be opened; every append fails the way the real one would."""
+
+    def __init__(self, why: str) -> None:
+        self._why = why
+
+    def append(self, *args: Any, **fields: Any) -> None:
+        raise OSError(self._why)
+
+
+def _send_step(helper: Helper, w: RuntimeWiring, log: AuditLog, step: cp.RuntimeStep, record: dict[str, Any], strict: bool = True) -> _Sent:
+    """Under the lock: the ``runtime_attempt`` record (written and fsync'd first), the one file write, the file read-back. :class:`_NotSent` before the write is sent. ``strict=False``
+    (the recovery of an in-flight journal at helper start): a record that cannot be written is reported in ``audit_problem`` and the write goes through -- getting the values back wins."""
     _take_lock(helper)
     sent = _Sent()
     try:
         try:
             _audit(helper, log, "runtime_attempt", detail=f"runtime write {step.domain} {step.key}: {step.before} -> {step.value}", **record)
         except OSError as exc:
-            raise _NotSent("AUDIT_UNAVAILABLE", f"the audit log cannot be written ({exc}); the write was not sent") from None
+            if strict:
+                raise _NotSent("AUDIT_UNAVAILABLE", f"the audit log cannot be written ({exc}); the write was not sent") from None
+            sent.audit_problem = f"the audit log cannot be written ({exc}); the write of {step.domain} {step.key} was sent unaudited"
         try:
             w.files.write_int(step.file, step.value)
             _read_back(w, step, sent)
@@ -655,7 +669,7 @@ class _Run:
     sent: int = 0
 
 
-def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.RuntimeStep], plan_id: str | None, revert: bool, cancel: threading.Event | None) -> _Run:
+def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.RuntimeStep], plan_id: str | None, revert: bool, cancel: threading.Event | None, strict: bool = True) -> _Run:
     """The transactions, one file at a time. A step refused before it is sent with nothing sent so far raises (nothing changed); any later stop is the result's ``stop``."""
     run = _Run([{"n": s.number, "domain": s.domain, "key": s.key, "file": s.file, "before": s.before, "value": s.value, "status": "not_sent"} for s in steps])  # every step is listed
     for step, entry in zip(steps, run.table):
@@ -664,7 +678,7 @@ def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.R
             break
         record = dict(domain=step.domain, key=step.key, path=str(w.files.path(step.file)), before=step.before, written=step.value, plan_id=plan_id, revert=revert)
         try:
-            outcome = _send_step(helper, w, log, step, record)
+            outcome = _send_step(helper, w, log, step, record, strict)
         except _NotSent as exc:
             entry["status"] = "refused"
             reason = f"step {step.number}: {exc}"
@@ -675,6 +689,8 @@ def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.R
         run.sent += 1  # a failed write may have reached the file
         if outcome.lock_problem:
             run.warnings.append(outcome.lock_problem)
+        if outcome.audit_problem:
+            run.warnings.append(outcome.audit_problem)
         if outcome.write_error is not None:
             entry["status"] = "error"
             entry["detail"] = str(outcome.write_error)
@@ -801,8 +817,20 @@ def recover_journal(helper: Helper) -> bool:
         if boot_id is None:
             raise OpError(REFUSED, "the boot id is unknown")
         if steps:
-            audit = _open_audit(helper)
-            run = _run_steps(helper, w, audit, steps, None, True, None)
+            try:
+                audit = _open_audit(helper)
+            except OSError as exc:  # G-235 (orchestrator decision): the restore goes through unaudited -- the caps back beat the record, as for the measure journal; the gap is loud in the log
+                log(f"runtime journal: the audit log cannot be opened ({exc}); the restore is NOT audited")
+                audit = _UnwritableLog(str(exc))
+            files = [{"path": str(w.files.path(st.file)), "value": st.value, "now": st.before} for st in steps]  # G-235: the one start record -- every file, the journaled original it goes back to, and the value it is at now
+            lost = [_audit_quiet(helper, audit, "runtime_attempt", op="journal.recover", domain="runtime", key="run", revert=True, files=files, file_count=len(files),
+                                 detail=f"journal.recover: {len(files)} runtime file(s) go back to the journaled values")]
+            run = _run_steps(helper, w, audit, steps, None, True, None, strict=False)
+            outcome = "restored" if run.stop is None else str(run.stop["kind"])
+            lost.append(_audit_quiet(helper, audit, "result", op="journal.recover", domain="runtime", file_count=len(files), writes=run.sent, restored=run.stop is None, outcome=outcome,
+                                     detail=f"journal.recover: {len(files)} files, " + ("restored ok" if run.stop is None else f"NOT restored ({str(run.stop['reason'])[:200]})")))
+            for p in filter(None, lost):
+                log(f"runtime journal: {p}")
             for p in run.warnings:
                 log(f"runtime journal: {p}")
             if run.stop is not None:

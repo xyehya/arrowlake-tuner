@@ -60,10 +60,12 @@ export function auditTime(ts) {
     : String(ts === undefined || ts === null ? "" : ts);
 }
 
-/** "writes" keeps what changed or could have changed the CPU: write attempts and their results, read-backs, refusals, errors and trips. */
+/** "writes" keeps what changed or could have changed the CPU: write attempts and their results, read-backs, refusals, errors and trips; G-235: also the runtime / cpufreq / powercap
+ *  attempts and the op-level `result` summaries (a measure or stress run, a recovered journal, a saved profile). */
 export function auditKeep(o, filter) {
   if (filter === "all") return true;
-  if (["refused", "error", "trip", "readback"].includes(o.event)) return true;
+  if (["refused", "error", "trip", "readback", "runtime_attempt", "powercap_attempt"].includes(o.event)) return true;
+  if (o.event === "result" && typeof o.op === "string" && o.cmd === undefined && o.msr === undefined) return true; // G-235: the summary record of an op that changed cpufreq or a file (vf.measure, stress.start, profiles.save, journal.recover ...)
   const cmd = toNum(o.cmd);
   return o.msr_kind === "write" || (cmd !== null && WRITE_CMDS.includes(cmd));
 }
@@ -86,8 +88,14 @@ export function auditRow(r) {
     if (o.verified === false) kind = "error";
   }
   const event = o.event !== undefined ? String(o.event) : o.unparsable !== undefined ? "unparsable" : "";
-  const detail = o.reason !== undefined ? String(o.reason) : o.purpose !== undefined ? String(o.purpose) : o.unparsable !== undefined ? o.unparsable : "";
-  const eventKind = ["refused", "error", "trip"].includes(event) ? "error" : event === "readback" ? (o.verified === false ? "error" : "ok") : "";
+  // G-235: `detail` first (the summary records carry "vf.measure: 48 files, restored ok"); a run summary without one is composed from its counts
+  const summary = event === "result" && typeof o.op === "string" && isNum(o.file_count) ? `${o.op}: ${o.file_count} files, ${o.restored === false ? "NOT restored" : "restored ok"}` : "";
+  const detail = o.detail !== undefined && o.detail !== null ? String(o.detail) : summary || (o.reason !== undefined ? String(o.reason) : o.purpose !== undefined ? String(o.purpose) : o.unparsable !== undefined ? o.unparsable : "");
+  if (rc === "" && o.value === undefined && typeof o.outcome === "string") {
+    result = o.outcome;
+    kind = o.restored === false || o.outcome === "error" ? "error" : o.outcome === "cancelled" || o.outcome === "cancel" ? "warn" : "ok";
+  }
+  const eventKind = ["refused", "error", "trip"].includes(event) || (event === "result" && o.restored === false) ? "error" : event === "readback" ? (o.verified === false ? "error" : "ok") : "";
   return {
     time: auditTime(o.ts),
     timeTitle: String(o.ts ?? ""),
@@ -95,7 +103,7 @@ export function auditRow(r) {
     event,
     eventKind,
     cpu: o.cpu === undefined || o.cpu === null ? "" : String(o.cpu),
-    request: auditRequest(o),
+    request: auditRequest(o) || (typeof o.op === "string" ? o.op : ""),
     result,
     resultKind: kind,
     verdict,

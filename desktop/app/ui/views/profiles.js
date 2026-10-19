@@ -454,6 +454,7 @@ export function profilesView() {
           on: { click: () => { S.saveOpen = !S.saveOpen; renderAccepted(); if (S.saveOpen) stateName.focus(); } } });
         acceptedCard.append(head, body, h("div", { class: "pr-row" }, restore, fromRead, saveState, finger));
         if (S.saveOpen) acceptedCard.append(statePanel);
+        saveCard.hidden = S.saveOpen; // G-235: one name field at a time -- the bottom "Save Tune edits as…" card steps aside (its text is kept) while the state panel is open
         renderStateGate();
       }
 

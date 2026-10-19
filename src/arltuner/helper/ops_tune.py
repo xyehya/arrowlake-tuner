@@ -2846,6 +2846,13 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
         header = f"Saved {stamp} by arltuner (profiles.save, G-228): the state of this boot's last read of every unit, as it is (not made the accepted state). A complete profile."
     else:
         header = f"Saved {stamp} by arltuner (profiles.save, G-148): this boot's read of every unit with the Tune editor's rows laid over it. A complete profile."
+    cfg = helper.cfg
+    _trust(helper, cfg.audit_path, want="file", must_exist=False)
+    try:
+        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=cfg.euid_fn(), what="audit log"))
+        audit = AuditLog(cfg.audit_path)
+    except (TrustError, OSError) as exc:  # G-235: proven writable before the profile file is written; nothing is saved without a record
+        raise OpError(REFUSED, f"the audit log {cfg.audit_path} cannot be written ({exc}); nothing was saved", {"check": "AUDIT_UNAVAILABLE"}) from None
     try:
         record = _profile_store(helper).save(name, profile=dump_profile(profile, header))
     except ProfileError as exc:
@@ -2856,6 +2863,11 @@ def op_profiles_save(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> di
               "turbo": profile.turbo is not None, "ring_points": 0 if profile.ring is None else len(profile.ring.points)}
     if args.get("from") == "read":
         result["from"] = "read"  # G-228: saved from the state of the last read, not accepted
+    try:
+        audit.append("result", ts=cfg.wall_clock(), operator=cfg.operator, op="profiles.save", profile=record["name"], source="read" if args.get("from") == "read" else "edits",
+                     units=result["units"], points=result["points"], turbo=result["turbo"], ring_points=result["ring_points"])
+    except (OSError, ValueError) as exc:
+        raise OpError(INTERNAL, f"profile {record['name']} was saved, but it could not be recorded in the audit log: {exc}", {"check": "AUDIT_UNAVAILABLE", "saved": record["name"]}) from None
     return result
 
 
