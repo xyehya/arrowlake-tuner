@@ -74,3 +74,4 @@
 - G-230 merged (node 332). Audit check: the 06:00 restore wrote NO turbo MSRs (planner skips equal tables) -> only the plan's step list/count overstates; G-231 queued.
 - Live: PL2 275 W via GUI OK (read back, sysfs 275000000). Caps cpu7 54x: write landed (5400 MHz under load) but helper read-back 1 ms after write saw the old value -> TRIPPED on apply and on revert (cpufreq async QoS update). UI: revert label 'undefinedx', 'pt undefined', V/F wording in runtime error. -> G-232.
 - Live GUI session 2 (06:16-06:24): PL2 275 OK; caps landed but read-back race tripped (G-232); stress 1 min P-cores 0 errors 66 C 157.6 W; throttle log shows PL1/EDP events at 98-131 W with PL1 250 -> mapping needs live verification. Capture captures/lnx/desktop-live-gui-20261019.txt.
+- G-231 merged (deepseek-flash; plan skips equal turbo tables via planner._turbo_tables/pack_turbo; tests fail pre-fix). Main 3381 OK, node 332. Not installed yet (operator in the app); install with G-232.
