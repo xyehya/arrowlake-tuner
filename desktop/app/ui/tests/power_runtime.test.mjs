@@ -524,6 +524,7 @@ test("G-233: no E label shows 49 for a stock 4900000 E-core (plan view, revert, 
   assert.equal(m.tiles[0].maxRatio, 48);
   assert.equal(m.tiles[0].maxKhz, 4900000);
   assert.equal(clockCeiling([{ max_ratio: 48 }]), 4800);
+});
 
 // ---- G-234 ----
 test("G-234: revertReason: only a read that says 'nothing journaled' turns Revert off; unread / unreadable stays usable", () => {
