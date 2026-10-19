@@ -684,18 +684,25 @@ def _goal_word(target: Target, current: VfWord, top: int | None) -> VfWord:
         raise PlanError(f"{target.label}: requested value does not fit the V/F word: {exc}") from exc
 
 
-def _vf_words(current: VfWord, goal: VfWord, top: int | None = None, label: str = "") -> tuple[tuple[VfWord, str], ...]:
+def _vf_words(
+    current: VfWord, goal: VfWord, top: int | None = None, label: str = "", sends_1d: bool = True, max_ratio_now: int | None = None
+) -> tuple[tuple[VfWord, str], ...]:
     """The 0x11 words to send, in order, with their stage label. Ratio and V target moving the same way take two words (registers.md
     "Ordering"): rising -> V target first (the old ratio stays), falling -> ratio first (the old V target stays); the offset moves in the
     second word. Otherwise one word. A goal without an OC point (V target 0, ``kept_word``) is always one word: there is no target to order.
-    G-124: a voltage-first word sent while the ratio is still at or below the top fused ratio has no OC point either; the hardware keeps no target there
-    (``[MEASURED lnx 2026-10-11/12]``), so that two-word raise cannot be planned."""
+    G-241: when the current word has no OC point (ratio <= the top fused ratio) there is no voltage-first word -- the hardware keeps no target there (G-124,
+    ``[MEASURED lnx 2026-10-11/12]``) -- so the OC point is created by ONE word carrying the new ratio, the target and the offset. That is safe: the CPU cannot run
+    the new ratio until the ``0x1D`` (and the turbo table) the plan sends after the word, so the voltage rises with the OC point before any frequency can use it
+    (P0 58x ``0x0005B43A``, the target landed 3 ms later, G-237 re-read ``[MEASURED lnx 2026-10-19]``). Only a plan that sends no ``0x1D`` after the word
+    (``sends_1d`` false) keeps the G-124 refusal."""
     if goal.v_target_raw == 0:
         return ((goal, ""),)
     d_ratio = goal.ratio - current.ratio
     d_v = goal.v_target_raw - current.v_target_raw
     if d_ratio > 0 and d_v > 0:
         if not has_oc_point(top, current.ratio):
+            if sends_1d and top is not None and max_ratio_now is not None and max_ratio_now <= top:
+                return ((goal, "creates the OC point (ratio + voltage in one word; the ratio is usable only after 0x1D)"),)
             raise PlanError(
                 f"{label}: raising the OC ratio and its voltage together needs the voltage first, but at ratio {current.ratio} (no OC point) the hardware drops the "
                 f"V target (G-124: a word without an OC point always keeps target 0), so the voltage-first word cannot be verified; raise the ratio alone first "
@@ -1066,7 +1073,7 @@ def build_plan(
                 whole_curve=True,
             )
         )
-        words = _vf_words(current, goal, top, t.label)
+        words = _vf_words(current, goal, top, t.label, sends_1d=t.ratio is not None and t.cpu not in residual_cpus, max_ratio_now=readings.favored & 0xFF)
         sent: int | None = None
         for word, stage in words:
             ctx = build_context(policy, t.cpu, vf_word_sent=sent, **facts)

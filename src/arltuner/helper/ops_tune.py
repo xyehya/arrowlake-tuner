@@ -2269,12 +2269,18 @@ def _apply_order(
     refuses (``write_order``) raises the apply's own refusal. The turbo tables are left out (their MSR words are not in the last read; they are listed last)."""
     if known is None:
         return None, ()
+    targets = resolve_targets(profile, topology) if profile.entries else ()
+    covered = all(t.cpu in known[0] for t in targets) and all((p.cpu, p.point) in known[1] for p in resolve_point_targets(profile, topology))
     try:
         plan = build_plan(
             dataclasses.replace(profile, turbo=None), topology, known[0], per_core_enabled=None, policy=policy, point_words=known[1], only_changed=profile.complete,
             ring_words=known[2],
         )
-    except (PlanError, ProfileError, ValueError):  # a word the last read does not hold: the apply decides from its own reads
+    except PlanError as exc:
+        if covered:  # G-241: the last read holds every word the plan needs, so this is the error the apply would raise from its own reads: Review shows it, nothing is sent
+            raise OpError(BAD_REQUEST, str(exc)) from None
+        return None, ()  # a word the last read does not hold: the apply decides from its own reads
+    except (ProfileError, ValueError):
         return None, ()
     refused = tuple(r for r in plan.refusals if r.reason == "CHECK_FAILED" and r.detail.startswith("write_order"))
     if refused:
@@ -2397,6 +2403,12 @@ def _preflight_error(exc: PreflightError) -> OpError:
             return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": CPU_LIMIT_UNREAD})
         return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": _REFUSAL_CHECK.get(first.reason, first.reason)})
     return OpError(REFUSED, f"{exc}. Nothing was sent.", {"check": "PREFLIGHT"})
+
+
+def _no_write(err: OpError) -> OpError:
+    """G-241: an apply-side refusal raised before the first write says so (``detail.writes_sent == 0``), so the page shows every unit "not written"."""
+    err.detail = {**(err.detail or {}), "writes_sent": 0}
+    return err
 
 
 def _base_ratio(helper: Helper, topology: Topology, kind: str) -> int | None:
@@ -2804,7 +2816,7 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
     try:
         targets = preflight(profile, topology, policy, extra_ops=scan_ops)  # nothing sent: the numbers against the policy as it is NOW
     except PreflightError as exc:
-        raise _preflight_error(exc) from None
+        raise _no_write(_preflight_error(exc)) from None
     except (PlanError, ProfileError) as exc:
         raise OpError(BAD_REQUEST, str(exc)) from None
     points = resolve_point_targets(profile, topology)
@@ -2815,13 +2827,15 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         # G-148: and the rounds the plan reserved (the executor re-judges them from its own reads before the first write: STEP_LIMIT when they do not fit)
         needed = min(scan_ops + max(plan.rounds, 1) * (per_round + _residual_ops(_residual_found(helper, profile, topology, policy))), policy.max_operations_per_session)
     progress_steps = 0
+    write_started = False  # G-241: set when a "step N: ... apply: write|enable ..." line is reported (every write step's purpose starts so); a PlanError before it sent nothing
     freq_cpus = sorted({t.cpu for t in targets} | ({c.cpu for c in topology.cores} if plan.restore else set()))  # a restore may rewrite a unit the profile has no row for
     freq_before = _cpufreq_before(helper, freq_cpus)  # G-126: the old cpuinfo / cap, before any write
 
     def progress(line: str) -> None:
-        nonlocal progress_steps
+        nonlocal progress_steps, write_started
         if line.startswith("step "):
             progress_steps += 1
+            write_started = write_started or "apply: write" in line or "apply: enable" in line
             ctx.progress(progress_steps, needed, None if session.used is None else session.used + progress_steps, session.policy.max_operations_per_boot)
 
     with _guarded_session(helper, ctx, policy, needed, "this apply") as session:
@@ -2841,8 +2855,14 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
                 boot_ops_used=session.used or 0,
                 auto_ramp=plan.restore,
             )
-        except PreflightError as exc:
-            raise _preflight_error(exc) from None
+        except PreflightError as exc:  # round 1 only (a later round's refusal becomes a report): nothing was written
+            raise _no_write(_preflight_error(exc)) from None
+        except PlanError as exc:
+            if write_started:
+                helper.tuned_this_boot = True  # type: ignore[attr-defined]
+                raise
+            # G-241: the plan the apply builds from its own reads is refused before any write: say so (the page shows every unit "not written")
+            raise OpError(REFUSED, f"{exc}. Nothing was written.", {"check": "PLAN_ERROR", "writes_sent": 0, "ops_done": progress_steps}) from None
         except BaseException:
             helper.tuned_this_boot = True  # type: ignore[attr-defined]  # G-120: an apply that died midway may have written; "stock" is never claimed after it
             raise
@@ -2894,12 +2914,12 @@ def op_tune_apply(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dict[
         result["stop"] = stop
         return result
     if report.stop_kind is StopKind.CANCELLED:
-        raise OpError(CANCELLED, "tune.apply was cancelled before the first write; nothing was changed", {"ops_done": result["ops_used"]})
+        raise OpError(CANCELLED, "tune.apply was cancelled before the first write; nothing was changed", {"ops_done": result["ops_used"], "writes_sent": 0})
     last_detail = report.steps[-1].detail if report.steps else ""
     if report.stop_kind is StopKind.REFUSED:
         check = last_detail.split(":", 1)[0] if ":" in last_detail else "REFUSED"
-        raise OpError(REFUSED, f"{report.stopped_reason}. Nothing was written.", {"check": check, "ops_done": result["ops_used"]})
-    raise OpError(INTERNAL, f"{report.stopped_reason}", {"ops_done": result["ops_used"], "tripped": report.tripped})
+        raise OpError(REFUSED, f"{report.stopped_reason}. Nothing was written.", {"check": check, "ops_done": result["ops_used"], "writes_sent": 0})
+    raise OpError(INTERNAL, f"{report.stopped_reason}", {"ops_done": result["ops_used"], "tripped": report.tripped, "writes_sent": 0})
 
 
 # --------------------------------------------------------------------------------------------------------------
