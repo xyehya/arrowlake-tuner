@@ -476,7 +476,14 @@ def _check_vf_bounded(
         sent = VfWord.from_u32(ctx.vf_word_sent)
         ratio_before, v_before = sent.ratio, sent.v_target_raw
     d_ratio, d_v = new.ratio - ratio_before, 0 if no_oc_point else new.v_target_raw - v_before
-    if d_ratio > 0 and d_v > 0:
+    # G-241 (operator 2026-10-19: "when setting an OC ratio, I am allowed to set its voltage ... it's a new point on the curve"): a word that CREATES the OC point --
+    # nothing sent to this core yet this session, the ratio in force at or below the top fused ratio (no OC point), the new ratio above it -- carries its ratio and
+    # its adaptive target together. A voltage-first word is impossible there (G-124: a word without an OC point keeps no target), and the new ratio is not usable
+    # until the 0x1D that must follow and equal it (favored_ratio_follows_vf), so the voltage is in place first in effect. The voltage ceiling above still applies.
+    creates_oc_point = (
+        ctx.vf_word_sent is None and ctx.top_fused_ratio is not None and ratio_before <= ctx.top_fused_ratio < new.ratio and new.v_target_raw > 0
+    )
+    if d_ratio > 0 and d_v > 0 and not creates_oc_point:
         return False, "the word raises the ratio and the V target together: raise the V target first (one 0x11), the ratio in the next"
     if d_ratio < 0 and d_v < 0:
         return False, "the word lowers the ratio and the V target together: lower the ratio first (one 0x11), the V target in the next"

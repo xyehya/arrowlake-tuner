@@ -281,6 +281,17 @@ class Ordering(BoundsCase):
         exc = self.refuse(guard, E8, word(49, E_V + 20), "raise the V target first")
         self.assertIn("together", exc.detail)
 
+    def test_g241_a_word_that_creates_the_oc_point_carries_ratio_and_voltage_together(self) -> None:
+        # BIOS defaults (live 2026-10-19): E max 46 = the top fused ratio, no OC point; the creating word may raise both (the ratio is unusable until 0x1D follows)
+        e46 = dict(E8, vf=0x2E, favored=0x2E2E)
+        guard = self.open(e46, **RAISE)
+        self.accept(guard, E8, word(50, E_V + 30))
+        self.refuse(guard, E8, word(51, E_V + 40), "raise the V target first")  # the OC point now exists: the ordering rule is back
+
+    def test_g241_an_existing_oc_point_still_needs_the_voltage_first(self) -> None:
+        guard = self.open(dict(E8, vf=word(48, E_V), favored=0x2E30), **RAISE)
+        self.refuse(guard, E8, word(50, E_V + 30), "raise the V target first")
+
     def test_voltage_first_then_ratio_is_accepted_in_that_order_only(self) -> None:
         guard = self.open(E8, **RAISE)
         self.accept(guard, E8, word(48, E_V + 20))  # V first

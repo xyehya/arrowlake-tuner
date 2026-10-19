@@ -35,6 +35,22 @@ class OneWordCreation(TuneCase):
         self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
 
 
+    def test_the_operators_draft_e_50x_at_1_1846_v_applies_in_one_word(self) -> None:
+        # the live draft that the guard refused before G-241's policy change: a creating word with a target ABOVE the fused voltage
+        h = self.boot(no_oc_point())
+        self.read(h)
+        plan = self.plan(h, rows(row("EC0", ratio=50, v=1.1846)))
+        res = self.apply_ok(h, plan)
+        for cpu in E_CPUS:
+            words = [r.data for r in self.sim.requests if r.cmd == 0x11 and r.cpu == cpu and r.p2 == 0]
+            self.assertEqual(len(words), 1, cpu)
+            self.assertEqual(VfWord.from_u32(words[0]).ratio, 50, cpu)
+            self.assertEqual(self.word(cpu).to_u32(), words[0], cpu)
+            order = [r.cmd for r in self.sim.requests if r.cpu == cpu and r.cmd in (0x11, 0x1D, 0x27)]
+            self.assertEqual(order, [0x11, 0x1D, 0x27], cpu)
+        self.assertTrue(all(rb["match"] for rb in res["readback"]), res["readback"])
+
+
 class PlanCatchesWhatApplyRaises(TuneCase):
     def test_a_plan_error_from_the_last_reads_is_raised_by_tune_plan_not_at_apply(self) -> None:
         h = self.boot(no_oc_point())
