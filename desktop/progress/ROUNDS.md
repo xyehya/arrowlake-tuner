@@ -85,3 +85,4 @@
 - G-236 merged (Opus: APPROVE WITH FIXES; f1 fixed by orchestrator, f2 checked: stored profiles P stock / E 48 explicit; f3 CLI P TURBO_BELOW_OC -> backlog; f4 cosmetic accepted).
 - G-237 merged (Opus APPROVE WITH FIXES; f1-f3 fixed by orchestrator). G-238 merged. Suite 3427 / node 351.
 - G-239 merged (orchestrator decision: keep guard rule favored_ratio_follows_vf; the plan re-sends the equal 0x11 word, then 0x1D/0x27 — idempotent, XTU-shaped; no helper change so no R review). Suite 3430 / node 357. Operator will cold boot next; then: accepted restore, PL2 275, clean x58 test.
+- G-240 + G-241 merged (Opus APPROVE WITH FIXES each; all findings fixed by orchestrator). Suite 3455 / node 367. Installed (21/21), AppImage rebuilt 17:07. Paused: operator to Windows.
