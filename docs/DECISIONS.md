@@ -265,3 +265,6 @@ ratios tab, or an explicit `turbo` in a profile/intent). An OC ratio above the t
 shows an (i) note at the OC ratio field and on the Turbo ratios tab: the core cannot run above the table's bucket for the active-core count until the
 table is raised there. Supersedes the "bundled with the per-core apply" part of D-017 (its fact stays true: the table caps the ratio and the BIOS restores
 it on reboot). Internal temporary tables of vf.measure / stress (journaled, restored) are not affected.
+D-050 consequence (G-236 review, 2026-10-19): a partial profile saved before G-148 (rows only, no `[turbo]`) whose OC ratio is above the table used to get
+the derived raise and now stays capped at the table (TURBO_BELOW_OC warns at plan time). Complete/accepted profiles store an explicit `[turbo]` and apply as
+before; the two stored profiles on the reference machine carry P [57,57,55x6] / E [48x8] (checked 2026-10-19), so no derived raise is hidden in them.
