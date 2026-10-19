@@ -1,0 +1,11 @@
+Live 2026-10-19 (audit): runtime.apply cap cpu7 5500000->5400000: readback 1 ms later read 5500000 -> "read-back mismatch, guard tripped"; the revert
+5400000->5500000 the same. Both writes DID land (sysfs a second later; cpu7 ran exactly 5400 MHz under load). Cause: cpufreq applies scaling_max_freq through
+freq_qos + the policy update worker (asynchronous); powercap writes are synchronous (power.apply read back fine).
+1. Helper: the caps (and uncore, same treatment) read-back polls the file until it matches or a bounded deadline passes: every 10 ms up to 500 ms (constant,
+   cite this note). Only a value still wrong at the deadline is a mismatch. Keep one read-back audit record (with the poll count / elapsed ms). Fake sysfs in
+   tests gets a "delayed apply" mode (old value for N reads); tests: delayed -> ok; never applies -> mismatch at the deadline; journal semantics unchanged.
+2. UI runtime result/review labels: the revert row shows "max 54x -> undefinedx" and the read-back table "pt undefined": render cap rows as "cpu 7 max 54x ->
+   55x (5500 MHz)" from step.before/value (kHz -> ratio /100000 for display), and the read-back rows by file/key ("cpu7 scaling_max_freq"), never "pt".
+3. The red box "The CPU holds a mix of old and new words ... restore the accepted state, or cold boot" is V/F wording: for power/runtime kinds say "Some runtime
+   settings were written, some not: the table shows which. Use Revert to boot values, or reboot (runtime values do not survive a reboot)."
+Simulator only. Do NOT run build-appimage.sh. `python3 tools/run_tests.py` green.

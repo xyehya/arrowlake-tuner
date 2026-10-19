@@ -183,3 +183,7 @@ Owns `desktop/app/ui/views/tune/apply.js` (result rows), `views/profiles.js` (li
 **G-231 · Helper: plan step list skips turbo tables equal to the CPU** · S · deps G-230
 Owns `src/arltuner/helper/ops_tune.py` (step-list builder ~:2259), tests. The executor already skips equal tables (planner.py ~:951; audit 2026-10-19 restore: no
 0x1AD/0x650 write), but the plan lists them and counts them in "N writes" (the restore said 4 writes for 2). Accept: an equal table gives no step; a different one does.
+
+**G-232 · Runtime caps read-back race + runtime result labels** · S · R · deps G-216, G-217
+Owns `src/arltuner/helper/ops_runtime.py` (read-back), `src/arltuner/controls/caps.py` / `uncore.py` (if needed), `desktop/app/ui/views/tune/runtime-kinds.js`,
+`views/tune/apply.js` (runtime result text only), tests. Found live 2026-10-19. Accept: sim tests with a delayed-apply fake sysfs; UI node tests.
