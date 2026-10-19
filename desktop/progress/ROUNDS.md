@@ -84,3 +84,4 @@
 - Installed + rebuilt with G-235; live: vf.measure P0 audited (runtime_attempt with 2 journaled files + result 'restored ok'), shown on the Audit screen. No open live bugs. Handing over to the operator; fused-V/F research (4 flash agents) running.
 - G-236 merged (Opus: APPROVE WITH FIXES; f1 fixed by orchestrator, f2 checked: stored profiles P stock / E 48 explicit; f3 CLI P TURBO_BELOW_OC -> backlog; f4 cosmetic accepted).
 - G-237 merged (Opus APPROVE WITH FIXES; f1-f3 fixed by orchestrator). G-238 merged. Suite 3427 / node 351.
+- G-239 merged (orchestrator decision: keep guard rule favored_ratio_follows_vf; the plan re-sends the equal 0x11 word, then 0x1D/0x27 — idempotent, XTU-shaped; no helper change so no R review). Suite 3430 / node 357. Operator will cold boot next; then: accepted restore, PL2 275, clean x58 test.
