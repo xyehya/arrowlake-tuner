@@ -187,3 +187,6 @@ Owns `src/arltuner/helper/ops_tune.py` (step-list builder ~:2259), tests. The ex
 **G-232 · Runtime caps read-back race + runtime result labels** · S · R · deps G-216, G-217
 Owns `src/arltuner/helper/ops_runtime.py` (read-back), `src/arltuner/controls/caps.py` / `uncore.py` (if needed), `desktop/app/ui/views/tune/runtime-kinds.js`,
 `views/tune/apply.js` (runtime result text only), tests. Found live 2026-10-19. Accept: sim tests with a delayed-apply fake sysfs; UI node tests.
+
+**G-233 · Show the ratio E-cores actually run (kernel kHz is one bin high)** · S · deps G-216, G-232
+Owns caps.py (expose), ops_runtime.py (read rows), the topology max_ratio source, UI rtstate/runtime/runtime-kinds/system/coremap. Notes R10-G-233.

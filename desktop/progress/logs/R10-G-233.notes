@@ -1,0 +1,16 @@
+Operator question 2026-10-19: "hardinfo2 and our app show E-cores at x49 while the E OC ratio is x48 and they never run above x48 — glitch?"
+Answer (docs/knowledge/power-profile-capping.md §6, MEASURED): the kernel converts HWP perf levels to kHz with a hybrid scale; E-cores have ~1.4 perf/ratio,
+so the top E perf level 68 is reported as cpuinfo_max_freq 4900000 kHz, but the core runs floor(68/1.4) = 48x. Any "kHz / 100000" display of an E-core is up to
+one ratio HIGH (live: EC3 capped at 46x shows "47×" in the Ratio caps tab and review, but ran 4601 MHz = 46x; stock E shows "49×").
+Fix every DISPLAY of a ratio derived from cpufreq kHz so it shows the ratio the core actually runs:
+1. Helper: expose the achieved ratio using the measured model already in src/arltuner/controls/caps.py (`_perf_ratio(kind, max_khz, n)`, the same model
+   cap_choice uses — reuse it, do not re-derive): runtime.read rows get `cap_ratio_effective` (int, achieved) next to `cap_ratio` (kept, = kHz/100000), and
+   `max_ratio_effective` from cpuinfo_max_khz; plan/revert steps already carry `ratio` for forward steps — give revert steps the effective ratio too.
+   Unknown model (cpuinfo outside the measured ones) -> effective = kHz/100000 and `ratio_model: "unmeasured"`.
+2. Topology `max_ratio` for E units (preflight/helper_topology) — if it is cpuinfo_max/100000 (49 for E), report the effective (48) and keep the kernel MHz
+   separately; P units unchanged (P maps 1:1 on the measured bins). Find where max_ratio is computed and cite it.
+3. UI: lib/rtstate.js (capRatio, ratios), views/tune/runtime.js:116 (in-force column), views/tune/runtime-kinds.js khzRatio / cap labels, system.js maxRatio,
+   coremap.js max_ratio scale: use the helper's effective values; show the kernel MHz as is, e.g. "48× (kernel 4900 MHz)". The cap input field after an
+   apply shows the effective ratio (46, not 47).
+4. Tests at helper (E 4700000 -> 46, 4900000 -> 48, 4800000 -> 47, P 5500000 -> 55) and UI (no E label shows 49 for a stock 4900000 E-core).
+Simulator only. Do NOT run build-appimage.sh. `python3 tools/run_tests.py` green.
