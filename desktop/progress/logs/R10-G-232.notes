@@ -9,3 +9,5 @@ freq_qos + the policy update worker (asynchronous); powercap writes are synchron
 3. The red box "The CPU holds a mix of old and new words ... restore the accepted state, or cold boot" is V/F wording: for power/runtime kinds say "Some runtime
    settings were written, some not: the table shows which. Use Revert to boot values, or reboot (runtime values do not survive a reboot)."
 Simulator only. Do NOT run build-appimage.sh. `python3 tools/run_tests.py` green.
+4. After a runtime apply that ended (even tripped) and a later successful revert of the same key, the runtime draft must be cleared (the pending bar kept
+   "1 change on 1 unit" for the caps edit).

@@ -1,0 +1,11 @@
+host lnx · 2026-10-19 05:56-06:24 · AppImage 50647409 (main + G-230) · orchestrator drove the GUI (own cua-driver on the local GNOME session,
+desktop screenshots + pixel clicks, no AT-SPI). Screenshots: ~/Pictures/Screenshots/arltuner-2026-10-19/ (26 files, operator machine).
+PASS  Read CPU state 1.2 s / 157 ops; ring limits 0x28 P1=2 1.512 V, 0x01 P1=2 85x (first live read).
+PASS  V/F apply P7 55x -91 -> -86 mV (read back OK, tiles updated without re-read) and restore accepted (accepted: matches).
+PASS  Power: PL2 295 -> 275 W (read back file+MSR; sysfs constraint_1 275000000).
+PASS* Caps: cpu7 54x landed (5400 MHz under pinned load) and the revert landed (5500000), BUT the helper read-back 1 ms after each write saw the old
+      value -> "Applied, with problems / guard tripped" both times (cpufreq async QoS). UI: "max 54x -> undefinedx", "pt undefined", V/F wording. -> G-232.
+PASS  Stress 1 min integer, 8 P-cores: 0 errors, 66 C, 157.6 W, P0/P3 57x, others 55x.
+CHECK Throttle events after load: "Power limit pl1" at 97.7 W / "pl1,pl2" at 130.9 W while PL1 = 250 W, PL2 = 275 W; "Current/EDP other" at 62 W.
+      The 0x64F bit mapping is inference (throttling.md §B); verify with throttling.md §F read #2 before trusting the labels.
+UI    Leftover "1 change on 1 unit" pending after the caps apply tripped + revert (runtime draft not cleared). Tuning label "accepted:accepted-20261015" (double prefix).
