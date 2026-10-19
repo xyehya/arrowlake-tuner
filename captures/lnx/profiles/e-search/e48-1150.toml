@@ -1,0 +1,60 @@
+# E search phase 48x (2026-10-19): E OC point 48x adaptive 1150 mV on all clusters + E turbo 48x8. Point 6 = -120 mV (phase 1: -140 passed, -150/-160 failed on cpu 21; 30 mV margin).
+[meta]
+name = "e48-1150"
+platform = "arl-s"
+
+[turbo]
+e = [48, 48, 48, 48, 48, 48, 48, 48]
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 48
+oc_voltage_mv = 1150
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 48
+oc_voltage_mv = 1150
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 48
+oc_voltage_mv = 1150
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 48
+oc_voltage_mv = 1150
+
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = -120
+expect_ratio = 46
