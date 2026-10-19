@@ -24,7 +24,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ from arltuner.stress.parse import MAX_ERROR_LINES
 from .cpu_online import refuse_if_cpu_offline
 from .ops import OpContext, OpSpec, _is_int, _no_args, _only, helper_topology
 from .ops_measure import (
-    CAP_ATTR, EPP_ATTR, _cpus_text, _remove_journal, _restore, _turbo_tables, _unit_maxima, _write_journal, epp_pinned_cpus, recover_journal,
+    CAP_ATTR, EPP_ATTR, CpufreqAudit, _cpus_text, _remove_journal, _restore, _turbo_tables, _unit_maxima, _write_journal, epp_pinned_cpus, recover_journal,
 )
 from .protocol import BAD_REQUEST, INTERNAL, REFUSED, OpError
 from .state import State
@@ -675,7 +675,9 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
         raise OpError(REFUSED, "a ratio cap needs the cpufreq journal of the measurement support, which this helper does not have", {"check": "NO_CPUFREQ"})
     exe = _trusted_exe(w, w.stress_ng if kind == "cpu" else w.stressapptest, "stress-ng" if kind == "cpu" else "stressapptest")
     cmd = cpu_command(exe, method, cpus, duration) if kind == "cpu" else memory_command(exe, duration, memory_mb)  # --temp-path is added at the spawn
+    audit = CpufreqAudit(helper, "stress.start")  # G-235: proven writable before anything is changed (the result file is stored, and a ratio cap writes cpufreq: both are audited)
     if cap is not None:
+        mw = replace(mw, cpufreq=audit.cpufreq(mw.cpufreq))
         recover_journal(mw, helper.cfg.log)  # a stale journal (a run that died) is applied first; if it cannot be, nothing new is started
         if Path(mw.journal_path).exists():
             raise OpError(REFUSED, "a stale cpufreq journal could not be restored; fix cpufreq by hand (see the helper log) before a capped run", {"check": "STALE_JOURNAL"})
@@ -801,6 +803,9 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
             if not restore_problems:
                 _remove_journal(mw)
     if error is not None:
+        lost = audit.result(outcome="error", screen=kind, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems, error=f"{type(error).__name__}: {error}"[:200])
+        if lost:
+            helper.cfg.log(lost)
         if isinstance(error, OpError) and not restore_problems:
             raise error
         if isinstance(error, OpError):
@@ -867,6 +872,9 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except StoreError as exc:
         rid, path = None, None
         result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: the result could not be stored: {exc.message}")])[:MAX_ERROR_LINES]
+    lost = audit.result(outcome=stopped_by, screen=kind, result_id=rid, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems)  # G-235
+    if lost:
+        result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: {lost}")])[:MAX_ERROR_LINES]
     if restore_problems:  # the run's cpufreq changes are still in force: not a success, whatever the screen found
         raise OpError(INTERNAL, "the stress run ended but " + " ".join(restore_problems), {"check": "RESTORE_FAILED"})
     return {"id": rid, **result, "record_path": path}

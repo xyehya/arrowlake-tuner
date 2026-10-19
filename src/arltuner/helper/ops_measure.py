@@ -19,13 +19,14 @@ import secrets
 import subprocess
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from arltuner import vfdump
 from arltuner.curves import CurveStore, StoreError, fit_record, is_curve_id, is_unit_id, new_curve_id, summary, unit_kind, unit_order, validate_name
 from arltuner.curves.record import RECORD_BUDGET
+from arltuner.guard import AuditLog
 from arltuner.guard.policy import fused_top_ratio
 from arltuner.mailbox.vf import VfWord
 from arltuner.topology import Topology
@@ -269,6 +270,112 @@ def device_wiring(*, lstat_fn: Callable[[str], Any] = os.lstat) -> MeasureWiring
         journal_path=INSTALLED_LOCK_DIR / "measure-journal.json",
         mem_fn=read_memory,
     )
+
+
+# =============================================================================================================================================
+# the audit trail of a cpufreq run (G-235)
+# =============================================================================================================================================
+class CpufreqAudit:
+    """G-235: every cpufreq write of a run (``vf.measure`` / ``stress.start``: the caps, the pins, EPP, and the restore) is one ``runtime_attempt`` record (``kind = "cpufreq"``,
+    fsync'd before the write is sent), and the run ends with one ``result`` record. ``runtime_attempt`` is neither a mailbox ``attempt`` nor a dwell, so the per-boot budget is
+    untouched. The log is opened (and so proven writable) **before** the run changes anything; after that a record that cannot be written is counted and reported once -- it never
+    stops a write, because the restore must always go through."""
+
+    def __init__(self, helper: Any, op: str) -> None:
+        cfg = helper.cfg
+        _trust(helper, cfg.audit_path, want="file", must_exist=False)
+        try:
+            os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=cfg.euid_fn(), what="audit log"))
+            self._log = AuditLog(cfg.audit_path)
+        except (TrustError, OSError) as exc:
+            raise OpError(REFUSED, f"the audit log {cfg.audit_path} cannot be written ({exc}); nothing was changed", {"check": "AUDIT_UNAVAILABLE"}) from None
+        self._cfg, self._helper, self.op = cfg, helper, op
+        self.writes = 0
+        self._lost = 0
+        self._why = ""
+
+    def _boot(self) -> str | None:
+        try:
+            boot = self._cfg.boot_id_fn()
+        except Exception:
+            return None
+        return boot.strip() or None if isinstance(boot, str) else None
+
+    def _append(self, event: str, **fields: Any) -> None:
+        try:
+            self._log.append(event, ts=self._cfg.wall_clock(), operator=self._cfg.operator, kind="cpufreq", boot_id=self._boot(), op=self.op, **fields)
+        except (OSError, ValueError) as exc:
+            self._lost += 1
+            self._why = str(exc)
+
+    def write(self, cpu: int, attr: str, before: Any, value: Any) -> None:
+        """The intent record of one cpufreq file write, before it is sent."""
+        self.writes += 1
+        self._append("runtime_attempt", domain="cpufreq", key=attr, path=f"cpu{cpu}/cpufreq/{attr}", before=before, written=str(value),
+                     detail=f"cpufreq write cpu{cpu} {attr}: {before} -> {value}")
+
+    def result(self, **fields: Any) -> str | None:
+        """The ``result`` record of the run (op, outcome, ids, counts); returns the note to report when this or an earlier record could not be written."""
+        self._append("result", writes=self.writes, **fields)
+        if self._lost:
+            return f"{self._lost} audit record(s) of this run could not be written ({self._why})"
+        return None
+
+    def cpufreq(self, files: Any) -> Any:
+        return _AuditedCpufreq(files, self)
+
+    def io(self, io: Any) -> Any:
+        return _AuditedIO(io, self)
+
+
+def _value(read: Callable[[], Any]) -> Any:
+    try:
+        return read()
+    except Exception:
+        return None
+
+
+class _AuditedCpufreq:
+    """``CpufreqFiles`` / ``SimCpufreq`` with ``write`` audited first; everything else is the wrapped object."""
+
+    def __init__(self, files: Any, audit: CpufreqAudit) -> None:
+        self._files, self._audit = files, audit
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._files, name)
+
+    def write(self, cpu: int, attr: str, value: str) -> None:
+        self._audit.write(cpu, attr, _value(lambda: self._files.read(cpu, attr)), value)
+        self._files.write(cpu, attr, value)
+
+
+class _AuditedIO:
+    """The measure IO with ``write_cap`` / ``write_min`` (what :func:`~arltuner.vfdump.set_cap` and ``restore_caps`` call) audited first."""
+
+    def __init__(self, io: Any, audit: CpufreqAudit) -> None:
+        self._io, self._audit = io, audit
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._io, name)
+
+    def write_cap(self, cpu: int, khz: int) -> None:
+        self._audit.write(cpu, CAP_ATTR, _value(lambda: self._io.read_cap(cpu)), khz)
+        self._io.write_cap(cpu, khz)
+
+    def write_min(self, cpu: int, khz: int) -> None:
+        self._audit.write(cpu, MIN_ATTR, _value(lambda: self._io.read_min(cpu)), khz)
+        self._io.write_min(cpu, khz)
+
+
+def audit_file_change(helper: Any, op: str, **fields: Any) -> None:
+    """G-235: the ``result`` record of an op that changes a file under the helper's state directory (a curve renamed / deleted). ``OSError`` / ``OpError`` when the log cannot be written."""
+    cfg = helper.cfg
+    _trust(helper, cfg.audit_path, want="file", must_exist=False)
+    try:
+        os.close(open_checked(cfg.audit_path, write=True, create=True, mode=0o600, euid=cfg.euid_fn(), what="audit log"))
+        AuditLog(cfg.audit_path).append("result", ts=cfg.wall_clock(), operator=cfg.operator, op=op, **fields)
+    except (TrustError, OSError, ValueError) as exc:
+        raise OpError(INTERNAL, f"{op} was done but could not be recorded in the audit log: {exc}", {"check": "AUDIT_UNAVAILABLE"}) from None
 
 
 # =============================================================================================================================================
@@ -775,6 +882,8 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
     entries: list[dict[str, Any]] = []
     journaled = False
     cancelled = False
+    audit: CpufreqAudit | None = None
+    started_at = w.monotonic()
     try:
         why_not = run.io.check()
         if why_not:
@@ -827,6 +936,9 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             "boot_id": boot.strip() if isinstance(boot, str) and boot.strip() else None, "mode": mode, "plan": plan_source, "complete": False, "kernel": w.kernel_fn(),
             "tuning_state": _tuning_state(helper, topo), "temps": {"min_c": None, "max_c": None}, "units": {}, "baseline": False,
         }
+        audit = CpufreqAudit(helper, "vf.measure")  # G-235: proven writable before anything is changed; from here every cpufreq write (also the stale-journal restore) is audited first
+        w = replace(w, cpufreq=audit.cpufreq(w.cpufreq))
+        run.io = audit.io(run.io)
         recover_journal(w, helper.cfg.log)  # G-141: a stale journal (a run that died) is applied first -- the values read below must be the user's, never a dead run's caps
         if Path(w.journal_path).exists():
             raise OpError(REFUSED, "a stale cpufreq journal could not be restored; fix cpufreq by hand (see the helper log) before a measurement", {"check": "STALE_JOURNAL"})
@@ -962,7 +1074,7 @@ def op_vf_measure(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[str
             run.close()
         except Exception as exc:
             problems.append(f"closing the MSR reader failed: {type(exc).__name__}: {exc}")
-    return _finish(w, record, cancelled, error, problems, ctx)
+    return _finish(w, record, cancelled, error, problems, ctx, audit, w.monotonic() - started_at, units)
 
 
 def _capped(problems: list[str], limit: int = 10) -> list[str]:
@@ -972,7 +1084,10 @@ def _capped(problems: list[str], limit: int = 10) -> list[str]:
     return problems[:limit - 1] + [f"... and {len(problems) - limit + 1} more notes not shown"]
 
 
-def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, error: BaseException | None, problems: list[str], ctx: OpContext) -> dict[str, Any]:
+def _finish(
+    w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, error: BaseException | None, problems: list[str], ctx: OpContext,
+    audit: CpufreqAudit | None = None, duration_s: float = 0.0, units: Sequence[str] = (),
+) -> dict[str, Any]:
     stored: dict[str, Any] | None = None
     store_problem: str | None = None
     has_points = record is not None and any(u["points"] for u in record["units"].values())
@@ -982,6 +1097,14 @@ def _finish(w: MeasureWiring, record: dict[str, Any] | None, cancelled: bool, er
         except StoreError as exc:
             store_problem = exc.message
     restore_bad = [p for p in problems if "could NOT restore" in p]
+    if audit is not None:  # G-235: the run's closing record (also when it was cancelled or failed: the trail shows the caps came back); the file written is the stored curve
+        outcome = "cancelled" if cancelled else "error" if error is not None else "complete"
+        note = audit.result(
+            outcome=outcome, curve_id=None if stored is None else stored["id"], units=list(units), points=sum(len(u["points"]) for u in record["units"].values()) if record is not None else 0,
+            duration_s=round(duration_s, 1), restored=not restore_bad, **({"error": f"{type(error).__name__}: {error}"[:200]} if error is not None else {}),
+        )
+        if note:
+            problems.append(note)
     detail: dict[str, Any] = {}
     if stored is not None:
         detail["curve_id"] = stored["id"]
@@ -1080,6 +1203,7 @@ def op_curves_update(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[
         record = _wiring(helper).store.update(args["id"], name=args.get("name"), baseline=args.get("baseline"))
     except StoreError as exc:
         raise _store_error(exc) from None
+    audit_file_change(helper, "curves.update", curve_id=args["id"], name=record.get("name"), is_baseline=record.get("baseline"))  # G-235
     return summary(record)
 
 
@@ -1088,6 +1212,7 @@ def op_curves_delete(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[
         _wiring(helper).store.delete(args["id"])
     except StoreError as exc:
         raise _store_error(exc) from None
+    audit_file_change(helper, "curves.delete", curve_id=args["id"])  # G-235
     return {"deleted": args["id"]}
 
 
