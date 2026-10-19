@@ -873,7 +873,7 @@ def op_stress_start(helper: Any, ctx: OpContext, args: dict[str, Any]) -> dict[s
     except StoreError as exc:
         rid, path = None, None
         result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: the result could not be stored: {exc.message}")])[:MAX_ERROR_LINES]
-    lost = audit.result(outcome=stopped_by, detail=None if cap is not None else f"stress.start: no caps written; result stored as {rid}", screen=kind, result_id=rid, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems)  # G-235
+    lost = audit.result(outcome=stopped_by, detail=None if cap is not None else (f"stress.start: no caps written; result stored as {rid}" if rid else "stress.start: no caps written; the result could not be stored"), screen=kind, result_id=rid, units=units, ratio_cap=cap, elapsed_s=round(elapsed, 1), restored=not restore_problems)  # G-235
     if lost:
         result["error_lines"] = (result["error_lines"] + [clean_line(f"helper: {lost}")])[:MAX_ERROR_LINES]
     if restore_problems:  # the run's cpufreq changes are still in force: not a success, whatever the screen found
