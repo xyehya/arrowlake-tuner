@@ -1,0 +1,22 @@
+Host lnx; simulator/fixtures only. Read registers.md ("OC-point V target lands late", XTU write procedure), platform-arl-s.md §G-124/D-035, planner.py `_vf_words`.
+Live 2026-10-19 13:25Z (BIOS defaults, E clusters at fused top 46x, no OC point): operator drafted EC0-3 OC ratio 50x + target 1.1846 V. Review showed a plan;
+Apply stopped right after its first reads with "PlanError: E-Core 0: raising the OC ratio and its voltage together needs the voltage first, but at ratio 46
+(no OC point) the hardware drops the V target (G-124)... raise the ratio alone first, then the voltage in a second profile". Nothing was written. The
+drawer showed EC0 "not read back", EC1 "interrupted", EC2/EC3 "not written" — misleading: nothing was sent.
+Facts: (a) G-124: a word with no OC point keeps no target, so voltage-first is impossible there. (b) The CPU cannot run the new ratio until 0x1D (and the turbo
+table for E/P buckets) is written, which the planner sends AFTER the 0x11 word; so a single 0x11 word carrying ratio + target together is the safe creation
+(the voltage rises with the OC point before any frequency can use it). (c) Today P0 58x was created exactly so (one word 0x0005B43A; the target landed 3 ms
+later, G-237 re-read verified it) and E 50x on the previous boot.
+Change:
+1. `_vf_words`: when ratio and target rise together and the current word has NO OC point, send ONE word = the goal (ratio + target + offset), stage label
+   "creates the OC point (ratio + voltage in one word; the ratio is usable only after 0x1D)". Keep the PlanError only if the plan would NOT send a 0x1D after
+   it for that core (e.g. residual/neutralised paths) — then the old message. Keep the two-word order when an OC point exists. Falling unchanged.
+   Verify the guard's predict/read-back accepts it (G-237 re-read covers a late target). Update the docstring and add a line to platform-arl-s.md citing
+   the P0 58x measurement.
+2. Plan/apply consistency: any PlanError that apply can raise must be raised at tune.plan time from the same readings (find why Review passed and apply
+   raised: likely the apply re-plans from fresh 0x10 reads while plan used tune.last; make plan use the same check). Test: plan of EC 50x + target from a
+   state without OC point -> plan OK with one 0x11 word per CPU then 0x1D/0x27, then 0x650 only if the operator drafted the table.
+3. UI apply.js: when the apply ends with an error before ANY write step was sent, every unit's status is "not written" and the header says "Nothing was
+   written"; never "not read back"/"interrupted" for units with no write sent. node test.
+`python3 tools/run_tests.py` green; commit `G-241: OC point created by one ratio+voltage word; plan catches apply-time plan errors; honest statuses`.
+Do NOT run build-appimage.sh.

@@ -211,3 +211,6 @@ Owns the tune intent path for an explicit "restate ratio" (src/arltuner/helper/o
 
 **G-240 · Undervolt Protection (rc 0x13): clear message, remembered per boot, planned around** · S · R · deps G-237
 Owns src/arltuner/helper/ops_tune.py (apply refusal mapping + per-boot UVP flag + plan check), tests, desktop/app/ui/views/tune/apply.js + status chip (components/status*.js) + mock. Notes R10-G-240.
+
+**G-241 · Create an OC point with ratio + voltage in one word (no voltage-first when no OC point); catch it at Review** · S · R · deps G-237, G-236
+Owns src/arltuner/controls/planner.py (`_vf_words` ~687 and its tests), helper plan/apply consistency in ops_tune.py (plan-time check only), desktop/app/ui/views/tune/apply.js (status labels of a plan-error-at-apply), tests. Notes R10-G-241.
