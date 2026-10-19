@@ -1,0 +1,17 @@
+Read docs/DECISIONS.md D-050 (and D-017 for history) first. Host lnx. Simulator / mock / fake sysfs only: no sudo, no /dev, never the installed helper.
+1. Helper: remove the derived turbo raise (ops_tune.py `_turbo_tables` ~1660-1680 and its use at ~1606). An intent with an OC ratio above a table's top bucket
+   plans NO table write; add a plan warning (code e.g. "TURBO_BELOW_OC", amber): "<unit> OC ratio <r>x is above the <P|E> turbo table (<buckets>): the core runs at
+   most the table's bucket for the active-core count until you raise it on the Turbo ratios tab (MSR 0x1AD|0x650)". Explicit `turbo: {P, E}` in an intent/profile
+   is unchanged. Find every other path that DERIVES a table from an OC ratio (grep TURBO_RAISE, oc_cap_kinds, _turbo_tables in controls/planner.py,
+   guard/policy.py, CLI apply) and decouple it the same way; report each path you changed and each you left (with why). Do NOT touch vf.measure / stress
+   internal temporary tables (ops_measure.py:949, ops_stress.py:566).
+2. Check stored profiles and restore paths keep working: tests/fixtures + the profile formats (accepted profiles, read-* profiles, tools/win restore
+   script generators, EXPECTED-words): if any relied on the derived raise (OC ratio above its own table without an explicit table), report it — do not
+   silently change semantics; add a test that a profile with an explicit table still writes it.
+3. UI: (a) OC section in the core inspector (views/tune/oc.js or wherever "OC ratio" renders): when the drafted OC ratio > the unit kind's turbo table top
+   bucket (draft table if edited, else read), show an (i) note under the field: "Turbo ratios cap this core at <bucket>x (1 active core). Raise the table on
+   the Turbo ratios tab to run <r>x." with a button/link that opens the Turbo ratios tab; no auto edit. (b) Turbo ratios tab: when any drafted/read OC ratio
+   of that kind is above the table, an (i) banner listing the units and their OC ratios. (c) apply.js: render the new warning code amber; remove any
+   TURBO_RAISE-specific rendering. (d) mock backend: same planner behaviour (no derived raise, the warning). node tests + Playwright smoke (tune).
+4. Docs: docs/knowledge/registers.md (or wherever T-023/D-017 bundling is described) gets one line pointing to D-050.
+`python3 tools/run_tests.py` green; commit `G-236: OC ratio no longer raises the turbo tables (D-050); OC/turbo (i) notes`. Do NOT run build-appimage.sh.

@@ -196,3 +196,6 @@ Owns `desktop/app/ui/views/tune/{ring,runtime,power}.js`, `rt-common.js`, `lib/r
 
 **G-235 · Audit gaps: vf.measure cap writes and profiles.save leave no audit record** · S · R · deps G-132, G-228
 Owns `src/arltuner/helper/ops_measure.py`, `ops_stress.py` (same check), `ops_tune.py` profiles.save path, tests, `desktop/app/ui/views/profiles.js` (one-field rule). Notes R10-G-235.
+
+**G-236 · Decouple OC ratio from the turbo tables (D-050)** · S · R · deps G-209, G-217
+Owns `src/arltuner/helper/ops_tune.py` (derived raise), `src/arltuner/controls/planner.py` / `guard/policy.py` only where they derive a table, tests, `desktop/app/ui/views/tune/{oc,turbo,apply}.js` + styles. Notes R10-G-236.

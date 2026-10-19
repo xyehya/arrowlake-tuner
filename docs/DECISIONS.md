@@ -254,3 +254,14 @@ Operator-policy VALUE limits (offset ceiling/floor, step limits, ratio_max, v_ta
 hidden in code/config: one mailbox transaction at a time, the mailbox command allowlist, the helper access list, read-back, write order, audit.
 Supersedes the operator-policy parts of D-038/D-039. Rationale: over-voltage is the only damage path and the CPU's own limit caps it; too deep an
 undervolt costs stability (a crash/reboot also clears runtime V/F). Facts audit: desktop/progress/logs/cpu-rules-audit.md.
+
+## D-050 · OC ratio and turbo ratio tables are decoupled; no automatic turbo raise (2026-10-19, operator)
+Operator, verbatim: "no i would keep the turboratios decoupled. i dont want toget all pcore turbo ratio of x58 automatically set for me. that will most
+probably wont work as unfavored corees fuse at x55 so thats both very coupled and risky. i would add not when an OC ratio is set on the GUI or any info (i)
+pointer note to change the turbo ratio alongside". Trigger: a P0 OC ratio of 58x planned `max(bucket, 58)` for all eight P buckets of MSR 0x1AD
+(ops_tune._turbo_tables, from D-017 / T-023), predicted all-core VccIA 1.29 -> 1.38 V, and the Turbo ratios tab did not show the raise.
+Rule: no code path derives or raises a turbo ratio table (0x1AD / 0x650) from an OC ratio; a table is written only when the operator edits it (Turbo
+ratios tab, or an explicit `turbo` in a profile/intent). An OC ratio above the table's top bucket is planned as asked with a plan warning, and the GUI
+shows an (i) note at the OC ratio field and on the Turbo ratios tab: the core cannot run above the table's bucket for the active-core count until the
+table is raised there. Supersedes the "bundled with the per-core apply" part of D-017 (its fact stays true: the table caps the ratio and the BIOS restores
+it on reboot). Internal temporary tables of vf.measure / stress (journaled, restored) are not affected.
