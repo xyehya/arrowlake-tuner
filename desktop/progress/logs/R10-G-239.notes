@@ -1,0 +1,15 @@
+Host lnx; simulator/mock/fixtures only, no sudo, no /dev. Read docs/knowledge/registers.md (XTU write procedure; "OC-point V target lands late"), D-050.
+Live state (2026-10-19): an apply of P0 OC 58x tripped (false trip, since fixed by G-237) after its FIRST write: cpu 0 now holds 0x11/0x10 word 0x0005b43a
+(OC point 58x, 1.4258 V) but 0x1D (favored / own max ratio, read via 0x1C[7:0]) is still 57 and 0x27 (granular) was not restated. The UI shows "OC ratio 58x"
+and there is NO diff, so nothing can be planned: the planner sends 0x1D/0x27 only when the intent carries a ratio (planner.py ~1097 `if t.ratio is None`).
+Build:
+1. Detection (helper read result or UI model, whichever already has 0x1C per core): a unit whose OC word ratio > its 0x1C[7:0] own max ratio = "OC ratio not
+   completed". The inspector (OC section) shows an amber note: "The OC word says 58x but this core's maximum ratio (0x1C) is 57x: the apply that set it stopped
+   early. [Complete the OC ratio]". The button sets a draft flag that makes the intent carry the ratio (58) for that unit even though it equals the read OC
+   word; the pending bar counts it as 1 change.
+2. Planner/intent: with that explicit ratio equal to the word in force, the plan must NOT rewrite the 0x11 word (equal -> skipped, as today for an equal word —
+   verify and test) and MUST send 0x1D = 58 and 0x27 = the 0x26 read, in the usual order, read back. No turbo table write (D-050). If the planner refuses or
+   re-sends 0x11, fix it minimally and explain.
+3. Simulator test: seed cpu 0 with 0x11 word 58x/target and 0x1C 57 -> plan has exactly 0x1D + 0x27 (+ its read-backs and the normal fact reads); apply in the
+   simulator ends with 0x1C[7:0] = 58. Node test for the note + button + draft flag; Playwright tune smoke screenshot of the note.
+`python3 tools/run_tests.py` green; commit `G-239: complete an interrupted OC ratio (0x1D/0x27 only)`. Do NOT run build-appimage.sh.

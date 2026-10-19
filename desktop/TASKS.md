@@ -205,3 +205,6 @@ Owns the guard/executor read-back for cmd 0x11 words (src/arltuner/guard/guard.p
 
 **G-238 · Show the OC point in the V/F table and chart** · S · deps G-208
 Owns `desktop/app/ui/views/tune/curve-editor.js`, `lib/units.js` (only if the OC point is filtered there), `lib/predict.js` (read only unless needed), tests. Notes R10-G-238.
+
+**G-239 · Finish an interrupted OC ratio (0x11 ratio above 0x1C max, 0x1D/0x27 never sent)** · S · R · deps G-236, G-237
+Owns the tune intent path for an explicit "restate ratio" (src/arltuner/helper/ops_tune.py intent parsing only, controls/planner.py only if needed), UI `desktop/app/ui/views/tune/oc.js` + draft flag in `lib/draft.js`, tests. Notes R10-G-239.
