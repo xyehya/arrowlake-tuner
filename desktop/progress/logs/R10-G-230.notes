@@ -1,0 +1,11 @@
+Found live 2026-10-19 (orchestrator drove the AppImage; accepted-state round trip P7 55x -91 -> -86 -> -91 mV, all read back OK):
+1. Apply result table: units/rows that were NOT written (unchanged P0-P6, turbo tables equal to the CPU) show amber "not read back"; show grey "no change"
+   (only written words get read-back OK / mismatch).
+2. A restore/profile plan lists turbo tables as written even when they equal the CPU's: if the helper plan really writes them, flag it in the notes for the
+   orchestrator (helper-side follow-up); the UI must show "no change" when before == after.
+3. Profiles list shows the accepted profile and its saved twin both as `accepted-20261015` with only small badges: group them ("accepted · also saved") or
+   sub-label the saved copy "saved copy of the accepted state".
+4. Audit: rc 0x11 at the end of a V/F walk shows amber "UNKNOWN_0x11": name it "end of table (0x11)" grey for read walks (the expected end), keep amber elsewhere.
+5. Save card wording: "Save current Tune settings" next to the accepted card's "Save current state as…" is confusing; label them "Save Tune edits as…" and
+   "Save the CPU's current state as…".
+Do NOT run build-appimage.sh.

@@ -175,3 +175,7 @@ Owns `src/arltuner/helper/ops_accept.py`, `src/arltuner/profiles/store.py`, the 
 `desktop/app/src-tauri/src/helper/ops.rs` (profiles.save arg shape only), tests. Operator 2026-10-18 (an accidental "Set as accepted" overwrote a known-good
 accepted state with no backup). Accept: save-from-read creates a complete profile without accepting; accept moves the replaced state into saved profiles;
 confirm step shows the per-unit diff; tests at helper + UI; Opus review.
+
+**G-230 · UI polish from the first live GUI session (2026-10-19)** · S · deps G-210, G-213, G-228
+Owns `desktop/app/ui/views/tune/apply.js` (result rows), `views/profiles.js` (list labels), `views/audit.js` (rc names), tests. Screenshots:
+`~/Pictures/Screenshots/arltuner-2026-10-19/` (operator machine; not in the repo). Accept: node + Playwright per item.
