@@ -348,8 +348,14 @@ class TestTune(V3Base):
         p = self.ok("tune.plan", self.intent(target="P0", ratio=57, v_target_v=1.4))
         rb = self.ok("tune.apply", {"plan_id": p["plan_id"], "typed": "CONFIRM " + p["nonce"]})["readback"]
         self.assertEqual([(x["unit"], x["point"]) for x in rb if not x["match"]], [("P0", 0)])
-        self.fake.tables["p"][0] = 55          # a machine whose P table tops out below the request
-        raised = self.ok("tune.plan", self.intent(target="P1", ratio=57))
+        self.fake.tables["p"] = [55] * 8       # a machine whose P table tops out below the request
+        above = self.ok("tune.plan", self.intent(target="P1", ratio=57))  # D-050: no table is derived from the OC ratio, the plan only warns
+        self.assertFalse([s for s in above["steps"] if s["kind"] == "write_msr"], above["steps"])
+        self.assertTrue(any(w["code"] == "TURBO_BELOW_OC" and "P1 OC ratio 57x" in w["text"] for w in above["warnings"]), above["warnings"])
+        self.assertFalse(any(w["code"] == "TURBO_RAISE" for w in above["warnings"]))
+        both = self.intent(target="P1", ratio=57)
+        both["intent"]["turbo"] = {"P": [57, 57, 56, 55, 55, 55, 55, 55]}
+        raised = self.ok("tune.plan", both)
         self.assertEqual(raised["steps"][-1], {"kind": "write_msr", "table": "p"})
         res = self.ok("tune.apply", {"plan_id": raised["plan_id"], "typed": "CONFIRM " + raised["nonce"]})
         self.assertEqual(res["readback"][-1]["unit"], "P")

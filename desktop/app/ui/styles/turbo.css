@@ -34,6 +34,20 @@
   max-width: 780px;
 }
 
+.turbo-oc-note {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.turbo-oc-note[hidden] {
+  display: none;
+}
+
 .turbo-tables {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

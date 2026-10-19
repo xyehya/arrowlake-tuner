@@ -77,7 +77,7 @@ class Item4AppliedTablesAreFolded(LastReadCase):
     def test_the_applied_turbo_table_is_what_the_helper_knows_afterwards(self) -> None:
         h = self.boot()
         self.read(h)
-        self.apply_ok(h, self.plan(h, rows(row("EC0", ratio=49))))  # raises the E table to 49 in every bucket
+        self.apply_ok(h, self.plan(h, {**rows(row("EC0", ratio=49)), "turbo": {"E": [49] * 8}}))  # D-050: the E table is raised by naming it, no longer by the ratio
         st = h.helper._tune_state
         self.assertEqual(st.tables["e"], (49,) * 8)
         self.assertEqual(st.turbo["E"]["ratios"], [49] * 8)
@@ -86,7 +86,7 @@ class Item4AppliedTablesAreFolded(LastReadCase):
         self.assertEqual(last["turbo"]["E"]["ratios"], [49] * 8)
         h2 = self.restart(h)  # ... and the stored read carries it over a helper restart
         self.assertEqual(self.last(h2)["result"]["tables"]["e"], [49] * 8)
-        plan = self.plan(h2, rows(row("EC0", ratio=49)))
+        plan = self.plan(h2, {**rows(row("EC0", ratio=49)), "turbo": {"E": [49] * 8}})
         self.assertFalse(any(s["kind"] == "write_msr" for s in plan["steps"]), plan["steps"])  # the table already holds 49: no second table write is planned
 
 

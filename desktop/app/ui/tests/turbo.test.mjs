@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import FIX from "../fixtures/fixtures.js";
 import G from "../fixtures/g217/fixtures-g217.js";
 import { modelFromRead } from "../lib/units.js";
-import { emptyDraft, diff, turboCur } from "../lib/draft.js";
+import { emptyDraft, diff, turboCur, setOcRatio, setBucket } from "../lib/draft.js";
 import { buildIntent } from "../lib/intent.js";
 import { createAppStore } from "../store.js";
 
@@ -282,6 +282,23 @@ test("turbo: mount renders an active-cores table per kind, the read-only counts 
   assert.equal(v.el.byClass("turbo-chart").length, 2);
   assert.equal(v.el.byClass("tb-eff").length, 2);
   assert.equal(v.el.byClass("turbo-dirty").filter((c) => !c.hidden).length, 0, "nothing pending at mount");
+  unmount();
+});
+
+test("turbo: D-050 banner: an OC ratio above a table is listed with its units, and raising the table in the draft clears it; nothing is edited for the operator", () => {
+  const withOc = setOcRatio(model(), emptyDraft(), ["P0", "P1"], 58);
+  const v = host({}, { getDraft: () => withOc });
+  const [pNote, eNote] = v.el.byClass("turbo-oc-note");
+  assert.equal(pNote.hidden, false);
+  assert.match(pNote.textContent, /P0 58× , ?P1 58×|P0 58×, P1 58×/);
+  assert.match(pNote.textContent, /at most 57×/);
+  assert.equal(eNote.hidden, true, "no E unit is above the E table");
+  assert.deepEqual(turboCur(v.model, "P"), [57, 57, 55, 55, 55, 55, 55, 55], "the table was not touched");
+  unmount();
+  const m = model();
+  const raised = setBucket(m, withOc, "P", 0, 58);
+  const w = host({}, { getDraft: () => raised });
+  assert.equal(w.el.byClass("turbo-oc-note")[0].hidden, true, "the drafted table now reaches 58×");
   unmount();
 });
 

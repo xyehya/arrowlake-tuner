@@ -3,12 +3,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import FIX from "../fixtures/fixtures.js";
 import { modelFromRead, sections, quickSelections, favoredIds } from "../lib/units.js";
-import { emptyDraft, setPoint, setVt, setOcRatio, clearOcEdits, setCurve, diff } from "../lib/draft.js";
+import { emptyDraft, setPoint, setVt, setOcRatio, clearOcEdits, setCurve, diff, setBucket } from "../lib/draft.js";
 import { MINUS } from "../lib/format.js";
+import { buildIntent } from "../lib/intent.js";
 import { parseInput, gridStep, mixedText } from "../components/stepper.js";
 import { nextSelection, tileFace, liveFace, sameIds } from "../views/tune/grid.js";
 import { curveRows, sectionCurve, disabledReason, limitCell, NO_BASELINE } from "../views/tune/curve-editor.js";
-import { ocInfo, offsetUnits, ocPointNo } from "../views/tune/oc.js";
+import { ocInfo, offsetUnits, ocPointNo, ocAboveTable } from "../views/tune/oc.js";
 import { selectionTitle, sectionFacts } from "../views/tune/inspector.js";
 import { baselineFromRecord, initialTune, syncPending, patchTune, discardDraft, requestReview, ensureTune, fmtSeconds } from "../views/tune.js";
 import { createAppStore } from "../store.js";
@@ -161,6 +162,19 @@ test("oc: the OC state wording of web G-150, 'no OC point' where the ratio is se
   assert.equal(ocPointNo([m.units.EC0]), 7);
   assert.deepEqual(offsetUnits(m, emptyDraft(), ["P0", "EC0"]).map((u) => u.id), ["EC0"], "only a unit with a ratio above its fused top");
   assert.deepEqual(offsetUnits(m, d, ["P0", "EC0"]).map((u) => u.id), ["P0", "EC0"]);
+});
+
+test("oc: D-050 ocAboveTable names the units whose (drafted) OC ratio is above their kind's table, the drafted table counts, nothing is derived", () => {
+  assert.equal(ocAboveTable(m, emptyDraft(), "P"), null, "as read: the P ratios fit the P table");
+  const d = setOcRatio(m, emptyDraft(), ["P0"], 58);
+  const o = ocAboveTable(m, d, "P");
+  assert.deepEqual([o.top, o.units], [57, [{ id: "P0", ratio: 58 }]]);
+  assert.equal(ocAboveTable(m, d, "E"), null, "the E table is a separate thing");
+  assert.equal(ocAboveTable(m, setBucket(m, d, "P", 0, 58), "P"), null, "a drafted table at 58× lifts the cap");
+  const { intent } = buildIntent(m, d);
+  assert.equal(intent.rows[0].ratio, 58);
+  assert.equal(intent.turbo, undefined, "the intent carries no table for an OC ratio");
+  assert.equal(ocAboveTable({ ...m, turbo: null }, d, "P"), null, "without a table read there is nothing to compare");
 });
 
 test("draft: clearOcEdits drops the ratio and its target together (no target is left without an OC ratio)", () => {
