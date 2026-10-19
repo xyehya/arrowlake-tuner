@@ -118,7 +118,7 @@ export function topologyRows(topology) {
     id: String(u.id),
     kind: u.kind === "P" ? "P-core" : u.kind === "E" ? "E-cluster" : String(u.kind ?? NA),
     cpus: Array.isArray(u.cpus) ? (u.cpus.length > 1 ? `${u.cpus[0]}–${u.cpus[u.cpus.length - 1]}` : String(u.cpus[0])) : NA,
-    maxRatio: isNum(u.max_ratio) ? `${u.max_ratio}×` : NA,
+    maxRatio: isNum(u.max_ratio) ? `${u.max_ratio}×` + (isNum(u.max_khz) && u.max_khz !== u.max_ratio * 100000 ? ` (kernel ${Math.round(u.max_khz / 1000)} MHz)` : "") : NA,
     perf: isNum(u.perf) ? String(u.perf) : NA,
     favored: u.favored === true,
   }));

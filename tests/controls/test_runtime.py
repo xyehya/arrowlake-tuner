@@ -220,6 +220,37 @@ class Caps(Case):
         self.assertEqual((steps, len(notes)), ([], 1))
         self.assertEqual(self.refusal(cp.plan_revert, {3: 9_000_000}, self.freq(), TOPO).check, "CAPS_RANGE")
 
+    def test_effective_ratio_is_what_the_core_runs_not_khz_over_100000(self) -> None:
+        """G-233 ``[MEASURED lnx 2026-10-12]``: an E-core's kernel kHz is one bin high (4.9 GHz = perf 68 = 48x); a P-core maps 1:1."""
+        self.assertEqual(cp.effective_ratio("E", 4_900_000, 4_700_000), (46, "measured"))
+        self.assertEqual(cp.effective_ratio("E", 4_900_000, 4_900_000), (48, "measured"))
+        self.assertEqual(cp.effective_ratio("E", 4_900_000, 4_800_000), (47, "measured"))
+        self.assertEqual(cp.effective_ratio("P", 5_500_000, 5_500_000), (55, "measured"))
+        self.assertEqual(cp.effective_ratio("P", 5_700_000, 5_700_000), (57, "measured"))
+        self.assertEqual(cp.effective_ratio("E", 4_800_000, 4_800_000), (48, "unmeasured"))  # a cpuinfo maximum the model was not measured on: kHz / 100000
+        self.assertEqual(cp.effective_ratio(None, 4_900_000, 4_900_000), (49, "unmeasured"))
+        self.assertEqual(cp.effective_ratio("E", 4_900_000, 400_000), (4, "unmeasured"))  # below the measured bins
+
+    def test_cpufreq_json_carries_the_effective_ratios_next_to_cap_ratio(self) -> None:
+        e = cp.CpuFreq(4_900_000, 4_700_000, 800_000).as_json("E")
+        self.assertEqual((e["cap_ratio"], e["cap_ratio_effective"], e["max_ratio_effective"], e["ratio_model"]), (47.0, 46, 48, "measured"))
+        p = cp.CpuFreq(5_500_000, 5_500_000, 800_000).as_json("P")
+        self.assertEqual((p["cap_ratio"], p["cap_ratio_effective"], p["max_ratio_effective"], p["ratio_model"]), (55.0, 55, 55, "measured"))
+        self.assertEqual(cp.CpuFreq(4_900_000, 4_900_000).as_json()["ratio_model"], "unmeasured")  # no kind
+
+    def test_plan_steps_carry_the_ratio_before_and_after(self) -> None:
+        steps = self.plan({10: 46})
+        self.assertEqual({(s.before_ratio, s.ratio, s.value) for s in steps}, {(48, 46, 4_700_000)})
+        self.assertEqual(steps[0].as_json()["before_ratio"], 48)
+
+    def test_revert_steps_carry_the_effective_ratio(self) -> None:
+        for cpu in (8, 9, 10, 11):
+            self.files.write_int(f"cpu{cpu}/cpufreq/scaling_max_freq", 4_700_000)
+        steps, _ = cp.plan_revert({8: 4_900_000}, self.freq(), TOPO)
+        self.assertEqual([(s.value, s.ratio, s.before_ratio) for s in steps], [(4_900_000, 48, 46)])  # not 49 / 47
+        steps, _ = cp.plan_revert({8: 4_900_000}, self.freq(), None)  # no topology: the kind is not known, so no ratio is claimed
+        self.assertEqual([(s.ratio, s.before_ratio) for s in steps], [(None, None)])
+
     def test_the_read_back_is_exact(self) -> None:
         (s,) = self.plan({3: 45})
         self.assertIsNone(cp.readback_problem(s, 4_500_000))

@@ -65,7 +65,7 @@ export function mount(el, ctx) {
     for (const g of groups) {
       const stepper = createStepper({
         label: "Maximum ratio of " + g.unit, unit: TIMES, step: 1, big: 5, decimals: 0, format: (v) => String(Math.round(v)),
-        title: g.unit + " · cpufreq scaling_max_freq of " + g.cpus.map((c) => "cpu" + c).join(", ") + " (kHz = ratio × 100000)",
+        title: g.unit + " · cpufreq scaling_max_freq of " + g.cpus.map((c) => "cpu" + c).join(", ") + " (the ratio shown is the one the cores run: the kernel kHz of an E-core is up to one ratio higher)",
         onCommit: (v) => editRt(store, (e) => {
           const row = capRows(store.get().rt.runtime.result).find((r) => r.unit === g.unit);
           const caps = { ...e.caps };
@@ -106,16 +106,17 @@ export function mount(el, ctx) {
       u.g = g;
       const win = unitWindow(cl, g.cpus);
       const pending = g.unit in edit;
-      u.stepper.set({ value: pending ? edit[g.unit] : g.capRatio, mixed: !pending && g.mixedCap ? { min: g.capMin, max: g.capRatio } : null, pending, disabled: !!why || g.online.length === 0, reason: why || (g.online.length ? "" : g.unit + " is offline"), was: pending && isNum(g.capRatio) ? g.capRatio + TIMES : "", min: win ? win.min : undefined, max: win ? win.max : undefined });
+      u.stepper.set({ value: pending ? edit[g.unit] : g.capRatio, mixed: !pending && g.mixedCap ? { min: g.capMin, max: g.capRatio } : null, pending, disabled: !!why || g.online.length === 0, reason: why || (g.online.length ? "" : g.unit + " is offline"), was: pending && isNum(g.capRatio) ? g.capRatio + TIMES : "", min: win ? win.min : undefined, max: win ? (isNum(g.maxRatio) ? Math.min(win.max, g.maxRatio) : win.max) : undefined });
       u.row.classList.toggle("pending", pending);
       clear(u.cpus);
       for (const c of g.cpus) {
         const on = g.online.includes(c);
         u.cpus.append(h("span", { class: "rt-cpu", title: "cpu" + c + (on ? " online" : " offline (read-only)") }, h("span", { class: on ? "rt-dot" : "rt-dot off" }), String(c), " "));
       }
-      u.now.textContent = isNum(g.capKhz) ? (Math.round(g.capKhz / 1e5) + TIMES + " (" + Math.round(g.capKhz / 1000) + " MHz)") : "–";
+      const kernelMhz = isNum(g.capKhz) ? Math.round(g.capKhz / 1000) : null;
+      u.now.textContent = kernelMhz === null || !isNum(g.capRatio) ? "–" : g.capRatio + TIMES + " (" + (kernelMhz === g.capRatio * 100 ? "" : "kernel ") + kernelMhz + " MHz)";
       u.range.textContent = capsLine(cl, g.online.length ? g.online : g.cpus) ? capsLine(cl, g.online.length ? g.online : g.cpus).replace(/^cpufreq /, "").replace(/ \(cpu.*\)$/, "") : "–";
-      u.range.title = win ? "ratios " + win.min + TIMES + "–" + win.max + TIMES : "";
+      u.range.title = win ? "ratios " + win.min + TIMES + "–" + (isNum(g.maxRatio) ? Math.min(win.max, g.maxRatio) : win.max) + TIMES : "";
     }
     clear(notice);
     if (why) notice.append(limitNote(why, "warn"));

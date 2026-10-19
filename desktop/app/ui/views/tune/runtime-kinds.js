@@ -42,8 +42,12 @@ const watts = (uw) => (isNum(uw) ? Math.round(uw / 1e4) / 100 + " W" : "?");
 const secs = (us) => (isNum(us) ? Math.round(us / 1e5) / 10 + " s" : "?");
 const khzRatio = (khz) => (isNum(khz) ? Math.round(khz / 1e5) + "×" : "?");
 const khzMhz = (khz) => (isNum(khz) ? Math.round(khz / 1e3) + " MHz" : "?");
-/** G-232: the ratio a cap step gives: the plan's own (E-core bins), else the file value in kHz / 100000 (a revert step has no `ratio`). */
+/** G-232 / G-233: the ratio a cap step gives (the plan's own: the helper's model of what the core runs; a revert step has it too), else the file value in kHz / 100000 for a helper that sends none. */
 const capRatio = (s) => (isNum(s.ratio) ? s.ratio + "×" : khzRatio(s.value));
+/** G-233: the file value in MHz, labelled "kernel" when it is not ratio x 100 MHz (an E-core: kernel 4900 MHz is 48x). */
+const capMhz = (s) => (isNum(s.value) && isNum(s.ratio) && s.value !== s.ratio * 1e5 ? "kernel " : "") + khzMhz(s.value);
+/** G-233: the ratio the cap in force ran at (`before_ratio`; an E-core's kHz / 100000 would show one too many). */
+const capWas = (s) => (isNum(s.before_ratio) ? s.before_ratio + "×" : khzRatio(s.before));
 
 /** power.plan result -> {units: [{unit, keys, lines}], steps: [text]}: one row per key the plan writes, the steps in the order the helper sends them. */
 export function powerView(plan) {
@@ -69,7 +73,7 @@ export function runtimeView(plan) {
   }
   const units = groups.map((g) => {
     const s = g.step;
-    if (g.domain === "caps") return { unit: "cpu " + g.keys.map((k) => String(k).replace(/^cpu/, "")).join(", "), keys: g.keys, lines: ["max " + khzRatio(s.before) + " → " + capRatio(s) + " (" + khzMhz(s.value) + ")" + (s.note ? " · " + s.note : "")] };
+    if (g.domain === "caps") return { unit: "cpu " + g.keys.map((k) => String(k).replace(/^cpu/, "")).join(", "), keys: g.keys, lines: ["max " + capWas(s) + " → " + capRatio(s) + " (" + capMhz(s) + ")" + (s.note ? " · " + s.note : "")] };
     return { unit: "Uncore " + String(s.key).replace("_ratio", "") + " ratio", keys: g.keys, lines: [khzRatio(s.before) + " → " + khzRatio(s.value)] };
   });
   return {

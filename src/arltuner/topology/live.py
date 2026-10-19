@@ -32,8 +32,10 @@ class LiveUnit:
     kind: str  # "P" | "E"
     cpus: tuple[int, ...]
     favored: bool
-    max_ratio: int | None
+    max_ratio: int | None  # G-233: the ratio the unit's cores really run at the top (an E-core's kernel kHz is one bin high); ``max_khz`` is the kernel's own cpuinfo_max_freq
     perf: int | None
+    max_khz: int | None = None
+    ratio_model: str | None = None  # "measured" | "unmeasured" (``max_ratio`` is then ``max_khz`` / 100000); None = no maximum read
 
 
 @dataclass(frozen=True)
@@ -43,10 +45,12 @@ class LiveTopology:
     favored_source: str | None  # "acpi_cppc" | "cpuinfo_max_freq" | None
 
     def contract(self) -> dict[str, Any]:
-        """The ``preflight`` result's ``topology`` object (G-127 consumes it): ``{units: [{id, kind, cpus, favored, max_ratio, perf}], favored_source}``."""
+        """The ``preflight`` result's ``topology`` object (G-127 consumes it): ``{units: [{id, kind, cpus, favored, max_ratio, perf, max_khz, ratio_model}], favored_source}``."""
         return {
             "units": [
-                {"id": u.id, "kind": u.kind, "cpus": list(u.cpus), "favored": u.favored, "max_ratio": u.max_ratio, "perf": u.perf} for u in self.units
+                {"id": u.id, "kind": u.kind, "cpus": list(u.cpus), "favored": u.favored, "max_ratio": u.max_ratio, "perf": u.perf,
+                 "max_khz": u.max_khz, "ratio_model": u.ratio_model}
+                for u in self.units
             ],
             "favored_source": self.favored_source,
         }
@@ -134,12 +138,17 @@ def read_live(root: Path = Path("/sys")) -> LiveTopology:
 
 def unit_table(topology: Topology) -> tuple[LiveUnit, ...]:
     """The units of a topology (P by index, then E clusters) with their facts; works for live and simulated topologies alike."""
+    from arltuner.controls.caps import effective_ratio  # lazy: controls.caps imports this package
+
     units: list[LiveUnit] = []
     for uid in topology.unit_ids():
         cores = [topology.by_cpu(cpu) for cpu in topology.unit_cpus(uid)]
         ratios = [c.max_ratio for c in cores if c.max_ratio is not None]
         perfs = [c.perf for c in cores if c.perf is not None]
-        units.append(LiveUnit(uid, cores[0].kind, tuple(c.cpu for c in cores), any(c.favored for c in cores), max(ratios) if ratios else None, max(perfs) if perfs else None))
+        raw = max(ratios) if ratios else None
+        max_khz = None if not raw else raw * KHZ_PER_RATIO
+        effective, model = (None, None) if max_khz is None else effective_ratio(cores[0].kind, max_khz, max_khz)
+        units.append(LiveUnit(uid, cores[0].kind, tuple(c.cpu for c in cores), any(c.favored for c in cores), raw if effective is None else effective, max(perfs) if perfs else None, max_khz, model))
     return tuple(units)
 
 

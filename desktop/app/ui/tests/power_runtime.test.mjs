@@ -21,6 +21,8 @@ import { KINDS, createApplyController, planWarnings, readbackCells, partialWordi
 import { powerWarnings } from "../views/tune/power.js";
 import { unitWindow, capsDisabledReason } from "../views/tune/runtime.js";
 import { uncoreDisabledReason } from "../views/tune/ring.js";
+import { buildCoreMap, clockCeiling } from "../components/coremap.js";
+import { topologyRows } from "../views/system.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const PY = `
@@ -484,4 +486,42 @@ test("no policy anywhere: the sources of the UI carry no policy wording in their
     });
   }
   assert.deepEqual(hits, [], "policy wording in code: " + hits.join(", "));
+});
+
+// ---- G-233: show the ratio E-cores actually run (kernel kHz is one bin high) ----
+const eRow = (cpu, unit, capKhz, eff) => ({ cpu, kind: "E", unit, online: true, cpufreq: { cpuinfo_max_khz: 4900000, cap_khz: capKhz, min_khz: 800000, cap_ratio: capKhz / 1e5, cap_ratio_effective: eff, max_ratio_effective: 48, ratio_model: "measured" } });
+
+test("G-233: capRows uses the helper's effective ratio (stock E 4900000 is 48x, a 4700000 cap is 46x), kHz stays the kernel's", () => {
+  const read = { caps: [eRow(8, "EC0", 4900000, 48), eRow(9, "EC0", 4900000, 48), eRow(24, "EC3", 4700000, 46)] };
+  const [ec0, ec3] = capRows(read);
+  assert.equal(ec0.capRatio, 48);
+  assert.equal(ec0.maxRatio, 48);
+  assert.equal(ec0.capKhz, 4900000);
+  assert.equal(ec3.capRatio, 46, "the cap input after an apply shows 46, not 47");
+  assert.equal(ec3.mixedCap, false);
+  const rt = readyRt();
+  rt.runtime = { state: "ready", result: read, error: null, at: null };
+  rt.edits.caps = { EC3: 46 };
+  assert.equal(runtimeRequest(rt).intent, null, "46x is what runs: nothing to apply");
+  // a helper without the effective fields: kHz / 100000 as before
+  const old = capRows({ caps: [{ cpu: 8, kind: "E", unit: "EC0", online: true, cpufreq: { cpuinfo_max_khz: 4900000, cap_khz: 4900000 } }] });
+  assert.equal(old[0].capRatio, 49);
+});
+
+test("G-233: no E label shows 49 for a stock 4900000 E-core (plan view, revert, topology, core map)", () => {
+  const rv = runtimeView({ steps: [
+    { n: 1, domain: "caps", key: "cpu8", file: "cpu8/cpufreq/scaling_max_freq", before: 4700000, value: 4900000, ratio: 48, before_ratio: 46, expect: [4850000, 4950000] },
+    { n: 2, domain: "caps", key: "cpu24", file: "f", before: 4900000, value: 4700000, ratio: 46, before_ratio: 48 },
+  ] });
+  assert.equal(rv.units[0].lines[0], "max 46× → 48× (kernel 4900 MHz)");
+  assert.equal(rv.units[1].lines[0], "max 48× → 46× (kernel 4700 MHz)");
+  assert.equal(rv.steps[0], "write cpu8/cpufreq/scaling_max_freq = 4900000 kHz (48×)");
+  assert.ok(!JSON.stringify(rv).includes("49×"));
+  const rows = topologyRows({ units: [{ id: "EC0", kind: "E", cpus: [8, 9, 10, 11], max_ratio: 48, max_khz: 4900000, perf: 68, favored: false }, { id: "P1", kind: "P", cpus: [2], max_ratio: 55, max_khz: 5500000, perf: 88, favored: false }] });
+  assert.equal(rows[0].maxRatio, "48× (kernel 4900 MHz)");
+  assert.equal(rows[1].maxRatio, "55×");
+  const m = buildCoreMap([{ id: "EC0", kind: "E", cpus: [8], favored: false, max_ratio: 48, max_khz: 4900000 }], null, "mhz");
+  assert.equal(m.tiles[0].maxRatio, 48);
+  assert.equal(m.tiles[0].maxKhz, 4900000);
+  assert.equal(clockCeiling([{ max_ratio: 48 }]), 4800);
 });

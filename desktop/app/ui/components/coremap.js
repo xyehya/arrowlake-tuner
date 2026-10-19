@@ -134,6 +134,7 @@ export function buildCoreMap(units, values, metric = "mhz", scale = "fixed") {
       kind: u.kind,
       favored: u.favored === true,
       maxRatio: isNum(u.max_ratio) ? u.max_ratio : null,
+      maxKhz: isNum(u.max_khz) ? u.max_khz : null,
       cells: cs,
       head: { value: headValue, text: headValue === null ? NA : fmtNum(headValue, m.digits), level: level(headValue), reason: have.length ? null : (cs.find((c) => c.reason) || {}).reason || "no reading" },
     };
@@ -194,7 +195,7 @@ export function createCoreMap() {
     const cls = ["cm-tile", isE ? "e" : "p", t.head.value === null ? "na" : `lv-${t.head.level}`];
     const title = t.head.value === null
       ? `${t.id}: ${m.label} n/a · ${t.head.reason}`
-      : `${t.id}${t.favored ? " (favored by the system)" : ""}: ${t.head.text} ${m.unit}${isE ? " (highest of its CPUs)" : ""}${t.maxRatio ? ` · fused top ${t.maxRatio}x` : ""}`;
+      : `${t.id}${t.favored ? " (favored by the system)" : ""}: ${t.head.text} ${m.unit}${isE ? " (highest of its CPUs)" : ""}${t.maxRatio ? ` · top ${t.maxRatio}x${t.maxKhz && t.maxKhz !== t.maxRatio * 100000 ? ` (kernel ${Math.round(t.maxKhz / 1000)} MHz)` : ""}` : ""}`;
     const name = h("div", { class: "cm-name" }, h("span", { text: t.id }), t.favored ? h("span", { class: "cm-star", title: "Favored core (acpi_cppc)", text: "★" }) : null, t.maxRatio ? h("span", { class: "cm-ratio", text: `${t.maxRatio}x` }) : null);
     const read = h("div", { class: "cm-read" }, h("span", { class: "cm-value", text: t.head.text }), t.head.value === null ? null : h("span", { class: "cm-unit", text: m.unit }));
     const kids = [name, read];
