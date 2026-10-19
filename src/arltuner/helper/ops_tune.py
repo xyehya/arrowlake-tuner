@@ -295,7 +295,7 @@ def _accepted_ring(helper: Helper) -> list[int] | None:
 
 UVP_MESSAGE = (
     "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). "
-    "Disable 'Undervolt Protection' in the BIOS and reboot to undervolt; positive offsets, OC ratios and turbo ratios still work."
+    "Disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Only negative offsets are refused; OC ratios and turbo ratios are not affected."
 )
 UVP_UNKNOWN_NOTE = "Undervolt Protection state unknown this boot; if the BIOS default is on, negative offsets will be refused at the first write"
 UVP_CHECK = "UNDERVOLT_PROTECTION"
@@ -341,7 +341,8 @@ def _uvp_refusal(report: Any) -> bool:
     if report.stop_kind is not StopKind.RC or not report.steps:
         return False
     last = report.steps[-1]
-    return last.step.kind in _VF_WRITE_KINDS and last.rc == _UVP_RC
+    # G-240 review f4: only a word with a negative offset is Undervolt Protection's business (the measured case); any other 0x13 stays a plain mailbox refusal
+    return last.step.kind in _VF_WRITE_KINDS and last.rc == _UVP_RC and last.step.data is not None and VfWord.from_u32(last.step.data).offset_raw < 0
 
 
 def _uvp_negative_landed(report: Any) -> bool:
@@ -353,34 +354,38 @@ def _uvp_negative_landed(report: Any) -> bool:
 
 
 def _uvp_plan_check(helper: Helper, profile: Profile, topology: Topology, warnings: list[str]) -> None:
-    """G-240: with Undervolt Protection known on, a plan with a negative offset (point, whole curve, ring point) or an OC-point voltage below the unit's fused voltage is refused before
+    """G-240: with Undervolt Protection known on, a plan with a negative offset (point, whole curve, ring point) is refused before
     any write, located at the unit / point like ``_check_range``; with the state unknown the plan carries a note when it holds a negative offset."""
     state = _uvp(helper)
     if state == "off":
         return
-    fused = helper.fused_words or {}
 
     def refuse(text: str) -> OpError:
         return OpError(REFUSED, f"{text}: {UVP_MESSAGE} Nothing was sent.", {"check": UVP_CHECK})
 
     negative = False
+    # G-240 review f1: a complete profile (accepted restore, saved state) lists words the CPU already holds; only a word it would actually WRITE can be refused
+    known = _last_baseline(helper, profile, topology) if profile.complete else None
+    base_words, point_words, ring_words = known if known is not None else ({}, {}, None)
+
+    def held_offset(word: int | None, mv: float) -> bool:
+        return word is not None and VfWord.from_u32(word).offset_raw == VfWord.mv_to_offset_raw(mv)
+
     for setting in profile.expand(topology):
         unit = unit_of_cpu(topology, setting.cpu)
-        if setting.offset_mv is not None and setting.offset_mv < 0:
+        rd = base_words.get(setting.cpu)
+        if setting.offset_mv is not None and setting.offset_mv < 0 and not (rd is not None and held_offset(rd.vf.to_u32(), setting.offset_mv)):
             negative = True
             if state == "on":
                 raise refuse(f"{unit}: offset {setting.offset_mv:+g} mV")
-        word = fused.get(setting.cpu)
-        if state == "on" and setting.oc_voltage_mv is not None and word is not None and VfWord.v_to_raw(setting.oc_voltage_mv / 1000) < (word >> 8) & 0xFFF:
-            raise refuse(f"{unit}: OC-point voltage {setting.oc_voltage_mv} mV is below the fused voltage of its top point")
     for point in profile.expand_points(topology):
-        if point.offset_mv < 0:
+        if point.offset_mv < 0 and not held_offset(point_words.get((point.cpu, point.point)), point.offset_mv):
             negative = True
             if state == "on":
                 raise refuse(f"{unit_of_cpu(topology, point.cpu)}: offset {point.offset_mv:+g} mV")
     if profile.ring is not None:
         for rp in profile.ring.points:
-            if rp.offset_mv < 0:
+            if rp.offset_mv < 0 and not held_offset(None if ring_words is None else ring_words.get(rp.point), rp.offset_mv):
                 negative = True
                 if state == "on":
                     raise refuse(f"ring point {rp.point}: offset {rp.offset_mv:+g} mV")

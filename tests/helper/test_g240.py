@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 
 from arltuner.helper.ops_tune import UVP_CHECK, UVP_MESSAGE, UVP_UNKNOWN_NOTE
+from arltuner.mailbox import VfWord
 from arltuner.msr import SimConfig
 
 from .test_tune import TuneCase, row, rows, texts
@@ -59,6 +60,20 @@ class UndervoltProtection(TuneCase):
             self.assertTrue(r["error"]["message"].startswith(text + ": "), r["error"]["message"])
             self.assertIn(UVP_MESSAGE, r["error"]["message"])
         self.assertEqual(len(self.sim.requests), sent)  # planning sends nothing
+
+    def test_a_complete_profile_holding_a_negative_word_the_cpu_already_has_is_not_refused(self) -> None:
+        # G-240 review f1: the BIOS set P3 point 5 to -61 mV (UVP does not stop the BIOS); a complete profile that only restates it writes nothing negative
+        raw = VfWord.mv_to_offset_raw(-61)
+        h = self.boot(dataclasses.replace(uvp_sim(), cpu_point_offsets={(3, 5): raw}))
+        self.read(h)
+        self.refused_apply(h)  # UVP now known on
+        self.assertEqual(self.read(h)["uvp"], "on")  # a fresh read (the refused apply made the last read stale); the flag survives it
+        r = h.call("s", "profiles.save", {"name": "held", "intent": rows(row("P0", points={"53": 0}))})
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(r["result"]["complete"], r)
+        plan = h.call("p", "tune.plan", {"intent": {"profile": "held"}})
+        self.assertTrue(plan["ok"], plan)  # the -61 mV word is held already: not a write, not refused
+        self.assertFalse(any(s.get("cpu") == 3 and s.get("point") == 5 for s in plan["result"].get("steps", [])), plan["result"].get("steps"))
 
     def test_positive_offsets_and_ratios_still_plan_and_apply(self) -> None:
         h = self.boot(uvp_sim())

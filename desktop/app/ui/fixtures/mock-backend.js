@@ -88,7 +88,7 @@ const stepParam = () => {
 };
 // G-240: `?uvp=on` makes the mock BIOS have Undervolt Protection on: the first tune.apply with a negative offset is refused (REFUSED, check UNDERVOLT_PROTECTION, the helper's message), the mock
 // then reports uvp "on" in tune.read / tune.last / tune.plan, and a later negative-offset plan is refused at the plan like the helper's. `?uvp=off` reports "off" from the start; default "unknown".
-export const UVP_MESSAGE = "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). Disable 'Undervolt Protection' in the BIOS and reboot to undervolt; positive offsets, OC ratios and turbo ratios still work.";
+export const UVP_MESSAGE = "The CPU refused a negative voltage offset: Undervolt Protection is enabled in the BIOS (Intel's default). Disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Only negative offsets are refused; OC ratios and turbo ratios are not affected.";
 const negativeOffsets = (intent) => {
   const out = [];
   for (const r of Array.isArray(intent && intent.rows) ? intent.rows : []) {

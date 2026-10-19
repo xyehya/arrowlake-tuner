@@ -13,7 +13,7 @@ const LINK_LABEL = {
 
 const ACCEPTED_LABEL = { unknown: "accepted: unknown", matches: "accepted: matches", equivalent: "accepted: equivalent", stock: "accepted: stock" };
 
-const UVP_TITLE = "The CPU refused a negative voltage offset: disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Positive offsets, OC ratios and turbo ratios still work.";
+const UVP_TITLE = "The CPU refused a negative voltage offset: disable 'Undervolt Protection' in the BIOS and reboot to undervolt. Only negative offsets are refused; OC ratios and turbo ratios are not affected.";
 
 /** G-240: the Undervolt Protection chip: amber text only while the helper reports "on"; hidden for "off" / "unknown". */
 export function uvpChip(uvp) {
