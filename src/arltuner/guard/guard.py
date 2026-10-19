@@ -1083,7 +1083,7 @@ class WriteGuard:
             match = _READBACK_MATCH.get(cmd, _same_word)
             verified = readback.rc == 0 and match(req.data, readback.data)
             extra: dict[str, object] = {}
-            if cmd == int(Cmd.VOLTAGE_FREQ_WRITE):  # G-237: only the V target of a new OC point lands late; the ratio, mode and offset must already be what was written
+            if cmd == int(Cmd.VOLTAGE_FREQ_WRITE) and p1 == 0 and p2 == 0:  # G-237: only the V target of a new OC point (the core-domain OC word, P1=0 P2=0 -- the measured case) lands late; the ratio, mode and offset must already be what was written
                 settle_from = self._clock()
                 while not verified and polls < len(OC_TARGET_SETTLE_S) and readback.rc == 0 and _late_v_target(req.data, readback.data):
                     self._record("readback", twin_req, confirm, response=readback, pending=True, poll=polls, expected=f"0x{req.data:08X}")
@@ -1094,7 +1094,8 @@ class WriteGuard:
                         self._record_quietly("error", twin_req, confirm, detail=f"{type(exc).__name__}: {exc}", stage="readback", poll=polls + 1)
                         raise
                     polls += 1
-                    self._ops += 1  # a re-read is a WRMSR like the read-back: counted by the session counter, not an ``attempt`` (no dwell, no per-boot cap)
+                    # a re-read is a WRMSR like the read-back and, like the first read-back, not counted in ``_ops``: the plan reserves one read-back per write, and a
+                    # counted re-read could push a planned apply over its exact session cap mid-way (G-237 review finding 1). Each re-read is still audited.
                     verified = readback.rc == 0 and match(req.data, readback.data)
                 if polls:
                     settle_ms = round(max(0.0, self._clock() - settle_from) * 1000.0, 3)

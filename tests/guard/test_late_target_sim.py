@@ -33,7 +33,7 @@ class LateTargetOverTheSimulator(GuardCase):
         self.assertFalse(guard.tripped)
         self.assertEqual(self.waits, [0.002, 0.005])
         self.assertEqual(self.sim.vf(0).to_u32(), WORD)
-        self.assertEqual(guard.operations, 3 + 1 + 2)
+        self.assertEqual(guard.operations, 3 + 1)  # re-reads not counted (G-237 review f1)
 
     def test_never_lands_trips_after_four_rereads(self) -> None:
         guard = self.rig(-1)

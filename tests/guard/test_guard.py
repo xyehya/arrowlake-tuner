@@ -914,7 +914,7 @@ class LateTarget(GuardCase):
         self.assertEqual(rb[-1]["polls"], 2)
         self.assertIn("settle_ms", rb[-1])
         self.assertEqual([r["event"] for r in self.records()].count("attempt"), 3 + 1)  # the re-reads are not attempts
-        self.assertEqual(guard.operations, 3 + 1 + 2)  # but they are counted
+        self.assertEqual(guard.operations, 3 + 1)  # re-reads are audited but, like the first read-back, not counted (G-237 review f1)
         self.assertFalse(self.lock_path.exists())
 
     def test_never_lands_trips_after_four_rereads(self) -> None:

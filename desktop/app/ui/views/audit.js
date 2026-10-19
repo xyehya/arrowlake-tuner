@@ -84,7 +84,7 @@ export function auditRow(r) {
   }
   let verdict = "";
   if (o.event === "readback") {
-    verdict = o.verified === true ? "verified" : o.verified === false ? "MISMATCH" : "";
+    verdict = o.verified === true ? "verified" : o.verified === false ? "MISMATCH" : o.pending === true ? "pending (re-read " + (isNum(o.poll) ? o.poll + 1 : "?") + ")" : "";
     if (o.verified === false) kind = "error";
   }
   const event = o.event !== undefined ? String(o.event) : o.unparsable !== undefined ? "unparsable" : "";

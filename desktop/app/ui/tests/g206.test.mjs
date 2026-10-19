@@ -472,6 +472,8 @@ test("audit: auditRow flags mismatches and non-pass results, and survives an unp
   const badWrite = auditRow({ event: "result", cmd: "0x11", rc: 17, rc_name: "UNKNOWN_0x11" });
   assert.deepEqual([badWrite.result, badWrite.resultKind], ["UNKNOWN_0x11", "warn"]);
   assert.equal(auditRow({ event: "result", cmd: "0x10", rc: 3, rc_name: "RATIO_LIMIT" }).resultKind, "warn");
+  // G-237 review f3: a re-read whose target has not landed yet says so (it is neither verified nor a mismatch)
+  assert.equal(auditRow({ event: "readback", cmd: "0x10", rc: 0, pending: true, poll: 0 }).verdict, "pending (re-read 1)");
   const mm = auditRow({ event: "readback", verified: false, rc_name: "Pass" });
   assert.deepEqual([mm.verdict, mm.resultKind, mm.eventKind], ["MISMATCH", "error", "error"]);
   assert.equal(auditRow({ event: "readback", verified: true, rc_name: "Pass" }).verdict, "verified");
