@@ -202,3 +202,6 @@ Owns `src/arltuner/helper/ops_tune.py` (derived raise), `src/arltuner/controls/p
 
 **G-237 · Bounded re-read for a late OC-point V target (false trip)** · S · R · deps G-132
 Owns the guard/executor read-back for cmd 0x11 words (src/arltuner/guard/guard.py and/or controls/executor.py), tests. Notes R10-G-237.
+
+**G-238 · Show the OC point in the V/F table and chart** · S · deps G-208
+Owns `desktop/app/ui/views/tune/curve-editor.js`, `lib/units.js` (only if the OC point is filtered there), `lib/predict.js` (read only unless needed), tests. Notes R10-G-238.

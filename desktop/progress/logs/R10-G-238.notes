@@ -1,0 +1,10 @@
+Host lnx; mock/fixtures only. Live fact (2026-10-19, last-read.json words of cpu 0): ["0x0005b43a" (P2=0: OC word, 58x, adaptive 1.4258 V), 8, 0x14, 0x1e, 0x30,
+0xf9a00035, 0xfc600037, 0xfca00038, 0xfa800039, "0x0000003a" (P2=9: the OC point, ratio 58, V field 0 like every per-point read)]. The inspector's V/F table
+and chart show points 1..8 only; the OC point (58x) appears only in the OC section below. Operator expects it in the table and the curve.
+Change: when a unit has an OC point (P2=0 ratio above the fused top; P point 9, E point 7), the V/F table gets a last row "Point 9 · 58x  OC" with: base V =
+the OC word's adaptive target (and predicted V = max(target, V(top fused point)) per lib/predict.js), offset cell = the OC word's offset field (read-only here,
+edits stay in the OC section: the row's offset/target cells are a link "edit in OC" that scrolls/focuses the OC section), read-back V = the read target.
+The chart plots it as the last point with a distinct marker (hollow/amber) and the x label "58x OC". Same for drafted OC points (a draft that creates one
+shows the row as pending). E clusters (point 7) and P cores; the ring has no OC point. A unit without an OC point renders exactly as today.
+node tests (both kinds, read + draft, no-OC unchanged) and a Playwright tune smoke screenshot. Commit `G-238: the OC point in the V/F table and chart`.
+Do NOT run build-appimage.sh.
