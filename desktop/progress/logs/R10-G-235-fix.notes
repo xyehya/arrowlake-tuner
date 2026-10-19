@@ -1,0 +1,13 @@
+FIX ROUND on your branch (orchestrator decisions on your open questions):
+1. Volume (Q2) — summary records, not one per write. vf.measure / stress.start write ONE fsync'd `runtime_attempt` record BEFORE the first cpufreq/EPP write,
+   listing every file the run will touch with its original value (the same content the measure/stress journal holds) and the planned caps; and ONE fsync'd
+   `result` record at the end (also on cancel/error) with: restored ok / per-file restore failures, duration, points measured. A write or restore that FAILS gets
+   its own record (event `error`, file, value, reason). No per-successful-write records. Keep the AUDIT_UNAVAILABLE refusal before the first change.
+   Update test_g235.py: audit count no longer equals the write count; assert start record lists every touched file + original, result after, failure records.
+2. recover_journal at helper start (core.py hook; ops_measure/ops_stress/ops_runtime journal recovery, Q4): the same — one record before restoring (files +
+   values), one result. You may edit those recovery functions for this only.
+3. Audit screen (Q1) — you may now edit desktop/app/ui/views/audit.js: `runtime_attempt` and `result` records show under "Writes & refusals"; the detail
+   column shows `o.detail` when present (fallback reason/purpose); a measure/stress summary row shows "<op>: N files, restored ok" style text. node tests.
+4. Q3 (stress.start without a cap refuses on an unwritable audit log): accepted — it writes a result file; keep it.
+5. Run the Playwright one-field test you added (python3 that has playwright, --browser) and report.
+`python3 tools/run_tests.py` green; commit `G-235: summary audit records, journal recovery audited, audit screen shows them`. Do NOT run build-appimage.sh.
