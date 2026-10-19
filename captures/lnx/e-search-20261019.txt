@@ -1,0 +1,17 @@
+2026-10-19T22:45:44+03:00 PL2 280->295 W runtime (operator request, E search)
+applied e46-40 (non-verified writes: 0) load sample: EC0:46x/1.1176V EC1:46x/1.0975V EC2:46x/1.0975V EC3:46x/1.0975V
+RESULT e46-40 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.1176V EC1:46x/1.0975V EC2:46x/1.0975V EC3:46x/1.0975V] stop=ENDED 2026-10-19T22:51:36+03:00 without an ICE
+applied e46-60 (non-verified writes: 0) load sample: EC0:46x/1.0975V EC1:46x/1.0775V EC2:46x/1.0775V EC3:46x/1.0775V
+RESULT e46-60 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.0975V EC1:46x/1.0775V EC2:46x/1.0775V EC3:46x/1.0775V] stop=ENDED 2026-10-19T22:57:28+03:00 without an ICE
+applied e46-80 (non-verified writes: 0) load sample: EC0:46x/1.0775V EC1:46x/1.0575V EC2:46x/1.0575V EC3:46x/1.0575V
+RESULT e46-80 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.0775V EC1:46x/1.0575V EC2:46x/1.0575V EC3:46x/1.0575V] stop=ENDED 2026-10-19T23:03:22+03:00 without an ICE
+applied e46-100 (non-verified writes: 0) load sample: EC0:46x/1.0575V EC1:46x/1.0375V EC2:46x/1.0375V EC3:46x/1.0375V
+RESULT e46-100 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.0575V EC1:46x/1.0375V EC2:46x/1.0375V EC3:46x/1.0375V] stop=ENDED 2026-10-19T23:09:12+03:00 without an ICE
+applied e46-120 (non-verified writes: 0) load sample: EC0:46x/1.0375V EC1:46x/1.0175V EC2:46x/1.0175V EC3:46x/1.0175V
+RESULT e46-120 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.0375V EC1:46x/1.0175V EC2:46x/1.0175V EC3:46x/1.0175V] stop=ENDED 2026-10-19T23:15:08+03:00 without an ICE
+applied e46-140 (non-verified writes: 0) load sample: EC0:46x/1.0175V EC1:46x/0.9976V EC2:46x/0.9976V EC3:46x/0.9976V
+RESULT e46-140 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:46x/1.0175V EC1:46x/0.9976V EC2:46x/0.9976V EC3:46x/0.9976V] stop=ENDED 2026-10-19T23:21:01+03:00 without an ICE
+applied e46-160 (non-verified writes: 0) load sample: EC0:46x/0.9976V EC1:46x/0.9775V EC2:46x/0.9775V EC3:46x/0.9775V
+RESULT e46-160 builds=/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:46x/0.9976V EC1:46x/0.9775V EC2:46x/0.9775V EC3:46x/0.9775V] stop=pkill: killing pid 133218 failed: Operation not permitted
+applied e46-150 (non-verified writes: 0) load sample: EC0:46x/1.0074V EC1:46x/0.9875V EC2:46x/0.9875V EC3:46x/0.9875V
+RESULT e46-150 builds=2/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:46x/1.0074V EC1:46x/0.9875V EC2:46x/0.9875V EC3:46x/0.9875V] stop=pkill: killing pid 133831 failed: Operation not permitted

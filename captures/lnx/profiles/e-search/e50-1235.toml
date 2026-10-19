@@ -1,4 +1,4 @@
-# E search phase 3 (2026-10-19): E OC point 50x adaptive 1235 mV on all clusters + E turbo 50x8. Point 6 = the phase 1 result (set separately).
+# E search phase 3 (2026-10-19): E OC point 50x adaptive 1235 mV on all clusters + E turbo 50x8. Point 6 = -120 mV (phase 1: -140 passed, -150/-160 failed on cpu 21; 30 mV margin).
 [meta]
 name = "e50-1235"
 platform = "arl-s"
@@ -30,3 +30,31 @@ index = 12
 ratio = 50
 oc_voltage_mv = 1235
 
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = -120
+expect_ratio = 46
