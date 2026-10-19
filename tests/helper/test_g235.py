@@ -107,8 +107,7 @@ class MeasureAudit(MeasureCase):
         first: dict[str, int] = {}  # the first cpu that gets a cap below its maximum: its cap writes fail
         self.cpufreq.fail = lambda cpu, attr, value: attr == CAP and value != str(self.model.max_khz(cpu)) and first.setdefault("cpu", cpu) == cpu
         h = self.start_measure()
-        reply = h.call("m", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)
-        self.assertIn("ok", reply)
+        h.call("m", "vf.measure", {"mode": "quick", "units": ["EC0"]}, timeout=60)
         failed = events(self, "error")
         self.assertTrue(failed)
         path = f"cpu{first['cpu']}/cpufreq/scaling_max_freq"

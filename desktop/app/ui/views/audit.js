@@ -65,7 +65,7 @@ export function auditTime(ts) {
 export function auditKeep(o, filter) {
   if (filter === "all") return true;
   if (["refused", "error", "trip", "readback", "runtime_attempt", "powercap_attempt"].includes(o.event)) return true;
-  if (o.event === "result" && typeof o.op === "string") return true; // G-235: the summary record of an op that changed cpufreq or a file (vf.measure, stress.start, profiles.save, journal.recover ...)
+  if (o.event === "result" && typeof o.op === "string" && o.cmd === undefined && o.msr === undefined) return true; // G-235: the summary record of an op that changed cpufreq or a file (vf.measure, stress.start, profiles.save, journal.recover ...)
   const cmd = toNum(o.cmd);
   return o.msr_kind === "write" || (cmd !== null && WRITE_CMDS.includes(cmd));
 }
