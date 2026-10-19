@@ -315,7 +315,9 @@ export function createCurveEditor(tc, section) {
     legend.textContent = dom.mode === "volt"
       ? "Dashed: baseline V. Solid: predicted V on your edits" + (anyPending ? " (pending); faint: the CPU's current offsets" : "") + ". Points are spaced evenly."
       : "Offsets in mV; the zero line is the fused curve. No baseline curve (Curves → Measure), so voltages are not drawn. Points are spaced evenly.";
-    if (rows.some((r) => r.oc)) legend.textContent += " Hollow amber: the OC point (its adaptive target; edit it in the OC section).";
+    if (rows.some((r) => r.oc)) legend.textContent += dom.mode === "volt"
+      ? " Amber: the OC point at its adaptive target (hollow as read, filled while pending); edit it in the OC section."
+      : " Amber: the OC point at its OC word's offset (the target voltage is in the table); edit it in the OC section.";
   }
 
   function ensureMarkers(rows) {
