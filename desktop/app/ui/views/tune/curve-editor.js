@@ -3,18 +3,22 @@
 // Typing, the arrow keys (5 mV, Shift 25), the wheel and the chart drag all end in the same commit() -> setPoint / setRingPoint / setCurve of lib/draft.js, so they produce the same draft.
 // `curveRows()` is pure (node-tested): it is the table, the DOM only shows it. Predictions come from lib/predict.js on the injected baseline (tc.baseFn()); without one only
 // the fused top point has a voltage and the other cells say why. The mailbox/register facts in the tooltips are from docs/knowledge/registers.md.
+// A unit with an OC point (P2 = 0 ratio above the fused top; P point 9, E point 7) gets a last row keyed OC_KEY (G-238): base V = the OC word's adaptive target, predicted V =
+// max(target, V(top fused point)) (lib/predict.js voltageAt), offset = the OC word's offset field, read-only here (the OC section edits it). The chart plots it as a hollow amber marker.
 import { h, svg, clear } from "../../components/dom.js";
 import { createStepper } from "../../components/stepper.js";
 import { isNum, fmtV, fmtMv, fmtAgg, fmtRatio, MINUS, DASH } from "../../lib/format.js";
-import { aggregate, sameMv, sameV, pointAt, ringPoint } from "../../lib/units.js";
-import { emptyDraft, effPointMv, pointValue, ringValue, curveValue, setPoint, setRingPoint, setCurve } from "../../lib/draft.js";
-import { predictUnit, predictedAt } from "../../lib/predict.js";
+import { aggregate, sameMv, sameV, pointAt, ringPoint, ocClass, fusedTopOf } from "../../lib/units.js";
+import { emptyDraft, effPointMv, effRatio, effVt, curRatio, curVt, pointValue, ringValue, curveValue, setPoint, setRingPoint, setCurve } from "../../lib/draft.js";
+import { predictUnit, predictedAt, voltageAt } from "../../lib/predict.js";
 import { limitsFor, NO_LIMITS } from "../../lib/limits.js";
 import { modelCpuLine, cpuOffsetCell } from "../../lib/cpulimits.js";
 
 export const NO_BASELINE = "no baseline curve (Curves → Measure)";
 export const STEP_MV = 5;
 export const BIG_STEP_MV = 25;
+export const OC_KEY = "oc"; // row/marker key of the OC point (a string: the other keys are ratios or ring point numbers)
+const OC_STROKE = "#f2b24c"; // = --warn (styles/tokens.css); a presentation attribute, since the .chart-marker rules would beat it
 const sgn = (x) => (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x);
 
 /** Why the offset fields of a kind are disabled, or "" when they are not. */
@@ -45,8 +49,56 @@ export function sectionCurve(model, draft, section, eff = true) {
   return curveValue(model, draft, section.ids, eff);
 }
 
+/** The OC-point row of a P/E section, or null when no unit has one (as read or as drafted). Volts come from the OC word's target (v_target_v), never from the point-9 read (its V field is 0). */
+function ocRow(model, draft, section, base) {
+  const us = section.ids.map((id) => model.units[id]).filter((u) => u && u.kind !== "R");
+  const effOc = (u) => ocClass(u, effRatio(draft, u)) === "oc";
+  const readOc = (u) => ocClass(u, curRatio(u)) === "oc";
+  const used = us.filter((u) => effOc(u) || readOc(u));
+  if (!used.length) return null;
+  const point = Math.max(...used.map((u) => (u.ocPoint && isNum(u.ocPoint.point) ? u.ocPoint.point : u.points.length + 1)));
+  const ratio = aggregate(used.map((u) => (effOc(u) ? effRatio(draft, u) : curRatio(u))));
+  const rtxt = ratio.state === "same" ? fmtRatio(ratio.value) : "mixed ratios";
+  const target = (u) => {
+    const t = effVt(draft, u);
+    return effOc(u) && isNum(t) && t > 0 ? t : null;
+  };
+  const pending = used.some((u) => {
+    const a = effVt(draft, u);
+    const b = curVt(u);
+    return effOc(u) !== readOc(u) || effRatio(draft, u) !== curRatio(u) || isNum(a) !== isNum(b) || (isNum(a) && !sameV(a, b));
+  });
+  const preds = used.filter((u) => target(u) !== null).map((u) => {
+    const top = predictedAt(predictUnit(model, draft, u.id, base), fusedTopOf(u));
+    const v = voltageAt(model, draft, u.id, effRatio(draft, u), base);
+    return { v, clampedBy: top && isNum(top.v) && isNum(v) && top.v > target(u) + 1e-9 ? { ratio: top.ratio, point: top.point } : null };
+  });
+  const clamp = preds.find((p) => p.clampedBy);
+  const offs = used.map((u) => (u.oc && isNum(u.oc.offset_mv) ? u.oc.offset_mv : null));
+  return {
+    key: OC_KEY,
+    ratio: ratio.state === "same" ? ratio.value : null,
+    point,
+    label: "Point " + point + " · " + rtxt,
+    ids: used.map((u) => u.id),
+    shared: used.length === section.ids.length,
+    agg: aggregate(offs, sameMv),
+    readAgg: aggregate(offs, sameMv),
+    pending,
+    baseV: aggregate(used.map(target), sameV),
+    baseSrc: "oc",
+    pred: aggregate(preds.map((p) => p.v), sameV),
+    readback: aggregate(used.filter(readOc).map((u) => voltageAt(model, emptyDraft(), u.id, curRatio(u), base) ?? curVt(u)), sameV),
+    clampedBy: clamp ? clamp.clampedBy : null,
+    ocSlot: false,
+    oc: true,
+    why: "this OC point has no adaptive target voltage yet (OC section)",
+  };
+}
+
 /**
- * Rows of a section's table. Each: {key (ratio | ring point no), ratio, point, label, ids, shared, agg, readAgg, pending, baseV, baseSrc, pred, readback, clampedBy, ocSlot, why}
+ * Rows of a section's table. Each: {key (ratio | ring point no | OC_KEY), ratio, point, label, ids, shared, agg, readAgg, pending, baseV, baseSrc, pred, readback, clampedBy, ocSlot, why}
+ * plus `oc: true` on the OC-point row (the last row of a P/E section whose units have one).
  * `agg`/`readAgg` aggregate the offsets (mixed -> {state:"mixed", min, max}); `pred`/`readback`/`baseV` aggregate volts ({state:"none"} = no value, `why` says why).
  */
 export function curveRows(model, draft, section, base, baseReason = NO_BASELINE) {
@@ -90,6 +142,8 @@ export function curveRows(model, draft, section, base, baseReason = NO_BASELINE)
       why: base ? "the baseline curve has no usable voltage at this ratio" : baseReason,
     });
   }
+  const oc = ocRow(model, draft, section, base);
+  if (oc) rows.push(oc);
   return rows;
 }
 
@@ -143,16 +197,25 @@ export function createCurveEditor(tc, section) {
       label: r.label + " offset", unit: "mV", hideUnit: true, step: STEP_MV, big: BIG_STEP_MV, onCommit: (mv) => commitPoint(r.key, mv),
       title: r.label + " offset · typed mV, Up/Down " + STEP_MV + " mV, Shift " + BIG_STEP_MV + " mV, wheel while focused · " + title,
     });
+    const offText = h("span", { class: "oc-off-read" });
+    const editOc = h("button", { type: "button", class: "btn small", text: "edit in OC", title: "The OC point is edited in the OC section below (ratio, target voltage, offset)", on: { click: gotoOc } });
     const cells = {
       pt: h("td", { class: "c-pt" }, h("span", { class: "pt-label", text: r.label }), h("span", { class: "pt-tag muted", hidden: true })),
       base: h("td", { class: "c-num" }),
-      off: h("td", { class: "c-off" }, stepper.el),
+      off: h("td", { class: "c-off" }, ...(r.oc ? [offText, editOc] : [stepper.el])),
       pred: h("td", { class: "c-num" }),
       read: h("td", { class: "c-num" }),
       lim: h("td", { class: "c-lim muted" }),
     };
-    const tr = h("tr", { dataset: { ratio: r.ratio ?? "", key: r.key, ring: ringSec ? "1" : "" } }, cells.pt, cells.base, cells.off, cells.pred, cells.read, cells.lim);
-    return { tr, cells, stepper };
+    const tr = h("tr", { dataset: { ratio: r.ratio ?? "", key: r.key, ring: ringSec ? "1" : "", oc: r.oc ? "1" : "" } }, cells.pt, cells.base, cells.off, cells.pred, cells.read, cells.lim);
+    return { tr, cells, stepper: r.oc ? null : stepper, offText };
+  }
+  /** "edit in OC": bring the OC section of this kind into view and focus its first field. */
+  function gotoOc() {
+    const oc = el.closest(".insp-section")?.querySelector(".oc-section");
+    if (!oc) return;
+    oc.scrollIntoView({ block: "nearest" });
+    oc.querySelector("input")?.focus({ preventScroll: true });
   }
 
   // ---- chart ----
@@ -181,7 +244,8 @@ export function createCurveEditor(tc, section) {
     const rows = rowsNow;
     const n = rows.length;
     if (!n) return;
-    const volt = rows.every((r) => r.pred.state !== "none" && r.baseV.state !== "none") && n >= 2;
+    const fused = rows.filter((r) => !r.oc); // the OC row does not decide the mode: without a target it is just not plotted in volts
+    const volt = fused.every((r) => r.pred.state !== "none" && r.baseV.state !== "none") && fused.length >= 2;
     const val = (r, which) => (volt ? aggVolt(which === "base" ? r.baseV : which === "read" ? r.readback : r.pred) : which === "base" ? 0 : aggMid(which === "read" ? r.readAgg : r.agg));
     const all = rows.flatMap((r) => ["base", "read", "draft"].map((w) => val(r, w))).filter(isNum);
     if (!drag) {
@@ -240,13 +304,18 @@ export function createCurveEditor(tc, section) {
       m.classList.toggle("pending", r.pending);
       m.classList.toggle("mixed", r.agg.state === "mixed");
       m.setAttribute("aria-valuenow", isNum(aggMid(r.agg)) ? String(aggMid(r.agg)) : "");
-      m.setAttribute("aria-valuetext", r.label + ": " + fmtAgg(r.agg, fmtMv));
-      gAxis.append(svg("text", { class: "chart-xtick", x: x, y: H - M.b + 14, "text-anchor": "middle" }, isNum(r.ratio) ? r.ratio + "×" : String(r.key)));
+      m.setAttribute("aria-valuetext", r.oc ? r.label + " OC: adaptive target " + fmtVText(r.baseV) + ", edited in the OC section" : r.label + ": " + fmtAgg(r.agg, fmtMv));
+      if (r.oc) {
+        m.setAttribute("fill", r.pending ? OC_STROKE : "none");
+        m.setAttribute("visibility", isNum(cur) ? "visible" : "hidden");
+      }
+      gAxis.append(svg("text", { class: "chart-xtick", x: x, y: H - M.b + 14, "text-anchor": "middle" }, r.oc ? (isNum(r.ratio) ? r.ratio + "× OC" : "OC") : isNum(r.ratio) ? r.ratio + "×" : String(r.key)));
       gAxis.append(svg("text", { class: "chart-xsub", x: x, y: H - M.b + 27, "text-anchor": "middle" }, "P" + r.point));
     });
     legend.textContent = dom.mode === "volt"
       ? "Dashed: baseline V. Solid: predicted V on your edits" + (anyPending ? " (pending); faint: the CPU's current offsets" : "") + ". Points are spaced evenly."
       : "Offsets in mV; the zero line is the fused curve. No baseline curve (Curves → Measure), so voltages are not drawn. Points are spaced evenly.";
+    if (rows.some((r) => r.oc)) legend.textContent += " Hollow amber: the OC point (its adaptive target; edit it in the OC section).";
   }
 
   function ensureMarkers(rows) {
@@ -254,14 +323,22 @@ export function createCurveEditor(tc, section) {
     clear(gMarks);
     markers.clear();
     rows.forEach((r, i) => {
-      const m = svg("circle", {
-        class: "chart-marker", r: 6, cx: 0, cy: 0, tabindex: i === 0 ? "0" : "-1", role: "slider", "aria-label": r.label + " offset (mV)", "aria-orientation": "vertical",
-        "data-key": r.key, "data-ratio": r.ratio ?? "",
-      });
-      m.addEventListener("pointerdown", (e) => onDown(e, r.key, m));
-      m.addEventListener("pointermove", (e) => onMove(e));
-      m.addEventListener("pointerup", (e) => onUp(e, m));
-      m.addEventListener("pointercancel", (e) => onUp(e, m));
+      // the OC marker is not a .chart-marker (those rules fill it and set ns-resize): hollow amber, read-only here
+      const m = r.oc
+        ? svg("circle", {
+            class: "chart-oc-marker", r: 6, cx: 0, cy: 0, fill: "none", stroke: OC_STROKE, "stroke-width": 2.5, tabindex: "-1", role: "slider", "aria-readonly": "true",
+            "aria-label": r.label + " OC point (edit in the OC section)", "data-key": r.key, "data-ratio": r.ratio ?? "",
+          })
+        : svg("circle", {
+            class: "chart-marker", r: 6, cx: 0, cy: 0, tabindex: i === 0 ? "0" : "-1", role: "slider", "aria-label": r.label + " offset (mV)", "aria-orientation": "vertical",
+            "data-key": r.key, "data-ratio": r.ratio ?? "",
+          });
+      if (!r.oc) {
+        m.addEventListener("pointerdown", (e) => onDown(e, r.key, m));
+        m.addEventListener("pointermove", (e) => onMove(e));
+        m.addEventListener("pointerup", (e) => onUp(e, m));
+        m.addEventListener("pointercancel", (e) => onUp(e, m));
+      }
       m.addEventListener("keydown", (e) => onKey(e, r.key));
       gMarks.append(m);
       markers.set(r.key, m);
@@ -305,7 +382,7 @@ export function createCurveEditor(tc, section) {
       for (const m of markers.values()) m.tabIndex = -1;
       next.tabIndex = 0;
       next.focus();
-    } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !reason()) {
+    } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && key !== OC_KEY && !reason()) {
       e.preventDefault();
       const size = e.shiftKey ? BIG_STEP_MV : STEP_MV;
       const cur = currentMv(key);
@@ -349,31 +426,36 @@ export function createCurveEditor(tc, section) {
     });
     for (const r of rowsNow) {
       const row = rowEls.get(r.key);
-      row.stepper.set({
-        ...fieldBase,
-        value: r.agg.state === "same" ? r.agg.value : null,
-        mixed: r.agg.state === "mixed" ? r.agg : null,
-        pending: r.pending,
-        was: r.readAgg.state === "same" ? fmtMv(r.readAgg.value) : r.readAgg.state === "mixed" ? "mixed" : "",
-      });
+      if (row.stepper) {
+        row.stepper.set({
+          ...fieldBase,
+          value: r.agg.state === "same" ? r.agg.value : null,
+          mixed: r.agg.state === "mixed" ? r.agg : null,
+          pending: r.pending,
+          was: r.readAgg.state === "same" ? fmtMv(r.readAgg.value) : r.readAgg.state === "mixed" ? "mixed" : "",
+        });
+      } else {
+        row.offText.textContent = fmtAgg(r.agg, fmtMv);
+        row.offText.title = "The OC word's own offset field (P2 = 0), read-only here";
+      }
       const c = row.cells;
       c.pt.querySelector(".pt-label").textContent = r.label;
       const tag = c.pt.querySelector(".pt-tag");
-      tag.hidden = !(r.ocSlot || !r.shared);
-      tag.textContent = r.ocSlot ? "OC slot" : !r.shared ? r.ids.length + " of " + section.ids.length + " units" : "";
-      tag.title = r.ocSlot ? "P2 = 9 is the OC ratio's slot: an offset written there moves the OC ratio [MEASURED lnx 2026-10-15]" : "Only these units have a point at this ratio; the edit applies to them";
+      tag.hidden = !(r.oc || r.ocSlot || !r.shared);
+      tag.textContent = r.oc ? "OC" + (r.shared ? "" : " · " + r.ids.length + " of " + section.ids.length + " units") : r.ocSlot ? "OC slot" : !r.shared ? r.ids.length + " of " + section.ids.length + " units" : "";
+      tag.title = r.oc ? "The OC point (P" + r.point + "): the unit's OC ratio above its fused top, with an adaptive target voltage [MEASURED lnx 2026-10-19]" : r.ocSlot ? "P2 = 9 is the OC ratio's slot: an offset written there moves the OC ratio [MEASURED lnx 2026-10-15]" : "Only these units have a point at this ratio; the edit applies to them";
       c.base.textContent = fmtVText(r.baseV);
-      c.base.title = r.baseV.state === "none" ? r.why : "from the " + (r.baseSrc === "fused" ? "fused top point (cmd 0x09)" : r.baseSrc === "interpolated" ? "baseline curve (interpolated between measured points)" : "baseline curve");
+      c.base.title = r.baseV.state === "none" ? r.why : "from the " + (r.baseSrc === "oc" ? "OC word's adaptive target voltage (P2 = 0)" : r.baseSrc === "fused" ? "fused top point (cmd 0x09)" : r.baseSrc === "interpolated" ? "baseline curve (interpolated between measured points)" : "baseline curve");
       c.pred.textContent = fmtVText(r.pred) + (r.clampedBy ? " ↑" : "");
-      c.pred.title = r.pred.state === "none" ? r.why : r.clampedBy ? "raised to point " + r.clampedBy.point + "'s voltage: the CPU keeps V(n) ≥ V(n−1)" : "base V + offset; not a CPU read";
+      c.pred.title = r.pred.state === "none" ? r.why : r.clampedBy ? "raised to point " + r.clampedBy.point + "'s voltage: the CPU keeps V(n) ≥ V(n−1)" : r.oc ? "the higher of the adaptive target and the top fused point's voltage; not a CPU read" : "base V + offset; not a CPU read";
       c.pred.classList.toggle("pending", r.pending && r.pred.state !== "none");
       c.pred.classList.toggle("na", r.pred.state === "none");
       c.base.classList.toggle("na", r.baseV.state === "none");
       c.read.textContent = fmtVText(r.readback);
-      c.read.title = r.readback.state === "none" ? r.why : "base V + the offsets read from the CPU";
+      c.read.title = r.readback.state === "none" ? (r.oc ? "no OC point was read from the CPU" : r.why) : r.oc ? "the OC target read from the CPU (raised to the top fused point's voltage when lower)" : "base V + the offsets read from the CPU";
       c.read.classList.toggle("na", r.readback.state === "none");
-      c.lim.textContent = cpuOffsetCell(model, kind) || limitCell(model, kind);
-      c.lim.title = (w ? "Offsets outside " + sgn(w.min) + "…" + sgn(w.max) + " mV are not accepted. " : "") + modelCpuLine(model, kind, "offset");
+      c.lim.textContent = r.oc ? "OC section" : cpuOffsetCell(model, kind) || limitCell(model, kind);
+      c.lim.title = r.oc ? "The OC point's ratio, target voltage and offset are limited in the OC section" : (w ? "Offsets outside " + sgn(w.min) + "…" + sgn(w.max) + " mV are not accepted. " : "") + modelCpuLine(model, kind, "offset");
       row.tr.classList.toggle("pending", r.pending);
     }
     ensureMarkers(rowsNow);
