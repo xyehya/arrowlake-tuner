@@ -35,7 +35,7 @@ pub const ALLOWED_OPS: &[&str] = &[
     "preflight", "audit.tail", "telemetry.start", "telemetry.stop", "cancel", "vf.dump", "tune.read", "tune.plan", "tune.apply",
     "profiles.list", "profiles.save", "profiles.accept", "profiles.diff", "profiles.fingerprint", "profiles.get", "tune.last", "vf.measure", "curves.list",
     "curves.get", "curves.update", "curves.delete", "mem.read", "stress.start", "stress.stop", "stress.list", "power.read", "power.plan",
-    "power.apply", "runtime.read", "runtime.plan", "runtime.apply",
+    "power.apply", "runtime.read", "runtime.plan", "runtime.apply", "throttle.tail",
 ];
 
 /// A family of plans: `*.apply` is bound to plan ids this connection got from the same kind's `*.plan`.
@@ -76,7 +76,7 @@ pub fn check(op: &str, args: &Value) -> Result<OpInfo, Refusal> {
         "preflight" | "telemetry.stop" | "profiles.list" | "profiles.fingerprint" | "tune.last" | "curves.list" | "mem.read" | "stress.stop"
         | "stress.list" | "runtime.read" => (a.is_empty(), false),
         "power.read" => (a.is_empty(), true), // guarded MSR reads: a long op in the helper
-        "audit.tail" => (audit_tail(a), false),
+        "audit.tail" | "throttle.tail" => (audit_tail(a), false), // same shape: optional n 1..200 (helper telemetry/throttle.validate_tail_n)
         "telemetry.start" => (telemetry_start(a), false),
         "cancel" => (cancel(a), false),
         "vf.dump" | "tune.read" => (vf_dump(a), true),
@@ -343,11 +343,18 @@ mod tests {
             assert!(e.as_ref().err().map_or(true, |r| r.code == "BAD_REQUEST"), "{op}: {e:?}");
         }
         assert_eq!(check("rm -rf", &json!({})).unwrap_err().code, "UNKNOWN_OP");
-        assert_eq!(ALLOWED_OPS.len(), 31);
+        assert_eq!(ALLOWED_OPS.len(), 32);
     }
 
     fn ok(op: &str, args: Value) -> bool {
         check(op, &args).is_ok()
+    }
+
+    #[test]
+    fn throttle_tail_shapes() {
+        assert!(ok("throttle.tail", json!({})) && ok("throttle.tail", json!({"n": 20})) && ok("throttle.tail", json!({"n": 200})));
+        assert!(!ok("throttle.tail", json!({"n": 0})) && !ok("throttle.tail", json!({"n": 201})) && !ok("throttle.tail", json!({"x": 1})));
+        assert!(!check("throttle.tail", &json!({})).unwrap().long);
     }
 
     #[test]
