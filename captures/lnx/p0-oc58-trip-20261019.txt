@@ -1,0 +1,14 @@
+# P0 OC 58 apply tripped 06:33:37Z (operator's apply via GUI): wrote 0x0005b43a, read-back 0x0000003a; follow-up read, orchestrator
+2026-10-19T09:35:22+03:00
+== 0x10 P1=0 P2=0 cpu0
+> 
+read cpu 0 (P-Core 0) cmd 0x10 P1=0x0 P2=0x0
+  ratio    : 58x
+  V target : 1.426 V (raw 0x5b4)
+  mode     : adaptive
+  offset   : +0.00 mV (raw 0)
+  word     : ratio 58, V target 1425.78 mV (raw 0x5b4), adaptive, offset +0.00 mV (raw 0)
+  raw word : 0x0005b43a
+mce: 0
+taint: 12292
+0x1AD cpu0: n/a

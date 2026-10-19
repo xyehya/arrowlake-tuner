@@ -199,3 +199,6 @@ Owns `src/arltuner/helper/ops_measure.py`, `ops_stress.py` (same check), `ops_tu
 
 **G-236 · Decouple OC ratio from the turbo tables (D-050)** · S · R · deps G-209, G-217
 Owns `src/arltuner/helper/ops_tune.py` (derived raise), `src/arltuner/controls/planner.py` / `guard/policy.py` only where they derive a table, tests, `desktop/app/ui/views/tune/{oc,turbo,apply}.js` + styles. Notes R10-G-236.
+
+**G-237 · Bounded re-read for a late OC-point V target (false trip)** · S · R · deps G-132
+Owns the guard/executor read-back for cmd 0x11 words (src/arltuner/guard/guard.py and/or controls/executor.py), tests. Notes R10-G-237.

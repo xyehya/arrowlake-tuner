@@ -1,0 +1,9 @@
+Read docs/knowledge/registers.md (last entry "OC-point V target lands late") and docs/SAFETY.md first. Host lnx. Simulator/fixtures only; no sudo, no /dev.
+Live fact: SET 0x11 0x0005b43a on cpu 0 read back 0x0000003a ~1 ms later -> guard trip; the word was 0x0005b43a when read later. Ratio immediate, V target late.
+Change: after a 0x11 write whose read-back differs ONLY in the V-target field [19:8] being 0 where the written word has a non-zero target (ratio, mode, offset
+equal), re-read cmd 0x10 (same P1/P2/cpu) up to N=4 more times with backoff 2, 5, 10, 20 ms (constants named in code, cite registers.md). Each re-read is a
+normal guarded, audited transaction (one at a time, under the same lock; counted in the op counter). Match within the retries -> success; the audit
+readback record notes "polls=k, settle_ms=x". Any other difference (ratio, offset, mode, or a non-zero different target) trips immediately as today.
+Never retry a write. Simulator: add a mode that returns the V target only after k reads to test both paths (lands at poll 2; never lands -> trip after 4).
+UI: none needed (the apply result already shows polls if present — if not, show "settled after k re-reads" in the read-back table row; views/tune/apply.js only).
+`python3 tools/run_tests.py` green; commit `G-237: bounded re-read for a late OC-point V target`. Do NOT run build-appimage.sh.
