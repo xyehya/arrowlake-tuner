@@ -399,7 +399,7 @@ def op_runtime_read(helper: Helper, ctx: OpContext, args: dict[str, Any]) -> dic
         f = freq[cpu]
         rows.append({
             "cpu": cpu, "kind": None if core is None else core.kind, "unit": None if core is None else topo.unit_of_cpu(cpu), "online": online[cpu] is not False,
-            "cpufreq": None if f is None else f.as_json(),
+            "cpufreq": None if f is None else f.as_json(None if core is None else core.kind),
         })
     result["caps"] = rows
     result["cpu_limits"] = _limits_doc(helper, w, topo)

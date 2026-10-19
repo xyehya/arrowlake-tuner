@@ -37,6 +37,7 @@ __all__ = [
     "RuntimeStep",
     "SysfsError",
     "cap_choice",
+    "effective_ratio",
     "plan",
     "limits_json",
     "plan_revert",
@@ -123,7 +124,7 @@ class RuntimeFiles:
 class RuntimeStep:
     """One sysfs file write. ``domain`` is ``caps`` / ``uncore``; ``key`` the intent item (``cpu8``, ``min_ratio``); ``file`` the name relative to the root; ``before`` /
     ``value`` in the file's unit (kHz); ``expect`` the ``(low, high)`` a read-back may show -- both ends equal ``value``: exact. A cap step also carries ``ratio`` (the ratio the cap will
-    actually give, ``None`` = not known) and ``note`` (set when that is not the ratio asked)."""
+    actually give, ``None`` = not known) and ``note`` (set when that is not the ratio asked); G-233: ``before_ratio`` is the ratio the ``before`` cap ran at (:func:`effective_ratio`)."""
 
     number: int
     domain: str
@@ -134,6 +135,7 @@ class RuntimeStep:
     expect: tuple[int, int]
     ratio: int | None = None
     note: str | None = None
+    before_ratio: int | None = None
 
     def as_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"n": self.number, "domain": self.domain, "key": self.key, "file": self.file, "before": self.before, "value": self.value, "expect": list(self.expect)}
@@ -141,6 +143,8 @@ class RuntimeStep:
             out["ratio"] = self.ratio
         if self.note is not None:
             out["note"] = self.note
+        if self.before_ratio is not None:
+            out["before_ratio"] = self.before_ratio
         return out
 
 
@@ -166,8 +170,15 @@ class CpuFreq:
     min_khz: int | None = None
     cpuinfo_min_khz: int | None = None
 
-    def as_json(self) -> dict[str, Any]:
-        return {"cpuinfo_max_khz": self.max_khz, "cap_khz": self.cap_khz, "min_khz": self.min_khz, "cap_ratio": self.cap_khz / KHZ_PER_RATIO, "cpuinfo_min_khz": self.cpuinfo_min_khz}
+    def as_json(self, kind: str | None = None) -> dict[str, Any]:
+        """``cap_ratio`` is kHz / 100000 (kept); G-233: ``cap_ratio_effective`` / ``max_ratio_effective`` are the ratios the core of ``kind`` really runs at (:func:`effective_ratio`)
+        and ``ratio_model`` says whether that came from the measured model (``"measured"``) or is kHz / 100000 (``"unmeasured"``)."""
+        cap, model = effective_ratio(kind, self.max_khz, self.cap_khz)
+        top = effective_ratio(kind, self.max_khz, self.max_khz)[0]
+        return {
+            "cpuinfo_max_khz": self.max_khz, "cap_khz": self.cap_khz, "min_khz": self.min_khz, "cap_ratio": self.cap_khz / KHZ_PER_RATIO, "cpuinfo_min_khz": self.cpuinfo_min_khz,
+            "cap_ratio_effective": cap, "max_ratio_effective": top, "ratio_model": model,
+        }
 
 
 def cap_file(cpu: int) -> str:
@@ -228,6 +239,15 @@ def cap_choice(kind: str, ratio: int, max_khz: int) -> CapChoice:
     return CapChoice(best[1] * KHZ_PER_RATIO, best[0])
 
 
+def effective_ratio(kind: str | None, max_khz: int, khz: int) -> tuple[int, str]:
+    """G-233: ``(ratio, model)`` -- the ratio a core of ``kind`` ("E" / "P") with ``cpuinfo_max_freq`` ``max_khz`` actually runs at a cpufreq value ``khz`` (a cap, or ``max_khz`` itself).
+    The kernel's kHz is HWP perf scaled by a hybrid factor, so for an E-core kHz / 100000 is up to one ratio high (4.9 GHz = perf 68 = 48x, ``[MEASURED lnx 2026-10-12]``). ``model`` is
+    ``"measured"`` when the measured kHz -> perf -> ratio model covers the CPU (the same :func:`_perf_ratio` as :func:`cap_choice`), else ``"unmeasured"`` and the ratio is kHz / 100000."""
+    n = khz // KHZ_PER_RATIO
+    got = _perf_ratio(kind, max_khz, n) if kind in ("E", "P") and n >= _MODEL_MIN_BIN else None
+    return (n, "unmeasured") if got is None else (got, "measured")
+
+
 # --------------------------------------------------------------------------------------------------------------
 # the plan
 # --------------------------------------------------------------------------------------------------------------
@@ -275,8 +295,17 @@ def _same(a: int, b: int, tolerance: int) -> bool:
     return a == b if tolerance == 0 else abs(a - b) < tolerance
 
 
-def _step(number: int, cpu: int, before: int, value: int, tolerance: int, ratio: int | None = None, note: str | None = None) -> RuntimeStep:
-    return RuntimeStep(number, "caps", f"cpu{cpu}", cap_file(cpu), before, value, (value - tolerance, value + tolerance), ratio, note)
+def _step(number: int, cpu: int, before: int, value: int, tolerance: int, ratio: int | None = None, note: str | None = None, before_ratio: int | None = None) -> RuntimeStep:
+    return RuntimeStep(number, "caps", f"cpu{cpu}", cap_file(cpu), before, value, (value - tolerance, value + tolerance), ratio, note, before_ratio)
+
+
+def _kind_of(topology: Topology | None, cpu: int) -> str | None:
+    if topology is None:
+        return None
+    try:
+        return topology.by_cpu(cpu).kind
+    except UnknownCore:
+        return None
 
 
 def plan(intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq | None], topology: Topology, *, held: str | None = None) -> list[RuntimeStep]:
@@ -314,7 +343,7 @@ def plan(intent: Mapping[int, int], policy: Policy, state: Mapping[int, CpuFreq 
         if freq.min_khz is not None and choice.khz < freq.min_khz:
             raise Refused("CAPS_BELOW_MIN", f"cpu {cpu}: ratio {ratio} is below the CPU's scaling_min_freq ({freq.min_khz} kHz): the kernel would refuse it", key)
         if not _same(choice.khz, freq.cap_khz, tol):
-            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, choice.khz, tol, choice.ratio, note))
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, choice.khz, tol, choice.ratio, note, effective_ratio(_kind_of(topology, cpu), freq.max_khz, freq.cap_khz)[0]))
     return steps
 
 
@@ -334,7 +363,9 @@ def plan_revert(values: Mapping[int, int], state: Mapping[int, CpuFreq | None], 
         # exact compare, no topology: the journal holds the kernel's own read-back of the boot value and that read-back is exact
         # (docs/knowledge/power-profile-capping.md §6); a renumbered topology must not change how a CPU number is restored.
         if values[cpu] != freq.cap_khz:
-            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], 0))
+            kind = _kind_of(topology, cpu)  # display only (G-233): the ratio the restored cap runs at, and the one it replaces; no kind (no topology) = not known
+            to, was = (None, None) if kind is None else (effective_ratio(kind, freq.max_khz, values[cpu])[0], effective_ratio(kind, freq.max_khz, freq.cap_khz)[0])
+            steps.append(_step(len(steps) + 1, cpu, freq.cap_khz, values[cpu], 0, to, None, was))
     return steps, notes
 
 

@@ -86,7 +86,7 @@ class SixPlusEight(LiveCase):
         self.assertEqual(topo["favored_source"], "acpi_cppc")
         self.assertEqual([u["id"] for u in topo["units"]], [f"P{i}" for i in range(6)] + ["EC0", "EC1"])
         self.assertEqual([u["id"] for u in topo["units"] if u["favored"]], ["P1", "P4"])
-        self.assertEqual(topo["units"][-1], {"id": "EC1", "kind": "E", "cpus": [10, 11, 12, 13], "favored": False, "max_ratio": 49, "perf": 68})
+        self.assertEqual(topo["units"][-1], {"id": "EC1", "kind": "E", "cpus": [10, 11, 12, 13], "favored": False, "max_ratio": 48, "perf": 68, "max_khz": 4_900_000, "ratio_model": "measured"})
 
     def test_plan_and_apply_work_on_this_part(self) -> None:
         h = self.boot_topology(SIX_EIGHT)

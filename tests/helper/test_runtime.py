@@ -129,6 +129,8 @@ class Read(RuntimeCase):
         cpu0, cpu8 = r["caps"][0], r["caps"][8]
         self.assertEqual((cpu0["kind"], cpu0["online"], cpu0["cpufreq"]["cap_khz"]), ("P", True, P_MAX))
         self.assertEqual((cpu8["kind"], cpu8["unit"], cpu8["online"]), ("E", "EC0", True))
+        self.assertEqual((cpu0["cpufreq"]["cap_ratio"], cpu0["cpufreq"]["cap_ratio_effective"], cpu0["cpufreq"]["max_ratio_effective"]), (57.0, 57, 57))  # G-233
+        self.assertEqual((cpu8["cpufreq"]["cap_ratio"], cpu8["cpufreq"]["cap_ratio_effective"], cpu8["cpufreq"]["max_ratio_effective"], cpu8["cpufreq"]["ratio_model"]), (49.0, 48, 48, "measured"))
         self.assertEqual(r["offline"], [])
         self.assertNotIn("parking", r)
         self.assertEqual((r["uncore"]["min_khz"], r["uncore"]["max_khz"], r["uncore"]["initial_max_khz"]), (800_000, 4_000_000, 4_000_000))

@@ -154,7 +154,8 @@ class DetectTests(unittest.TestCase):
         self.assertEqual([u.id for u in live.units], [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])
         self.assertEqual([u.id for u in live.units if u.favored], ["P0", "P3"])
         ec1 = next(u for u in live.units if u.id == "EC1")
-        self.assertEqual((ec1.kind, ec1.cpus, ec1.max_ratio, ec1.perf, ec1.favored), ("E", (12, 13, 14, 15), 49, 68, False))
+        self.assertEqual((ec1.kind, ec1.cpus, ec1.max_ratio, ec1.perf, ec1.favored), ("E", (12, 13, 14, 15), 48, 68, False))  # G-233: 4.9 GHz kernel = 48x
+        self.assertEqual((ec1.max_khz, ec1.ratio_model), (4_900_000, "measured"))
         p0 = live.units[0]
         self.assertEqual((p0.cpus, p0.max_ratio, p0.perf), ((0,), 57, 92))
 
@@ -198,8 +199,8 @@ class DetectTests(unittest.TestCase):
         reference_like(self.sub("a"))
         contract = read_live(self.sub("a")).contract()
         self.assertEqual(set(contract), {"units", "favored_source"})
-        self.assertEqual(contract["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92})
-        self.assertEqual(contract["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 49, "perf": 68})
+        self.assertEqual(contract["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92, "max_khz": 5_700_000, "ratio_model": "measured"})
+        self.assertEqual(contract["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 48, "perf": 68, "max_khz": 4_900_000, "ratio_model": "measured"})
         self.assertEqual(contract_dict(arl_s_285k())["favored_source"], "acpi_cppc")
 
     def test_detect_returns_topology_and_accepts_str_root(self) -> None:
@@ -211,7 +212,7 @@ class DetectTests(unittest.TestCase):
     def test_max_ratio_of_kind(self) -> None:
         reference_like(self.sub("a"))
         live = read_live(self.sub("a"))
-        self.assertEqual((live.max_ratio_of_kind("P"), live.max_ratio_of_kind("E")), (57, 49))
+        self.assertEqual((live.max_ratio_of_kind("P"), live.max_ratio_of_kind("E")), (57, 48))
 
     def test_missing_files_raise(self) -> None:
         make_sysfs(self.sub("a"), 8, 16)

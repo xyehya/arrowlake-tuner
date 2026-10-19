@@ -60,18 +60,23 @@ export function powerRequest(rt) {
   return powerIntent(rt.edits.power, powerCurrent(rt.power.result));
 }
 
-/** The cap rows of a runtime.read: [{unit, kind, cpus: [all], online: [online cpus], offline: n, capKhz, capRatio (whole, nearest), minKhz, maxKhz}] in unit order (P0..P7, EC0..). */
+/** The cap rows of a runtime.read: [{unit, kind, cpus: [all], online: [online cpus], offline: n, capKhz, capRatio (G-233: the ratio the cores really run, whole), maxRatio (the same for cpuinfo_max_freq; null = unknown), minKhz, maxKhz}]
+ *  in unit order (P0..P7, EC0..). An E-core's kernel kHz / 100000 is up to one ratio high, so the helper's `cap_ratio_effective` / `max_ratio_effective` are used; kHz / 100000 only for a helper that sends none. */
 export function capRows(result) {
   const rows = result && Array.isArray(result.caps) ? result.caps : [];
   const by = new Map();
   for (const r of rows) {
     if (!r || typeof r.unit !== "string" || !isNum(r.cpu)) continue;
-    const g = by.get(r.unit) || { unit: r.unit, kind: r.kind, cpus: [], online: [], capKhz: [], minKhz: null, maxKhz: null };
+    const g = by.get(r.unit) || { unit: r.unit, kind: r.kind, cpus: [], online: [], capKhz: [], capEff: [], maxRatio: null, minKhz: null, maxKhz: null };
     g.cpus.push(r.cpu);
     if (r.online !== false) {
       g.online.push(r.cpu);
       const f = r.cpufreq || {};
-      if (isNum(f.cap_khz)) g.capKhz.push(f.cap_khz);
+      if (isNum(f.cap_khz)) {
+        g.capKhz.push(f.cap_khz);
+        g.capEff.push(isNum(f.cap_ratio_effective) ? f.cap_ratio_effective : Math.round(f.cap_khz / 100000));
+      }
+      if (isNum(f.max_ratio_effective)) g.maxRatio = Math.min(g.maxRatio ?? Infinity, f.max_ratio_effective);
       if (isNum(f.min_khz)) g.minKhz = Math.max(g.minKhz ?? 0, f.min_khz);
       if (isNum(f.cpuinfo_max_khz)) g.maxKhz = Math.min(g.maxKhz ?? Infinity, f.cpuinfo_max_khz);
     }
@@ -79,8 +84,8 @@ export function capRows(result) {
   }
   return [...by.values()].map((g) => {
     const khz = g.capKhz.length ? Math.max(...g.capKhz) : null;
-    const ratios = g.capKhz.map((x) => Math.round(x / 100000));
-    return { ...g, capKhz: khz, capRatio: khz === null ? null : Math.round(khz / 100000), capMin: ratios.length ? Math.min(...ratios) : null, mixedCap: new Set(ratios).size > 1, offline: g.cpus.length - g.online.length };
+    const ratios = g.capEff;
+    return { ...g, capKhz: khz, capRatio: ratios.length ? Math.max(...ratios) : null, capMin: ratios.length ? Math.min(...ratios) : null, mixedCap: new Set(ratios).size > 1, offline: g.cpus.length - g.online.length };
   });
 }
 

@@ -100,8 +100,8 @@ class AllGoodTests(FakeRoot):
         self.assertEqual(set(topo), {"units", "favored_source"})
         self.assertEqual(topo["favored_source"], "acpi_cppc")
         self.assertEqual([u["id"] for u in topo["units"]], [f"P{i}" for i in range(8)] + [f"EC{i}" for i in range(4)])
-        self.assertEqual(topo["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92})
-        self.assertEqual(topo["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 49, "perf": 68})
+        self.assertEqual(topo["units"][0], {"id": "P0", "kind": "P", "cpus": [0], "favored": True, "max_ratio": 57, "perf": 92, "max_khz": 5_700_000, "ratio_model": "measured"})
+        self.assertEqual(topo["units"][8], {"id": "EC0", "kind": "E", "cpus": [8, 9, 10, 11], "favored": False, "max_ratio": 48, "perf": 68, "max_khz": 4_900_000, "ratio_model": "measured"})
         self.assertEqual([u["id"] for u in topo["units"] if u["favored"]], ["P0", "P3"])
 
     def test_a_simulated_topology_is_reported_instead_of_the_real_sysfs(self):
