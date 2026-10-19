@@ -190,3 +190,6 @@ Owns `src/arltuner/helper/ops_runtime.py` (read-back), `src/arltuner/controls/ca
 
 **G-233 · Show the ratio E-cores actually run (kernel kHz is one bin high)** · S · deps G-216, G-232
 Owns caps.py (expose), ops_runtime.py (read rows), the topology max_ratio source, UI rtstate/runtime/runtime-kinds/system/coremap. Notes R10-G-233.
+
+**G-234 · Live session 3 UI bugs** · S · deps G-217, G-232
+Owns `desktop/app/ui/views/tune/{ring,runtime,power}.js`, `rt-common.js`, `lib/rtstate.js`, `app.js` (keyboard handler only), styles, tests.

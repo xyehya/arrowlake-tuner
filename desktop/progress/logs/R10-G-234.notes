@@ -1,0 +1,13 @@
+Found live 2026-10-19 06:45-06:49 (orchestrator driving the AppImage):
+1. "Revert to boot values" on Ring & uncore (and Ratio caps, Power) does nothing when the app has not itself done a runtime apply in this session: canRevert()
+   checks rt.runtime.result.journal / rt.power.result.boot, which are only set from a read the tab did (or a successful apply in this window). Live: uncore max
+   had been applied (journal /run/arltuner/runtime-journal.json holds uncore.max_ratio 4000000 + 5 caps) and the button was disabled with no feedback after an app
+   reload. Fix: the tabs read runtime.read / power.read on mount (cheap, sysfs + guarded MSR read) and canRevert uses the journal from that read; a disabled
+   button shows its reason inline (not only as a tooltip).
+2. Number keys typed into a field that lost focus switch screens (screenForKey: typing check uses e.target; after a click the focus can sit on a non-input
+   element). Require Alt+1..7 (or keep bare digits only when no element of the page has a selection / no input was focused in the last 500 ms). Pick Alt+digit,
+   update the nav-rail hint badges and tests.
+3. Ctrl+A outside an input selects the WHOLE page (blue tint, clicks then appear to do nothing). Set user-select: none on the app chrome/panels and allow it
+   only in inputs, tables of values (copyable) and log text.
+4. After a successful revert the runtime tab's "new value" fields must reset to the in-force values (they kept the old edit until reload).
+Simulator/mock only. Do NOT run build-appimage.sh. node + Playwright tests per item.
