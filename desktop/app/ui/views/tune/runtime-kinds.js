@@ -41,6 +41,9 @@ export const PL_NAME = { pl1_w: "Processor Core Power Limit (PL1)", pl2_w: "Proc
 const watts = (uw) => (isNum(uw) ? Math.round(uw / 1e4) / 100 + " W" : "?");
 const secs = (us) => (isNum(us) ? Math.round(us / 1e5) / 10 + " s" : "?");
 const khzRatio = (khz) => (isNum(khz) ? Math.round(khz / 1e5) + "×" : "?");
+const khzMhz = (khz) => (isNum(khz) ? Math.round(khz / 1e3) + " MHz" : "?");
+/** G-232: the ratio a cap step gives: the plan's own (E-core bins), else the file value in kHz / 100000 (a revert step has no `ratio`). */
+const capRatio = (s) => (isNum(s.ratio) ? s.ratio + "×" : khzRatio(s.value));
 
 /** power.plan result -> {units: [{unit, keys, lines}], steps: [text]}: one row per key the plan writes, the steps in the order the helper sends them. */
 export function powerView(plan) {
@@ -66,12 +69,12 @@ export function runtimeView(plan) {
   }
   const units = groups.map((g) => {
     const s = g.step;
-    if (g.domain === "caps") return { unit: "cpu " + g.keys.map((k) => String(k).replace(/^cpu/, "")).join(", "), keys: g.keys, lines: ["max " + khzRatio(s.before) + " → " + s.ratio + "×" + (s.note ? " (" + s.note + ")" : "")] };
+    if (g.domain === "caps") return { unit: "cpu " + g.keys.map((k) => String(k).replace(/^cpu/, "")).join(", "), keys: g.keys, lines: ["max " + khzRatio(s.before) + " → " + capRatio(s) + " (" + khzMhz(s.value) + ")" + (s.note ? " · " + s.note : "")] };
     return { unit: "Uncore " + String(s.key).replace("_ratio", "") + " ratio", keys: g.keys, lines: [khzRatio(s.before) + " → " + khzRatio(s.value)] };
   });
   return {
     units,
-    steps: steps.map((s) => (s.domain === "caps" ? "write " + s.file + " = " + s.value + " kHz (" + s.ratio + "×)" : "write " + s.file + " = " + s.value + " kHz") + (s.note ? " · " + s.note : "")),
+    steps: steps.map((s) => (s.domain === "caps" ? "write " + s.file + " = " + s.value + " kHz (" + capRatio(s) + ")" : "write " + s.file + " = " + s.value + " kHz") + (s.note ? " · " + s.note : "")),
   };
 }
 

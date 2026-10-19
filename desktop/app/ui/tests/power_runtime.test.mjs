@@ -17,7 +17,7 @@ import { normCpuLimits, capWindow, uncoreWindow, capsLine, uncoreLine, powerLine
 import { initialRt, powerCurrent, powerDisagrees, powerDisabledReason, powerRequest, capRows, uncoreState, runtimeRequest, pendingCounts, ensureRt, editRt } from "../lib/rtstate.js";
 import { ensureTune, requestReview as pendingBarReview, syncPending, setPendingAll, discardDraft } from "../views/tune.js";
 import { powerView, runtimeView, POWER_KIND, RUNTIME_KIND, registerRuntimeKinds, requestReview, revertRequest, PL_NAME } from "../views/tune/runtime-kinds.js";
-import { KINDS, createApplyController, planWarnings } from "../views/tune/apply.js";
+import { KINDS, createApplyController, planWarnings, readbackCells, partialWording, summarizeResult } from "../views/tune/apply.js";
 import { powerWarnings } from "../views/tune/power.js";
 import { unitWindow, capsDisabledReason } from "../views/tune/runtime.js";
 import { uncoreDisabledReason } from "../views/tune/ring.js";
@@ -198,6 +198,42 @@ test("power: PL2 below PL1 is a warning (never a block); the step is the XTU lab
   assert.deepEqual(Object.values(PL_NAME), ["Processor Core Power Limit (PL1)", "Processor Core Turbo Power Limit (PL2)", "Turbo Boost Power Time Window"]);
 });
 
+// ---- G-232: runtime result labels ----
+test("G-232: a revert cap step has no ratio field: the row is derived from the kHz values, never 'undefined'", () => {
+  const rv = runtimeView({ steps: [{ n: 1, domain: "caps", key: "cpu7", file: "cpu7/cpufreq/scaling_max_freq", before: 5400000, value: 5500000, expect: [5500000, 5500000] }, { n: 2, domain: "uncore", key: "max_ratio", file: "u/max_freq_khz", before: 4000000, value: 3000000 }] });
+  assert.equal(rv.units[0].unit, "cpu 7");
+  assert.equal(rv.units[0].lines[0], "max 54× → 55× (5500 MHz)");
+  assert.equal(rv.steps[0], "write cpu7/cpufreq/scaling_max_freq = 5500000 kHz (55×)");
+  assert.ok(!JSON.stringify(rv).includes("undefined"));
+  const e = runtimeView({ steps: [{ n: 1, domain: "caps", key: "cpu8", file: "f", before: 4800000, value: 4600000, ratio: 46, note: "capped at 46×" }] });
+  assert.equal(e.units[0].lines[0], "max 48× → 46× (4600 MHz) · capped at 46×", "the plan's own ratio and note win");
+});
+
+test("G-232: read-back rows of the runtime / power helpers are shown by file and key, V/F rows as before", () => {
+  const caps = readbackCells({ domain: "caps", key: "cpu7", expected: [5400000, 5400000], file: 5400000, match: true });
+  assert.deepEqual(caps, { unit: "cpu7", point: "scaling_max_freq", cpu: 7, expected: "5400000", actual: "5400000" });
+  assert.equal(readbackCells({ domain: "caps", key: "cpu8", expected: [4600000, 4650000], file: null, match: false }).expected, "4600000–4650000");
+  assert.equal(readbackCells({ domain: "caps", key: "cpu8", expected: [1, 1], file: null }).actual, "not read back");
+  const un = readbackCells({ domain: "uncore", key: "max_ratio", expected: [3e6, 3e6], file: 3e6 });
+  assert.deepEqual([un.unit, un.point], ["uncore", "max_freq_khz"]);
+  const pw = readbackCells({ key: "pl1_w", expected: [1, 1], file: 1, msr: 1 });
+  assert.deepEqual([pw.unit, pw.point], ["power", "pl1_w"]);
+  assert.deepEqual(readbackCells({ unit: "P0", point: 3, cpu: 0, expected: "0x1", actual: "0x2" }), { unit: "P0", point: "pt 3", cpu: 0, expected: "0x1", actual: "0x2" });
+  assert.equal(readbackCells({ unit: "P0", point: 0 }).point, "OC point");
+  for (const x of [{ domain: "caps", key: "cpu7", expected: [1, 1], file: 1 }, { key: "pl2_w", expected: [1, 1], file: 1 }]) assert.ok(!/pt |undefined/.test(JSON.stringify(readbackCells(x))));
+  assert.equal(summarizeResult({ readback: [{ domain: "caps", key: "cpu7", match: false }], complete: false }).total, 1);
+});
+
+test("G-232: the red box of a partial runtime apply says runtime settings, not V/F words", () => {
+  const vf = partialWording(false, true);
+  assert.match(vf.title, /mix of old and new words/);
+  assert.match(vf.text, /cold boot/);
+  const rt = partialWording(true, true);
+  assert.equal(rt.title, "Some runtime settings were written, some not.");
+  assert.equal(rt.text, "The table shows which. Use Revert to boot values, or reboot (runtime values do not survive a reboot). The guard tripped.");
+  assert.ok(!/cold boot|accepted state|old and new words/.test(rt.title + rt.text));
+});
+
 // ---- drawer kinds ----
 test("kinds: power/runtime register once with planArgs = the intent itself (top-level fields) and the recorded plans give rows", () => {
   registerRuntimeKinds();
@@ -213,7 +249,7 @@ test("kinds: power/runtime register once with planArgs = the intent itself (top-
   assert.equal(pv.units[2].lines[0], "127.9 s → 56 s");
   const rv = runtimeView(G["runtime-plan"].response.result);
   assert.equal(rv.units[0].unit, "cpu 0");
-  assert.equal(rv.units[0].lines[0], "max 57× → 50×");
+  assert.equal(rv.units[0].lines[0], "max 57× → 50× (5000 MHz)");
   assert.equal(rv.units[1].unit, "cpu 8, 9, 10, 11", "the four CPUs of the cluster asked for the same change: one row");
   assert.match(rv.units[1].lines[0], /capped at 22/);
   assert.equal(rv.units[2].unit, "Uncore max ratio");

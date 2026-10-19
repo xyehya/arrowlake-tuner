@@ -12,7 +12,7 @@
   (reported; the revert is then not ``complete``) and the uncore is restored normally.
 * ``runtime.apply``: one sysfs file per transaction, planned again from the values now in force (any difference is ``PLAN_STALE``). Before the first write the values being replaced are
   journaled (``runtime-journal.json``, root 0600, boot-id bound, bounded; a key is journaled the first time it is written in a boot and never overwritten) with ``in_flight`` set; each write is audited
-  (``runtime_attempt``, fsync'd) before it is sent, under the guard's cross-process lock, read back from the file, and a mismatch stops the apply (no retry, no auto-revert). When the apply ends --
+  (``runtime_attempt``, fsync'd) before it is sent, under the guard's cross-process lock, read back from the file (polled up to 500 ms: cpufreq applies a cap asynchronously, G-232), and a mismatch stops the apply (no retry, no auto-revert). When the apply ends --
   complete or stopped -- ``in_flight`` is cleared.
 
 **What "restore at helper start" means here.** The journal is kept for ``revert`` (like the power journal) and is **not** applied at every start: the systemd-activated helper idles out after
@@ -30,6 +30,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +62,12 @@ _CPU_MAX = 1024
 _LOCK = threading.Lock()
 _BLOCKING_OPS = ("stress.start", "vf.measure")
 _CPU_DIR = re.compile(r"cpu(\d+)")
+#: G-232 [MEASURED lnx 2026-10-19]: cpufreq applies a ``scaling_max_freq`` write asynchronously (freq_qos + the policy update worker), so a read 1 ms after the write still shows the old value
+#: (audit: cpu7 5500000 -> 5400000 read back 5500000; the file read 5400000 a second later). The read-back polls every 10 ms until it matches; a value still wrong after 500 ms is a mismatch.
+READBACK_POLL_S = 0.010
+READBACK_DEADLINE_S = 0.500
+_monotonic = time.monotonic  # tests replace these two with a fake clock
+_sleep = time.sleep
 
 
 @dataclass
@@ -79,13 +86,15 @@ class SimRuntimeFiles(cp.RuntimeFiles):
 
     UNCORE = "intel_uncore_frequency/package_00_die_00"
 
-    def __init__(self, cpufreq: Any, cpus: Sequence[int], *, uncore: tuple[int, int] = (800000, 4000000), drop_writes: bool = False) -> None:
+    def __init__(self, cpufreq: Any, cpus: Sequence[int], *, uncore: tuple[int, int] = (800000, 4000000), drop_writes: bool = False, delay_reads: int = 0) -> None:
         super().__init__("/nonexistent/sim-cpu")
         self.cpufreq = cpufreq
         self.cpus = sorted(cpus)
         self.online = {c: 1 for c in self.cpus if c != 0}
         self.uncore = {"min_freq_khz": uncore[0], "max_freq_khz": uncore[1], "initial_min_freq_khz": uncore[0], "initial_max_freq_khz": uncore[1]}
         self.drop_writes = drop_writes
+        self.delay_reads = delay_reads  # G-232: after a write the next ``delay_reads`` reads of that file still show the old text (cpufreq applies asynchronously)
+        self._stale: dict[str, list[Any]] = {}
         self.writes: list[tuple[str, int]] = []
 
     def _route(self, name: str) -> tuple[str, int | None, str]:
@@ -100,6 +109,13 @@ class SimRuntimeFiles(cp.RuntimeFiles):
         return "none", None, ""
 
     def read_text(self, name: str) -> str | None:
+        stale = self._stale.get(name)
+        if stale is not None and stale[1] > 0:
+            stale[1] -= 1
+            return stale[0]
+        return self._read_now(name)
+
+    def _read_now(self, name: str) -> str | None:
         kind, cpu, attr = self._route(name)
         if kind == "online":
             return str(self.online[cpu]) if cpu in self.online else None  # type: ignore[index]
@@ -117,10 +133,12 @@ class SimRuntimeFiles(cp.RuntimeFiles):
     def write_int(self, name: str, value: int) -> None:
         self.writes.append((name, int(value)))
         kind, cpu, attr = self._route(name)
-        if kind in ("none", "online") or self.read_text(name) is None:
+        if kind in ("none", "online") or self._read_now(name) is None:
             raise cp.SysfsError(f"cannot write {self.path(name)}: No such file or directory")
         if self.drop_writes:
             return
+        if self.delay_reads:
+            self._stale[name] = [self._read_now(name), self.delay_reads]
         if kind == "cpufreq":
             if attr == cp.CAP_ATTR and self.cpufreq.model.unit_of(cpu).startswith("E"):
                 value = self.cpufreq.model.e_cap_quantized(int(value))
@@ -587,6 +605,8 @@ class _Sent:
     """What one sent step left: the file read-back (``None`` = unreadable), a failed write, a lock that could not be released."""
 
     file_value: int | None = None
+    polls: int = 0
+    elapsed_ms: int = 0
     write_error: cp.SysfsError | None = None
     lock_problem: str | None = None
 
@@ -602,15 +622,28 @@ def _send_step(helper: Helper, w: RuntimeWiring, log: AuditLog, step: cp.Runtime
             raise _NotSent("AUDIT_UNAVAILABLE", f"the audit log cannot be written ({exc}); the write was not sent") from None
         try:
             w.files.write_int(step.file, step.value)
-            try:
-                sent.file_value = w.files.read_int(step.file)
-            except cp.SysfsError:
-                sent.file_value = None
+            _read_back(w, step, sent)
         except cp.SysfsError as exc:
             sent.write_error = exc
     finally:
         sent.lock_problem = _release_lock(helper)
     return sent
+
+
+def _read_back(w: RuntimeWiring, step: cp.RuntimeStep, sent: _Sent) -> None:
+    """Read the file until it shows what the step allows or :data:`READBACK_DEADLINE_S` has passed (:data:`READBACK_POLL_S` apart); the last read is the read-back."""
+    start = _monotonic()
+    while True:
+        try:
+            sent.file_value = w.files.read_int(step.file)
+        except cp.SysfsError:
+            sent.file_value = None
+        sent.polls += 1
+        now = _monotonic()
+        if cp.readback_problem(step, sent.file_value) is None or now - start >= READBACK_DEADLINE_S:
+            break
+        _sleep(READBACK_POLL_S)
+    sent.elapsed_ms = round((_monotonic() - start) * 1000)
 
 
 @dataclass
@@ -651,7 +684,7 @@ def _run_steps(helper: Helper, w: RuntimeWiring, log: AuditLog, steps: list[cp.R
         problem = cp.readback_problem(step, outcome.file_value)
         run.readback.append({"domain": step.domain, "key": step.key, "expected": list(step.expect), "file": outcome.file_value, "match": problem is None, **({} if problem is None else {"problem": problem})})
         entry.update(status="ok" if problem is None else "unverified", file_value=outcome.file_value)
-        run.warnings.extend(filter(None, [_audit_quiet(helper, log, "readback", detail=problem or "the file shows the value written", read_value=outcome.file_value, matches=problem is None, **record)]))
+        run.warnings.extend(filter(None, [_audit_quiet(helper, log, "readback", detail=problem or "the file shows the value written", read_value=outcome.file_value, matches=problem is None, polls=outcome.polls, elapsed_ms=outcome.elapsed_ms, **record)]))
         if problem is not None:
             run.warnings.extend(filter(None, [_audit_quiet(helper, log, "trip", reason="TRIPPED", detail=problem, **record)]))
             run.stop = {"kind": "unverified", "reason": f"step {step.number}: read-back mismatch: {problem}; stopping (no retry, no automatic revert)", "tripped": True}
