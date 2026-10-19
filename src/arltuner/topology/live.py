@@ -5,7 +5,8 @@ small sysfs files below, no other ``arltuner`` imports than ``topology.cpumap``.
 
 * P CPUs  = ``devices/cpu_core/cpus``, E CPUs = ``devices/cpu_atom/cpus`` (kernel cpulist syntax),
 * E clusters = the distinct ``devices/system/cpu/cpu<N>/topology/cluster_cpus_list`` of the E CPUs, numbered in order of their first CPU,
-* ``cpufreq/cpuinfo_max_freq`` (kHz) / 100000 = ``max_ratio`` of a CPU (a unit takes the maximum over its CPUs),
+* ``cpufreq/cpuinfo_max_freq`` (kHz) / 100000 = ``Core.max_ratio`` of a CPU (a unit takes the maximum over its CPUs); a ``LiveUnit`` reports instead the ratio the cores really run
+  (G-233: an E-core's kernel kHz is one bin high, ``controls.caps.effective_ratio``) with the kernel's ``max_khz`` beside it,
 * ``acpi_cppc/highest_perf`` = ``perf`` (unit: maximum over its CPUs),
 * **favored** = the P units with the highest ``perf`` (fallback: ``max_ratio``); none when all P units are equal. ``favored_source`` names the
   value that decided it. ``0x1C[7:0]`` of a ``tune.read`` is a cross-check done by the caller, never an input here.
@@ -56,7 +57,7 @@ class LiveTopology:
         }
 
     def max_ratio_of_kind(self, kind: str) -> int | None:
-        """The highest ``max_ratio`` of the units of a kind (the live hardware ratio limit of that kind), or None when no unit has one."""
+        """The highest ``max_ratio`` of the units of a kind (the ratio the cores of that kind actually top out at; ``max_khz`` is the kernel's own), or None when no unit has one."""
         values = [u.max_ratio for u in self.units if u.kind == kind and u.max_ratio is not None]
         return max(values) if values else None
 
