@@ -1,8 +1,8 @@
 #!/bin/bash
-# restore-good.sh — re-apply the KNOWN-GOOD state (good-p53p55-fav-e46m120.toml, see GOOD-STATE.md) through the installed arltuner CLI.
+# restore-good.sh [PROFILE] — re-apply the KNOWN-GOOD state (default good-p53p55-fav-e46m120; or good-p53p55-fav-e48-1185), see GOOD-STATE.md, through the installed arltuner CLI.
 # One guarded apply (installed root-owned tree, installed policy, --allow-taint-bit 2 for the first MSR write of a boot). Safe to run at any time.
 set -euo pipefail
-D="$(cd "$(dirname "$0")" && pwd)"; N=good-p53p55-fav-e46m120
+D="$(cd "$(dirname "$0")" && pwd)"; N=${1:-good-p53p55-fav-e46m120}
 sudo install -m 0644 -o root "$D/$N.toml" "/root/$N.toml"
 LOG="$HOME/AI/arrowlake-tuner/captures/lnx/restore-good-$(date +%Y%m%dT%H%M%S).txt"
 sudo env ARLTUNER_ALLOW_MAILBOX=1 USER="$USER" /usr/bin/python3 -I -c '

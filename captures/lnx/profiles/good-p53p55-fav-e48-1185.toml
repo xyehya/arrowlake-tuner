@@ -1,0 +1,512 @@
+# good-p53p55-fav-e48-1185 — ALTERNATIVE (E 48x) state (2026-10-19), restorable any time:
+#  P: 53x <= 1.200 V, 55x 1.270 V group, P0/P3 56x -15 / 57x -75 mV (57x clamps to V(56x)), P turbo 57/57/55x6
+#     passed 15/15 all-core compile (uv-p53p55-e46), 2/2 all-core (uv-fav5675), 1 build pinned to P0+P3, stress-ng P0+P3 at 56x/57x.
+#  E: OC point 48x adaptive 1.185 V all clusters + point 6 -120 mV, E turbo 48x8. 48x ladder: 1.185 / 1.175 pass 3/3, 1.165 FAIL (cpu 21, EC3).
+#  Creates/moves the E OC point (only a cold boot clears it).
+[meta]
+name = "good-p53p55-fav-e48-1185"
+platform = "arl-s"
+
+[turbo]
+p = [57, 57, 55, 55, 55, 55, 55, 55]  # favored 57x at 1-2 active cores, all-core 55x
+e = [48, 48, 48, 48, 48, 48, 48, 48]  # E 48x via the OC point below
+
+[[core]]
+kind = "E"
+index = 0
+ratio = 48
+oc_voltage_mv = 1185
+
+[[core]]
+kind = "E"
+index = 4
+ratio = 48
+oc_voltage_mv = 1185
+
+[[core]]
+kind = "E"
+index = 8
+ratio = 48
+oc_voltage_mv = 1185
+
+[[core]]
+kind = "E"
+index = 12
+ratio = 48
+oc_voltage_mv = 1185
+
+[[point]]
+kind = "P"
+index = 0
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 0
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 0
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 0
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 0
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 0
+point = 6
+offset_mv = -28
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 0
+point = 7
+offset_mv = -15
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 0
+point = 8
+offset_mv = -75
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 1
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 1
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 1
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 1
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 1
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 1
+point = 6
+offset_mv = -36
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 1
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 1
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 2
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 2
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 2
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 2
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 2
+point = 5
+offset_mv = -71
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 2
+point = 6
+offset_mv = -96
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 2
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 2
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 3
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 3
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 3
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 3
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 3
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 3
+point = 6
+offset_mv = -28
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 3
+point = 7
+offset_mv = -15
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 3
+point = 8
+offset_mv = -75
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 4
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 4
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 4
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 4
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 4
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 4
+point = 6
+offset_mv = -49
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 4
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 4
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 5
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 5
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 5
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 5
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 5
+point = 5
+offset_mv = -61
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 5
+point = 6
+offset_mv = -88
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 5
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 5
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 6
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 6
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 6
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 6
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 6
+point = 5
+offset_mv = -50
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 6
+point = 6
+offset_mv = -76
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 6
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 6
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "P"
+index = 7
+point = 1
+offset_mv = 0
+expect_ratio = 8
+
+[[point]]
+kind = "P"
+index = 7
+point = 2
+offset_mv = 0
+expect_ratio = 20
+
+[[point]]
+kind = "P"
+index = 7
+point = 3
+offset_mv = 0
+expect_ratio = 30
+
+[[point]]
+kind = "P"
+index = 7
+point = 4
+offset_mv = 0
+expect_ratio = 48
+
+[[point]]
+kind = "P"
+index = 7
+point = 5
+offset_mv = -71
+expect_ratio = 53
+
+[[point]]
+kind = "P"
+index = 7
+point = 6
+offset_mv = -106
+expect_ratio = 55
+
+[[point]]
+kind = "P"
+index = 7
+point = 7
+offset_mv = 0
+expect_ratio = 56
+
+[[point]]
+kind = "P"
+index = 7
+point = 8
+offset_mv = 0
+expect_ratio = 57
+
+[[point]]
+kind = "E"
+index = 0
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 4
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 8
+point = 6
+offset_mv = -120
+expect_ratio = 46
+
+[[point]]
+kind = "E"
+index = 12
+point = 6
+offset_mv = -120
+expect_ratio = 46

@@ -41,6 +41,14 @@ E turbo table 0x650: 46 x8. EC3 (cpus 20-23) is the weakest cluster; every E fai
 ## Not chosen
 - E 49x: edge OC 1.270 V (1.210/1.240/1.255 failed on EC3); at 49x/1.27 V the shared current limit (0x64F bit 8) pulls P to 46-54x under heavy load.
 - E 50x: not testable all-core — current limit (0x64F bit 8 at ~215 W) holds E at 49x and P at 48x.
-- E 48x: being searched next (see docs/knowledge/tuning-results.md).
+## E-clusters — 48x alternative (OC point 48x, point 6 -120 mV, E turbo 48x8; 3 all-core builds per step)
+| OC 48x target | VID under load | Result |
+|---|---|---|
+| 1.240 V | 1.243 | 1 build clean, stopped (operator: too high); P fell to 51-52x (current limit 0x64F bit 8) |
+| **1.185 V (alternative)** | **1.185** | 3/3 — 20 mV above the first failure |
+| 1.175 V (edge) | 1.175 | 3/3 |
+| 1.165 V | 1.1675 | FAIL (ICE build 1, cpu 21 = EC3) |
+Profile `good-p53p55-fav-e48-1185.toml`: `restore-good.sh good-p53p55-fav-e48-1185`. Earlier 48x failures: 1.157 V without an OC point (cpu 8) and
+the accepted 1.123/1.112 V (cpu 13) — both below this edge.
 
 Runtime-only (not in the profile): PL2 295 W (BIOS 280 W), PL1 265 W.
