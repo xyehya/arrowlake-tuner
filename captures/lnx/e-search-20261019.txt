@@ -36,3 +36,13 @@ RESULT e48-1175 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:48x/1.1750V EC1:
 applied e48-1165 (non-verified writes: 0) load sample: EC0:48x/1.1675V EC1:48x/1.1675V EC2:48x/1.1675V EC3:48x/1.1675V
 RESULT e48-1165 builds=/3 ice=0 segv_cpus=[021 ] mce=0 sample=[EC0:48x/1.1675V EC1:48x/1.1675V EC2:48x/1.1675V EC3:48x/1.1675V] stop=pkill: killing pid 280172 failed: Operation not permitted
 2026-10-20T02:54:11+03:00 e48-1175 + PL1 250 / PL2 295 / tau 120 s (operator)
+applied e47-0 (non-verified writes: 0) load sample: EC0:47x/1.0575V EC1:47x/1.0375V EC2:47x/1.0375V EC3:47x/1.0375V
+RESULT e47-0 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0575V EC1:47x/1.0375V EC2:47x/1.0375V EC3:47x/1.0375V] stop=ENDED 2026-10-20T05:40:30+03:00 without an ICE
+applied e47-0 (non-verified writes: 0) load sample: EC0:47x/1.0575V EC1:47x/1.0375V EC2:47x/1.0375V EC3:47x/1.0375V
+RESULT e47-0 builds=3/10 ice=0 segv_cpus=[023 ] mce=0 sample=[EC0:47x/1.0575V EC1:47x/1.0375V EC2:47x/1.0375V EC3:47x/1.0375V] stop=pkill: killing pid 29280 failed: Operation not permitted
+applied e47-1 (non-verified writes: 0) load sample: EC0:47x/1.0775V EC1:47x/1.0575V EC2:47x/1.0575V EC3:47x/1.0575V
+RESULT e47-1 builds=2/3 ice=0 segv_cpus=[023 ] mce=0 sample=[EC0:47x/1.0775V EC1:47x/1.0575V EC2:47x/1.0575V EC3:47x/1.0575V] stop=pkill: killing pid 29936 failed: Operation not permitted
+applied e47-2 (non-verified writes: 0) load sample: EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V
+RESULT e47-2 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V] stop=ENDED 2026-10-20T05:51:20+03:00 without an ICE
+applied e47-2 (non-verified writes: 0) load sample: EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V
+RESULT e47-2 builds=10/10 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V] stop=ENDED 2026-10-20T06:10:14+03:00 without an ICE
