@@ -1,6 +1,7 @@
 # Known-good tuning state (2026-10-19, Core Ultra 9 285K, Z890 Steel Legend, BIOS: UVP off, E max 46x, 6400 MT/s)
 
-Restore at any time:  `~/AI/arrowlake-tuner/captures/lnx/profiles/restore-good.sh`
+Restore at any time:  `~/AI/arrowlake-tuner/captures/lnx/profiles/restore-good.sh` (46x default)
+Current (2026-10-20): `restore-good.sh good-p58-e47-1077` — E 47x 1.077 V all clusters + P0 58x OC + P turbo 58,58,55x6 (see the 47x section)
 Profile: `good-p53p55-fav-e46m100.toml` (one guarded apply; writes all P points 1-8, E point 6, P and E turbo tables).
 
 ## P-cores — per-point offsets (mV, as stored: 1/1024 V steps) and resulting VID under load
@@ -54,3 +55,13 @@ the accepted 1.123/1.112 V (cpu 13) — both below this edge.
 Runtime-only (not in the profile): PL2 295 W (BIOS 280 W), PL1 265 W.
 
 Lesson: a 3-build pass next to a failure is not stable — 46x -120 and 48x 1.175 V both failed late in long runs (EC3). Confirm with 15.
+
+## E 47x + P0 58x (2026-10-20) — profile good-p58-e47-1077 (restore-good.sh good-p58-e47-1077)
+P: the known-good undervolt + P0 OC 58x at 1426 mV (= fused 57x V; 1-thread P0 runs 58x at 1.429 V) + P turbo 58,58,55x6. E: OC point 47x + point 6 -100, E turbo 47x8.
+| E 47x OC target (EC0 / EC1-3) | Result |
+|---|---|
+| 1.057 / 1.037 | 3/3 screen, then 10-run: ICE build 4 cpu 23 (EC3) — FAIL |
+| 1.077 / 1.057 | ICE build 3 cpu 23 (EC3) — FAIL |
+| 1.097 / 1.077 | 3/3 + 10/10 |
+| **1.077 all clusters (chosen)** | **10/10** (VID 1.0775 under load) |
+BIOS for this: P turbo/E 46 as set, PL1 250 / PL2 295 W, tau 79 s (BIOS). Not yet 15 builds; OCCT/Linpack pending.

@@ -46,3 +46,5 @@ applied e47-2 (non-verified writes: 0) load sample: EC0:47x/1.0975V EC1:47x/1.07
 RESULT e47-2 builds=3/3 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V] stop=ENDED 2026-10-20T05:51:20+03:00 without an ICE
 applied e47-2 (non-verified writes: 0) load sample: EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V
 RESULT e47-2 builds=10/10 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0975V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V] stop=ENDED 2026-10-20T06:10:14+03:00 without an ICE
+applied e47-u1077 (non-verified writes: 0) load sample: EC0:47x/1.0775V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V
+RESULT e47-u1077 builds=10/10 ice=0 segv_cpus=[] mce=0 sample=[EC0:47x/1.0775V EC1:47x/1.0775V EC2:47x/1.0775V EC3:47x/1.0775V] stop=ENDED 2026-10-20T06:29:03+03:00 without an ICE

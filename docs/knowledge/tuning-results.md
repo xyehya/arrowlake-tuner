@@ -91,3 +91,4 @@ BIOS or mailbox 0x16/0x17, not allowlisted) [inference: bit 8 = IccMax/EDP is UN
   During the run: E 48x 100 %, P 54x ~85 % / 55x ~7 %, package ~231 W avg (243 max), 0x64F bit 8 intermittent.
 - 2026-10-20 03:39: E 46x pt6 -120 (P state B, PL1 250/PL2 295): 12/15, ICE build 13 cpu 21 (EC3). Long runs move the edge; next -100 x15.
 - 2026-10-20 04:08: E 46x pt6 -100 (P state B, PL1 250/PL2 295/tau 112 s): **15/15**, 111-114 s, MCE 0, 0 SIGSEGV. Known-good = -100 (good-p53p55-fav-e46m100.toml).
+- 2026-10-20 06:29: E 47x OC 1.077 V all clusters (+P0 58x OC 1426 mV, turbo P 58,58,55x6 E 47x8): 10/10. 1.057/1.037 failed b4 of 10, 1.077/1.057 failed b3 (EC3).
