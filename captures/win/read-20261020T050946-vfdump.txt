@@ -1,0 +1,6 @@
+﻿vf-dump: up to 155 guard-mediated mailbox READ requests on the ThrottleStop driver (Windows), CPUs 0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20 (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11) and the ring (cmd 0x10 P1=2 via cpu 0, P2 = 0 and each point until the first rc 0x11, at most 11 reads), one at a time, 0 s apart; normally one per point of each CPU (the budget is the worst case: P2 <= 10, as far as the policy allows).
+A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.
+Identity check first (--device-win): 12 guarded reads of cmd 0x09 P1=0x11 P2=0 (every P-core and the first CPU of each E cluster), matched with the fused V/F words recorded in the accepted state's fingerprint.json; any mismatch refuses the whole session before a write.
+To proceed type exactly:  CONFIRM f86edef6
+> refused: identity check failed: the P-core logical processor of slot CPU 0 reads fused word 0x0, which no P-core of the accepted state recorded. The Linux CPU -> Windows LP map cannot be established from what the CPU reports. No write was sent.
+

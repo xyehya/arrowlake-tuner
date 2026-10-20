@@ -14,7 +14,13 @@ Code: `tools/win/*`, `src/arltuner/msr/winport.py`. Procedure for users: `docs/g
 | Load | each run writes a new uniquely named copy, re-verifies directory ACL, reparse points and SHA-256, `sc create ThrottleStop type= kernel start= demand` + `sc start`; `\\.\ThrottleStop` must open. After the run the service and the copy are deleted (D-042) |
 | Never run beside it | the ThrottleStop GUI, XTU, HWiNFO driver features or an elevated OCCT (all are mailbox clients) |
 Config/security: Memory integrity (HVCI/VBS) must be OFF. With the Microsoft Vulnerable Driver Blocklist ON the driver loaded on Win11 26200/26300
-[MEASURED win 2026-10-02]. ThrottleStop.sys was abused by malware in 2025 and may be blocklisted later: errors 1275 / 577 / "blocked" -> route closed
+[MEASURED win 2026-10-02], and again on a fresh Win11 26300 install with the blocklist ON (value 1) after DG_Readiness_Tool v3.6 `-Disable`
+(Bitdefender's own Memory-integrity toggle did not take) [MEASURED win 2026-10-20]. First real `restore_tuning.ps1 -Orchestrated` run on that install:
+identity 12/12, RESTORED (11 OK + cpu0 EQUIVALENT OC word 0x39), 317 mailbox ops, WHEA 0 [MEASURED win 2026-10-20].
+**Hypervisor (WSL2) blocks the mailbox:** with only Virtual Machine Platform enabled (HVCI and Credential Guard off), Windows starts the hypervisor and the VBS base layer
+(Win32_DeviceGuard VBS status 2, no services running); the driver still loads, but the first identity read (cmd 0x09 via MSR 0x150) returns fused word 0x0, so
+the guard refuses before any write. Hyper-V logs NO event 12550 for it: the access is filtered silently [MEASURED win 2026-10-20]. ⇒ no runtime tuning while
+the hypervisor runs. ThrottleStop.sys was abused by malware in 2025 and may be blocklisted later: errors 1275 / 577 / "blocked" -> route closed
 (alternatives PawnIO, Intel IPF stack: unexplored). The device ACL is SYSTEM + Administrators only (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
 
 ## 2. IOCTL interface [DECOMPILED win-throttlestop-fivr.md s1, driver ioctl.c]

@@ -1,0 +1,186 @@
+vf-dump: up to 155 guard-mediated mailbox READ requests on the ThrottleStop driver (Windows), CPUs 0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20 (cmd 0x10 P1=0, P2 = 0 and each point until the first rc 0x11) and the ring (cmd 0x10 P1=2 via cpu 0, P2 = 0 and each point until the first rc 0x11, at most 11 reads), one at a time, 0 s apart; normally one per point of each CPU (the budget is the worst case: P2 <= 10, as far as the policy allows).
+A mailbox read is a WRMSR to MSR 0x150 (hardware-write tier, docs/SAFETY.md). No write command is sent.
+Identity check first (--device-win): 12 guarded reads of cmd 0x09 P1=0x11 P2=0 (every P-core and the first CPU of each E cluster), matched with the fused V/F words recorded in the accepted state's fingerprint.json; any mismatch refuses the whole session before a write.
+To proceed type exactly:  CONFIRM fda28385
+> 
+identity check passed: 12 guarded reads matched the accepted state's fused V/F words (0 P-cores were in a different order than the first guess).
+vf-dump: 122 mailbox reads, 109 words, 12 CPU(s) + the ring
+P-Core 0   [read CPU 0]
+  point  ratio  offset (mV, raw)
+  OC       57x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -49.8 mV (raw -51)
+  6        55x  -28.3 mV (raw -29)
+  7        56x  -14.6 mV (raw -15)
+  8        57x  -75.2 mV (raw -77)
+  OC word 0x00000039: ratio 57x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 1   [read CPU 1]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -49.8 mV (raw -51)
+  6        55x  -36.1 mV (raw -37)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 2   [read CPU 2]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -71.3 mV (raw -73)
+  6        55x  -95.7 mV (raw -98)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 3   [read CPU 3]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -49.8 mV (raw -51)
+  6        55x  -28.3 mV (raw -29)
+  7        56x  -14.6 mV (raw -15)
+  8        57x  -75.2 mV (raw -77)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 4   [read CPU 4]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -49.8 mV (raw -51)
+  6        55x  -48.8 mV (raw -50)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 5   [read CPU 5]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -60.5 mV (raw -62)
+  6        55x  -87.9 mV (raw -90)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 6   [read CPU 6]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -49.8 mV (raw -51)
+  6        55x  -76.2 mV (raw -78)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+P-Core 7   [read CPU 7]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        20x  +0.0 mV (raw 0)
+  3        30x  +0.0 mV (raw 0)
+  4        48x  +0.0 mV (raw 0)
+  5        53x  -71.3 mV (raw -73)
+  6        55x  -106.4 mV (raw -109)
+  7        56x  +0.0 mV (raw 0)
+  8        57x  +0.0 mV (raw 0)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=9
+
+E-cluster 0 (CPUs 8-11)   [read CPU 8]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        15x  +0.0 mV (raw 0)
+  3        23x  +0.0 mV (raw 0)
+  4        30x  +0.0 mV (raw 0)
+  5        40x  +0.0 mV (raw 0)
+  6        46x  -99.6 mV (raw -102)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=7
+
+E-cluster 1 (CPUs 12-15)   [read CPU 12]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        15x  +0.0 mV (raw 0)
+  3        23x  +0.0 mV (raw 0)
+  4        30x  +0.0 mV (raw 0)
+  5        40x  +0.0 mV (raw 0)
+  6        46x  -99.6 mV (raw -102)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=7
+
+E-cluster 2 (CPUs 16-19)   [read CPU 16]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        15x  +0.0 mV (raw 0)
+  3        23x  +0.0 mV (raw 0)
+  4        30x  +0.0 mV (raw 0)
+  5        40x  +0.0 mV (raw 0)
+  6        46x  -99.6 mV (raw -102)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=7
+
+E-cluster 3 (CPUs 20-23)   [read CPU 20]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (raw 0)
+  1         8x  +0.0 mV (raw 0)
+  2        15x  +0.0 mV (raw 0)
+  3        23x  +0.0 mV (raw 0)
+  4        30x  +0.0 mV (raw 0)
+  5        40x  +0.0 mV (raw 0)
+  6        46x  -99.6 mV (raw -102)
+  OC word 0x00000000: ratio 0x, V target 0 (tracks the top fused point), adaptive, offset +0.0 mV (raw 0)
+  table end: rc 0x11 at P2=7
+
+DIFFERENCES between P-cores / between the CPUs of one E-cluster (tables are per core: the favored P-cores 0 and 3 may boost higher):
+  P-cores point 5: offset differs (-49.8 mV (raw -51): cpu 0, 1, 3, 4, 6; -71.3 mV (raw -73): cpu 2, 7; -60.5 mV (raw -62): cpu 5)
+  P-cores point 6: offset differs (-28.3 mV (raw -29): cpu 0, 3; -36.1 mV (raw -37): cpu 1; -95.7 mV (raw -98): cpu 2; -48.8 mV (raw -50): cpu 4; -87.9 mV (raw -90): cpu 5; -76.2 mV (raw -78): cpu 6; -106.4 mV (raw -109): cpu 7)
+  P-cores point 7: offset differs (-14.6 mV (raw -15): cpu 0, 3; +0.0 mV (raw 0): cpu 1, 2, 4, 5, 6, 7)
+  P-cores point 8: offset differs (-75.2 mV (raw -77): cpu 0, 3; +0.0 mV (raw 0): cpu 1, 2, 4, 5, 6, 7)
+Ring (cache, domain P1=2)   [read CPU 0]
+  point  ratio  offset (mV, raw)
+  OC        0x  +0.0 mV (+0)
+  1         8x  +0.0 mV (+0)
+  2        14x  +0.0 mV (+0)
+  3        20x  +0.0 mV (+0)
+  4        28x  +0.0 mV (+0)
+  5        34x  +0.0 mV (+0)
+  6        37x  +0.0 mV (+0)
+  7        38x  +0.0 mV (+0)
+  8        39x  +0.0 mV (+0)
+  OC word 0x00000000 (BIOS-owned: recorded and compared, never written)
+  table end: rc 0x11 at P2=9
+
