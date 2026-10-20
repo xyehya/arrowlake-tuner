@@ -1,7 +1,7 @@
 # Known-good tuning state (2026-10-19, Core Ultra 9 285K, Z890 Steel Legend, BIOS: UVP off, E max 46x, 6400 MT/s)
 
 Restore at any time:  `~/AI/arrowlake-tuner/captures/lnx/profiles/restore-good.sh` (46x default)
-Current (2026-10-20): `restore-good.sh good-p58-e47-1077` — E 47x 1.077 V all clusters + P0 58x OC + P turbo 58,58,55x6 (see the 47x section)
+Current (2026-10-20): `restore-good.sh good-p58-e47-2` — E 47x EC0 1.097 / EC1-3 1.077 V + P0 58x OC + P turbo 58,58,55x6 (see the 47x section)
 Profile: `good-p53p55-fav-e46m100.toml` (one guarded apply; writes all P points 1-8, E point 6, P and E turbo tables).
 
 ## P-cores — per-point offsets (mV, as stored: 1/1024 V steps) and resulting VID under load
@@ -64,5 +64,7 @@ P: the known-good undervolt + P0 OC 58x at 1426 mV (= fused 57x V; 1-thread P0 r
 | 1.077 / 1.057 | ICE build 3 cpu 23 (EC3) — FAIL |
 | 1.097 / 1.077 | 3/3 + 10/10 |
 | 1.077 all clusters | 10/10 (old tuned profile); then under hpc-compute-zram on llama.cpp b11748: ICE build 2 on **cpu 8 (EC0)** — FAIL; operator's own build also ICE'd |
-| **1.097 / 1.077 (e47-2, back to this)** | 10/10 (old tuned profile); hpc-compute-zram not yet tested |
+| **1.097 / 1.077 (e47-2, chosen)** | 10/10 (balanced) + **10/10 hpc-compute-zram, b11748** — accepted (Linux + Windows), GUI profile good-p58-e47-2 |
 BIOS for this: P turbo/E 46 as set, PL1 250 / PL2 295 W, tau 79 s (BIOS). Not yet 15 builds; OCCT/Linpack pending.
+
+Tuned profile matters: under hpc-compute-zram (min=max HWP, C1-only) an all-core build runs ~257 W / 86 C vs ~220-240 W / ~60-66 C under balanced; validate under the harshest profile.

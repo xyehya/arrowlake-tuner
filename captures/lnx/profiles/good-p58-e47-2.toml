@@ -1,90 +1,46 @@
-# Accepted 2026-10-20T03:31:22Z from saved profile good-p58-e47-1077. Written by arltuner (profiles.accept); replace it the same way, never by hand.
+# good-p58-e47-2 (PASSED 10/10 balanced + 10/10 hpc-compute-zram on llama.cpp b11748, 2026-10-20): E 47x OC  EC0 1097 mV / EC1-3 1077 mV; P0 OC 58x at 1426 mV (fused 57x V); turbo P 58,58,55x6 E 47x8; rest = good-p53p55-fav-e46m100
+# good-p53p55-fav-e46m100 — KNOWN-GOOD state (2026-10-19), restorable any time:
+#  P: 53x <= 1.200 V, 55x 1.270 V group, P0/P3 56x -15 / 57x -75 mV (57x clamps to V(56x)), P turbo 57/57/55x6
+#     passed 15/15 all-core compile (uv-p53p55-e46), 2/2 all-core (uv-fav5675), 1 build pinned to P0+P3, stress-ng P0+P3 at 56x/57x.
+#  E: 46x, point 6 -100 mV all clusters, E turbo 46x8 — PASSED 15/15 all-core compile (e46m100-x15, 2026-10-20). -120 failed at build 13 (EC3 cpu 21).
+#  Leaves any existing E OC point in place (only a cold boot clears one); the 46x8 E table keeps E at 46x regardless.
 [meta]
-name = "good-p58-e47-1077"
+name = "good-p58-e47-2"
 platform = "arl-s"
-complete = true  # G-148 (D-044): the whole tuning state of the CPU; applying it writes only the words that differ
+
+[turbo]
+p = [58, 58, 55, 55, 55, 55, 55, 55]  # P0 58x OC at 1-2 active cores, all-core 55x
+e = [47, 47, 47, 47, 47, 47, 47, 47]  # E 47x via the OC point
 
 [[core]]
 kind = "P"
 index = 0
-fused_top_ratio = 57
 ratio = 58
 oc_voltage_mv = 1426
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 1
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 2
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 3
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 4
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 5
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 6
-fused_top_ratio = 57
-offset_mv = 0
-
-[[core]]
-kind = "P"
-index = 7
-fused_top_ratio = 57
-offset_mv = 0
 
 [[core]]
 kind = "E"
 index = 0
-fused_top_ratio = 46
 ratio = 47
-oc_voltage_mv = 1077
-offset_mv = 0
+oc_voltage_mv = 1097
 
 [[core]]
 kind = "E"
 index = 4
-fused_top_ratio = 46
 ratio = 47
 oc_voltage_mv = 1077
-offset_mv = 0
 
 [[core]]
 kind = "E"
 index = 8
-fused_top_ratio = 46
 ratio = 47
 oc_voltage_mv = 1077
-offset_mv = 0
 
 [[core]]
 kind = "E"
 index = 12
-fused_top_ratio = 46
 ratio = 47
 oc_voltage_mv = 1077
-offset_mv = 0
 
 [[point]]
 kind = "P"
@@ -537,79 +493,9 @@ expect_ratio = 57
 [[point]]
 kind = "E"
 index = 0
-point = 1
-offset_mv = 0
-expect_ratio = 8
-
-[[point]]
-kind = "E"
-index = 0
-point = 2
-offset_mv = 0
-expect_ratio = 15
-
-[[point]]
-kind = "E"
-index = 0
-point = 3
-offset_mv = 0
-expect_ratio = 23
-
-[[point]]
-kind = "E"
-index = 0
-point = 4
-offset_mv = 0
-expect_ratio = 30
-
-[[point]]
-kind = "E"
-index = 0
-point = 5
-offset_mv = 0
-expect_ratio = 40
-
-[[point]]
-kind = "E"
-index = 0
 point = 6
 offset_mv = -100
 expect_ratio = 46
-
-[[point]]
-kind = "E"
-index = 4
-point = 1
-offset_mv = 0
-expect_ratio = 8
-
-[[point]]
-kind = "E"
-index = 4
-point = 2
-offset_mv = 0
-expect_ratio = 15
-
-[[point]]
-kind = "E"
-index = 4
-point = 3
-offset_mv = 0
-expect_ratio = 23
-
-[[point]]
-kind = "E"
-index = 4
-point = 4
-offset_mv = 0
-expect_ratio = 30
-
-[[point]]
-kind = "E"
-index = 4
-point = 5
-offset_mv = 0
-expect_ratio = 40
 
 [[point]]
 kind = "E"
@@ -621,41 +507,6 @@ expect_ratio = 46
 [[point]]
 kind = "E"
 index = 8
-point = 1
-offset_mv = 0
-expect_ratio = 8
-
-[[point]]
-kind = "E"
-index = 8
-point = 2
-offset_mv = 0
-expect_ratio = 15
-
-[[point]]
-kind = "E"
-index = 8
-point = 3
-offset_mv = 0
-expect_ratio = 23
-
-[[point]]
-kind = "E"
-index = 8
-point = 4
-offset_mv = 0
-expect_ratio = 30
-
-[[point]]
-kind = "E"
-index = 8
-point = 5
-offset_mv = 0
-expect_ratio = 40
-
-[[point]]
-kind = "E"
-index = 8
 point = 6
 offset_mv = -100
 expect_ratio = 46
@@ -663,88 +514,6 @@ expect_ratio = 46
 [[point]]
 kind = "E"
 index = 12
-point = 1
-offset_mv = 0
-expect_ratio = 8
-
-[[point]]
-kind = "E"
-index = 12
-point = 2
-offset_mv = 0
-expect_ratio = 15
-
-[[point]]
-kind = "E"
-index = 12
-point = 3
-offset_mv = 0
-expect_ratio = 23
-
-[[point]]
-kind = "E"
-index = 12
-point = 4
-offset_mv = 0
-expect_ratio = 30
-
-[[point]]
-kind = "E"
-index = 12
-point = 5
-offset_mv = 0
-expect_ratio = 40
-
-[[point]]
-kind = "E"
-index = 12
 point = 6
 offset_mv = -100
 expect_ratio = 46
-
-[ring]
-oc_word = 0x00000000  # G-154: the ring OC word as read (BIOS-owned: compared on a restore, never written)
-
-[[ring.point]]
-point = 1
-offset_mv = 0
-expect_ratio = 8
-
-[[ring.point]]
-point = 2
-offset_mv = 0
-expect_ratio = 14
-
-[[ring.point]]
-point = 3
-offset_mv = 0
-expect_ratio = 20
-
-[[ring.point]]
-point = 4
-offset_mv = 0
-expect_ratio = 28
-
-[[ring.point]]
-point = 5
-offset_mv = 0
-expect_ratio = 34
-
-[[ring.point]]
-point = 6
-offset_mv = 0
-expect_ratio = 37
-
-[[ring.point]]
-point = 7
-offset_mv = 0
-expect_ratio = 38
-
-[[ring.point]]
-point = 8
-offset_mv = 0
-expect_ratio = 39
-
-[turbo]
-e = [47, 47, 47, 47, 47, 47, 47, 47]
-p = [58, 58, 55, 55, 55, 55, 55, 55]

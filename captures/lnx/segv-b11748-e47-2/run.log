@@ -1,0 +1,11 @@
+CASE A1-all pin='all' -j 24 wall=108s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A2-all pin='all' -j 24 wall=108s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A3-all pin='all' -j 24 wall=109s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A4-all pin='all' -j 24 wall=109s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A5-all pin='all' -j 24 wall=109s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A6-all pin='all' -j 24 wall=109s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A7-all pin='all' -j 24 wall=107s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A8-all pin='all' -j 24 wall=108s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A9-all pin='all' -j 24 wall=107s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+CASE A10-all pin='all' -j 24 wall=107s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+ALLDONE /home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-b11748-e47-2-20261020T073104-summary.txt
