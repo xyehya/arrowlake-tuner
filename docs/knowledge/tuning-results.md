@@ -89,3 +89,4 @@ BIOS or mailbox 0x16/0x17, not allowlisted) [inference: bit 8 = IccMax/EDP is UN
 - 2026-10-20 03:12: E 48x OC 1.175 V (pt6 -120), P state B, PL1 250 / PL2 295 / tau 112 s: 10-build run 9/10 — ICE in build 10 on cpu 23 (EC3), GCC 15
   version.h:1. A 3-build screen at the edge is not enough; 1.185 V (20 mV above the 1.165 V failure) is the 48x working value, unconfirmed at 10/15 builds.
   During the run: E 48x 100 %, P 54x ~85 % / 55x ~7 %, package ~231 W avg (243 max), 0x64F bit 8 intermittent.
+- 2026-10-20 03:39: E 46x pt6 -120 (P state B, PL1 250/PL2 295): 12/15, ICE build 13 cpu 21 (EC3). Long runs move the edge; next -100 x15.

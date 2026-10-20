@@ -1,0 +1,4 @@
+STOP 2026-10-20T03:39:14+03:00: ice_log=/home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-good-e46m120-x15-20261020T031636-A13-all.log mce=0 (was 0)
+/usr/include/c++/15/bits/version.h:1: internal compiler error: Segmentation fault
+pkill: killing pid 338254 failed: Operation not permitted
+pkill: killing pid 338257 failed: Operation not permitted
