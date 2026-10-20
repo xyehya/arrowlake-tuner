@@ -1,0 +1,27 @@
+CASE A1-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A2-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A3-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A4-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A5-all pin='all' -j 24 wall=110s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A6-all pin='all' -j 24 wall=110s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A7-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A8-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A9-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1531
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
