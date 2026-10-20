@@ -92,3 +92,4 @@ BIOS or mailbox 0x16/0x17, not allowlisted) [inference: bit 8 = IccMax/EDP is UN
 - 2026-10-20 03:39: E 46x pt6 -120 (P state B, PL1 250/PL2 295): 12/15, ICE build 13 cpu 21 (EC3). Long runs move the edge; next -100 x15.
 - 2026-10-20 04:08: E 46x pt6 -100 (P state B, PL1 250/PL2 295/tau 112 s): **15/15**, 111-114 s, MCE 0, 0 SIGSEGV. Known-good = -100 (good-p53p55-fav-e46m100.toml).
 - 2026-10-20 06:29: E 47x OC 1.077 V all clusters (+P0 58x OC 1426 mV, turbo P 58,58,55x6 E 47x8): 10/10. 1.057/1.037 failed b4 of 10, 1.077/1.057 failed b3 (EC3).
+- 2026-10-20 07:14: E 47x 1.077 V uniform under tuned hpc-compute-zram, llama.cpp b11748: ICE build 2 on cpu 8 (EC0), mmq-instance TU, MCE 0 — first traced EC0 failure; EC0 needs its +20 mV (fused V 20 mV above EC1-3). Back to e47-2 (EC0 1.097 / EC1-3 1.077).

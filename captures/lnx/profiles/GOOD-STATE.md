@@ -63,5 +63,6 @@ P: the known-good undervolt + P0 OC 58x at 1426 mV (= fused 57x V; 1-thread P0 r
 | 1.057 / 1.037 | 3/3 screen, then 10-run: ICE build 4 cpu 23 (EC3) — FAIL |
 | 1.077 / 1.057 | ICE build 3 cpu 23 (EC3) — FAIL |
 | 1.097 / 1.077 | 3/3 + 10/10 |
-| **1.077 all clusters (chosen)** | **10/10** (VID 1.0775 under load) |
+| 1.077 all clusters | 10/10 (old tuned profile); then under hpc-compute-zram on llama.cpp b11748: ICE build 2 on **cpu 8 (EC0)** — FAIL; operator's own build also ICE'd |
+| **1.097 / 1.077 (e47-2, back to this)** | 10/10 (old tuned profile); hpc-compute-zram not yet tested |
 BIOS for this: P turbo/E 46 as set, PL1 250 / PL2 295 W, tau 79 s (BIOS). Not yet 15 builds; OCCT/Linpack pending.

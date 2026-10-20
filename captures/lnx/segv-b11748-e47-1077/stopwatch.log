@@ -1,0 +1,4 @@
+STOP 2026-10-20T07:14:13+03:00: ice_log=/home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-b11748-e47-1077-20261020T071131-A2-all.log mce=0 (was 0)
+/usr/include/c++/15/bits/version.h:1: internal compiler error: Segmentation fault
+pkill: killing pid 382812 failed: Operation not permitted
+pkill: killing pid 382813 failed: Operation not permitted
