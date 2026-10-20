@@ -1,7 +1,7 @@
 # Known-good tuning state (2026-10-19, Core Ultra 9 285K, Z890 Steel Legend, BIOS: UVP off, E max 46x, 6400 MT/s)
 
 Restore at any time:  `~/AI/arrowlake-tuner/captures/lnx/profiles/restore-good.sh`
-Profile: `good-p53p55-fav-e46m120.toml` (one guarded apply; writes all P points 1-8, E point 6, P and E turbo tables).
+Profile: `good-p53p55-fav-e46m100.toml` (one guarded apply; writes all P points 1-8, E point 6, P and E turbo tables).
 
 ## P-cores — per-point offsets (mV, as stored: 1/1024 V steps) and resulting VID under load
 Stock VIDs = baseline measured 2026-10-11 (offsets 0). Points 1-4 (8/20/30/48x) are 0 on every core.
@@ -30,9 +30,9 @@ P0+P3 (-j2, 804 s) · stress-ng P0+P3 120 s capped at 56x and at 57x. MCE 0 thro
 | -40 | 1.118 | 1.098 | 3/3 |
 | -60 | 1.098 | 1.078 | 3/3 |
 | -80 | 1.078 | 1.058 | 3/3 |
-| -100 | 1.058 | 1.038 | 3/3 |
-| **-120 (chosen)** | **1.038** | **1.018** | 3/3 |
-| -140 (edge) | 1.018 | 0.998 | 3/3 |
+| **-100 (chosen)** | **1.058** | **1.038** | **15/15** (e46m100-x15, 2026-10-20) |
+| -120 | 1.038 | 1.018 | 3/3 screen, then 12/15 — ICE build 13, cpu 21 (EC3) |
+| -140 | 1.018 | 0.998 | 3/3 screen only |
 | -150 | 1.007 | 0.988 | FAIL (ICE build 3, cpu 21 = EC3) |
 | -160 | 0.998 | 0.978 | FAIL (ICE build 1, cpu 21 = EC3) |
 
@@ -41,7 +41,7 @@ E turbo table 0x650: 46 x8. EC3 (cpus 20-23) is the weakest cluster; every E fai
 ## Not chosen
 - E 49x: edge OC 1.270 V (1.210/1.240/1.255 failed on EC3); at 49x/1.27 V the shared current limit (0x64F bit 8) pulls P to 46-54x under heavy load.
 - E 50x: not testable all-core — current limit (0x64F bit 8 at ~215 W) holds E at 49x and P at 48x.
-## E-clusters — 48x alternative (OC point 48x, point 6 -120 mV, E turbo 48x8; 3 all-core builds per step)
+## E-clusters — 48x alternative (OC point 48x, point 6 -100 mV, E turbo 48x8; 3 all-core builds per step)
 | OC 48x target | VID under load | Result |
 |---|---|---|
 | 1.240 V | 1.243 | 1 build clean, stopped (operator: too high); P fell to 51-52x (current limit 0x64F bit 8) |
@@ -52,3 +52,5 @@ Profile `good-p53p55-fav-e48-1185.toml`: `restore-good.sh good-p53p55-fav-e48-11
 the accepted 1.123/1.112 V (cpu 13) — both below this edge.
 
 Runtime-only (not in the profile): PL2 295 W (BIOS 280 W), PL1 265 W.
+
+Lesson: a 3-build pass next to a failure is not stable — 46x -120 and 48x 1.175 V both failed late in long runs (EC3). Confirm with 15.

@@ -1,0 +1,46 @@
+CASE A1-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A2-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A3-all pin='all' -j 24 wall=112s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A4-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A5-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A6-all pin='all' -j 24 wall=114s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A7-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A8-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A9-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A10-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A11-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A12-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A13-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A14-all pin='all' -j 24 wall=111s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+CASE A15-all pin='all' -j 24 wall=113s final_rc=0 failed_attempts=0 ice=0 failed_objs=[] kernel=[]
+klog_lines 1540
+--- new kernel lines (expected msr/filter_write/energy_model notices hidden):
+ALLDONE /home/yk/AI/arrowlake-tuner/captures/lnx/compile-stress-e46m100-x15-20261020T033957-summary.txt

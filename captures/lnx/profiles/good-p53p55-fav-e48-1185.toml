@@ -1,7 +1,7 @@
 # good-p53p55-fav-e48-1185 — ALTERNATIVE (E 48x) state (2026-10-19), restorable any time:
 #  P: 53x <= 1.200 V, 55x 1.270 V group, P0/P3 56x -15 / 57x -75 mV (57x clamps to V(56x)), P turbo 57/57/55x6
 #     passed 15/15 all-core compile (uv-p53p55-e46), 2/2 all-core (uv-fav5675), 1 build pinned to P0+P3, stress-ng P0+P3 at 56x/57x.
-#  E: OC point 48x adaptive 1.185 V all clusters + point 6 -120 mV, E turbo 48x8. 48x ladder: 1.185 / 1.175 pass 3/3, 1.165 FAIL (cpu 21, EC3).
+#  E: OC point 48x adaptive 1.185 V all clusters + point 6 -100 mV, E turbo 48x8. 48x ladder: 1.185 / 1.175 pass 3/3, 1.165 FAIL (cpu 21, EC3).
 #  Creates/moves the E OC point (only a cold boot clears it).
 [meta]
 name = "good-p53p55-fav-e48-1185"
@@ -487,26 +487,26 @@ expect_ratio = 57
 kind = "E"
 index = 0
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 4
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 8
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 12
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46

@@ -1,10 +1,10 @@
-# good-p53p55-fav-e46m120 — KNOWN-GOOD state (2026-10-19), restorable any time:
+# good-p53p55-fav-e46m100 — KNOWN-GOOD state (2026-10-19), restorable any time:
 #  P: 53x <= 1.200 V, 55x 1.270 V group, P0/P3 56x -15 / 57x -75 mV (57x clamps to V(56x)), P turbo 57/57/55x6
 #     passed 15/15 all-core compile (uv-p53p55-e46), 2/2 all-core (uv-fav5675), 1 build pinned to P0+P3, stress-ng P0+P3 at 56x/57x.
-#  E: 46x, point 6 -120 mV all clusters (edge -140; -150/-160 fail on EC3 cpu 21), E turbo 46x8; passed 3/3 builds per step down to -140.
+#  E: 46x, point 6 -100 mV all clusters, E turbo 46x8 — PASSED 15/15 all-core compile (e46m100-x15, 2026-10-20). -120 failed at build 13 (EC3 cpu 21).
 #  Leaves any existing E OC point in place (only a cold boot clears one); the 46x8 E table keeps E at 46x regardless.
 [meta]
-name = "good-p53p55-fav-e46m120"
+name = "good-p53p55-fav-e46m100"
 platform = "arl-s"
 
 [turbo]
@@ -463,26 +463,26 @@ expect_ratio = 57
 kind = "E"
 index = 0
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 4
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 8
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
 
 [[point]]
 kind = "E"
 index = 12
 point = 6
-offset_mv = -120
+offset_mv = -100
 expect_ratio = 46
