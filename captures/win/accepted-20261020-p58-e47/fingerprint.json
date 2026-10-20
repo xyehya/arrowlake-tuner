@@ -1,0 +1,204 @@
+{
+ "schema": 1,
+ "recorded": "2026-10-20T03:31:22Z",
+ "cpu": {
+  "vendor": "GenuineIntel",
+  "family": 6,
+  "model": 198,
+  "brand": "Intel(R) Core(TM) Ultra 9 285K"
+ },
+ "cpus": [
+  {
+   "cpu": 0,
+   "kind": "P",
+   "index": 0,
+   "cluster": null,
+   "favored": true,
+   "fused_word": "0x5B439"
+  },
+  {
+   "cpu": 1,
+   "kind": "P",
+   "index": 1,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x53839"
+  },
+  {
+   "cpu": 2,
+   "kind": "P",
+   "index": 2,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x57439"
+  },
+  {
+   "cpu": 3,
+   "kind": "P",
+   "index": 3,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x59439"
+  },
+  {
+   "cpu": 4,
+   "kind": "P",
+   "index": 4,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x54439"
+  },
+  {
+   "cpu": 5,
+   "kind": "P",
+   "index": 5,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x56C39"
+  },
+  {
+   "cpu": 6,
+   "kind": "P",
+   "index": 6,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x56039"
+  },
+  {
+   "cpu": 7,
+   "kind": "P",
+   "index": 7,
+   "cluster": null,
+   "favored": false,
+   "fused_word": "0x58039"
+  },
+  {
+   "cpu": 8,
+   "kind": "E",
+   "index": 0,
+   "cluster": 0,
+   "favored": false,
+   "fused_word": "0x4A02E"
+  },
+  {
+   "cpu": 9,
+   "kind": "E",
+   "index": 1,
+   "cluster": 0,
+   "favored": false,
+   "fused_word": "0x4A02E"
+  },
+  {
+   "cpu": 10,
+   "kind": "E",
+   "index": 2,
+   "cluster": 0,
+   "favored": false,
+   "fused_word": "0x4A02E"
+  },
+  {
+   "cpu": 11,
+   "kind": "E",
+   "index": 3,
+   "cluster": 0,
+   "favored": false,
+   "fused_word": "0x4A02E"
+  },
+  {
+   "cpu": 12,
+   "kind": "E",
+   "index": 4,
+   "cluster": 1,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 13,
+   "kind": "E",
+   "index": 5,
+   "cluster": 1,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 14,
+   "kind": "E",
+   "index": 6,
+   "cluster": 1,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 15,
+   "kind": "E",
+   "index": 7,
+   "cluster": 1,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 16,
+   "kind": "E",
+   "index": 8,
+   "cluster": 2,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 17,
+   "kind": "E",
+   "index": 9,
+   "cluster": 2,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 18,
+   "kind": "E",
+   "index": 10,
+   "cluster": 2,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 19,
+   "kind": "E",
+   "index": 11,
+   "cluster": 2,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 20,
+   "kind": "E",
+   "index": 12,
+   "cluster": 3,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 21,
+   "kind": "E",
+   "index": 13,
+   "cluster": 3,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 22,
+   "kind": "E",
+   "index": 14,
+   "cluster": 3,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  },
+  {
+   "cpu": 23,
+   "kind": "E",
+   "index": 15,
+   "cluster": 3,
+   "favored": false,
+   "fused_word": "0x48C2E"
+  }
+ ]
+}
