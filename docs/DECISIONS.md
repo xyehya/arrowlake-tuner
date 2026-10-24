@@ -268,3 +268,9 @@ it on reboot). Internal temporary tables of vf.measure / stress (journaled, rest
 D-050 consequence (G-236 review, 2026-10-19): a partial profile saved before G-148 (rows only, no `[turbo]`) whose OC ratio is above the table used to get
 the derived raise and now stays capped at the table (TURBO_BELOW_OC warns at plan time). Complete/accepted profiles store an explicit `[turbo]` and apply as
 before; the two stored profiles on the reference machine carry P [57,57,55x6] / E [48x8] (checked 2026-10-19), so no derived raise is hidden in them.
+
+## D-051 · Drop the P0 58x OC point; accepted state = good-p57-e47 (2026-10-24, operator)
+Operator: "it could be my overclock on cpu 0 of 5.8 ... its not that much of a perf lift so lets remove the oc and keep x57 as the top frequency with its
+undervolt offset kept in place". Trigger: 23 corrected MCEs incl. a CPU0 BANK0 CMCI storm in the boot that ran P0 58x (`docs/knowledge/tuning-results.md`
+2026-10-24). New accepted state on both hosts: good-p58-e47-2 minus the P0 OC point, P turbo 57,57,55x6; all P offsets and the E 47x OC unchanged.
+The Windows folder `captures/win/accepted-20261020-p58-e47-2` is superseded by `accepted-20261024-p57-e47`. Supersedes the P0 58x part of the 2026-10-20 acceptance.

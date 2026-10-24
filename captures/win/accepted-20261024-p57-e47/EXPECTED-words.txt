@@ -1,0 +1,16 @@
+# Accepted 2026-10-24T11:30:40Z from saved profile good-p57-e47. Written by arltuner (profiles.accept); replace it the same way, never by hand.
+# <linux cpu> <OC word P2=0> <point 1> ... <point n>   (hex, no 0x), one line per core / E-cluster that the last read covered.
+0  39 8 14 1E 30 F9A00035 FC600037 FE200038 F6600039
+1  0 8 14 1E 30 F9A00035 FB600037 38 39
+2  0 8 14 1E 30 F6E00035 F3C00037 38 39
+3  0 8 14 1E 30 F9A00035 FC600037 FE200038 F6600039
+4  0 8 14 1E 30 F9A00035 F9C00037 38 39
+5  0 8 14 1E 30 F8400035 F4C00037 38 39
+6  0 8 14 1E 30 F9A00035 F6400037 38 39
+7  0 8 14 1E 30 F6E00035 F2600037 38 39
+8  4632F 8 F 17 1E 28 F340002E 2F
+12  44F2F 8 F 17 1E 28 F340002E 2F
+16  44F2F 8 F 17 1E 28 F340002E 2F
+20  44F2F 8 F 17 1E 28 F340002E 2F
+# ring: the ring (cache, mailbox domain P1=2) as the last read found it: <OC word (BIOS-owned, compared, never written)> <point 1> ... <point n>
+ring  0 8 E 14 1C 22 25 26 27

@@ -1,7 +1,14 @@
 # STATE — live handoff (rewrite at end of every session; ≤ 80 lines)
 
-_Updated: 2026-10-19 17:10 · lnx · G-236..G-241 merged + installed, AppImage rebuilt. Suite **3455 Python OK (74 skipped), node 367, cargo OK**
-(`python3 tools/run_tests.py`). Operator is rebooting into Windows for unrelated tasks; resume on Linux with a fresh Re-read._
+_Updated: 2026-10-24 14:35 · lnx · state change only, no code (D-051). Last code session 2026-10-19: G-236..G-241 merged + installed, suite **3455 Python
+OK (74 skipped), node 367, cargo OK** (`python3 tools/run_tests.py`)._
+
+## 2026-10-24 — accepted state is now good-p57-e47 (D-051)
+- P0 58x OC point dropped after 23 corrected MCEs (CPU0 BANK0 CMCI storm) in the boot that ran p58 (`docs/knowledge/tuning-results.md`). `good-p57-e47`
+  = good-p58-e47-2 minus the P0 OC point, P turbo 57,57,55x6; offsets + E 47x OC unchanged. Applied 14:21 (all read back equal, MCE 0), accepted 11:30Z
+  (old state saved as `accepted-before-20261024-113040`). Linux: `captures/lnx/profiles/restore-good.sh good-p57-e47`; Windows:
+  `captures/win/accepted-20261024-p57-e47/` (p58 folder marked superseded). rasdaemon installed (MCE bank/status now kept).
+- The week's abrupt reboots were power (generator/EDL switchover via the inverter, all within 2.2 min of the hour), not tuning.
 
 ## Where we are
 - **Desktop app (D-046):** Tauri 2 AppImage `desktop/dist/arltuner-desktop-0.0.1-x86_64.AppImage` (Dashboard, Tune [Cores/Turbo/Power/Ring & uncore/

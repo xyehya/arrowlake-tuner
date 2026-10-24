@@ -94,3 +94,13 @@ BIOS or mailbox 0x16/0x17, not allowlisted) [inference: bit 8 = IccMax/EDP is UN
 - 2026-10-20 06:29: E 47x OC 1.077 V all clusters (+P0 58x OC 1426 mV, turbo P 58,58,55x6 E 47x8): 10/10. 1.057/1.037 failed b4 of 10, 1.077/1.057 failed b3 (EC3).
 - 2026-10-20 07:14: E 47x 1.077 V uniform under tuned hpc-compute-zram, llama.cpp b11748: ICE build 2 on cpu 8 (EC0), mmq-instance TU, MCE 0 — first traced EC0 failure; EC0 needs its +20 mV (fused V 20 mV above EC1-3). Back to e47-2 (EC0 1.097 / EC1-3 1.077).
 - 2026-10-20 07:49: e47-2 (EC0 1.097 / EC1-3 1.077) 10/10 under hpc-compute-zram on b11748 (107-109 s, MCE 0). Accepted as good-p58-e47-2. hpc-compute-zram: HWP min=max, cpu_dma_latency 1 us -> ~257 W / 86 C during builds vs ~220-240 W / 60-66 C balanced [MEASURED lnx 2026-10-20].
+
+## 2026-10-24 — corrected MCEs on CPU0 under P0 58x; OC dropped (D-051) [MEASURED lnx 2026-10-24]
+- Boot 2026-10-22 12:36 → 2026-10-24 14:00 ran good-p58-e47-2 (P0 OC 58x @ 1426 mV): **23** corrected "Machine check events logged", first 46 min after the
+  apply (13:22), incl. `CPU0 BANK0 CMCI storm detected` (06:23, subsided 06:24). Bank 0 on a P core = L1 data cache. No mcelog/rasdaemon then, so no
+  status/address; ABRT reported each as a "kernel oops" and deleted it. Every other boot that week: 0 MCE — including a 24 h boot on the same profile (Oct 21-22).
+- The machine's abrupt reboots that week are NOT this: all 7 since Oct 11 hit within 2.2 min of the hour (building generator / EDL switchover through the
+  inverter); no panic, no kdump vmcore, no boot-time MCE.
+- Operator dropped the P0 OC: profile `good-p57-e47` (= good-p58-e47-2 without the P0 OC point, P turbo 57,57,55x6), applied 14:21, all writes read back
+  equal, MCE 0; accepted 11:30Z (previous saved as accepted-before-20261024-113040). rasdaemon 0.8.0 installed — a recurrence at 57x now keeps bank/status.
+- segv-trace noise: `lscpu` SIGSEGV code=128 is its own VMware-backdoor probe (caught), run by ABRT for each oops — benign.

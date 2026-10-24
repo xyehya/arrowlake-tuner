@@ -1,0 +1,201 @@
+# policies/advanced-2026-10-11.toml -- ADVANCED-USER POLICY (D-032, operator yes 2026-10-11). Seeded to /etc/arltuner/policy.toml by install.sh
+# (--reseed-config replaces an existing one). Derived from policies/session-2026-10-02-points.toml; same allow entries, bounds opened to the numbers below.
+# Operator, verbatim: "remove the limitations on the mailbox writes and the amount of offsets or target voltages - this is for advanced users so they
+# know what they are doing. although in the drop down menus i dont think we can go above/below 200mv in offsets or the fused max of the p and e cores".
+#
+# What is OPEN (numbers, not mechanisms):
+#   offsets      runtime -200 ... +200 mV  (effective_offset_floor_mv = -200, offset_ceiling_mv = 200; code sanity ceiling raised 100 -> 200)
+#   steps        per write at the code maxima: ratio 8, V target 200 mV, offset 200 mV (the ramp profile is no longer required)
+#   V target     <= the hardware maximum of cmd 0x28 minus one: P 1625 mV, E 1355 mV [MEASURED win 2026-10-01]
+#   ratio        <= P 57 (fused max, 0x1C[15:8] on the favored cores [MEASURED]), E 49 (D-017, already run; 0x1C 46 is not an E cap [MEASURED])
+#   op caps      indicators only: 100000 per session and per boot; no dwell between operations
+# What is KEPT (safety mechanisms, not limits): one mailbox transaction at a time (2026-08-26 incident: sweeps, not budgets), the allowlist below
+# (default deny), the health gate, the audit log, the plan-bound nonce of tune.apply, the read-back of every write (a mismatch trips the guard).
+# Static/override voltage stays out (D-016: mode must be adaptive).
+
+cpus = ["0-23"]
+max_operations_per_session = 100000
+max_operations_per_boot = 100000
+min_dwell_s = 0.0
+
+
+[[allow]]
+name = "oc_capability_read"
+cmd = 0x01
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "per_core_capability_read"
+cmd = 0x02
+p1 = [0, 1, 2, 3, 4, 5, 6, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_floor_read"
+cmd = 0x09
+p1 = [0x11]
+p2 = [0, 2, 7]
+kind = "read"
+
+[[allow]]
+name = "favored_core_read"
+cmd = 0x1C
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "granular_ratio_read"
+cmd = 0x26
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "max_voltage_limit_read"
+cmd = 0x28
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_read"
+cmd = 0x14
+p1 = [0]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "voltage_freq_read"
+cmd = 0x10
+p1 = [0, 2, 7]
+p2 = [0]
+kind = "read"
+
+[[allow]]
+name = "vf_point_read"  # per-V/F-point word (E points 1..6, P points 1..8, one more when an OC ratio above the top point adds one); vf.dump walks to rc 0x11
+cmd = 0x10
+p1 = [0]
+p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+kind = "read"
+
+[[allow]]
+name = "misc_global_config_write"
+cmd = 0x15
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "percore_enable_only"
+
+[[allow]]
+name = "voltage_freq_write"  # the OC-ratio point (P2 = 0): ratio, adaptive V target, whole-curve offset
+cmd = 0x11
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "vf_bounded"
+
+[[allow]]
+name = "favored_core_write"
+cmd = 0x1D
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "favored_ratio_follows_vf"
+
+[[allow]]
+name = "granular_ratio_write"
+cmd = 0x27
+p1 = [0]
+p2 = [0]
+kind = "write"
+check = "granular_equals_read"
+
+[[allow]]
+name = "vf_point_write"  # per-point offsets: P points 1..8, E points 1..6 (tune.apply never writes a point beyond the table that was read)
+cmd = 0x11
+p1 = [0]
+p2 = [1, 2, 3, 4, 5, 6, 7, 8]
+kind = "write"
+check = "vf_point_offset_bounded"
+
+[[allow]]
+name = "ring_point_read"   # ring (domain P1=2) V/F point words, read-only (ring has 8 fused + OC per SkatterBencher)
+cmd = 0x10
+p1 = [2]
+p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+kind = "read"
+
+[[allow]]
+name = "ring_point_write"   # 2026-10-02 (T-028): ring (P1 2) V/F point offsets, operator-authorized runtime ring tuning (CLI point-offset only); P2 9 = the ring OC point (40x), operator yes 2026-10-15
+cmd = 0x11
+p1 = [2]
+p2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+kind = "write"
+check = "vf_point_offset_bounded"
+
+# --- plain-MSR access (T-023, D-017): the turbo ratio tables. Writes: 0x650 (E) and 0x1AD (P) on CPU 0 only, under turbo_ratio_bounded
+# (every byte non-zero, non-increasing bucket 0..7, at most ratio_max of its kind, within max_ratio_step of the table read this session). ---
+[[msr_allow]]
+name = "msr_0xce_read"
+msr = 0xCE
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x650_read"
+msr = 0x650
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x1ad_read"
+msr = 0x1AD
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x1ae_read"   # G-114: P bucket core counts (tune.read turbo.P.counts); read-only by policy
+msr = 0x1AE
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x651_read"   # G-114: E bucket core counts (tune.read turbo.E.counts); read-only by policy
+msr = 0x651
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x650_write"
+msr = 0x650
+kind = "write"
+cpus = [0]                       # the CPU XTU writes it on
+check = "turbo_ratio_bounded"
+
+[[msr_allow]]
+name = "msr_0x1ad_write"
+msr = 0x1AD
+kind = "write"
+cpus = [0]
+check = "turbo_ratio_bounded"
+
+[[msr_allow]]
+name = "msr_0x198_read"   # vf measurement: running ratio + requested VID
+msr = 0x198
+kind = "read"
+
+# --- 2026-10-18 · D-046/D-047 (H4): package power limits. Reads of 0x606/0x610/0x614 (never written); PL1/PL2/tau via powercap only.
+# Ceilings = this machine's BIOS values at boot (PL1 250 W, PL2 295 W, tau ~128 s): nothing above what the BIOS already runs. Backup: policy.toml.bak-2026-10-18
+[[msr_allow]]
+name = "msr_0x606_read"
+msr = 0x606
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x610_read"
+msr = 0x610
+kind = "read"
+
+[[msr_allow]]
+name = "msr_0x614_read"
+msr = 0x614
+kind = "read"

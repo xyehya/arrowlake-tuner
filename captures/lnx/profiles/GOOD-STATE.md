@@ -1,7 +1,10 @@
 # Known-good tuning state (2026-10-19, Core Ultra 9 285K, Z890 Steel Legend, BIOS: UVP off, E max 46x, 6400 MT/s)
 
 Restore at any time:  `~/AI/arrowlake-tuner/captures/lnx/profiles/restore-good.sh` (46x default)
-Current (2026-10-20): `restore-good.sh good-p58-e47-2` — E 47x EC0 1.097 / EC1-3 1.077 V + P0 58x OC + P turbo 58,58,55x6 (see the 47x section)
+Current (2026-10-24): `restore-good.sh good-p57-e47` — good-p58-e47-2 minus the P0 58x OC point: P top fused 57x (turbo 57,57,55x6), all P offsets kept
+(P0/P3 57x -75 mV), E 47x EC0 1.097 / EC1-3 1.077 V unchanged. Why: 23 corrected MCEs incl. "CPU0 BANK0 CMCI storm" in the Oct 22-24 boot that ran p58
+(an earlier 24 h p58 boot had 0); 58x gave little perf. Applied 2026-10-24 14:21, all writes read back equal, MCE 0 [MEASURED lnx 2026-10-24].
+Previous (2026-10-20): `restore-good.sh good-p58-e47-2` — E 47x EC0 1.097 / EC1-3 1.077 V + P0 58x OC + P turbo 58,58,55x6 (see the 47x section)
 Profile: `good-p53p55-fav-e46m100.toml` (one guarded apply; writes all P points 1-8, E point 6, P and E turbo tables).
 
 ## P-cores — per-point offsets (mV, as stored: 1/1024 V steps) and resulting VID under load

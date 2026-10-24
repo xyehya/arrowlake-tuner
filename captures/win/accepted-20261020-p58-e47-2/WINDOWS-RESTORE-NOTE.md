@@ -1,5 +1,8 @@
 # Windows restore — accepted state good-p58-e47-2 (2026-10-20, for the Claude agent on Windows)
 
+> **SUPERSEDED 2026-10-24 — do not restore this folder.** Use `captures/win/accepted-20261024-p57-e47/WINDOWS-RESTORE-NOTE.md`
+> (the same state without the P0 58× OC point; D-051). Kept for history only.
+
 This SUPERSEDES `captures/win/accepted-offsets-20261020/` (the offsets-only state). Read `AGENTS.md` and `docs/SAFETY.md` first; host `win`.
 The general procedure (prerequisites, preflight, init-dir, carve, rules) is the same as in
 `captures/win/accepted-offsets-20261020/WINDOWS-RESTORE-NOTE.md` — follow its steps 1–7, but copy THIS folder in step 4:
